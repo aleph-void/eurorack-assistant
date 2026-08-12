@@ -30,6 +30,8 @@ import UsersView from '../src/views/UsersView.vue';
 import ChangePasswordView from '../src/views/ChangePasswordView.vue';
 import ConfigView from '../src/views/ConfigView.vue';
 import NotesView from '../src/views/NotesView.vue';
+import PatchesView from '../src/views/PatchesView.vue';
+import PatchDetailView from '../src/views/PatchDetailView.vue';
 import { useJobsStore } from '../src/stores/jobs.js';
 import { useAuthStore } from '../src/stores/auth.js';
 
@@ -254,6 +256,91 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="group-input_jack"]').text()).toContain('-10V … 10V');
     expect(wrapper.find('[data-test="group-output_jack"]').text()).toContain('unipolar');
     expect(wrapper.find('[data-test="group-knob"]').text()).toContain('Rise');
+  });
+
+  it('records and removes routing switch sections', async () => {
+    // A switch section needs a common plus two steps, so this module gets a
+    // second input jack on top of the shared fixture.
+    api.get.mockResolvedValue({
+      ...moduleResponse,
+      components: [
+        ...moduleResponse.components,
+        { id: 4, type: 'input_jack', name: 'Signal In 2', description: null, voltage_min: null, voltage_max: null, polarity: null },
+      ],
+      switches: [
+        { id: 4, name: 'Section 1', common_component_id: 2, step_component_ids: [1, 4], description: null },
+      ],
+    });
+    api.post.mockResolvedValue({ id: 5 });
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const row = wrapper.find('[data-test="switch-4"]');
+    expect(row.text()).toContain('Section 1');
+    expect(row.text()).toContain('EOR');
+    expect(row.text()).toContain('Signal In');
+
+    // A section needs a common plus at least two distinct steps: selecting
+    // only the common's own jack leaves too few.
+    await wrapper.find('[data-test="switch-common"]').setValue('2');
+    const steps = wrapper.find('[data-test="switch-steps"]');
+    const stepOptions = steps.findAll('option');
+    await stepOptions[1].setSelected(); // EOR — the common itself, filtered out
+    expect(wrapper.find('[data-test="switch-create"]').attributes('disabled')).toBeDefined();
+    await stepOptions[0].setSelected(); // Signal In
+    await stepOptions[2].setSelected(); // Signal In 2
+    await wrapper.find('[data-test="switch-name"]').setValue('Section 2');
+    await wrapper.find('[data-test="switches"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/switches', {
+      common_component_id: 2,
+      step_component_ids: [1, 4],
+      name: 'Section 2',
+    });
+
+    await wrapper.find('[data-test="delete-switch-4"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/switches/4');
+  });
+
+  it('records internal signal paths and marks unfed outputs as generators', async () => {
+    api.get.mockResolvedValue({ ...moduleResponse, routes: [] });
+    api.post.mockResolvedValue({ id: 7 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    // No route feeds EOR, so it counts as a generator.
+    expect(wrapper.find('[data-test="group-output_jack"]').text()).toContain('generator');
+
+    await wrapper.find('[data-test="route-input"]').setValue('1');
+    await wrapper.find('[data-test="route-output"]').setValue('2');
+    await wrapper.find('[data-test="routes"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/routes', {
+      input_component_id: 1,
+      output_component_id: 2,
+    });
+  });
+
+  it('lists routes, shows what feeds an output, and removes routes', async () => {
+    api.get.mockResolvedValue({
+      ...moduleResponse,
+      routes: [{ id: 7, input_component_id: 1, output_component_id: 2, description: 'audio path' }],
+    });
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const row = wrapper.find('[data-test="route-7"]');
+    expect(row.text()).toContain('Signal In');
+    expect(row.text()).toContain('EOR');
+    expect(row.text()).toContain('audio path');
+    expect(wrapper.find('[data-test="group-output_jack"]').text()).toContain('fed by Signal In');
+
+    await wrapper.find('[data-test="delete-route-7"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/routes/7');
   });
 
   it('shows normalled connections with resolved component names', async () => {
@@ -1081,5 +1168,499 @@ describe('ConfigView', () => {
     await wrapper.find('form').trigger('submit');
     await flushPromises();
     expect(wrapper.find('[data-test="error"]').text()).toContain('Invalid llm_provider');
+  });
+});
+
+describe('PatchesView', () => {
+  const racksResponse = [
+    { id: 1, name: 'main rack', module_count: 3 },
+    { id: 2, name: 'empty case', module_count: 0 },
+  ];
+
+  function mockLists(patches) {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/racks' ? racksResponse : patches)
+    );
+  }
+
+  it('lists patches with their rack and counts', async () => {
+    mockLists([
+      {
+        id: 5,
+        name: 'Krell',
+        description: 'self-generating',
+        rack_name: 'main rack',
+        module_count: 3,
+        cable_count: 2,
+        created_at: '2026-08-12T10:00:00Z',
+      },
+    ]);
+    const wrapper = mount(PatchesView, { global: testGlobal() });
+    await flushPromises();
+    const row = wrapper.find('[data-test="patch-5"]');
+    expect(row.text()).toContain('Krell');
+    expect(row.text()).toContain('self-generating');
+    expect(row.text()).toContain('main rack');
+  });
+
+  it('creates a patch from the selected rack', async () => {
+    mockLists([]);
+    api.post.mockResolvedValue({ id: 9 });
+    const wrapper = mount(PatchesView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="empty"]').exists()).toBe(true);
+    // The first rack that actually has modules is preselected.
+    expect(wrapper.find('[data-test="new-rack"]').element.value).toBe('1');
+    await wrapper.find('[data-test="new-name"]').setValue('Krell');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches', {
+      rack_id: 1,
+      name: 'Krell',
+      description: undefined,
+    });
+  });
+
+  it('deletes a patch after confirmation', async () => {
+    mockLists([
+      { id: 5, name: 'Krell', rack_name: 'main rack', module_count: 3, cable_count: 0, created_at: '2026-08-12T10:00:00Z' },
+    ]);
+    api.delete.mockResolvedValue({ ok: true });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const wrapper = mount(PatchesView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="delete-5"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/patches/5');
+    expect(wrapper.find('[data-test="patch-5"]').exists()).toBe(false);
+  });
+});
+
+describe('PatchDetailView', () => {
+  const patchResponse = {
+    id: 7,
+    name: 'Krell',
+    description: null,
+    rack_id: 1,
+    rack_name: 'main rack',
+    created_at: '2026-08-12T10:00:00Z',
+    modules: [
+      {
+        id: 11,
+        module_id: 1,
+        manufacturer: 'Make Noise',
+        module_name: 'Maths',
+        instance: 1,
+        live: true,
+        components: [
+          { id: 1, type: 'input_jack', name: 'Signal In', values: [] },
+          { id: 2, type: 'output_jack', name: 'EOR', values: [] },
+          {
+            id: 3,
+            type: 'knob',
+            name: 'Rise',
+            values: [
+              { id: 1, type: 'min', value: '0' },
+              { id: 2, type: 'max', value: '10' },
+            ],
+          },
+          {
+            id: 4,
+            type: 'switch',
+            name: 'Mode',
+            values: [
+              { id: 3, type: 'enum', value: 'Cycle' },
+              { id: 4, type: 'enum', value: 'Sustain' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 12,
+        module_id: 2,
+        manufacturer: 'ALM',
+        module_name: 'Pam',
+        instance: 1,
+        live: false,
+        components: [],
+      },
+      {
+        id: 13,
+        module_id: 3,
+        manufacturer: 'Doepfer',
+        module_name: 'A-180-2',
+        instance: 1,
+        live: true,
+        components: [
+          { id: 5, type: 'bidirectional_jack', name: 'M1', group_label: '1', values: [] },
+          { id: 6, type: 'bidirectional_jack', name: 'M2', group_label: '1', values: [] },
+        ],
+      },
+    ],
+    cables: [
+      {
+        id: 21,
+        from_patch_module_id: 11,
+        from_component_id: 2,
+        from_component_name: 'EOR',
+        to_patch_module_id: 11,
+        to_component_id: 1,
+        to_component_name: 'Signal In',
+      },
+    ],
+    settings: [
+      { id: 31, patch_module_id: 11, component_id: 3, component_name: 'Rise', value: '7' },
+    ],
+    normalizations: [
+      {
+        patch_module_id: 11,
+        normalization_id: 41,
+        target_component_id: 1,
+        target_component_name: 'Signal In',
+        source_component_id: null,
+        source_component_name: null,
+        source_label: 'internal oscillator',
+        kind: 'internal',
+        description: null,
+        active: false,
+        overriding_cable_id: 21,
+        signals: [],
+      },
+      {
+        patch_module_id: 13,
+        normalization_id: 42,
+        target_component_id: 6,
+        target_component_name: 'M2',
+        source_component_id: 5,
+        source_component_name: 'M1',
+        source_label: null,
+        kind: 'input',
+        description: null,
+        active: true,
+        overriding_cable_id: null,
+        signals: [
+          {
+            kind: 'cable',
+            cable_id: 21,
+            from_patch_module_id: 11,
+            from_component_id: 2,
+            from_component_name: 'EOR',
+            via: ['M1'],
+          },
+        ],
+      },
+    ],
+    flow: [
+      {
+        key: 'pm11:c2',
+        kind: 'jack',
+        patch_module_id: 11,
+        component_id: 2,
+        name: 'EOR',
+        jack_type: 'output_jack',
+        via: null,
+        merge: false,
+        cycle: false,
+        children: [
+          {
+            key: 'pm13:c5',
+            kind: 'jack',
+            patch_module_id: 13,
+            component_id: 5,
+            name: 'M1',
+            jack_type: 'bidirectional_jack',
+            via: 'cable',
+            merge: false,
+            cycle: false,
+            children: [
+              {
+                key: 'pm13:c6',
+                kind: 'jack',
+                patch_module_id: 13,
+                component_id: 6,
+                name: 'M2',
+                jack_type: 'bidirectional_jack',
+                via: 'mult',
+                merge: true,
+                cycle: false,
+                children: [
+                  {
+                    key: 'pm13:c5',
+                    kind: 'jack',
+                    patch_module_id: 13,
+                    component_id: 5,
+                    name: 'M1',
+                    jack_type: 'bidirectional_jack',
+                    via: 'route',
+                    merge: false,
+                    cycle: true,
+                    children: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  it('renders the snapshot, cables and settings', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="snapshot-note"]').text()).toContain("rack 'main rack'");
+    const cable = wrapper.find('[data-test="cable-21"]');
+    expect(cable.text()).toContain('EOR');
+    expect(cable.text()).toContain('Signal In');
+    expect(wrapper.find('[data-test="setting-31"]').text()).toContain('Rise');
+    // A module deleted since the snapshot still shows, marked as gone.
+    expect(wrapper.find('[data-test="patch-module-12"]').text()).toContain('no longer in your system');
+  });
+
+  it('filters modules by typed text and plugs a cable', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.post.mockResolvedValue({ id: 22 });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    // Typing narrows the module dropdowns (only live Maths has jacks anyway).
+    await wrapper.find('[data-test="cable-filter"]').setValue('make noise');
+    const fromOptions = wrapper.find('[data-test="cable-from-module"]').findAll('option');
+    expect(fromOptions.map((o) => o.text()).join(' ')).toContain('Make Noise Maths');
+
+    await wrapper.find('[data-test="cable-from-module"]').setValue('11');
+    await wrapper.find('[data-test="cable-from-jack"]').setValue('2');
+    await wrapper.find('[data-test="cable-to-module"]').setValue('11');
+    await wrapper.find('[data-test="cable-to-jack"]').setValue('1');
+    await wrapper.find('[data-test="cables"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/cables', {
+      from_patch_module_id: 11,
+      from_component_id: 2,
+      to_patch_module_id: 11,
+      to_component_id: 1,
+    });
+  });
+
+  it('renders the signal flow as an indented tree with source, merge and cycle badges', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    const root = wrapper.find('[data-test="flow-row-0"]');
+    expect(root.text()).toContain('Make Noise Maths — EOR');
+    expect(root.text()).toContain('generator');
+
+    const hop = wrapper.find('[data-test="flow-row-1"]');
+    expect(hop.text()).toContain('cable →');
+    expect(hop.text()).toContain('Doepfer A-180-2 — M1');
+
+    const merged = wrapper.find('[data-test="flow-row-2"]');
+    expect(merged.text()).toContain('mult copy →');
+    expect(merged.text()).toContain('merge point');
+
+    const looped = wrapper.find('[data-test="flow-row-3"]');
+    expect(looped.text()).toContain('feedback loop');
+  });
+
+  it('labels switch positions and distinguishes switched selection from mixing', async () => {
+    api.get.mockResolvedValue({
+      ...patchResponse,
+      flow: [
+        {
+          key: 'pm11:c2',
+          kind: 'jack',
+          patch_module_id: 11,
+          component_id: 2,
+          name: 'EOR',
+          jack_type: 'output_jack',
+          via: null,
+          switched: false,
+          merge: false,
+          switched_merge: false,
+          cycle: false,
+          children: [
+            {
+              key: 'pm13:c5',
+              kind: 'jack',
+              patch_module_id: 13,
+              component_id: 5,
+              name: 'I/O 1',
+              jack_type: 'bidirectional_jack',
+              via: 'switch',
+              switched: true,
+              merge: false,
+              switched_merge: false,
+              cycle: false,
+              children: [
+                {
+                  key: 'pm13:c6',
+                  kind: 'jack',
+                  patch_module_id: 13,
+                  component_id: 6,
+                  name: 'O/I',
+                  jack_type: 'bidirectional_jack',
+                  via: 'switch',
+                  switched: true,
+                  merge: false,
+                  switched_merge: true,
+                  cycle: false,
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    const step = wrapper.find('[data-test="flow-row-1"]');
+    expect(step.text()).toContain('switch position →');
+    expect(step.text()).toContain('one switch position');
+    // A switched convergence is a selection, not a mix.
+    const common = wrapper.find('[data-test="flow-row-2"]');
+    expect(common.text()).toContain('switched — one source at a time');
+    expect(common.text()).not.toContain('merge point');
+  });
+
+  it('shows normalled connections as active (with the traced signal) or overridden', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    const overridden = wrapper.find('[data-test="normalled-11-41"]');
+    expect(overridden.text()).toContain('Signal In');
+    expect(overridden.text()).toContain('internal oscillator');
+    expect(overridden.text()).toContain('overridden');
+
+    const active = wrapper.find('[data-test="normalled-13-42"]');
+    expect(active.text()).toContain('active');
+    expect(active.text()).toContain('receives EOR from Make Noise Maths (via M1)');
+  });
+
+  it('offers mult jacks at both ends of a cable', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    // The mult module shows up in both dropdowns even though it has no fixed
+    // input/output jacks, and its jacks are labeled with their group.
+    const fromModules = wrapper.find('[data-test="cable-from-module"]');
+    expect(fromModules.findAll('option').map((o) => o.text()).join(' ')).toContain('Doepfer A-180-2');
+    await fromModules.setValue('13');
+    const fromJacks = wrapper.find('[data-test="cable-from-jack"]').findAll('option');
+    expect(fromJacks.map((o) => o.text()).join(' ')).toContain('M1 (mult 1)');
+
+    const toModules = wrapper.find('[data-test="cable-to-module"]');
+    expect(toModules.findAll('option').map((o) => o.text()).join(' ')).toContain('Doepfer A-180-2');
+    await toModules.setValue('13');
+    const toJacks = wrapper.find('[data-test="cable-to-jack"]').findAll('option');
+    expect(toJacks.map((o) => o.text()).join(' ')).toContain('M2 (mult 1)');
+  });
+
+  it('offers enum options as a dropdown and ranges as numbers when dialing in a module', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.put.mockResolvedValue({ id: 32 });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="settings-module"]').setValue('11');
+    // Rise has min/max 0..10 → a number input, prefilled from the saved setting.
+    const rise = wrapper.find('[data-test="control-input-3"]');
+    expect(rise.attributes('type')).toBe('number');
+    expect(rise.attributes('max')).toBe('10');
+    expect(rise.element.value).toBe('7');
+    // Mode has enum positions → a select.
+    const mode = wrapper.find('[data-test="control-input-4"]');
+    expect(mode.element.tagName).toBe('SELECT');
+    expect(mode.findAll('option').map((o) => o.text()).join(' ')).toContain('Cycle');
+
+    await mode.setValue('Cycle');
+    await wrapper.find('[data-test="control-save-4"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/patches/7/settings', {
+      patch_module_id: 11,
+      component_id: 4,
+      value: 'Cycle',
+    });
+  });
+});
+
+describe('ModuleDetailView component values', () => {
+  const moduleResponse = {
+    id: 1,
+    manufacturer: 'Make Noise',
+    name: 'Maths',
+    manual_status: 'found',
+    analysis_status: 'complete',
+    summary: 'x',
+    quantity: 1,
+    racks: [{ id: 1, name: 'main rack', quantity: 1 }],
+    manuals: [],
+    components: [
+      { id: 3, type: 'knob', name: 'Rise', description: null, voltage_min: null, voltage_max: null, polarity: null,
+        values: [
+          { id: 1, type: 'min', value: '0' },
+          { id: 2, type: 'max', value: '10' },
+        ] },
+      { id: 4, type: 'switch', name: 'Mode', description: null, voltage_min: null, voltage_max: null, polarity: null,
+        values: [{ id: 3, type: 'enum', value: 'Cycle', description: 'loops' }] },
+    ],
+  };
+
+  it('summarizes values in the component tables and lists them for editing', async () => {
+    api.get.mockResolvedValue(moduleResponse);
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="group-knob"]').text()).toContain('0 … 10');
+    expect(wrapper.find('[data-test="group-switch"]').text()).toContain('Cycle');
+    const row = wrapper.find('[data-test="value-3"]');
+    expect(row.text()).toContain('Mode');
+    expect(row.text()).toContain('loops');
+  });
+
+  it('reclassifies a component as a mult jack with a group', async () => {
+    api.get.mockResolvedValue(moduleResponse);
+    api.put.mockResolvedValue({ id: 4, type: 'bidirectional_jack', group_label: '1' });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="edit-component-4"]').trigger('click');
+    await wrapper.find('[data-test="edit-type-4"]').setValue('bidirectional_jack');
+    // The group field only appears for bidirectional jacks.
+    await wrapper.find('[data-test="edit-group-4"]').setValue('1');
+    await wrapper.find('[data-test="edit-save-4"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/modules/1/components/4', {
+      type: 'bidirectional_jack',
+      group_label: '1',
+    });
+  });
+
+  it('adds and removes a value', async () => {
+    api.get.mockResolvedValue(moduleResponse);
+    api.post.mockResolvedValue({ id: 9 });
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="value-component"]').setValue('4');
+    await wrapper.find('[data-test="value-type"]').setValue('enum');
+    await wrapper.find('[data-test="value-value"]').setValue('Sustain');
+    await wrapper.find('[data-test="value-description"]').setValue('holds');
+    await wrapper.find('[data-test="values"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/components/4/values', {
+      type: 'enum',
+      value: 'Sustain',
+      description: 'holds',
+    });
+
+    await wrapper.find('[data-test="delete-value-1"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/components/3/values/1');
   });
 });

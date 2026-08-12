@@ -508,6 +508,8 @@ describe('normalizeComponents', () => {
         voltage_min: -2,
         voltage_max: 5,
         polarity: 'bipolar',
+        group_label: null,
+        values: [],
       },
       {
         type: 'other',
@@ -516,6 +518,8 @@ describe('normalizeComponents', () => {
         voltage_min: null,
         voltage_max: null,
         polarity: null,
+        group_label: null,
+        values: [],
       },
     ]);
   });

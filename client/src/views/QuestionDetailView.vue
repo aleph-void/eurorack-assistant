@@ -277,7 +277,7 @@ onUnmounted(() => clearTimeout(pollTimer));
           <li v-for="c in question.components" :key="c.id">
             {{ c.module_manufacturer }} {{ c.module_name }} — <strong>{{ c.name }}</strong>
             <span class="badge" :class="c.type === 'input_jack' ? 'pending' : 'found'">
-              {{ c.type === 'input_jack' ? 'input' : 'output' }}
+              {{ c.type === 'input_jack' ? 'input' : c.type === 'bidirectional_jack' ? 'mult' : 'output' }}
             </span>
           </li>
         </ul>

@@ -4,6 +4,8 @@ import LoginView from './views/LoginView.vue';
 import ModulesView from './views/ModulesView.vue';
 import ModuleDetailView from './views/ModuleDetailView.vue';
 import RacksView from './views/RacksView.vue';
+import PatchesView from './views/PatchesView.vue';
+import PatchDetailView from './views/PatchDetailView.vue';
 import ImportView from './views/ImportView.vue';
 import AskView from './views/AskView.vue';
 import QuestionsView from './views/QuestionsView.vue';
@@ -21,6 +23,8 @@ export const routes = [
   { path: '/modules', name: 'modules', component: ModulesView },
   { path: '/modules/:id', name: 'module-detail', component: ModuleDetailView, props: true },
   { path: '/racks', name: 'racks', component: RacksView },
+  { path: '/patches', name: 'patches', component: PatchesView },
+  { path: '/patches/:id', name: 'patch-detail', component: PatchDetailView, props: true },
   { path: '/import', name: 'import', component: ImportView },
   { path: '/ask', name: 'ask', component: AskView },
   { path: '/questions', name: 'questions', component: QuestionsView },

@@ -11,6 +11,7 @@ import { configRoutes } from './routes/config.js';
 import { jobRoutes } from './routes/jobs.js';
 import { noteRoutes } from './routes/notes.js';
 import { exportRoutes } from './routes/exports.js';
+import { patchRoutes } from './routes/patches.js';
 
 export function createApp(db, { manualsDir, exportsDir } = {}) {
   const app = express();
@@ -30,6 +31,7 @@ export function createApp(db, { manualsDir, exportsDir } = {}) {
   app.use('/api/jobs', jobRoutes(db));
   app.use('/api/notes', noteRoutes(db));
   app.use('/api/exports', exportRoutes(db, { exportsDir }));
+  app.use('/api/patches', patchRoutes(db));
 
   app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

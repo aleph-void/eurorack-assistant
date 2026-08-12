@@ -104,6 +104,9 @@ export function defineModels(sequelize) {
       voltage_min: { type: DataTypes.REAL },
       voltage_max: { type: DataTypes.REAL },
       polarity: { type: DataTypes.TEXT },
+      // Which mult section a bidirectional jack belongs to (see migration
+      // 005); null on other component types and on single-group mults.
+      group_label: { type: DataTypes.TEXT },
     },
     { tableName: 'module_components', createdAt: 'created_at', updatedAt: false }
   );
@@ -125,6 +128,121 @@ export function defineModels(sequelize) {
       description: { type: DataTypes.TEXT },
     },
     { tableName: 'component_normalizations', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // A routing switch section: the common jack connects to exactly one of the
+  // step jacks at a time. Direction (1→N, N→1, or either on bidirectional
+  // switches) is decided by how a patch cables the jacks.
+  const ComponentSwitch = define(
+    'ComponentSwitch',
+    {
+      id,
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      name: { type: DataTypes.TEXT },
+      common_component_id: { type: DataTypes.INTEGER, allowNull: false },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'component_switches', createdAt: 'created_at', updatedAt: false }
+  );
+
+  const ComponentSwitchStep = define(
+    'ComponentSwitchStep',
+    {
+      switch_id: { type: DataTypes.INTEGER, primaryKey: true },
+      component_id: { type: DataTypes.INTEGER, primaryKey: true },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'component_switch_steps', timestamps: false }
+  );
+
+  // An internal signal path: the input jack's signal (possibly processed)
+  // appears at the output jack. Output jacks no route feeds are signal
+  // generators. Extracted from the manual; users may add/remove rows.
+  const ComponentRoute = define(
+    'ComponentRoute',
+    {
+      id,
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      input_component_id: { type: DataTypes.INTEGER, allowNull: false },
+      output_component_id: { type: DataTypes.INTEGER, allowNull: false },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'component_routes', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // A valid value for a component: the 'min'/'max' ends of a continuous
+  // range, or one 'enum' row per discrete position. Extracted from the manual
+  // during analysis; users may add/edit/delete rows.
+  const ComponentValue = define(
+    'ComponentValue',
+    {
+      id,
+      component_id: { type: DataTypes.INTEGER, allowNull: false },
+      type: { type: DataTypes.TEXT, allowNull: false },
+      value: { type: DataTypes.TEXT, allowNull: false },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'component_values', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // A user's patch: cables + settings against a snapshot of a rack. rack_id
+  // and the module/component ids on the snapshot tables are soft references
+  // (no FK): the patch keeps rendering from its denormalized name columns
+  // after modules move racks, get re-analyzed or get deleted.
+  const Patch = define(
+    'Patch',
+    {
+      id,
+      user_id: { type: DataTypes.INTEGER, allowNull: false },
+      rack_id: { type: DataTypes.INTEGER },
+      rack_name: { type: DataTypes.TEXT, allowNull: false },
+      name: { type: DataTypes.TEXT, allowNull: false },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'patches', createdAt: 'created_at', updatedAt: 'updated_at' }
+  );
+
+  // One row per module instance in the rack at patch creation (quantity 2 →
+  // instance 1 and instance 2).
+  const PatchModule = define(
+    'PatchModule',
+    {
+      id,
+      patch_id: { type: DataTypes.INTEGER, allowNull: false },
+      module_id: { type: DataTypes.INTEGER },
+      manufacturer: { type: DataTypes.TEXT, allowNull: false },
+      module_name: { type: DataTypes.TEXT, allowNull: false },
+      instance: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+    },
+    { tableName: 'patch_modules', createdAt: 'created_at', updatedAt: false }
+  );
+
+  const PatchCable = define(
+    'PatchCable',
+    {
+      id,
+      patch_id: { type: DataTypes.INTEGER, allowNull: false },
+      from_patch_module_id: { type: DataTypes.INTEGER, allowNull: false },
+      from_component_id: { type: DataTypes.INTEGER },
+      from_component_name: { type: DataTypes.TEXT, allowNull: false },
+      to_patch_module_id: { type: DataTypes.INTEGER, allowNull: false },
+      to_component_id: { type: DataTypes.INTEGER },
+      to_component_name: { type: DataTypes.TEXT, allowNull: false },
+    },
+    { tableName: 'patch_cables', createdAt: 'created_at', updatedAt: false }
+  );
+
+  const PatchSetting = define(
+    'PatchSetting',
+    {
+      id,
+      patch_id: { type: DataTypes.INTEGER, allowNull: false },
+      patch_module_id: { type: DataTypes.INTEGER, allowNull: false },
+      component_id: { type: DataTypes.INTEGER },
+      component_name: { type: DataTypes.TEXT, allowNull: false },
+      value: { type: DataTypes.TEXT, allowNull: false },
+    },
+    { tableName: 'patch_settings', createdAt: 'created_at', updatedAt: 'updated_at' }
   );
 
   const Note = define(
@@ -262,6 +380,30 @@ export function defineModels(sequelize) {
     as: 'Source',
   });
 
+  Module.hasMany(ComponentSwitch, { foreignKey: 'module_id' });
+  ComponentSwitch.belongsTo(Module, { foreignKey: 'module_id' });
+  ComponentSwitch.belongsTo(ModuleComponent, { foreignKey: 'common_component_id', as: 'Common' });
+  ComponentSwitch.hasMany(ComponentSwitchStep, { foreignKey: 'switch_id' });
+  ComponentSwitchStep.belongsTo(ComponentSwitch, { foreignKey: 'switch_id' });
+  ComponentSwitchStep.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
+
+  Module.hasMany(ComponentRoute, { foreignKey: 'module_id' });
+  ComponentRoute.belongsTo(Module, { foreignKey: 'module_id' });
+  ComponentRoute.belongsTo(ModuleComponent, { foreignKey: 'input_component_id', as: 'Input' });
+  ComponentRoute.belongsTo(ModuleComponent, { foreignKey: 'output_component_id', as: 'Output' });
+
+  ModuleComponent.hasMany(ComponentValue, { foreignKey: 'component_id' });
+  ComponentValue.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
+
+  Patch.belongsTo(User, { foreignKey: 'user_id' });
+  Patch.hasMany(PatchModule, { foreignKey: 'patch_id' });
+  PatchModule.belongsTo(Patch, { foreignKey: 'patch_id' });
+  PatchModule.belongsTo(Module, { foreignKey: 'module_id' });
+  Patch.hasMany(PatchCable, { foreignKey: 'patch_id' });
+  PatchCable.belongsTo(Patch, { foreignKey: 'patch_id' });
+  Patch.hasMany(PatchSetting, { foreignKey: 'patch_id' });
+  PatchSetting.belongsTo(Patch, { foreignKey: 'patch_id' });
+
   Note.hasMany(NoteModule, { foreignKey: 'note_id' });
   NoteModule.belongsTo(Note, { foreignKey: 'note_id' });
   NoteModule.belongsTo(Module, { foreignKey: 'module_id' });
@@ -304,6 +446,14 @@ export function defineModels(sequelize) {
     RackModule,
     ModuleComponent,
     ComponentNormalization,
+    ComponentRoute,
+    ComponentSwitch,
+    ComponentSwitchStep,
+    ComponentValue,
+    Patch,
+    PatchModule,
+    PatchCable,
+    PatchSetting,
     Note,
     NoteModule,
     NoteComponent,

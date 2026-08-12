@@ -104,7 +104,7 @@ export async function jackComponentsForModules(db, moduleIds) {
   if (moduleIds.length === 0) return [];
   const { Module, ModuleComponent } = db.models;
   const components = await ModuleComponent.findAll({
-    where: { module_id: moduleIds, type: ['input_jack', 'output_jack'] },
+    where: { module_id: moduleIds, type: ['input_jack', 'output_jack', 'bidirectional_jack'] },
     include: [{ model: Module, attributes: ['manufacturer', 'name'] }],
     order: [['id', 'ASC']],
   });

@@ -35,6 +35,7 @@ async function logout() {
     <span class="brand">Eurorack Assistant</span>
     <RouterLink to="/modules">Modules</RouterLink>
     <RouterLink to="/racks">Racks</RouterLink>
+    <RouterLink to="/patches">Patches</RouterLink>
     <RouterLink to="/import">Import</RouterLink>
     <RouterLink to="/ask">Ask</RouterLink>
     <RouterLink to="/questions">Questions</RouterLink>

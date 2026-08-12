@@ -21,6 +21,7 @@ const docNameValid = computed(() => {
 const TYPE_LABELS = {
   input_jack: 'Input jacks',
   output_jack: 'Output jacks',
+  bidirectional_jack: 'Bidirectional jacks (mults)',
   knob: 'Knobs',
   slider: 'Sliders',
   button: 'Buttons',
@@ -102,6 +103,190 @@ async function removeNormalization(n) {
     await load();
   } catch (e) {
     normError.value = e.message;
+  }
+}
+
+// ---- internal signal paths (routes) ----
+// Which inputs' signals appear at which outputs; outputs no route feeds are
+// signal generators. Shared hardware facts, editable like normalizations.
+const routeInput = ref('');
+const routeOutput = ref('');
+const routeDescription = ref('');
+const routeError = ref('');
+
+const outputJacks = computed(
+  () => module.value?.components?.filter((c) => c.type === 'output_jack') || []
+);
+
+// 'generator' for outputs nothing feeds, otherwise the inputs that reach it.
+function outputSignalSource(c) {
+  const feeding = (module.value?.routes || [])
+    .filter((r) => r.output_component_id === c.id)
+    .map((r) => componentName(r.input_component_id));
+  return feeding.length === 0 ? 'generator' : `fed by ${feeding.join(', ')}`;
+}
+
+async function createRoute() {
+  routeError.value = '';
+  try {
+    const payload = {
+      input_component_id: Number(routeInput.value),
+      output_component_id: Number(routeOutput.value),
+    };
+    if (routeDescription.value.trim()) payload.description = routeDescription.value.trim();
+    await api.post(`/api/modules/${props.id}/routes`, payload);
+    routeInput.value = '';
+    routeOutput.value = '';
+    routeDescription.value = '';
+    await load();
+  } catch (e) {
+    routeError.value = e.message;
+  }
+}
+
+async function removeRoute(route) {
+  routeError.value = '';
+  try {
+    await api.delete(`/api/modules/${props.id}/routes/${route.id}`);
+    await load();
+  } catch (e) {
+    routeError.value = e.message;
+  }
+}
+
+// ---- routing switch sections ----
+// A switch connects its common jack to one step jack at a time; which
+// direction it runs is decided per patch by the cabling.
+const switchCommon = ref('');
+const switchSteps = ref([]);
+const switchName = ref('');
+const switchError = ref('');
+
+const switchValid = computed(
+  () => switchCommon.value && switchSteps.value.filter((id) => Number(id) !== Number(switchCommon.value)).length >= 2
+);
+
+async function createSwitch() {
+  switchError.value = '';
+  try {
+    await api.post(`/api/modules/${props.id}/switches`, {
+      common_component_id: Number(switchCommon.value),
+      step_component_ids: switchSteps.value
+        .map(Number)
+        .filter((id) => id !== Number(switchCommon.value)),
+      name: switchName.value.trim() || undefined,
+    });
+    switchCommon.value = '';
+    switchSteps.value = [];
+    switchName.value = '';
+    await load();
+  } catch (e) {
+    switchError.value = e.message;
+  }
+}
+
+async function removeSwitch(section) {
+  switchError.value = '';
+  try {
+    await api.delete(`/api/modules/${props.id}/switches/${section.id}`);
+    await load();
+  } catch (e) {
+    switchError.value = e.message;
+  }
+}
+
+// ---- reclassifying components ----
+// The analysis sometimes types a mult's jacks as plain inputs/outputs; any
+// user with the module racked can correct a component's type and, for
+// bidirectional (mult) jacks, its group.
+const COMPONENT_TYPES = [
+  'input_jack',
+  'output_jack',
+  'bidirectional_jack',
+  'knob',
+  'slider',
+  'button',
+  'toggle',
+  'switch',
+  'display',
+  'other',
+];
+const editingComponentId = ref(null);
+const editType = ref('');
+const editGroup = ref('');
+const editError = ref('');
+
+function startEditComponent(c) {
+  editingComponentId.value = c.id;
+  editType.value = c.type;
+  editGroup.value = c.group_label || '';
+  editError.value = '';
+}
+
+async function saveComponent(c) {
+  editError.value = '';
+  try {
+    await api.put(`/api/modules/${props.id}/components/${c.id}`, {
+      type: editType.value,
+      group_label: editGroup.value,
+    });
+    editingComponentId.value = null;
+    await load();
+  } catch (e) {
+    editError.value = e.message;
+  }
+}
+
+// ---- component values (valid settings) ----
+const valueComponent = ref(''); // component id
+const valueType = ref('enum');
+const valueValue = ref('');
+const valueDescription = ref('');
+const valueError = ref('');
+
+const allValues = computed(() =>
+  (module.value?.components || []).flatMap((c) =>
+    (c.values || []).map((v) => ({ ...v, component: c }))
+  )
+);
+
+const valueValid = computed(() => valueComponent.value && valueValue.value.trim() !== '');
+
+// "0 … 10" for a min/max range, "LP | BP | HP" for enum positions.
+function valueSummary(c) {
+  const values = c.values || [];
+  const options = values.filter((v) => v.type === 'enum').map((v) => v.value);
+  if (options.length > 0) return options.join(' | ');
+  const min = values.find((v) => v.type === 'min')?.value;
+  const max = values.find((v) => v.type === 'max')?.value;
+  if (min === undefined && max === undefined) return '—';
+  return `${min ?? '?'} … ${max ?? '?'}`;
+}
+
+async function createValue() {
+  valueError.value = '';
+  try {
+    const payload = { type: valueType.value, value: valueValue.value.trim() };
+    if (valueDescription.value.trim()) payload.description = valueDescription.value.trim();
+    await api.post(
+      `/api/modules/${props.id}/components/${valueComponent.value}/values`,
+      payload
+    );
+    valueValue.value = '';
+    valueDescription.value = '';
+    await load();
+  } catch (e) {
+    valueError.value = e.message;
+  }
+}
+
+async function removeValue(v) {
+  valueError.value = '';
+  try {
+    await api.delete(`/api/modules/${props.id}/components/${v.component.id}/values/${v.id}`);
+    await load();
+  } catch (e) {
+    valueError.value = e.message;
   }
 }
 
@@ -279,7 +464,8 @@ onMounted(load);
             <select id="norm-source" v-model="normSource" data-test="norm-source">
               <option value="" disabled>Select a source…</option>
               <option v-for="c in jacks" :key="c.id" :value="c.id">
-                {{ c.name }} ({{ c.type === 'input_jack' ? 'input' : 'output' }})
+                {{ c.name }}
+                ({{ c.type === 'input_jack' ? 'input' : c.type === 'bidirectional_jack' ? 'mult' : 'output' }})
               </option>
               <option value="internal">Internal / unlisted signal…</option>
             </select>
@@ -304,6 +490,223 @@ onMounted(load);
           </div>
         </div>
         <p v-if="normError" class="error" data-test="norm-error">{{ normError }}</p>
+      </form>
+    </div>
+
+    <div v-if="module.components?.length" class="panel" data-test="switches">
+      <h2>Routing switches</h2>
+      <p class="muted">
+        A switch section connects its common jack to exactly one step jack at a time. Patch a
+        cable into the common to distribute it to the steps, or into the steps to select one of
+        them onto the common — the direction follows your cabling, so bidirectional switches
+        need no extra setup. Unlike a mult, only one connection is live at a time.
+      </p>
+      <table v-if="module.switches?.length">
+        <thead>
+          <tr>
+            <th>Section</th>
+            <th>Common</th>
+            <th>Steps</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="s in module.switches" :key="s.id" :data-test="`switch-${s.id}`">
+            <td>{{ s.name || `Switch ${s.id}` }}</td>
+            <td>{{ componentName(s.common_component_id) }}</td>
+            <td>{{ s.step_component_ids.map(componentName).join(', ') }}</td>
+            <td>
+              <button
+                class="danger"
+                style="margin: 0"
+                :data-test="`delete-switch-${s.id}`"
+                @click="removeSwitch(s)"
+              >
+                Remove
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="muted">No routing switches recorded for this module.</p>
+
+      <form @submit.prevent="createSwitch">
+        <div class="row">
+          <div>
+            <label for="switch-common">Common jack</label>
+            <select id="switch-common" v-model="switchCommon" data-test="switch-common">
+              <option value="" disabled>Select the common jack…</option>
+              <option v-for="c in jacks" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </div>
+          <div>
+            <label for="switch-steps">Step jacks (select two or more)</label>
+            <select id="switch-steps" v-model="switchSteps" multiple data-test="switch-steps">
+              <option v-for="c in jacks" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </div>
+          <div>
+            <label for="switch-name">Name (optional)</label>
+            <input id="switch-name" v-model="switchName" data-test="switch-name" placeholder="e.g. Section 1" />
+          </div>
+          <div class="shrink">
+            <button type="submit" style="margin: 0" :disabled="!switchValid" data-test="switch-create">
+              Add
+            </button>
+          </div>
+        </div>
+        <p v-if="switchError" class="error" data-test="switch-error">{{ switchError }}</p>
+      </form>
+    </div>
+
+    <div v-if="module.components?.length" class="panel" data-test="routes">
+      <h2>Internal signal paths</h2>
+      <p class="muted">
+        Which inputs' signals appear at which outputs (a mixer feeds every channel into the mix
+        out; a filter feeds its audio input to each filter output). Output jacks that nothing
+        feeds count as signal generators. These paths let a
+        <RouterLink to="/patches">patch</RouterLink> trace signal flow straight through the
+        module.
+      </p>
+      <table v-if="module.routes?.length">
+        <thead>
+          <tr>
+            <th>Input</th>
+            <th>Appears at</th>
+            <th>Description</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="r in module.routes" :key="r.id" :data-test="`route-${r.id}`">
+            <td>{{ componentName(r.input_component_id) }}</td>
+            <td>{{ componentName(r.output_component_id) }}</td>
+            <td>{{ r.description || '—' }}</td>
+            <td>
+              <button
+                class="danger"
+                style="margin: 0"
+                :data-test="`delete-route-${r.id}`"
+                @click="removeRoute(r)"
+              >
+                Remove
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="muted">
+        No internal signal paths recorded — every output jack counts as a generator.
+      </p>
+
+      <form @submit.prevent="createRoute">
+        <div class="row">
+          <div>
+            <label for="route-input">Input</label>
+            <select id="route-input" v-model="routeInput" data-test="route-input">
+              <option value="" disabled>Select an input…</option>
+              <option v-for="c in inputJacks" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </div>
+          <div>
+            <label for="route-output">Appears at output</label>
+            <select id="route-output" v-model="routeOutput" data-test="route-output">
+              <option value="" disabled>Select an output…</option>
+              <option v-for="c in outputJacks" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </div>
+          <div style="flex: 2">
+            <label for="route-description">Description (optional)</label>
+            <input id="route-description" v-model="routeDescription" data-test="route-description" />
+          </div>
+          <div class="shrink">
+            <button
+              type="submit"
+              style="margin: 0"
+              :disabled="!routeInput || !routeOutput"
+              data-test="route-create"
+            >
+              Add
+            </button>
+          </div>
+        </div>
+        <p v-if="routeError" class="error" data-test="route-error">{{ routeError }}</p>
+      </form>
+    </div>
+
+    <div v-if="module.components?.length" class="panel" data-test="values">
+      <h2>Component values</h2>
+      <p class="muted">
+        The valid settings of each control, extracted from the manual — a min/max pair for a
+        continuous range, or one entry per position of a switch. They drive the setting controls
+        when this module is used in a <RouterLink to="/patches">patch</RouterLink>; correct them
+        here if the analysis got them wrong.
+      </p>
+      <table v-if="allValues.length">
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Type</th>
+            <th>Value</th>
+            <th>Description</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="v in allValues" :key="v.id" :data-test="`value-${v.id}`">
+            <td>{{ v.component.name }}</td>
+            <td>{{ v.type }}</td>
+            <td>{{ v.value }}</td>
+            <td>{{ v.description || '—' }}</td>
+            <td>
+              <button
+                class="danger"
+                style="margin: 0"
+                :data-test="`delete-value-${v.id}`"
+                @click="removeValue(v)"
+              >
+                Remove
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="muted">No values recorded for this module's components.</p>
+
+      <form @submit.prevent="createValue">
+        <div class="row">
+          <div>
+            <label for="value-component">Component</label>
+            <select id="value-component" v-model="valueComponent" data-test="value-component">
+              <option value="" disabled>Select a component…</option>
+              <option v-for="c in module.components" :key="c.id" :value="c.id">
+                {{ c.name }} ({{ c.type }})
+              </option>
+            </select>
+          </div>
+          <div class="shrink">
+            <label for="value-type">Type</label>
+            <select id="value-type" v-model="valueType" data-test="value-type">
+              <option value="enum">enum (one position)</option>
+              <option value="min">min</option>
+              <option value="max">max</option>
+            </select>
+          </div>
+          <div>
+            <label for="value-value">Value</label>
+            <input id="value-value" v-model="valueValue" data-test="value-value" placeholder="e.g. LP or 0" />
+          </div>
+          <div style="flex: 2">
+            <label for="value-description">Description (optional)</label>
+            <input id="value-description" v-model="valueDescription" data-test="value-description" />
+          </div>
+          <div class="shrink">
+            <button type="submit" style="margin: 0" :disabled="!valueValid" data-test="value-create">
+              Add
+            </button>
+          </div>
+        </div>
+        <p v-if="valueError" class="error" data-test="value-error">{{ valueError }}</p>
       </form>
     </div>
 
@@ -426,6 +829,10 @@ onMounted(load);
             <th>Description</th>
             <th v-if="group.type.endsWith('_jack')">Voltage range</th>
             <th v-if="group.type.endsWith('_jack')">Polarity</th>
+            <th v-if="group.type === 'bidirectional_jack'">Group</th>
+            <th v-if="group.type === 'output_jack'">Signal</th>
+            <th v-if="!group.type.endsWith('_jack')">Valid values</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -434,9 +841,51 @@ onMounted(load);
             <td>{{ c.description || '—' }}</td>
             <td v-if="group.type.endsWith('_jack')">{{ voltageRange(c) }}</td>
             <td v-if="group.type.endsWith('_jack')">{{ c.polarity || '—' }}</td>
+            <td v-if="group.type === 'bidirectional_jack'">{{ c.group_label || '—' }}</td>
+            <td v-if="group.type === 'output_jack'">{{ outputSignalSource(c) }}</td>
+            <td v-if="!group.type.endsWith('_jack')">{{ valueSummary(c) }}</td>
+            <td>
+              <template v-if="editingComponentId === c.id">
+                <select v-model="editType" :data-test="`edit-type-${c.id}`" style="width: auto">
+                  <option v-for="t in COMPONENT_TYPES" :key="t" :value="t">{{ t }}</option>
+                </select>
+                <input
+                  v-if="editType === 'bidirectional_jack'"
+                  v-model="editGroup"
+                  placeholder="Mult group (e.g. 1)"
+                  :data-test="`edit-group-${c.id}`"
+                  style="width: auto; margin-left: 0.4rem"
+                />
+                <button
+                  style="margin: 0 0 0 0.4rem"
+                  :data-test="`edit-save-${c.id}`"
+                  @click="saveComponent(c)"
+                >
+                  Save
+                </button>
+                <button style="margin: 0 0 0 0.4rem" @click="editingComponentId = null">
+                  Cancel
+                </button>
+              </template>
+              <button
+                v-else
+                style="margin: 0"
+                :data-test="`edit-component-${c.id}`"
+                @click="startEditComponent(c)"
+              >
+                Edit
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>
+      <p
+        v-if="editError && group.components.some((c) => c.id === editingComponentId)"
+        class="error"
+        data-test="edit-error"
+      >
+        {{ editError }}
+      </p>
     </div>
 
     <p v-if="module.components && module.components.length === 0" class="muted">
