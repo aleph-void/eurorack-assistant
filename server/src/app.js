@@ -1,5 +1,6 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import { createLimiters } from './rateLimit.js';
 import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
 import { moduleRoutes } from './routes/modules.js';
@@ -13,12 +14,23 @@ import { noteRoutes } from './routes/notes.js';
 import { exportRoutes } from './routes/exports.js';
 import { patchRoutes } from './routes/patches.js';
 
-export function createApp(db, { manualsDir, exportsDir } = {}) {
+export function createApp(db, { manualsDir, exportsDir, rateLimit } = {}) {
   const app = express();
+  // nginx is the only hop in front of the server and it sets X-Forwarded-For.
+  // Without this the rate limiters would see every request as coming from the
+  // proxy's address and put all users in one bucket — one noisy client would
+  // lock out everyone else.
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '40mb' }));
   app.use(cookieParser());
 
+  // Registered before the limiters so probes never consume a request budget.
   app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+  const limiters = createLimiters(rateLimit);
+  app.use('/api', limiters.api);
+  app.use('/api/auth/login', limiters.credentials);
+  app.use('/api/auth/password', limiters.credentials);
 
   app.use('/api/auth', authRoutes(db));
   app.use('/api/users', userRoutes(db));

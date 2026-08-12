@@ -5,6 +5,7 @@ import {
   deleteSession,
   deleteUserSessions,
   hashPassword,
+  passwordProblem,
   requireAuth,
   sessionCookieOptions,
   verifyPassword,
@@ -61,9 +62,8 @@ export function authRoutes(db) {
           .status(400)
           .json({ error: 'current_password and new_password are required' });
       }
-      if (String(new_password).length < 8) {
-        return res.status(400).json({ error: 'new password must be at least 8 characters' });
-      }
+      const problem = passwordProblem(new_password, { label: 'new password' });
+      if (problem) return res.status(400).json({ error: problem });
       const user = await db.models.User.findByPk(req.user.id);
       if (!user || !verifyPassword(String(current_password), user.password_hash)) {
         return res.status(401).json({ error: 'Current password is incorrect' });

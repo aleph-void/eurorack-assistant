@@ -6,7 +6,9 @@ import { createApp } from '../src/app.js';
 import {
   generatePassword,
   hashPassword,
+  passwordProblem,
   verifyPassword,
+  MIN_PASSWORD_LENGTH,
   PBKDF2_DIGEST,
   PBKDF2_ITERATIONS,
 } from '../src/auth.js';
@@ -133,7 +135,7 @@ describe('auth', () => {
 
   it('rejects expired sessions', async () => {
     const db = await createTestDb();
-    const app = createApp(db);
+    const app = createApp(db, { rateLimit: false });
     const user = await createUser(db, { username: 'bob' });
     await db.query(
       "INSERT INTO sessions (token, user_id, expires_at) VALUES ('stale', $1, now() - interval '1 hour')",
@@ -141,6 +143,95 @@ describe('auth', () => {
     );
     const res = await request(app).get('/api/auth/me').set('Cookie', 'session=stale');
     expect(res.status).toBe(401);
+  });
+});
+
+describe('password policy', () => {
+  it('accepts exactly the minimum length and rejects one character less', () => {
+    expect(passwordProblem('a'.repeat(MIN_PASSWORD_LENGTH))).toBeNull();
+    expect(passwordProblem('a'.repeat(MIN_PASSWORD_LENGTH - 1))).toMatch(/at least 8 characters/);
+  });
+
+  it('names the field it is complaining about', () => {
+    expect(passwordProblem('short', { label: 'new password' })).toMatch(/^new password must be/);
+  });
+
+  it('rejects anything that is not a string or number', () => {
+    // JSON bodies can carry objects/arrays; String()-ing those used to produce
+    // a long-enough value ('[object Object]') that sailed past a length check.
+    expect(passwordProblem({ toString: () => 'longenough' })).toMatch(/required/);
+    expect(passwordProblem(['longenough'])).toMatch(/required/);
+    expect(passwordProblem(null)).toMatch(/required/);
+    expect(passwordProblem(undefined)).toMatch(/required/);
+  });
+
+  it('enforces the minimum on a self-service password change', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    const change = (newPassword) =>
+      request(app)
+        .post('/api/auth/password')
+        .set('Cookie', aliceCookie)
+        .send({ current_password: 'password123', new_password: newPassword });
+
+    const short = await change('a'.repeat(MIN_PASSWORD_LENGTH - 1));
+    expect(short.status).toBe(400);
+    expect(short.body.error).toMatch(/at least 8 characters/);
+
+    const object = await change({ length: 40 });
+    expect(object.status).toBe(400);
+
+    // The rejected attempts changed nothing — the old password still works.
+    expect(
+      (await request(app).post('/api/auth/login').send({ username: 'alice', password: 'password123' }))
+        .status
+    ).toBe(200);
+
+    const ok = await change('a'.repeat(MIN_PASSWORD_LENGTH));
+    expect(ok.status).toBe(200);
+  });
+
+  it('enforces the minimum when an admin creates a user', async () => {
+    const { app, db, adminCookie } = await createTestApp();
+    const create = (username, password) =>
+      request(app).post('/api/users').set('Cookie', adminCookie).send({ username, password });
+
+    const short = await create('shorty', 'a'.repeat(MIN_PASSWORD_LENGTH - 1));
+    expect(short.status).toBe(400);
+    expect(short.body.error).toMatch(/at least 8 characters/);
+    // The rejection happened before the insert.
+    expect(await db.models.User.findOne({ where: { username: 'shorty' } })).toBeNull();
+
+    const ok = await create('minimal', 'a'.repeat(MIN_PASSWORD_LENGTH));
+    expect(ok.status).toBe(201);
+  });
+
+  it('enforces the minimum when an admin resets a password', async () => {
+    const { app, db, adminCookie } = await createTestApp();
+    const alice = await db.models.User.findOne({ where: { username: 'alice' } });
+
+    const short = await request(app)
+      .post(`/api/users/${alice.id}/password`)
+      .set('Cookie', adminCookie)
+      .send({ password: 'a'.repeat(MIN_PASSWORD_LENGTH - 1) });
+    expect(short.status).toBe(400);
+    expect(short.body.error).toMatch(/at least 8 characters/);
+
+    // Rejected before anything was written: the old password still logs in.
+    expect(
+      (await request(app).post('/api/auth/login').send({ username: 'alice', password: 'password123' }))
+        .status
+    ).toBe(200);
+
+    const ok = await request(app)
+      .post(`/api/users/${alice.id}/password`)
+      .set('Cookie', adminCookie)
+      .send({ password: 'a'.repeat(MIN_PASSWORD_LENGTH) });
+    expect(ok.status).toBe(200);
+  });
+
+  it('generates passwords that clear the minimum', () => {
+    expect(generatePassword().length).toBeGreaterThanOrEqual(MIN_PASSWORD_LENGTH);
+    expect(passwordProblem(generatePassword())).toBeNull();
   });
 });
 
@@ -169,7 +260,7 @@ describe('ensureAdmin', () => {
     expect(rows[0].must_change_password).toBe(true);
 
     // The generated password actually works for login.
-    const app = createApp(db);
+    const app = createApp(db, { rateLimit: false });
     const res = await request(app)
       .post('/api/auth/login')
       .send({ username: 'admin', password: result.password });
@@ -191,7 +282,7 @@ describe('ensureAdmin', () => {
   it('resets the password when asked, kills sessions, and forces a change again', async () => {
     const db = await createTestDb();
     const first = await ensureAdmin(db);
-    const app = createApp(db);
+    const app = createApp(db, { rateLimit: false });
     const cookie = await login(app, 'admin', first.password);
 
     const second = await ensureAdmin(db, { reset: true });
@@ -223,7 +314,7 @@ describe('forced password change', () => {
   async function freshAdmin() {
     const db = await createTestDb();
     const { password } = await ensureAdmin(db);
-    const app = createApp(db);
+    const app = createApp(db, { rateLimit: false });
     const cookie = await login(app, 'admin', password);
     return { db, app, cookie, password };
   }

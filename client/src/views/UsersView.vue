@@ -84,8 +84,16 @@ onMounted(load);
           <input id="new-username" v-model="username" data-test="username" required />
         </div>
         <div>
-          <label for="new-password">Password (leave blank to generate)</label>
-          <input id="new-password" v-model="password" data-test="password" type="text" />
+          <label for="new-password">Password (min 8 chars, blank to generate)</label>
+          <!-- minlength only applies when a value is present, so leaving the
+               field blank still generates a password. -->
+          <input
+            id="new-password"
+            v-model="password"
+            data-test="password"
+            type="text"
+            minlength="8"
+          />
         </div>
         <div class="shrink">
           <button type="submit" :disabled="busy" data-test="create">Create</button>

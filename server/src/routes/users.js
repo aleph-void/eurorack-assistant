@@ -4,6 +4,7 @@ import {
   deleteUserSessions,
   generatePassword,
   hashPassword,
+  passwordProblem,
   requireAdmin,
   requireAuth,
 } from '../auth.js';
@@ -51,8 +52,9 @@ export function userRoutes(db) {
       if (!password) {
         generated = generatePassword();
         password = generated;
-      } else if (String(password).length < 8) {
-        return res.status(400).json({ error: 'password must be at least 8 characters' });
+      } else {
+        const problem = passwordProblem(password);
+        if (problem) return res.status(400).json({ error: problem });
       }
       const created = await User.create({
         username,
@@ -84,8 +86,9 @@ export function userRoutes(db) {
       if (!password) {
         generated = generatePassword();
         password = generated;
-      } else if (String(password).length < 8) {
-        return res.status(400).json({ error: 'password must be at least 8 characters' });
+      } else {
+        const problem = passwordProblem(password);
+        if (problem) return res.status(400).json({ error: problem });
       }
       // The reset and the forced logout everywhere land atomically.
       await db.sequelize.transaction(async (transaction) => {

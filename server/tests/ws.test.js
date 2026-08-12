@@ -11,7 +11,7 @@ let db, app, bus, server, wsHandle, port;
 
 beforeEach(async () => {
   db = await createTestDb();
-  app = createApp(db);
+  app = createApp(db, { rateLimit: false });
   bus = createBus();
   server = http.createServer(app);
   wsHandle = attachWebSocketServer(server, db, bus);

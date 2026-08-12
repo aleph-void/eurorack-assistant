@@ -53,7 +53,7 @@ export async function createTestApp() {
   const db = await createTestDb();
   const manualsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-manuals-'));
   const exportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-exports-'));
-  const app = createApp(db, { manualsDir, exportsDir });
+  const app = createApp(db, { manualsDir, exportsDir, rateLimit: false });
   await createUser(db, { username: 'admin', isAdmin: true });
   await createUser(db, { username: 'alice' });
   const adminCookie = await login(app, 'admin');

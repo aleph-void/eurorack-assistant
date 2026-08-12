@@ -24,6 +24,22 @@ export function sessionCookieOptions(env = process.env) {
   };
 }
 
+export const MIN_PASSWORD_LENGTH = 8;
+
+// Single source of truth for the password policy, shared by every endpoint
+// that accepts a password (self-service change, admin create, admin reset).
+// Returns an error string, or null when the password is acceptable.
+export function passwordProblem(password, { label = 'password' } = {}) {
+  if (typeof password !== 'string' && typeof password !== 'number') {
+    return `${label} is required`;
+  }
+  const value = String(password);
+  if (value.length < MIN_PASSWORD_LENGTH) {
+    return `${label} must be at least ${MIN_PASSWORD_LENGTH} characters`;
+  }
+  return null;
+}
+
 // Passwords are stored as PBKDF2-HMAC-SHA512 hashes in a self-describing
 // format: pbkdf2$<digest>$<iterations>$<salt hex>$<derived key hex>.
 // Verification reads the parameters from the stored hash, so these constants
