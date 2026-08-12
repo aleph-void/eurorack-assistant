@@ -118,7 +118,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `question_components` | links a question to the specific components it pertains to (LLM-suggested, then user-reviewed) |
 | `question_manuals` / `question_answers` / `question_notes` | the documents the user attached during review: manual PDFs, previous answers, notes |
 | `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `scope_question`, `answer_question`) with attempts + errors |
-| `app_config` | admin-set LLM provider/model |
+| `app_config` | admin-set LLM provider/model and job worker count (`import_workers`, default 4) |
 
 ## Development
 

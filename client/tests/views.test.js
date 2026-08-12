@@ -804,6 +804,7 @@ describe('ConfigView', () => {
   const configResponse = {
     llm_provider: 'claude',
     llm_model: '',
+    import_workers: '4',
     providers: ['claude', 'codex'],
     known_models: { claude: ['claude-fable-5'], codex: ['gpt-5.1-codex'] },
     default_models: { claude: 'claude-fable-5', codex: 'gpt-5.1-codex' },
@@ -815,14 +816,17 @@ describe('ConfigView', () => {
     const wrapper = mount(ConfigView, { global: testGlobal() });
     await flushPromises();
     expect(wrapper.find('[data-test="provider"]').element.value).toBe('claude');
+    expect(wrapper.find('[data-test="import-workers"]').element.value).toBe('4');
 
     await wrapper.find('[data-test="provider"]').setValue('codex');
     await wrapper.find('[data-test="model"]').setValue('gpt-5.1-codex');
+    await wrapper.find('[data-test="import-workers"]').setValue('6');
     await wrapper.find('form').trigger('submit');
     await flushPromises();
     expect(api.put).toHaveBeenCalledWith('/api/config', {
       llm_provider: 'codex',
       llm_model: 'gpt-5.1-codex',
+      import_workers: 6,
     });
     expect(wrapper.find('[data-test="saved"]').exists()).toBe(true);
   });

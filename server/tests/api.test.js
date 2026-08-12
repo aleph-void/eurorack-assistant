@@ -396,8 +396,38 @@ describe('config API', () => {
     const res = await request(app).get('/api/config').set('Cookie', adminCookie);
     expect(res.status).toBe(200);
     expect(res.body.llm_provider).toBe('claude');
+    expect(res.body.import_workers).toBe('4');
     expect(res.body.providers).toEqual(['claude', 'codex']);
     expect(res.body.known_models.claude).toContain('claude-fable-5');
+  });
+
+  it('updates import_workers and rejects non-integer values', async () => {
+    const { app, adminCookie } = await createTestApp();
+    const res = await request(app)
+      .put('/api/config')
+      .set('Cookie', adminCookie)
+      .send({ import_workers: 8 });
+    expect(res.status).toBe(200);
+    expect(res.body.import_workers).toBe('8');
+
+    const again = await request(app).get('/api/config').set('Cookie', adminCookie);
+    expect(again.body.import_workers).toBe('8');
+
+    for (const bad of ['three', 4.5, 0, -1, '', null, true]) {
+      const rejected = await request(app)
+        .put('/api/config')
+        .set('Cookie', adminCookie)
+        .send({ import_workers: bad });
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error).toMatch(/import_workers/);
+    }
+    // A numeric string is accepted and normalized.
+    const asString = await request(app)
+      .put('/api/config')
+      .set('Cookie', adminCookie)
+      .send({ import_workers: '2' });
+    expect(asString.status).toBe(200);
+    expect(asString.body.import_workers).toBe('2');
   });
 
   it('updates provider and model', async () => {

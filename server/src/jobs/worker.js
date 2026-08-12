@@ -13,7 +13,7 @@
 
 import { createBackend } from '../services/llm.js';
 import { manualPath } from '../services/pdf.js';
-import { getLlmSettings } from '../services/config.js';
+import { getLlmSettings, getImportWorkerCount, DEFAULT_IMPORT_WORKERS } from '../services/config.js';
 import {
   parseModuleCsv,
   parseModuleLines,
@@ -128,13 +128,17 @@ export function createWorker(db, options = {}) {
 
   async function claimNextJob() {
     const { Job } = db.models;
-    const next = await Job.findOne({ where: { status: 'pending' }, order: [['id', 'ASC']] });
-    if (!next) return null;
-    const [, claimed] = await Job.update(
-      { status: 'running', attempts: next.attempts + 1 },
-      { where: { id: next.id, status: 'pending' }, returning: true }
-    );
-    return claimed[0] ? claimed[0].get({ plain: true }) : null;
+    // Concurrent workers can race for the same pending row; the guarded
+    // update decides the winner and the loser moves on to the next row.
+    for (;;) {
+      const next = await Job.findOne({ where: { status: 'pending' }, order: [['id', 'ASC']] });
+      if (!next) return null;
+      const [, claimed] = await Job.update(
+        { status: 'running', attempts: next.attempts + 1 },
+        { where: { id: next.id, status: 'pending' }, returning: true }
+      );
+      if (claimed[0]) return claimed[0].get({ plain: true });
+    }
   }
 
   async function handleImport(job, backend, progress) {
@@ -300,14 +304,26 @@ export function createWorker(db, options = {}) {
   let running = false;
   let stopped = false;
 
+  async function drain() {
+    while (!stopped && (await tick()) !== null) {
+      /* keep going */
+    }
+  }
+
   async function loop() {
     if (running) return;
     running = true;
     try {
-      // Drain the queue, then go back to sleep.
-      while (!stopped && (await tick()) !== null) {
-        /* keep going */
+      // The worker count is admin-configurable (app_config.import_workers)
+      // and re-read on every wake-up, so changes apply without a restart.
+      let workers = DEFAULT_IMPORT_WORKERS;
+      try {
+        workers = await getImportWorkerCount(db);
+      } catch (e) {
+        log(`could not read import_workers, using default ${workers}: ${e.message}`);
       }
+      // Drain the queue with `workers` concurrent loops, then go back to sleep.
+      await Promise.all(Array.from({ length: workers }, () => drain()));
     } catch (e) {
       log(`worker loop error: ${e.message}`);
     } finally {

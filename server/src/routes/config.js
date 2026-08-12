@@ -26,13 +26,14 @@ export function configRoutes(db) {
       const updates = {};
       if (req.body?.llm_provider !== undefined) updates.llm_provider = req.body.llm_provider;
       if (req.body?.llm_model !== undefined) updates.llm_model = req.body.llm_model;
+      if (req.body?.import_workers !== undefined) updates.import_workers = req.body.import_workers;
       if (Object.keys(updates).length === 0) {
         return res.status(400).json({ error: 'Nothing to update' });
       }
       const config = await setConfig(db, updates);
       res.json(config);
     } catch (e) {
-      if (/Invalid llm_provider|Unknown config key/.test(e.message)) {
+      if (/Invalid llm_provider|Invalid import_workers|Unknown config key/.test(e.message)) {
         return res.status(400).json({ error: e.message });
       }
       next(e);

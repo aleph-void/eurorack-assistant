@@ -38,9 +38,17 @@ afterEach(() => {
 describe('config service', () => {
   it('returns defaults and persists updates', async () => {
     const db = await createTestDb();
-    expect(await getConfig(db)).toEqual({ llm_provider: 'claude', llm_model: '' });
+    expect(await getConfig(db)).toEqual({
+      llm_provider: 'claude',
+      llm_model: '',
+      import_workers: '4',
+    });
     await setConfig(db, { llm_provider: 'codex', llm_model: 'gpt-5.1' });
-    expect(await getConfig(db)).toEqual({ llm_provider: 'codex', llm_model: 'gpt-5.1' });
+    expect(await getConfig(db)).toEqual({
+      llm_provider: 'codex',
+      llm_model: 'gpt-5.1',
+      import_workers: '4',
+    });
     await setConfig(db, { llm_model: '' });
     expect((await getLlmSettings(db)).model).toBe('gpt-5.1-codex');
   });

@@ -13,6 +13,7 @@ import {
   PDF_HASH,
 } from './helpers.js';
 import { createWorker, enqueueJob, enqueueFindManual, MAX_ATTEMPTS } from '../src/jobs/worker.js';
+import { getImportWorkerCount, DEFAULT_IMPORT_WORKERS } from '../src/services/config.js';
 import { createBus } from '../src/events.js';
 
 let manualsDir;
@@ -447,5 +448,55 @@ describe('worker', () => {
     }
     const { rows } = await db.query('SELECT status FROM jobs');
     expect(rows[0].status).toBe('complete');
+  });
+
+  it('processes jobs concurrently with the configured number of workers', async () => {
+    const db = await createTestDb();
+    await db.query("INSERT INTO app_config (key, value) VALUES ('import_workers', '3')");
+    const user = await createUser(db, { username: 'u' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    for (let i = 0; i < 3; i++) {
+      const module = await insertModule(db, user.id, { name: `Module ${i}`, manual_hash: PDF_HASH });
+      await enqueue(db, 'analyze_manual', { module_id: module.id });
+    }
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const backend = fakeBackend({
+      analyzeDocument: async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        inFlight -= 1;
+        return '{"summary": "S", "components": []}';
+      },
+    });
+    const worker = createWorker(db, {
+      manualsDir,
+      backendFactory: () => backend,
+      pollIntervalMs: 10,
+      log: () => {},
+    });
+    worker.start();
+    try {
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const { rows } = await db.query('SELECT status FROM jobs');
+        if (rows.every((r) => r.status === 'complete')) break;
+        if (Date.now() > deadline) throw new Error(`jobs did not finish: ${JSON.stringify(rows)}`);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    } finally {
+      worker.stop();
+    }
+    expect(maxInFlight).toBe(3);
+  });
+
+  it('falls back to the default worker count when the stored value is unusable', async () => {
+    const db = await createTestDb();
+    expect(await getImportWorkerCount(db)).toBe(DEFAULT_IMPORT_WORKERS);
+    // Bypasses setConfig validation to simulate a corrupt row.
+    await db.query("INSERT INTO app_config (key, value) VALUES ('import_workers', 'banana')");
+    expect(await getImportWorkerCount(db)).toBe(DEFAULT_IMPORT_WORKERS);
   });
 });

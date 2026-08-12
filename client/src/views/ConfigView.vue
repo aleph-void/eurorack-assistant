@@ -5,6 +5,7 @@ import { api } from '../api.js';
 const config = ref(null);
 const provider = ref('claude');
 const model = ref('');
+const importWorkers = ref(4);
 const error = ref('');
 const saved = ref(false);
 const busy = ref(false);
@@ -17,6 +18,7 @@ onMounted(async () => {
     config.value = await api.get('/api/config');
     provider.value = config.value.llm_provider;
     model.value = config.value.llm_model;
+    importWorkers.value = Number(config.value.import_workers);
   } catch (e) {
     error.value = e.message;
   }
@@ -30,6 +32,7 @@ async function save() {
     config.value = { ...config.value, ...(await api.put('/api/config', {
       llm_provider: provider.value,
       llm_model: model.value,
+      import_workers: importWorkers.value,
     })) };
     saved.value = true;
   } catch (e) {
@@ -41,7 +44,7 @@ async function save() {
 </script>
 
 <template>
-  <h1>LLM configuration</h1>
+  <h1>Configuration</h1>
   <div class="panel">
     <p class="muted">
       Questions, manual research, and manual analysis are sent to this provider. The provider CLI
@@ -60,6 +63,17 @@ async function save() {
       <datalist id="known-models">
         <option v-for="m in knownModels" :key="m" :value="m" />
       </datalist>
+
+      <label for="import-workers">Import job workers (jobs processed in parallel)</label>
+      <input
+        id="import-workers"
+        v-model.number="importWorkers"
+        data-test="import-workers"
+        type="number"
+        min="1"
+        step="1"
+        required
+      />
 
       <p v-if="error" class="error" data-test="error">{{ error }}</p>
       <p v-if="saved" class="success" data-test="saved">Configuration saved.</p>
