@@ -4,12 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   isProbablyPdf,
+  pdfIsReadable,
   safeManualName,
   downloadPdf,
   findChrome,
+  findPdfinfo,
   renderPageToPdf,
 } from '../src/services/pdf.js';
-import { PDF_BYTES, fakeFetch } from './helpers.js';
+import { PDF_BYTES, TRUNCATED_PDF_BYTES, fakeFetch } from './helpers.js';
 
 let dir;
 beforeEach(() => {
@@ -45,6 +47,70 @@ describe('isProbablyPdf', () => {
     const result = isProbablyPdf(p);
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/missing PDF header/);
+  });
+});
+
+describe('pdfIsReadable', () => {
+  const failingPdfinfo = (stderr) => (bin, args, opts, cb) =>
+    cb(Object.assign(new Error('Command failed'), { code: 1 }), '', stderr);
+
+  it('accepts a structurally complete PDF', async () => {
+    const p = path.join(dir, 'ok.pdf');
+    fs.writeFileSync(p, PDF_BYTES);
+    expect(await pdfIsReadable(p)).toEqual({ ok: true, reason: 'ok' });
+  });
+
+  it('rejects a truncated PDF whose header still looks right', async () => {
+    const p = path.join(dir, 'cut.pdf');
+    fs.writeFileSync(p, TRUNCATED_PDF_BYTES);
+    expect(isProbablyPdf(p).ok).toBe(true);
+    const result = await pdfIsReadable(p);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/truncated/);
+  });
+
+  it('rejects a document pdfinfo cannot parse', async () => {
+    const p = path.join(dir, 'broken.pdf');
+    fs.writeFileSync(p, PDF_BYTES);
+    const result = await pdfIsReadable(p, {
+      pdfinfoPath: '/usr/bin/pdfinfo',
+      execImpl: failingPdfinfo("Syntax Error: Couldn't find trailer dictionary\n"),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/Couldn't find trailer dictionary/);
+  });
+
+  it('rejects a PDF with no pages', async () => {
+    const p = path.join(dir, 'empty.pdf');
+    fs.writeFileSync(p, PDF_BYTES);
+    const result = await pdfIsReadable(p, {
+      pdfinfoPath: '/usr/bin/pdfinfo',
+      execImpl: (bin, args, opts, cb) => cb(null, 'PDF version:     1.4\n', ''),
+    });
+    expect(result).toEqual({ ok: false, reason: 'PDF has no pages' });
+  });
+
+  it('falls back to the structural check when poppler is missing', async () => {
+    const p = path.join(dir, 'ok.pdf');
+    fs.writeFileSync(p, PDF_BYTES);
+    const execImpl = () => {
+      throw new Error('pdfinfo should not run');
+    };
+    expect(await pdfIsReadable(p, { pdfinfoPath: null, execImpl })).toEqual({
+      ok: true,
+      reason: 'ok',
+    });
+  });
+});
+
+describe('findPdfinfo', () => {
+  it('finds pdfinfo on PATH', () => {
+    fs.writeFileSync(path.join(dir, 'pdfinfo'), '#!/bin/sh\n', { mode: 0o755 });
+    expect(findPdfinfo({ PATH: dir })).toBe(path.join(dir, 'pdfinfo'));
+  });
+
+  it('returns null when poppler is not installed', () => {
+    expect(findPdfinfo({ PATH: dir })).toBe(null);
   });
 });
 
@@ -138,6 +204,16 @@ describe('downloadPdf', () => {
     const fetchImpl = fakeFetch({ 'example.com': { text: '<html>404</html>' } });
     const dest = path.join(dir, 'out.pdf');
     expect(await downloadPdf('https://example.com/manual.pdf', dest, { fetchImpl })).toBe(false);
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it('rejects a truncated PDF and cleans up', async () => {
+    // Served with the right content type and a %PDF- header, but cut short —
+    // the erogenous-tones vc8-instructions.pdf case.
+    const fetchImpl = fakeFetch({ 'erogenous-tones.com': { body: TRUNCATED_PDF_BYTES } });
+    const dest = path.join(dir, 'out.pdf');
+    const url = 'https://erogenous-tones.com/download/vc8-instructions.pdf';
+    expect(await downloadPdf(url, dest, { fetchImpl })).toBe(false);
     expect(fs.existsSync(dest)).toBe(false);
   });
 

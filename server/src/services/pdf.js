@@ -72,10 +72,8 @@ export function safeManualName(manufacturer, module, suffix = 'Manual') {
 
 const CHROME_NAMES = ['google-chrome', 'chromium', 'chromium-browser', 'chrome'];
 
-// Locate a headless-capable Chrome/Chromium binary on PATH (the server docker
-// image ships `chromium`; local dev machines may have `google-chrome`).
-export function findChrome(env = process.env) {
-  for (const name of CHROME_NAMES) {
+function findOnPath(names, env) {
+  for (const name of names) {
     for (const dir of (env.PATH || '').split(path.delimiter)) {
       if (!dir) continue;
       const candidate = path.join(dir, name);
@@ -90,6 +88,86 @@ export function findChrome(env = process.env) {
   return null;
 }
 
+// Locate a headless-capable Chrome/Chromium binary on PATH (the server docker
+// image ships `chromium`; local dev machines may have `google-chrome`).
+export function findChrome(env = process.env) {
+  return findOnPath(CHROME_NAMES, env);
+}
+
+// poppler's pdfinfo, from the same poppler-utils package that gives the LLM
+// CLIs pdftotext.
+export function findPdfinfo(env = process.env) {
+  return findOnPath(['pdfinfo'], env);
+}
+
+// A complete PDF ends with an %%EOF marker on its last line; a few writers
+// leave trailing whitespace or a stray byte after it, so look at the tail
+// rather than the very end.
+const EOF_SEARCH_BYTES = 2048;
+
+function readTail(filePath, count) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    const length = Math.min(count, size);
+    const buf = Buffer.alloc(length);
+    fs.readSync(fd, buf, 0, length, size - length);
+    return buf.toString('latin1');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Deep validation, used when acquiring a manual: a file can start with %PDF-
+// and still be unusable. Some manuals are served truncated — erogenous-tones'
+// vc8-instructions.pdf, for one, is cut off at exactly 1MiB, so the header
+// survives but the xref table and trailer do not. Everything downstream
+// (pdftotext, the LLM CLIs reading the manual, the browser's viewer) fails on
+// such a file, so accepting it on its header alone means storing a manual that
+// no later job can read. Parsing it here instead lets the acquisition chain
+// fall through to the next candidate and ultimately to the product-page
+// render. Without poppler on PATH the check degrades to the structural %%EOF
+// test rather than rejecting every document.
+export async function pdfIsReadable(filePath, opts = {}) {
+  const { pdfinfoPath = findPdfinfo(), execImpl = execFile, log = () => {} } = opts;
+
+  const basic = isProbablyPdf(filePath);
+  if (!basic.ok) return basic;
+
+  try {
+    if (!readTail(filePath, EOF_SEARCH_BYTES).includes('%%EOF')) {
+      return { ok: false, reason: 'truncated PDF (no %%EOF marker)' };
+    }
+  } catch (e) {
+    return { ok: false, reason: `exception while checking PDF: ${e.message}` };
+  }
+
+  if (!pdfinfoPath) {
+    log('no pdfinfo binary on PATH; validating PDFs by structure alone');
+    return { ok: true, reason: 'ok' };
+  }
+
+  let stdout;
+  try {
+    stdout = await new Promise((resolve, reject) => {
+      execImpl(pdfinfoPath, [filePath], { timeout: 60_000 }, (err, out, errOut) => {
+        if (!err) return resolve(String(out || ''));
+        // pdfinfo reports the real problem on stderr ("Syntax Error: Couldn't
+        // find trailer dictionary"); its own message is just an exit status.
+        const detail = String(errOut || '').trim().split('\n')[0] || err.message;
+        reject(new Error(detail));
+      });
+    });
+  } catch (e) {
+    return { ok: false, reason: `pdfinfo cannot parse the document: ${e.message}` };
+  }
+
+  if (!Number(/^Pages:\s+(\d+)/m.exec(stdout)?.[1] || 0)) {
+    return { ok: false, reason: 'PDF has no pages' };
+  }
+  return { ok: true, reason: 'ok' };
+}
+
 // Save a web page as a PDF using headless Chrome. Returns true when dest is a
 // valid PDF afterwards. Chrome's exit status is ignored (like the Python
 // original): a timed-out or crashed render may still have produced a usable
@@ -97,7 +175,12 @@ export function findChrome(env = process.env) {
 // back to weasyprint when no Chrome exists; there is no Node equivalent, so
 // the docker image guarantees chromium instead.
 export async function renderPageToPdf(url, dest, opts = {}) {
-  const { chromePath = findChrome(), execImpl = execFile, log = () => {} } = opts;
+  const {
+    chromePath = findChrome(),
+    execImpl = execFile,
+    validateImpl = pdfIsReadable,
+    log = () => {},
+  } = opts;
   if (!chromePath) {
     log('no chrome/chromium binary found on PATH; cannot render page to PDF');
     return false;
@@ -122,16 +205,20 @@ export async function renderPageToPdf(url, dest, opts = {}) {
   } catch (e) {
     log(`headless chrome rendering ${url}: ${e.message}`);
   }
-  const { ok, reason } = isProbablyPdf(dest);
+  const { ok, reason } = await validateImpl(dest, { log });
   if (ok) return true;
   log(`rendered ${url} is not a valid PDF (${reason})`);
   fs.rmSync(dest, { force: true });
   return false;
 }
 
-// Download url to dest and verify it is a real PDF. Retries once with fuller
-// browser headers when the plain user agent is rejected.
-export async function downloadPdf(url, dest, { fetchImpl = fetch, log = () => {} } = {}) {
+// Download url to dest and verify it is a real, readable PDF. Retries once
+// with fuller browser headers when the plain user agent is rejected.
+export async function downloadPdf(
+  url,
+  dest,
+  { fetchImpl = fetch, validateImpl = pdfIsReadable, log = () => {} } = {}
+) {
   let originMatch = url.match(/^https?:\/\/[^/]+/);
   const retryHeaders = { ...CHROME_DESKTOP_HEADERS };
   if (originMatch) retryHeaders.Referer = originMatch[0] + '/';
@@ -159,7 +246,7 @@ export async function downloadPdf(url, dest, { fetchImpl = fetch, log = () => {}
       continue;
     }
 
-    const { ok, reason } = isProbablyPdf(dest);
+    const { ok, reason } = await validateImpl(dest, { log });
     if (ok) return true;
     log(`${url} is not a valid PDF (${reason})`);
     fs.rmSync(dest, { force: true });

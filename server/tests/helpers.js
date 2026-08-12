@@ -10,6 +10,7 @@ import { migrate } from '../src/db/migrate.js';
 import { createApp } from '../src/app.js';
 import { hashPassword } from '../src/auth.js';
 import { DEFAULT_RACK_NAME, findOrCreateRack } from '../src/services/racks.js';
+import { textToPdf } from '../src/services/textPdf.js';
 
 // pg-mem hands timestamps to Sequelize as strings moment can only parse via
 // its js-Date fallback; the resulting deprecation warning would spam the run.
@@ -107,12 +108,16 @@ export async function mapModule(db, userId, moduleId, fields = {}) {
   return rackRow.get({ plain: true });
 }
 
-// A minimal-but-valid PDF file body, and its content hash (documents are
-// stored on disk as <hash>.pdf).
-export const PDF_BYTES = Buffer.from(
-  '%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n'
-);
+// A small PDF file body, and its content hash (documents are stored on disk
+// as <hash>.pdf). Built with the app's own PDF writer so it is structurally
+// complete — acquisition parses candidate manuals with pdfinfo, which a
+// hand-written stub with no xref table would fail.
+export const PDF_BYTES = textToPdf([{ text: 'Test Manual', bold: true }, { text: 'Page one.' }]);
 export const PDF_HASH = crypto.createHash('sha256').update(PDF_BYTES).digest('hex');
+
+// The same PDF cut short mid-body: header intact, xref table and %%EOF gone —
+// the shape of a manual served truncated by its host.
+export const TRUNCATED_PDF_BYTES = PDF_BYTES.subarray(0, 400);
 
 // Fake LLM backend whose responses are scripted per method.
 export function fakeBackend(responses = {}) {

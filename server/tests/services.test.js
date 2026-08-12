@@ -11,6 +11,7 @@ import {
   fakeFetch,
   PDF_BYTES,
   PDF_HASH,
+  TRUNCATED_PDF_BYTES,
 } from './helpers.js';
 import { findManualForModule, researchModule } from '../src/services/manualFinder.js';
 import {
@@ -275,6 +276,44 @@ describe('findManualForModule', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].original_name).toBe('Make_Noise_Maths_Product_Page.pdf');
     expect(fs.existsSync(path.join(manualsDir, `${hash}.pdf`))).toBe(true);
+  });
+
+  it('renders the product page when the manual URL serves a corrupt PDF', async () => {
+    // erogenous-tones.com/download/vc8-instructions.pdf answers 200 with
+    // application/pdf, but the body is cut short: the %PDF- header survives
+    // while the xref table and trailer do not, so nothing downstream can read
+    // it. It must not be stored as the module's manual.
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id, { manufacturer: 'Erogenous Tones', name: 'VC8' });
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Erogenous Tones',
+        module: 'VC8',
+        pdf_urls: ['https://erogenous-tones.com/download/vc8-instructions.pdf'],
+        product_page_url: 'https://erogenous-tones.com/erogenous-tones-vc8.html',
+      }),
+    });
+    const fetchImpl = fakeFetch({
+      'erogenous-tones.com/download': { body: TRUNCATED_PDF_BYTES },
+      // No archived copy of the truncated manual either.
+      'archive.org/wayback/available': { json: {} },
+    });
+    const renderImpl = fakeRender({ 'erogenous-tones-vc8.html': RENDER_A });
+
+    const hash = await findManualForModule(db, backend, module, manualsDir, {
+      fetchImpl,
+      renderImpl,
+    });
+    expect(hash).toBe(RENDER_A_HASH);
+    expect(renderImpl.calls).toEqual(['https://erogenous-tones.com/erogenous-tones-vc8.html']);
+
+    const { rows } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [module.id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].original_name).toBe('Erogenous_Tones_VC8_Product_Page.pdf');
+    // The truncated download left nothing behind.
+    expect(fs.readdirSync(manualsDir)).toEqual([`${hash}.pdf`]);
   });
 
   it('recovers a dead manual URL from the wayback machine', async () => {
