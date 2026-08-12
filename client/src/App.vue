@@ -45,7 +45,7 @@ async function logout() {
     </RouterLink>
     <template v-if="auth.isAdmin">
       <RouterLink to="/admin/users">Users</RouterLink>
-      <RouterLink to="/admin/config">LLM Config</RouterLink>
+      <RouterLink to="/admin/config">Application Config</RouterLink>
     </template>
     <span class="spacer"></span>
     <RouterLink class="muted" to="/account/password" title="Change password" data-test="account">

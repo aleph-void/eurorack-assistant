@@ -492,6 +492,56 @@ describe('worker', () => {
     expect(maxInFlight).toBe(3);
   });
 
+  it('runs jobs chained mid-drain (import → find_manual) at full concurrency', async () => {
+    const db = await createTestDb();
+    await db.query("INSERT INTO app_config (key, value) VALUES ('import_workers', '3')");
+    const user = await createUser(db, { username: 'u' });
+    await enqueueJob(db, 'import', {
+      userId: user.id,
+      payload: { type: 'text', content: 'Make Noise,Maths\nMake Noise,Rene\nMake Noise,Wogglebug' },
+    });
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const backend = fakeBackend({
+      completeTextWithSearch: async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        inFlight -= 1;
+        return JSON.stringify({
+          manufacturer: 'Make Noise',
+          module: 'Maths',
+          pdf_urls: ['https://makenoise.com/manual.pdf'],
+          product_page_url: null,
+        });
+      },
+      analyzeDocument: '{"summary": "S", "components": []}',
+    });
+    const worker = createWorker(db, {
+      manualsDir,
+      backendFactory: () => backend,
+      fetchImpl: fakeFetch({ 'makenoise.com': { body: PDF_BYTES } }),
+      pollIntervalMs: 10,
+      log: () => {},
+    });
+    worker.start();
+    try {
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const { rows } = await db.query('SELECT status FROM jobs');
+        if (rows.length >= 7 && rows.every((r) => r.status === 'complete')) break;
+        if (Date.now() > deadline) throw new Error(`jobs did not finish: ${JSON.stringify(rows)}`);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    } finally {
+      worker.stop();
+    }
+    // The three find_manual jobs only exist once the import job is already
+    // running; they must still be spread across the worker pool.
+    expect(maxInFlight).toBe(3);
+  });
+
   it('falls back to the default worker count when the stored value is unusable', async () => {
     const db = await createTestDb();
     expect(await getImportWorkerCount(db)).toBe(DEFAULT_IMPORT_WORKERS);

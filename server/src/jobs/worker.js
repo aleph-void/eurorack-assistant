@@ -1,4 +1,5 @@
-// DB-backed job worker. Polls the jobs table and processes one job at a time:
+// DB-backed job worker. Polls the jobs table and processes pending jobs with
+// up to `import_workers` (app_config) concurrent runners. Job types:
 //   import          — parse an import (text/csv/modulargrid), create module
 //                     records, and queue a find_manual job per new module
 //   find_manual     — research + download the module's manual PDF, then queue
@@ -269,6 +270,10 @@ export function createWorker(db, options = {}) {
   async function tick() {
     const job = await claimNextJob();
     if (!job) return null;
+    return runJob(job);
+  }
+
+  async function runJob(job) {
     const owners = await jobOwners(job);
     const labels = await jobLabels(job);
     Object.assign(job, labels);
@@ -304,12 +309,6 @@ export function createWorker(db, options = {}) {
   let running = false;
   let stopped = false;
 
-  async function drain() {
-    while (!stopped && (await tick()) !== null) {
-      /* keep going */
-    }
-  }
-
   async function loop() {
     if (running) return;
     running = true;
@@ -322,8 +321,30 @@ export function createWorker(db, options = {}) {
       } catch (e) {
         log(`could not read import_workers, using default ${workers}: ${e.message}`);
       }
-      // Drain the queue with `workers` concurrent loops, then go back to sleep.
-      await Promise.all(Array.from({ length: workers }, () => drain()));
+      // Drain the queue with `workers` concurrent runners, then go back to
+      // sleep. A runner that finds the queue empty must not exit while a
+      // sibling is still mid-job: jobs chain (import → find_manual →
+      // analyze_manual), so the busy sibling may be about to enqueue work
+      // that should run at full concurrency too.
+      let working = 0;
+      const idleDelayMs = Math.min(pollIntervalMs, 200);
+      const runner = async () => {
+        while (!stopped) {
+          const job = await claimNextJob();
+          if (job) {
+            working += 1;
+            try {
+              await runJob(job);
+            } finally {
+              working -= 1;
+            }
+            continue;
+          }
+          if (working === 0) return;
+          await new Promise((resolve) => setTimeout(resolve, idleDelayMs));
+        }
+      };
+      await Promise.all(Array.from({ length: workers }, runner));
     } catch (e) {
       log(`worker loop error: ${e.message}`);
     } finally {
