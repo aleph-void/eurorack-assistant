@@ -67,6 +67,23 @@ installation; on other distros install Docker yourself first):
 
 The app is then at <http://localhost:8080>.
 
+### HTTPS
+
+Pass your domain to the setup script to serve TLS on port 443:
+
+```sh
+sudo certbot certonly --standalone -d rack.example.com   # if you don't have certs yet
+./setup.sh rack.example.com
+```
+
+When certs exist in `/etc/letsencrypt/live/<fqdn>/`, nginx serves
+<https://fqdn/> on port 443 with port 80 redirecting to it (the FQDN is
+remembered in `.env`, so later plain `./setup.sh` runs keep TLS). Certs are
+mounted read-only from the host; after a `certbot renew`, reload nginx with
+`docker compose exec nginx nginx -s reload` (a good certbot deploy hook).
+With rootless Docker, setup grants `rootlesskit` the `cap_net_bind_service`
+capability so it can bind ports 80/443.
+
 The server container mounts `~/.claude` and `~/.codex` from the host so the
 CLIs inside the container reuse your subscription logins (override the paths
 with `CLAUDE_CONFIG_DIR` / `CODEX_CONFIG_DIR` in `.env`).

@@ -2,15 +2,22 @@
 #
 # One-shot setup for Eurorack Assistant.
 #
+#   Usage: ./setup.sh [fqdn]
+#
 #   1. Installs Docker (docker.io + docker-compose-v2) on Ubuntu if missing.
 #   2. Installs the LLM provider CLIs (claude, codex) if missing.
-#   3. Generates secrets, builds containers, migrates the database.
-#   4. Asks which provider to use and guides you through authenticating —
+#   3. When an FQDN is given (or remembered in .env) and Let's Encrypt certs
+#      exist in /etc/letsencrypt/live/<fqdn>/, serves HTTPS on port 443 (with
+#      port 80 redirecting) instead of plain HTTP on port 8080.
+#   4. Generates secrets, builds containers, migrates the database.
+#   5. Asks which provider to use and guides you through authenticating —
 #      skipped entirely when a provider is already configured in the database.
-#   5. Creates the admin account — its random password is printed ONCE below
+#   6. Creates the admin account — its random password is printed ONCE below
 #      and stored nowhere else in cleartext.
 set -euo pipefail
 cd "$(dirname "$0")"
+
+FQDN="${1:-}"
 
 info() { echo "[setup] $*"; }
 warn() { echo "[setup] WARNING: $*" >&2; }
@@ -181,6 +188,76 @@ authenticate_provider() {
   esac
 }
 
+# ------------------------------------------------------------------- tls ----
+set_env() {
+  local key="$1" val="$2"
+  if grep -qE "^${key}=" .env; then
+    sed -i "s|^${key}=.*|${key}=${val}|" .env
+  else
+    echo "${key}=${val}" >> .env
+  fi
+}
+
+get_env() { grep -E "^$1=" .env 2>/dev/null | head -n 1 | cut -d= -f2- || true; }
+
+certs_exist() {
+  local d="/etc/letsencrypt/live/$FQDN"
+  # /etc/letsencrypt is usually root-only, so fall back to sudo for the check.
+  if [ -r "$d/fullchain.pem" ] && [ -r "$d/privkey.pem" ]; then return 0; fi
+  sudo test -r "$d/fullchain.pem" 2>/dev/null && sudo test -r "$d/privkey.pem" 2>/dev/null
+}
+
+# Rootful docker publishes low ports via the root daemon, so no capability is
+# needed. Rootless docker binds host ports itself and needs
+# CAP_NET_BIND_SERVICE on rootlesskit to bind 80/443.
+ensure_port_bind_cap() {
+  if ! $DOCKER info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+    return
+  fi
+  warn "rootless docker detected: it cannot read root-owned certs in /etc/letsencrypt,"
+  warn "so nginx may fail to start unless the certs are readable by your user."
+  local rk
+  rk=$(command -v rootlesskit || true)
+  if [ -z "$rk" ]; then
+    warn "rootlesskit not found; binding ports 80/443 will likely fail."
+    return
+  fi
+  if command -v getcap >/dev/null 2>&1 && getcap "$rk" 2>/dev/null | grep -q cap_net_bind_service; then
+    return
+  fi
+  if ! command -v setcap >/dev/null 2>&1 && is_ubuntu; then
+    sudo apt-get install -y libcap2-bin
+  fi
+  info "granting cap_net_bind_service to rootlesskit for ports 80/443 (requires sudo)..."
+  sudo setcap cap_net_bind_service=ep "$rk"
+  systemctl --user restart docker || \
+    warn "could not restart rootless docker; restart it manually: systemctl --user restart docker"
+}
+
+setup_tls() {
+  # Remember the FQDN from a previous run so plain "./setup.sh" keeps TLS.
+  if [ -z "$FQDN" ]; then
+    FQDN=$(get_env FQDN)
+  fi
+  if [ -z "$FQDN" ]; then
+    return
+  fi
+  if certs_exist; then
+    info "TLS certs found in /etc/letsencrypt/live/$FQDN — enabling HTTPS on port 443"
+    TLS_ENABLED=1
+    set_env FQDN "$FQDN"
+    set_env APP_PORT 80
+    set_env COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
+    ensure_port_bind_cap
+  else
+    warn "no TLS certs in /etc/letsencrypt/live/$FQDN (need fullchain.pem + privkey.pem);"
+    warn "staying on plain HTTP. Get certs with:"
+    warn "  sudo certbot certonly --standalone -d $FQDN"
+    warn "then re-run: ./setup.sh $FQDN"
+    sed -i '/^COMPOSE_FILE=/d' .env
+  fi
+}
+
 # ------------------------------------------------------------------- app ----
 random_hex() {
   if command -v openssl >/dev/null 2>&1; then
@@ -204,6 +281,9 @@ EOF
 else
   info ".env already exists, keeping it"
 fi
+
+TLS_ENABLED=0
+setup_tls
 
 info "building images (this compiles the web client)..."
 $DOCKER compose build
@@ -276,9 +356,15 @@ fi
 info "starting all services..."
 $DOCKER compose up -d
 
-APP_PORT=$(grep -E '^APP_PORT=' .env | cut -d= -f2)
 echo ""
-info "done — the app is at http://localhost:${APP_PORT:-8080}"
+if [ "$TLS_ENABLED" = "1" ]; then
+  info "done — the app is at https://$FQDN/"
+  info "after cert renewals, reload nginx: $DOCKER compose exec nginx nginx -s reload"
+  info "(e.g. as a certbot deploy hook)"
+else
+  APP_PORT=$(get_env APP_PORT)
+  info "done — the app is at http://localhost:${APP_PORT:-8080}"
+fi
 if [ "$HAS_ADMIN" = "yes" ]; then
   info "log in with your existing admin credentials."
 else

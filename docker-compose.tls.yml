@@ -1,0 +1,14 @@
+# TLS override, enabled by setup.sh via COMPOSE_FILE in .env when
+# /etc/letsencrypt/live/$FQDN/ holds certs. setup.sh also sets APP_PORT=80 so
+# the base port mapping becomes 80:80 (redirect to https) alongside 443:443.
+services:
+  nginx:
+    ports:
+      - "443:443"
+    environment:
+      FQDN: ${FQDN:?missing FQDN - run ./setup.sh <fqdn>}
+    volumes:
+      # live/ holds symlinks into archive/, so mount all of /etc/letsencrypt;
+      # renewed certs appear without a recreate (reload nginx to pick them up).
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ./nginx/tls.conf.template:/etc/nginx/templates/default.conf.template:ro
