@@ -3,6 +3,7 @@
 // validation, then an archive.org item-library fallback.
 
 import path from 'node:path';
+import { Op, fn, col, where } from 'sequelize';
 import { extractJsonObject } from './json.js';
 import { downloadPdf, isProbablyPdf, safeManualName, USER_AGENT } from './pdf.js';
 
@@ -130,6 +131,8 @@ export async function findManualForModule(db, backend, module, manualsDir, deps 
     };
   }
 
+  const { Module, Manual } = db.models;
+
   // Keep the caller's naming when it was given explicitly.
   if (module.manufacturer) {
     info.manufacturer = module.manufacturer;
@@ -138,15 +141,19 @@ export async function findManualForModule(db, backend, module, manualsDir, deps 
     // Free-text import: adopt the researched official naming — unless another
     // module already uses it (modules are shared records), in which case the
     // original free-text naming is kept to avoid a collision.
-    const { rows: clash } = await db.query(
-      `SELECT id FROM modules
-       WHERE lower(manufacturer) = lower($2) AND lower(name) = lower($3) AND id <> $1`,
-      [module.id, info.manufacturer, info.module]
-    );
-    if (clash.length === 0) {
-      await db.query(
-        'UPDATE modules SET manufacturer = $2, name = $3, updated_at = now() WHERE id = $1',
-        [module.id, info.manufacturer, info.module]
+    const clash = await Module.findOne({
+      where: {
+        [Op.and]: [
+          where(fn('lower', col('manufacturer')), info.manufacturer.toLowerCase()),
+          where(fn('lower', col('name')), info.module.toLowerCase()),
+          { id: { [Op.ne]: module.id } },
+        ],
+      },
+    });
+    if (!clash) {
+      await Module.update(
+        { manufacturer: info.manufacturer, name: info.module },
+        { where: { id: module.id } }
       );
     } else {
       log(`researched name "${info.manufacturer} ${info.module}" already exists; keeping "${module.name}"`);
@@ -156,25 +163,20 @@ export async function findManualForModule(db, backend, module, manualsDir, deps 
   const manualName = await acquireManual(info, manualsDir, { fetchImpl, log });
   if (manualName) {
     // Record the shared (user_id NULL) manual document unless already present.
-    const { rows: existing } = await db.query(
-      'SELECT id FROM manuals WHERE module_id = $1 AND user_id IS NULL AND filename = $2',
-      [module.id, manualName]
-    );
-    if (existing.length === 0) {
-      await db.query(
-        `INSERT INTO manuals (module_id, user_id, filename, source) VALUES ($1, NULL, $2, 'found')`,
-        [module.id, manualName]
-      );
+    const existing = await Manual.findOne({
+      where: { module_id: module.id, user_id: null, filename: manualName },
+    });
+    if (!existing) {
+      await Manual.create({
+        module_id: module.id,
+        user_id: null,
+        filename: manualName,
+        source: 'found',
+      });
     }
-    await db.query(
-      `UPDATE modules SET manual_status = 'found', updated_at = now() WHERE id = $1`,
-      [module.id]
-    );
+    await Module.update({ manual_status: 'found' }, { where: { id: module.id } });
     return manualName;
   }
-  await db.query(
-    `UPDATE modules SET manual_status = 'failed', updated_at = now() WHERE id = $1`,
-    [module.id]
-  );
+  await Module.update({ manual_status: 'failed' }, { where: { id: module.id } });
   return null;
 }

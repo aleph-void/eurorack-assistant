@@ -2,36 +2,54 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { Router } from 'express';
+import { Op } from 'sequelize';
 import { requireAuth } from '../auth.js';
 import { isProbablyPdf } from '../services/pdf.js';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/data/manuals' } = {}) {
+  const { Module, UserModule, ModuleComponent, Manual, Note, NoteModule, NoteComponent } =
+    db.models;
   const router = Router();
   router.use(requireAuth(db));
 
   // The user's mapping row for a module, or null if it isn't in their system.
   async function userModule(userId, moduleId) {
-    const { rows } = await db.query(
-      `SELECT m.*, um.quantity FROM user_modules um
-       JOIN modules m ON m.id = um.module_id
-       WHERE um.user_id = $1 AND um.module_id = $2`,
-      [userId, Number(moduleId)]
-    );
-    return rows[0] || null;
+    const mapping = await UserModule.findOne({
+      where: { user_id: userId, module_id: Number(moduleId) },
+      include: Module,
+    });
+    if (!mapping || !mapping.Module) return null;
+    return { ...mapping.Module.get({ plain: true }), quantity: mapping.quantity };
   }
 
   router.get('/', async (req, res, next) => {
     try {
-      const { rows } = await db.query(
-        `SELECT m.id, m.manufacturer, m.name, um.quantity, m.manual_status,
-                m.analysis_status, m.summary, m.created_at, m.updated_at
-         FROM user_modules um JOIN modules m ON m.id = um.module_id
-         WHERE um.user_id = $1 ORDER BY m.manufacturer, m.name`,
-        [req.user.id]
+      const mappings = await UserModule.findAll({
+        where: { user_id: req.user.id },
+        include: Module,
+        order: [
+          [Module, 'manufacturer', 'ASC'],
+          [Module, 'name', 'ASC'],
+        ],
+      });
+      res.json(
+        mappings.map((um) => {
+          const m = um.Module;
+          return {
+            id: m.id,
+            manufacturer: m.manufacturer,
+            name: m.name,
+            quantity: um.quantity,
+            manual_status: m.manual_status,
+            analysis_status: m.analysis_status,
+            summary: m.summary,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+          };
+        })
       );
-      res.json(rows);
     } catch (e) {
       next(e);
     }
@@ -41,38 +59,53 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
     try {
       const module = await userModule(req.user.id, req.params.id);
       if (!module) return res.status(404).json({ error: 'Module not found' });
-      const { rows: components } = await db.query(
-        `SELECT id, type, name, description, voltage_min, voltage_max, polarity
-         FROM module_components WHERE module_id = $1 ORDER BY type, id`,
-        [module.id]
-      );
+      const components = await ModuleComponent.findAll({
+        where: { module_id: module.id },
+        attributes: ['id', 'type', 'name', 'description', 'voltage_min', 'voltage_max', 'polarity'],
+        order: [
+          ['type', 'ASC'],
+          ['id', 'ASC'],
+        ],
+      });
       // Documents: the shared auto-found manual plus this user's own uploads.
-      const { rows: manuals } = await db.query(
-        `SELECT id, filename, original_name, source, user_id, created_at
-         FROM manuals
-         WHERE module_id = $1 AND (user_id IS NULL OR user_id = $2)
-         ORDER BY id`,
-        [module.id, req.user.id]
-      );
+      const manuals = await Manual.findAll({
+        where: {
+          module_id: module.id,
+          [Op.or]: [{ user_id: null }, { user_id: req.user.id }],
+        },
+        attributes: ['id', 'filename', 'original_name', 'source', 'user_id', 'created_at'],
+        order: [['id', 'ASC']],
+      });
       // The requesting user's notes attached to this module (component_id NULL)
       // or to one of its components. Notes are strictly private per user.
-      const { rows: moduleNotes } = await db.query(
-        `SELECT n.id, n.title, n.body, n.updated_at, NULL AS component_id
-         FROM note_modules nm JOIN notes n ON n.id = nm.note_id
-         WHERE nm.module_id = $1 AND n.user_id = $2
-         ORDER BY n.id`,
-        [module.id, req.user.id]
-      );
-      const { rows: componentNotes } = await db.query(
-        `SELECT n.id, n.title, n.body, n.updated_at, nc.component_id
-         FROM note_components nc
-         JOIN notes n ON n.id = nc.note_id
-         JOIN module_components mc ON mc.id = nc.component_id
-         WHERE mc.module_id = $1 AND n.user_id = $2
-         ORDER BY n.id`,
-        [module.id, req.user.id]
-      );
-      res.json({ ...module, components, manuals, notes: [...moduleNotes, ...componentNotes] });
+      const moduleNotes = await NoteModule.findAll({
+        where: { module_id: module.id },
+        include: [{ model: Note, where: { user_id: req.user.id } }],
+        order: [[Note, 'id', 'ASC']],
+      });
+      const componentNotes = await NoteComponent.findAll({
+        include: [
+          { model: Note, where: { user_id: req.user.id } },
+          { model: ModuleComponent, where: { module_id: module.id }, attributes: [] },
+        ],
+        order: [[Note, 'id', 'ASC']],
+      });
+      const noteJson = (note, componentId) => ({
+        id: note.id,
+        title: note.title,
+        body: note.body,
+        updated_at: note.updated_at,
+        component_id: componentId,
+      });
+      res.json({
+        ...module,
+        components,
+        manuals,
+        notes: [
+          ...moduleNotes.map((nm) => noteJson(nm.Note, null)),
+          ...componentNotes.map((nc) => noteJson(nc.Note, nc.component_id)),
+        ],
+      });
     } catch (e) {
       next(e);
     }
@@ -82,11 +115,10 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
   // record (manual, analysis) remains for other users.
   router.delete('/:id', async (req, res, next) => {
     try {
-      const result = await db.query(
-        'DELETE FROM user_modules WHERE user_id = $1 AND module_id = $2',
-        [req.user.id, Number(req.params.id)]
-      );
-      if (result.rowCount === 0) return res.status(404).json({ error: 'Module not found' });
+      const deleted = await UserModule.destroy({
+        where: { user_id: req.user.id, module_id: Number(req.params.id) },
+      });
+      if (deleted === 0) return res.status(404).json({ error: 'Module not found' });
       res.json({ ok: true });
     } catch (e) {
       next(e);
@@ -131,13 +163,15 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
         return res.status(400).json({ error: `not a valid PDF (${reason})` });
       }
 
-      const { rows } = await db.query(
-        `INSERT INTO manuals (module_id, user_id, filename, original_name, source)
-         VALUES ($1, $2, $3, $4, 'upload')
-         RETURNING id, filename, original_name, source, user_id, created_at`,
-        [module.id, req.user.id, stored, String(filename)]
-      );
-      res.status(201).json(rows[0]);
+      const manual = await Manual.create({
+        module_id: module.id,
+        user_id: req.user.id,
+        filename: stored,
+        original_name: String(filename),
+        source: 'upload',
+      });
+      const { id, original_name, source, user_id, created_at } = manual;
+      res.status(201).json({ id, filename: stored, original_name, source, user_id, created_at });
     } catch (e) {
       next(e);
     }
@@ -147,13 +181,16 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
   // deleted this way).
   router.delete('/:id/manuals/:manualId', async (req, res, next) => {
     try {
-      const { rows } = await db.query(
-        `SELECT * FROM manuals WHERE id = $1 AND module_id = $2 AND user_id = $3`,
-        [Number(req.params.manualId), Number(req.params.id), req.user.id]
-      );
-      if (rows.length === 0) return res.status(404).json({ error: 'Document not found' });
-      await db.query('DELETE FROM manuals WHERE id = $1', [rows[0].id]);
-      fs.rmSync(path.join(manualsDir, rows[0].filename), { force: true });
+      const manual = await Manual.findOne({
+        where: {
+          id: Number(req.params.manualId),
+          module_id: Number(req.params.id),
+          user_id: req.user.id,
+        },
+      });
+      if (!manual) return res.status(404).json({ error: 'Document not found' });
+      await manual.destroy();
+      fs.rmSync(path.join(manualsDir, manual.filename), { force: true });
       res.json({ ok: true });
     } catch (e) {
       next(e);

@@ -1,27 +1,41 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import moment from 'moment';
 import { newDb } from 'pg-mem';
 import request from 'supertest';
+import { createDatabase } from '../src/db/index.js';
 import { migrate } from '../src/db/migrate.js';
 import { createApp } from '../src/app.js';
 import { hashPassword } from '../src/auth.js';
 
-// In-memory postgres + migrations; returns a pg-compatible pool.
+// pg-mem hands timestamps to Sequelize as strings moment can only parse via
+// its js-Date fallback; the resulting deprecation warning would spam the run.
+moment.suppressDeprecationWarnings = true;
+
+// In-memory postgres + migrations, wrapped in the app's Sequelize database
+// object. db.query() is a raw-SQL escape hatch for test fixtures/assertions,
+// backed by the same pg-mem instance.
 export async function createTestDb() {
   const mem = newDb();
-  const { Pool } = mem.adapters.createPg();
-  const db = new Pool();
+  // Sequelize issues SET statements (timezone, client_min_messages) on
+  // connect that pg-mem cannot parse; swallow them.
+  mem.public.interceptQueries((sql) => (/^set\s/i.test(sql.trim()) ? [] : null));
+  const adapter = mem.adapters.createPg();
+  const db = createDatabase({ dialectModule: adapter, databaseVersion: '13.4.0' });
+  const pool = new adapter.Pool();
+  db.query = (...args) => pool.query(...args);
   await migrate(db);
   return db;
 }
 
 export async function createUser(db, { username, password = 'password123', isAdmin = false }) {
-  const { rows } = await db.query(
-    'INSERT INTO users (username, password_hash, is_admin) VALUES ($1, $2, $3) RETURNING *',
-    [username, hashPassword(password), isAdmin]
-  );
-  return rows[0];
+  const user = await db.models.User.create({
+    username,
+    password_hash: hashPassword(password),
+    is_admin: isAdmin,
+  });
+  return user.get({ plain: true });
 }
 
 // Logs in via the API and returns the session cookie header value.
@@ -55,25 +69,25 @@ export async function insertModule(db, userId, fields = {}) {
     analysis_status = 'pending',
     summary = null,
   } = fields;
-  const { rows } = await db.query(
-    `INSERT INTO modules (manufacturer, name, manual_status, analysis_status, summary)
-     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [manufacturer, name, manual_status, analysis_status, summary]
-  );
-  const module = rows[0];
+  const module = await db.models.Module.create({
+    manufacturer,
+    name,
+    manual_status,
+    analysis_status,
+    summary,
+  });
   if (userId) {
-    await db.query(
-      'INSERT INTO user_modules (user_id, module_id, quantity) VALUES ($1, $2, $3)',
-      [userId, module.id, quantity]
-    );
+    await db.models.UserModule.create({ user_id: userId, module_id: module.id, quantity });
   }
   if (manual_filename) {
-    await db.query(
-      `INSERT INTO manuals (module_id, user_id, filename, source) VALUES ($1, NULL, $2, 'found')`,
-      [module.id, manual_filename]
-    );
+    await db.models.Manual.create({
+      module_id: module.id,
+      user_id: null,
+      filename: manual_filename,
+      source: 'found',
+    });
   }
-  return { ...module, quantity };
+  return { ...module.get({ plain: true }), quantity };
 }
 
 // A minimal-but-valid PDF file body.

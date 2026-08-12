@@ -88,19 +88,12 @@ export async function analyzeManualForModule(db, backend, module, manualPath) {
     throw new Error('LLM analysis returned neither a summary nor components');
   }
 
-  await db.query('DELETE FROM module_components WHERE module_id = $1', [module.id]);
-  for (const c of components) {
-    await db.query(
-      `INSERT INTO module_components
-         (module_id, type, name, description, voltage_min, voltage_max, polarity)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [module.id, c.type, c.name, c.description, c.voltage_min, c.voltage_max, c.polarity]
-    );
-  }
-  await db.query(
-    `UPDATE modules SET summary = $2, analysis_status = 'complete', updated_at = now()
-     WHERE id = $1`,
-    [module.id, summary]
+  const { Module, ModuleComponent } = db.models;
+  await ModuleComponent.destroy({ where: { module_id: module.id } });
+  await ModuleComponent.bulkCreate(components.map((c) => ({ ...c, module_id: module.id })));
+  await Module.update(
+    { summary, analysis_status: 'complete' },
+    { where: { id: module.id } }
   );
   return { summary, components };
 }

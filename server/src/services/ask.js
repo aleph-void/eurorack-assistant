@@ -3,6 +3,7 @@
 // answers, submit everything to the LLM backend, and store the linked answer.
 
 import path from 'node:path';
+import { Op } from 'sequelize';
 import { extractJsonArray } from './json.js';
 import { isProbablyPdf } from './pdf.js';
 
@@ -99,20 +100,17 @@ export async function determineComponentScope(backend, question, components) {
 // The jack components of the given modules, labeled for the scoping prompt.
 export async function jackComponentsForModules(db, moduleIds) {
   if (moduleIds.length === 0) return [];
-  const placeholders = moduleIds.map((_, i) => `$${i + 1}`).join(', ');
-  const { rows } = await db.query(
-    `SELECT mc.id, mc.name, mc.type, m.manufacturer, m.name AS module_name
-     FROM module_components mc
-     JOIN modules m ON m.id = mc.module_id
-     WHERE mc.module_id IN (${placeholders}) AND mc.type IN ('input_jack', 'output_jack')
-     ORDER BY mc.id`,
-    moduleIds
-  );
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    type: r.type,
-    module_label: `${r.manufacturer} ${r.module_name}`.trim(),
+  const { Module, ModuleComponent } = db.models;
+  const components = await ModuleComponent.findAll({
+    where: { module_id: moduleIds, type: ['input_jack', 'output_jack'] },
+    include: [{ model: Module, attributes: ['manufacturer', 'name'] }],
+    order: [['id', 'ASC']],
+  });
+  return components.map((c) => ({
+    id: c.id,
+    name: c.name,
+    type: c.type,
+    module_label: `${c.Module.manufacturer} ${c.Module.name}`.trim(),
   }));
 }
 
@@ -120,29 +118,33 @@ export async function jackComponentsForModules(db, moduleIds) {
 // passed along as extra context documents (ask.py's find_markdown_docs).
 export async function findPreviousAnswers(db, userId, scopedModuleIds) {
   if (scopedModuleIds.length === 0) return [];
-  const placeholders = scopedModuleIds.map((_, i) => `$${i + 2}`).join(', ');
-  const { rows } = await db.query(
-    `SELECT DISTINCT q.id, q.prompt, q.answer, q.created_at
-     FROM questions q
-     JOIN question_modules qm ON qm.question_id = q.id
-     WHERE q.user_id = $1 AND q.status = 'answered' AND q.answer IS NOT NULL
-       AND qm.module_id IN (${placeholders})
-     ORDER BY q.created_at ASC`,
-    [userId, ...scopedModuleIds]
-  );
-  return rows.map((r) => ({
-    name: `previous-answer-${r.id}.md`,
-    text: `# Question\n\n${r.prompt}\n\n# Answer\n\n${r.answer}`,
+  const { Question, QuestionModule } = db.models;
+  // Eager loading dedupes questions linked to several in-scope modules.
+  const questions = await Question.findAll({
+    where: { user_id: userId, status: 'answered', answer: { [Op.not]: null } },
+    include: [
+      { model: QuestionModule, attributes: ['module_id'], where: { module_id: scopedModuleIds } },
+    ],
+    order: [['created_at', 'ASC']],
+  });
+  return questions.map((q) => ({
+    name: `previous-answer-${q.id}.md`,
+    text: `# Question\n\n${q.prompt}\n\n# Answer\n\n${q.answer}`,
   }));
 }
 
 // Full pipeline for one question. Returns the updated question row.
 export async function answerQuestion(db, backend, question, manualsDir, { log = () => {} } = {}) {
-  const { rows: modules } = await db.query(
-    `SELECT m.* FROM user_modules um JOIN modules m ON m.id = um.module_id
-     WHERE um.user_id = $1 ORDER BY m.manufacturer, m.name`,
-    [question.user_id]
-  );
+  const { Module, UserModule, Manual, Question, QuestionModule, QuestionComponent } = db.models;
+  const mappings = await UserModule.findAll({
+    where: { user_id: question.user_id },
+    include: Module,
+    order: [
+      [Module, 'manufacturer', 'ASC'],
+      [Module, 'name', 'ASC'],
+    ],
+  });
+  const modules = mappings.map((um) => um.Module.get({ plain: true }));
   if (modules.length === 0) throw new Error('No modules imported yet');
 
   const scoped = await determineScope(backend, question.prompt, modules);
@@ -152,15 +154,11 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
   log(`in scope: ${scoped.map((m) => `${m.manufacturer} ${m.name}`).join(', ')}`);
 
   for (const m of scoped) {
-    const { rows: linked } = await db.query(
-      'SELECT 1 FROM question_modules WHERE question_id = $1 AND module_id = $2',
-      [question.id, m.id]
-    );
-    if (linked.length === 0) {
-      await db.query(
-        'INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)',
-        [question.id, m.id]
-      );
+    const linked = await QuestionModule.findOne({
+      where: { question_id: question.id, module_id: m.id },
+    });
+    if (!linked) {
+      await QuestionModule.create({ question_id: question.id, module_id: m.id });
     }
   }
 
@@ -175,15 +173,11 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
       );
     }
     for (const jack of scopedJacks) {
-      const { rows: linked } = await db.query(
-        'SELECT 1 FROM question_components WHERE question_id = $1 AND component_id = $2',
-        [question.id, jack.id]
-      );
-      if (linked.length === 0) {
-        await db.query(
-          'INSERT INTO question_components (question_id, component_id) VALUES ($1, $2)',
-          [question.id, jack.id]
-        );
+      const linked = await QuestionComponent.findOne({
+        where: { question_id: question.id, component_id: jack.id },
+      });
+      if (!linked) {
+        await QuestionComponent.create({ question_id: question.id, component_id: jack.id });
       }
     }
   } catch (e) {
@@ -193,16 +187,17 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
   // Collect manual PDFs for the in-scope modules: the shared auto-found
   // manuals plus documents this user attached to their own module instances.
   // Deduped by filename (some modules share a manual file).
-  const modulePlaceholders = scoped.map((_, i) => `$${i + 2}`).join(', ');
-  const { rows: manualRows } = await db.query(
-    `SELECT DISTINCT filename FROM manuals
-     WHERE module_id IN (${modulePlaceholders}) AND (user_id IS NULL OR user_id = $1)
-     ORDER BY filename`,
-    [question.user_id, ...scoped.map((m) => m.id)]
-  );
+  const manualRows = await Manual.findAll({
+    where: {
+      module_id: scoped.map((m) => m.id),
+      [Op.or]: [{ user_id: null }, { user_id: question.user_id }],
+    },
+    attributes: ['filename'],
+  });
+  const filenames = [...new Set(manualRows.map((r) => r.filename))].sort();
   const pdfPaths = [];
-  for (const row of manualRows) {
-    const pdf = path.join(manualsDir, row.filename);
+  for (const filename of filenames) {
+    const pdf = path.join(manualsDir, filename);
     const { ok, reason } = isProbablyPdf(pdf);
     if (ok) pdfPaths.push(pdf);
     else log(`skipping ${pdf}: ${reason}`);
@@ -226,10 +221,9 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
 
   const answer = await backend.answerWithDocuments(answerPrompt, manuals, previous);
 
-  const { rows } = await db.query(
-    `UPDATE questions SET answer = $2, status = 'answered', error = NULL, answered_at = now()
-     WHERE id = $1 RETURNING *`,
-    [question.id, answer]
+  const [, updated] = await Question.update(
+    { answer, status: 'answered', error: null, answered_at: new Date() },
+    { where: { id: question.id }, returning: true }
   );
-  return rows[0];
+  return updated[0]?.get({ plain: true });
 }

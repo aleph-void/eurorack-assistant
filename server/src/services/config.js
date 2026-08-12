@@ -6,24 +6,22 @@ export const CONFIG_DEFAULTS = {
 };
 
 export async function getConfig(db) {
-  const { rows } = await db.query('SELECT key, value FROM app_config');
+  const rows = await db.models.AppConfig.findAll();
   const config = { ...CONFIG_DEFAULTS };
   for (const row of rows) config[row.key] = row.value;
   return config;
 }
 
 export async function setConfig(db, updates) {
+  const { AppConfig } = db.models;
   for (const [key, value] of Object.entries(updates)) {
     if (!(key in CONFIG_DEFAULTS)) throw new Error(`Unknown config key: ${key}`);
     if (key === 'llm_provider' && !PROVIDERS.includes(value)) {
       throw new Error(`Invalid llm_provider: ${value}`);
     }
-    const result = await db.query('UPDATE app_config SET value = $2 WHERE key = $1', [
-      key,
-      String(value),
-    ]);
-    if (result.rowCount === 0) {
-      await db.query('INSERT INTO app_config (key, value) VALUES ($1, $2)', [key, String(value)]);
+    const [updated] = await AppConfig.update({ value: String(value) }, { where: { key } });
+    if (updated === 0) {
+      await AppConfig.create({ key, value: String(value) });
     }
   }
   return getConfig(db);

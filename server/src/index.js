@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import http from 'node:http';
-import { createPool } from './db/pool.js';
+import { createDatabase } from './db/index.js';
 import { migrate } from './db/migrate.js';
 import { createApp } from './app.js';
 import { createWorker } from './jobs/worker.js';
@@ -11,7 +11,7 @@ const PORT = Number(process.env.PORT || 3000);
 const MANUALS_DIR = process.env.MANUALS_DIR || '/data/manuals';
 
 async function main() {
-  const db = createPool();
+  const db = createDatabase();
   await migrate(db);
   fs.mkdirSync(MANUALS_DIR, { recursive: true });
 

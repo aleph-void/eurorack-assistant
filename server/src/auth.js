@@ -24,31 +24,26 @@ export function generatePassword(length = 20) {
 export async function createSession(db, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  await db.query(
-    'INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)',
-    [token, userId, expiresAt]
-  );
+  await db.models.Session.create({ token, user_id: userId, expires_at: expiresAt });
   return { token, expiresAt };
 }
 
 export async function deleteSession(db, token) {
-  await db.query('DELETE FROM sessions WHERE token = $1', [token]);
+  await db.models.Session.destroy({ where: { token } });
 }
 
 export async function getSessionUser(db, token) {
   if (!token) return null;
-  const { rows } = await db.query(
-    `SELECT u.id, u.username, u.is_admin, s.expires_at
-     FROM sessions s JOIN users u ON u.id = s.user_id
-     WHERE s.token = $1`,
-    [token]
-  );
-  if (rows.length === 0) return null;
-  if (new Date(rows[0].expires_at).getTime() < Date.now()) {
+  const session = await db.models.Session.findOne({
+    where: { token },
+    include: db.models.User,
+  });
+  if (!session || !session.User) return null;
+  if (new Date(session.expires_at).getTime() < Date.now()) {
     await deleteSession(db, token);
     return null;
   }
-  const { id, username, is_admin } = rows[0];
+  const { id, username, is_admin } = session.User;
   return { id, username, is_admin };
 }
 

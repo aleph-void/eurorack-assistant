@@ -2,13 +2,13 @@
 // The password is stored only as a bcrypt hash. Pass --reset to generate a
 // new random password for an existing admin.
 
-import { createPool } from '../src/db/pool.js';
+import { createDatabase } from '../src/db/index.js';
 import { migrate } from '../src/db/migrate.js';
 import { ensureAdmin } from '../src/setupAdmin.js';
 
 const reset = process.argv.includes('--reset');
 
-const db = createPool();
+const db = createDatabase();
 try {
   await migrate(db);
   const result = await ensureAdmin(db, { reset });
@@ -33,5 +33,5 @@ try {
   console.error(e);
   process.exitCode = 1;
 } finally {
-  await db.end();
+  await db.close();
 }
