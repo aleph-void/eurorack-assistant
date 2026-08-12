@@ -3,6 +3,7 @@ import cookieParser from 'cookie-parser';
 import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
 import { moduleRoutes } from './routes/modules.js';
+import { manualRoutes } from './routes/manuals.js';
 import { importRoutes } from './routes/imports.js';
 import { questionRoutes } from './routes/questions.js';
 import { configRoutes } from './routes/config.js';
@@ -19,6 +20,7 @@ export function createApp(db, { manualsDir } = {}) {
   app.use('/api/auth', authRoutes(db));
   app.use('/api/users', userRoutes(db));
   app.use('/api/modules', moduleRoutes(db, { manualsDir }));
+  app.use('/api/manuals', manualRoutes(db, { manualsDir }));
   app.use('/api/imports', importRoutes(db));
   app.use('/api/questions', questionRoutes(db));
   app.use('/api/config', configRoutes(db));

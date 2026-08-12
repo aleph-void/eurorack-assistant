@@ -1,10 +1,8 @@
 import fs from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
 import { Router } from 'express';
 import { Op } from 'sequelize';
 import { requireAuth } from '../auth.js';
-import { isProbablyPdf } from '../services/pdf.js';
+import { isProbablyPdfBuffer, manualPath, sha256Buffer } from '../services/pdf.js';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
@@ -73,7 +71,7 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
           module_id: module.id,
           [Op.or]: [{ user_id: null }, { user_id: req.user.id }],
         },
-        attributes: ['id', 'filename', 'original_name', 'source', 'user_id', 'created_at'],
+        attributes: ['id', 'hash', 'name', 'original_name', 'source', 'user_id', 'created_at'],
         order: [['id', 'ASC']],
       });
       // The requesting user's notes attached to this module (component_id NULL)
@@ -126,15 +124,22 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
   });
 
   // Attach an additional PDF document to your module instance. Body:
-  // { filename, data_base64 }. Private to the uploading user.
+  // { name, filename, data_base64 }. Private to the uploading user. The name
+  // labels the document; 'manual' is reserved for the shared auto-found
+  // manual, so uploads must pick something else.
   router.post('/:id/manuals', async (req, res, next) => {
     try {
       const module = await userModule(req.user.id, req.params.id);
       if (!module) return res.status(404).json({ error: 'Module not found' });
 
-      const { filename, data_base64: dataBase64 } = req.body || {};
-      if (!filename || !dataBase64) {
-        return res.status(400).json({ error: 'filename and data_base64 are required' });
+      const { name: rawName, filename, data_base64: dataBase64 } = req.body || {};
+      if (!rawName || !filename || !dataBase64) {
+        return res.status(400).json({ error: 'name, filename and data_base64 are required' });
+      }
+      const name = String(rawName).trim();
+      if (!name) return res.status(400).json({ error: 'name, filename and data_base64 are required' });
+      if (name.toLowerCase() === 'manual') {
+        return res.status(400).json({ error: "'manual' is reserved for the shared manual" });
       }
       let data;
       try {
@@ -146,32 +151,37 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
         return res.status(400).json({ error: 'file is empty or larger than 25MB' });
       }
 
-      const safeBase = String(filename)
-        .replace(/\.pdf$/i, '')
-        .replace(/[^a-zA-Z0-9._-]+/g, '_')
-        .slice(0, 80);
-      const stored = `user${req.user.id}_${module.id}_${crypto
-        .randomBytes(4)
-        .toString('hex')}_${safeBase}.pdf`;
-      const dest = path.join(manualsDir, stored);
-      fs.mkdirSync(manualsDir, { recursive: true });
-      fs.writeFileSync(dest, data);
+      const { ok, reason } = isProbablyPdfBuffer(data);
+      if (!ok) return res.status(400).json({ error: `not a valid PDF (${reason})` });
 
-      const { ok, reason } = isProbablyPdf(dest);
-      if (!ok) {
-        fs.rmSync(dest, { force: true });
-        return res.status(400).json({ error: `not a valid PDF (${reason})` });
+      // Content-addressed storage: the file lands at <sha256>.pdf, so a
+      // document that already exists (under any record) is stored once.
+      const hash = sha256Buffer(data);
+      const dest = manualPath(manualsDir, hash);
+      if (!fs.existsSync(dest)) {
+        fs.mkdirSync(manualsDir, { recursive: true });
+        fs.writeFileSync(dest, data);
       }
 
-      const manual = await Manual.create({
-        module_id: module.id,
-        user_id: req.user.id,
-        filename: stored,
-        original_name: String(filename),
-        source: 'upload',
+      // Re-uploading a document you already attached references the existing
+      // record instead of creating a duplicate.
+      const existing = await Manual.findOne({
+        where: { module_id: module.id, user_id: req.user.id, hash },
       });
+      const manual =
+        existing ||
+        (await Manual.create({
+          module_id: module.id,
+          user_id: req.user.id,
+          hash,
+          name,
+          original_name: String(filename),
+          source: 'upload',
+        }));
       const { id, original_name, source, user_id, created_at } = manual;
-      res.status(201).json({ id, filename: stored, original_name, source, user_id, created_at });
+      res
+        .status(existing ? 200 : 201)
+        .json({ id, hash, name: manual.name, original_name, source, user_id, created_at });
     } catch (e) {
       next(e);
     }
@@ -190,7 +200,10 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
       });
       if (!manual) return res.status(404).json({ error: 'Document not found' });
       await manual.destroy();
-      fs.rmSync(path.join(manualsDir, manual.filename), { force: true });
+      // The file is shared by every record with the same content hash; only
+      // remove it once the last reference is gone.
+      const remaining = await Manual.count({ where: { hash: manual.hash } });
+      if (remaining === 0) fs.rmSync(manualPath(manualsDir, manual.hash), { force: true });
       res.json({ ok: true });
     } catch (e) {
       next(e);

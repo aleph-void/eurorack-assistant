@@ -62,7 +62,10 @@ export function defineModels(sequelize) {
       id,
       module_id: { type: DataTypes.INTEGER, allowNull: false },
       user_id: { type: DataTypes.INTEGER },
-      filename: { type: DataTypes.TEXT, allowNull: false },
+      hash: { type: DataTypes.TEXT, allowNull: false },
+      // 'manual' marks the manual proper; user uploads carry a distinct
+      // user-chosen label.
+      name: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'manual' },
       original_name: { type: DataTypes.TEXT },
       source: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'found' },
     },

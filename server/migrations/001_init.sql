@@ -35,19 +35,24 @@ CREATE TABLE modules (
   UNIQUE (manufacturer, name)
 );
 
--- PDF documents on disk (in MANUALS_DIR), mapped to modules. A module can
--- have several: user_id NULL marks the shared auto-found manual, while rows
--- with a user_id are private documents that user attached to their own module
--- instance (invisible to other users).
+-- PDF documents, mapped to modules. Files are content-addressed: hash is the
+-- sha256 of the PDF bytes and the file lives at MANUALS_DIR/<hash>.pdf, so
+-- identical documents are stored once no matter how many records reference
+-- them. A module can have several: user_id NULL marks the shared auto-found
+-- manual, while rows with a user_id are private documents that user attached
+-- to their own module instance (invisible to other users).
 CREATE TABLE manuals (
   id SERIAL PRIMARY KEY,
   module_id INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  filename TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT 'manual',
   original_name TEXT,
   source TEXT NOT NULL DEFAULT 'found',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX manuals_hash_idx ON manuals (hash);
 
 CREATE TABLE user_modules (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

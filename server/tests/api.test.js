@@ -1,6 +1,8 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
-import { createTestApp, insertModule, PDF_BYTES } from './helpers.js';
+import { createTestApp, insertModule, PDF_BYTES, PDF_HASH } from './helpers.js';
 
 describe('modules API', () => {
   it('lists only the current user’s modules', async () => {
@@ -69,22 +71,28 @@ describe('modules API', () => {
 
 describe('module documents API', () => {
   const pdfBase64 = PDF_BYTES.toString('base64');
+  // A second, distinct PDF (different content hash than PDF_BYTES).
+  const OTHER_BYTES = Buffer.concat([PDF_BYTES, Buffer.from('% alternate\n')]);
+  const otherBase64 = OTHER_BYTES.toString('base64');
+  const MINE_HASH = 'b'.repeat(64);
+  const SECRET_HASH = 'c'.repeat(64);
 
   async function withModule() {
     const fixture = await createTestApp();
     const { rows } = await fixture.db.query("SELECT id FROM users WHERE username = 'alice'");
     fixture.alice = rows[0];
     fixture.module = await insertModule(fixture.db, rows[0].id, {
-      manual_filename: 'shared.pdf',
+      manual_hash: PDF_HASH,
     });
+    fs.writeFileSync(path.join(fixture.manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
     return fixture;
   }
 
   it('lists the shared manual plus own uploads in module detail', async () => {
     const { app, db, aliceCookie, alice, module } = await withModule();
     await db.query(
-      `INSERT INTO manuals (module_id, user_id, filename, original_name, source)
-       VALUES ($1, $2, 'mine.pdf', 'my-notes.pdf', 'upload')`,
+      `INSERT INTO manuals (module_id, user_id, hash, original_name, source)
+       VALUES ($1, $2, '${MINE_HASH}', 'my-notes.pdf', 'upload')`,
       [module.id, alice.id]
     );
     // Another user's private document on the same shared module.
@@ -94,31 +102,84 @@ describe('module documents API', () => {
       module.id,
     ]);
     await db.query(
-      `INSERT INTO manuals (module_id, user_id, filename, source)
-       VALUES ($1, $2, 'admins-secret.pdf', 'upload')`,
+      `INSERT INTO manuals (module_id, user_id, hash, source)
+       VALUES ($1, $2, '${SECRET_HASH}', 'upload')`,
       [module.id, admin[0].id]
     );
 
     const res = await request(app).get(`/api/modules/${module.id}`).set('Cookie', aliceCookie);
     expect(res.status).toBe(200);
-    const filenames = res.body.manuals.map((m) => m.filename);
-    expect(filenames).toContain('shared.pdf');
-    expect(filenames).toContain('mine.pdf');
-    expect(filenames).not.toContain('admins-secret.pdf');
+    const hashes = res.body.manuals.map((m) => m.hash);
+    expect(hashes).toContain(PDF_HASH);
+    expect(hashes).toContain(MINE_HASH);
+    expect(hashes).not.toContain(SECRET_HASH);
   });
 
-  it('uploads a PDF document private to the user', async () => {
-    const { app, db, aliceCookie, module } = await withModule();
+  it('uploads a PDF document private to the user, stored by content hash', async () => {
+    const { app, db, aliceCookie, manualsDir, module } = await withModule();
     const res = await request(app)
       .post(`/api/modules/${module.id}/manuals`)
       .set('Cookie', aliceCookie)
-      .send({ filename: 'extra notes.pdf', data_base64: pdfBase64 });
+      .send({ name: 'calibration guide', filename: 'extra notes.pdf', data_base64: otherBase64 });
     expect(res.status).toBe(201);
     expect(res.body.source).toBe('upload');
+    expect(res.body.name).toBe('calibration guide');
     expect(res.body.original_name).toBe('extra notes.pdf');
+    expect(res.body.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(fs.existsSync(path.join(manualsDir, `${res.body.hash}.pdf`))).toBe(true);
 
     const { rows } = await db.query('SELECT * FROM manuals WHERE id = $1', [res.body.id]);
     expect(rows[0].user_id).not.toBeNull();
+    expect(rows[0].hash).toBe(res.body.hash);
+  });
+
+  it('re-uploading the same content references the existing record', async () => {
+    const { app, db, aliceCookie, module } = await withModule();
+    const first = await request(app)
+      .post(`/api/modules/${module.id}/manuals`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'notes', filename: 'notes.pdf', data_base64: otherBase64 });
+    expect(first.status).toBe(201);
+    const again = await request(app)
+      .post(`/api/modules/${module.id}/manuals`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'notes again', filename: 'renamed.pdf', data_base64: otherBase64 });
+    expect(again.status).toBe(200);
+    expect(again.body.id).toBe(first.body.id);
+
+    const { rows } = await db.query(
+      'SELECT * FROM manuals WHERE module_id = $1 AND user_id IS NOT NULL',
+      [module.id]
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  it('serves documents by hash, but never other users’ private documents', async () => {
+    const { app, aliceCookie, adminCookie, module } = await withModule();
+    // Shared manual: any authenticated user can retrieve it.
+    const shared = await request(app).get(`/api/manuals/${PDF_HASH}`).set('Cookie', aliceCookie);
+    expect(shared.status).toBe(200);
+    expect(shared.headers['content-type']).toContain('application/pdf');
+    expect(Buffer.compare(shared.body, PDF_BYTES)).toBe(0);
+
+    // Alice's private upload: only alice can retrieve it.
+    const upload = await request(app)
+      .post(`/api/modules/${module.id}/manuals`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'private notes', filename: 'private.pdf', data_base64: otherBase64 });
+    const mine = await request(app)
+      .get(`/api/manuals/${upload.body.hash}`)
+      .set('Cookie', aliceCookie);
+    expect(mine.status).toBe(200);
+    expect(
+      (await request(app).get(`/api/manuals/${upload.body.hash}`).set('Cookie', adminCookie))
+        .status
+    ).toBe(404);
+
+    expect((await request(app).get(`/api/manuals/${PDF_HASH}`)).status).toBe(401);
+    expect(
+      (await request(app).get('/api/manuals/not-a-hash').set('Cookie', aliceCookie)).status
+    ).toBe(404);
   });
 
   it('rejects non-PDF uploads and uploads to unmapped modules', async () => {
@@ -128,7 +189,7 @@ describe('module documents API', () => {
         await request(app)
           .post(`/api/modules/${module.id}/manuals`)
           .set('Cookie', aliceCookie)
-          .send({ filename: 'x.pdf', data_base64: Buffer.from('<html>').toString('base64') })
+          .send({ name: 'x', filename: 'x.pdf', data_base64: Buffer.from('<html>').toString('base64') })
       ).status
     ).toBe(400);
     expect(
@@ -136,17 +197,37 @@ describe('module documents API', () => {
         await request(app)
           .post(`/api/modules/${module.id}/manuals`)
           .set('Cookie', adminCookie)
-          .send({ filename: 'x.pdf', data_base64: pdfBase64 })
+          .send({ name: 'x', filename: 'x.pdf', data_base64: pdfBase64 })
       ).status
     ).toBe(404);
   });
 
+  it("requires a document name and reserves 'manual' for the shared manual", async () => {
+    const { app, aliceCookie, module } = await withModule();
+    const post = (body) =>
+      request(app).post(`/api/modules/${module.id}/manuals`).set('Cookie', aliceCookie).send(body);
+    expect((await post({ filename: 'x.pdf', data_base64: otherBase64 })).status).toBe(400);
+    expect(
+      (await post({ name: '   ', filename: 'x.pdf', data_base64: otherBase64 })).status
+    ).toBe(400);
+    expect(
+      (await post({ name: 'Manual', filename: 'x.pdf', data_base64: otherBase64 })).status
+    ).toBe(400);
+  });
+
   it('deletes own uploads but never the shared manual', async () => {
-    const { app, db, aliceCookie, alice, module } = await withModule();
+    const { app, db, aliceCookie, manualsDir, module } = await withModule();
+    // Same content as the shared manual: the record dedupes per user, and the
+    // file must survive the delete because the shared record still needs it.
     const upload = await request(app)
       .post(`/api/modules/${module.id}/manuals`)
       .set('Cookie', aliceCookie)
-      .send({ filename: 'notes.pdf', data_base64: pdfBase64 });
+      .send({ name: 'notes', filename: 'notes.pdf', data_base64: pdfBase64 });
+    // Unique content: its file goes away with the last (only) record.
+    const unique = await request(app)
+      .post(`/api/modules/${module.id}/manuals`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'unique notes', filename: 'unique.pdf', data_base64: otherBase64 });
 
     expect(
       (
@@ -155,6 +236,16 @@ describe('module documents API', () => {
           .set('Cookie', aliceCookie)
       ).status
     ).toBe(200);
+    expect(fs.existsSync(path.join(manualsDir, `${PDF_HASH}.pdf`))).toBe(true);
+
+    expect(
+      (
+        await request(app)
+          .delete(`/api/modules/${module.id}/manuals/${unique.body.id}`)
+          .set('Cookie', aliceCookie)
+      ).status
+    ).toBe(200);
+    expect(fs.existsSync(path.join(manualsDir, `${unique.body.hash}.pdf`))).toBe(false);
 
     const { rows: shared } = await db.query(
       'SELECT id FROM manuals WHERE module_id = $1 AND user_id IS NULL',
@@ -291,7 +382,7 @@ describe('questions API', () => {
     const { rows } = await fixture.db.query("SELECT id FROM users WHERE username = 'alice'");
     fixture.alice = rows[0];
     await insertModule(fixture.db, fixture.alice.id, {
-      manual_filename: 'maths.pdf',
+      manual_hash: PDF_HASH,
       manual_status: 'found',
     });
     return fixture;
@@ -474,7 +565,7 @@ describe('jobs API', () => {
   it('stamps answer_question jobs with the asking user', async () => {
     const { app, db, aliceCookie } = await createTestApp();
     const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
-    await insertModule(db, rows[0].id, { manual_filename: 'maths.pdf' });
+    await insertModule(db, rows[0].id, { manual_hash: PDF_HASH });
     await request(app)
       .post('/api/questions')
       .set('Cookie', aliceCookie)

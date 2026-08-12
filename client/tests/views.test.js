@@ -115,8 +115,8 @@ describe('ModuleDetailView', () => {
     analysis_status: 'complete',
     summary: 'A dual function generator.',
     manuals: [
-      { id: 1, filename: 'Make_Noise_Maths_Manual.pdf', original_name: null, source: 'found', user_id: null },
-      { id: 2, filename: 'user2_1_notes.pdf', original_name: 'my-notes.pdf', source: 'upload', user_id: 2 },
+      { id: 1, hash: 'a'.repeat(64), name: 'manual', original_name: 'Make_Noise_Maths_Manual.pdf', source: 'found', user_id: null },
+      { id: 2, hash: 'b'.repeat(64), name: 'my notes', original_name: 'my-notes.pdf', source: 'upload', user_id: 2 },
     ],
     components: [
       { id: 1, type: 'input_jack', name: 'Signal In', description: 'In', voltage_min: -10, voltage_max: 10, polarity: 'bipolar' },
@@ -143,8 +143,12 @@ describe('ModuleDetailView', () => {
 
     const docs = wrapper.find('[data-test="documents"]');
     expect(docs.text()).toContain('Make_Noise_Maths_Manual.pdf');
-    expect(docs.text()).toContain('my-notes.pdf');
+    expect(docs.text()).toContain('my notes');
     expect(docs.text()).toContain('shared manual');
+    // Documents are retrieved by content hash.
+    expect(wrapper.find('[data-test="doc-1"] a').attributes('href')).toBe(
+      `/api/manuals/${'a'.repeat(64)}`
+    );
     expect(wrapper.find('[data-test="delete-doc-1"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="delete-doc-2"]').exists()).toBe(true);
 
@@ -193,17 +197,28 @@ describe('ModuleDetailView', () => {
     expect(api.post).toHaveBeenCalledWith('/api/notes/1/detach', { module_id: 1 });
   });
 
-  it('uploads an additional PDF as base64', async () => {
+  it('uploads an additional PDF as base64 with a required name', async () => {
     api.get.mockResolvedValue(moduleResponse);
     api.post.mockResolvedValue({ id: 3 });
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
 
+    // The file input stays disabled until a valid name (not 'manual') is set.
+    expect(wrapper.find('[data-test="doc-upload"]').attributes('disabled')).toBeDefined();
+    await wrapper.find('[data-test="doc-name"]').setValue('manual');
+    expect(wrapper.find('[data-test="doc-upload"]').attributes('disabled')).toBeDefined();
+    await wrapper.find('[data-test="doc-name"]').setValue('calibration guide');
+    expect(wrapper.find('[data-test="doc-upload"]').attributes('disabled')).toBeUndefined();
+
     const file = new File(['%PDF-1.4 fake pdf'], 'extra.pdf', { type: 'application/pdf' });
     await wrapper.vm.uploadDocument(file);
     expect(api.post).toHaveBeenCalledWith(
       '/api/modules/1/manuals',
-      expect.objectContaining({ filename: 'extra.pdf', data_base64: expect.any(String) })
+      expect.objectContaining({
+        name: 'calibration guide',
+        filename: 'extra.pdf',
+        data_base64: expect.any(String),
+      })
     );
     const { data_base64 } = api.post.mock.calls[0][1];
     expect(atob(data_base64)).toContain('%PDF-1.4');

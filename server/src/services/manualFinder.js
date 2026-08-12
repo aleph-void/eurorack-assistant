@@ -2,10 +2,11 @@
 // LLM web research for the official manual PDF, direct download with
 // validation, then an archive.org item-library fallback.
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { Op, fn, col, where } from 'sequelize';
 import { extractJsonObject } from './json.js';
-import { downloadPdf, isProbablyPdf, safeManualName, USER_AGENT } from './pdf.js';
+import { downloadPdf, manualPath, safeManualName, sha256File, USER_AGENT } from './pdf.js';
 
 export const RESEARCH_TEMPLATE = (line) => `You are researching the eurorack modular synthesizer module: "${line}"
 
@@ -87,30 +88,39 @@ export async function archiveOrgItemPdf(query, dest, { fetchImpl = fetch, log = 
   return false;
 }
 
-// Try, in order: direct PDF download, archive.org item library.
-// Returns the manual file name (inside manualsDir), or null if all failed.
+// Try, in order: direct PDF download, archive.org item library. The download
+// lands in a temporary file that is then content-addressed: renamed to
+// <sha256>.pdf, so a manual that was already retrieved (for this or any other
+// module) reuses the existing file. Returns the hash, or null if all failed.
 export async function acquireManual(info, manualsDir, { fetchImpl = fetch, log = () => {} } = {}) {
-  const manualName = safeManualName(info.manufacturer, info.module);
-  const dest = path.join(manualsDir, manualName);
+  const tmp = path.join(manualsDir, `download_${safeManualName(info.manufacturer, info.module)}`);
 
-  if (isProbablyPdf(dest).ok) {
-    log(`already downloaded: ${manualName}`);
-    return manualName;
-  }
+  let downloaded = false;
   for (const url of info.pdf_urls) {
     log(`trying manual PDF: ${url}`);
-    if (await downloadPdf(url, dest, { fetchImpl, log })) return manualName;
+    if (await downloadPdf(url, tmp, { fetchImpl, log })) {
+      downloaded = true;
+      break;
+    }
   }
+  if (!downloaded) {
+    log(`searching archive.org for: ${info.manufacturer} ${info.module}`);
+    const query = `"${info.manufacturer}" "${info.module}" manual`;
+    downloaded = await archiveOrgItemPdf(query, tmp, { fetchImpl, log });
+  }
+  if (!downloaded) return null;
 
-  log(`searching archive.org for: ${info.manufacturer} ${info.module}`);
-  const query = `"${info.manufacturer}" "${info.module}" manual`;
-  if (await archiveOrgItemPdf(query, dest, { fetchImpl, log })) return manualName;
-
-  return null;
+  const hash = sha256File(tmp);
+  const dest = manualPath(manualsDir, hash);
+  if (fs.existsSync(dest)) fs.rmSync(tmp, { force: true });
+  else fs.renameSync(tmp, dest);
+  return hash;
 }
 
-// Full pipeline for one module row: research (unless the manufacturer/name are
-// already known and a manual exists), download, update the module record.
+// Full pipeline for one module row: research, download, update the module
+// record. Always retrieves from the internet; the hash dedupe in
+// acquireManual/the manuals table makes a re-run of an unchanged manual a
+// no-op.
 export async function findManualForModule(db, backend, module, manualsDir, deps = {}) {
   const { fetchImpl = fetch, log = () => {} } = deps;
   const line = module.manufacturer ? `${module.manufacturer},${module.name}` : module.name;
@@ -160,22 +170,25 @@ export async function findManualForModule(db, backend, module, manualsDir, deps 
     }
   }
 
-  const manualName = await acquireManual(info, manualsDir, { fetchImpl, log });
-  if (manualName) {
-    // Record the shared (user_id NULL) manual document unless already present.
+  const hash = await acquireManual(info, manualsDir, { fetchImpl, log });
+  if (hash) {
+    // A document with this content is already recorded for the module:
+    // reference the existing shared (user_id NULL) record instead of
+    // creating a duplicate.
     const existing = await Manual.findOne({
-      where: { module_id: module.id, user_id: null, filename: manualName },
+      where: { module_id: module.id, user_id: null, hash },
     });
     if (!existing) {
       await Manual.create({
         module_id: module.id,
         user_id: null,
-        filename: manualName,
+        hash,
+        original_name: safeManualName(info.manufacturer, info.module),
         source: 'found',
       });
     }
     await Module.update({ manual_status: 'found' }, { where: { id: module.id } });
-    return manualName;
+    return hash;
   }
   await Module.update({ manual_status: 'failed' }, { where: { id: module.id } });
   return null;

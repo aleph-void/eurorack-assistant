@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -58,14 +59,14 @@ export async function createTestApp() {
 }
 
 // Creates a shared module record, maps it into userId's system, and (when
-// manual_filename is given) records it as the shared auto-found manual.
+// manual_hash is given) records it as the shared auto-found manual.
 export async function insertModule(db, userId, fields = {}) {
   const {
     manufacturer = 'Make Noise',
     name = 'Maths',
     quantity = 1,
-    manual_filename = null,
-    manual_status = manual_filename ? 'found' : 'pending',
+    manual_hash = null,
+    manual_status = manual_hash ? 'found' : 'pending',
     analysis_status = 'pending',
     summary = null,
   } = fields;
@@ -79,21 +80,23 @@ export async function insertModule(db, userId, fields = {}) {
   if (userId) {
     await db.models.UserModule.create({ user_id: userId, module_id: module.id, quantity });
   }
-  if (manual_filename) {
+  if (manual_hash) {
     await db.models.Manual.create({
       module_id: module.id,
       user_id: null,
-      filename: manual_filename,
+      hash: manual_hash,
       source: 'found',
     });
   }
   return { ...module.get({ plain: true }), quantity };
 }
 
-// A minimal-but-valid PDF file body.
+// A minimal-but-valid PDF file body, and its content hash (documents are
+// stored on disk as <hash>.pdf).
 export const PDF_BYTES = Buffer.from(
   '%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n'
 );
+export const PDF_HASH = crypto.createHash('sha256').update(PDF_BYTES).digest('hex');
 
 // Fake LLM backend whose responses are scripted per method.
 export function fakeBackend(responses = {}) {

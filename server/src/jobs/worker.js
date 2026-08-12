@@ -9,8 +9,8 @@
 // Progress is published per-user on the event bus, which the WebSocket server
 // forwards to the browser.
 
-import path from 'node:path';
 import { createBackend } from '../services/llm.js';
+import { manualPath } from '../services/pdf.js';
 import { getLlmSettings } from '../services/config.js';
 import {
   parseModuleCsv,
@@ -36,10 +36,11 @@ export async function enqueueJob(db, type, { userId = null, moduleId = null, que
   return job.get({ plain: true });
 }
 
-// Queue a find_manual job unless the module already has a manual or a live
-// job. The job is owned by (and visible to) the user whose import queued it.
+// Queue a find_manual job unless one is already live. Imports always re-try
+// retrieval from the internet — an unchanged manual dedupes by content hash
+// against the existing document record. The job is owned by (and visible to)
+// the user whose import queued it.
 export async function enqueueFindManual(db, module, userId) {
-  if (module.manual_status === 'found') return null;
   const pending = await db.models.Job.findOne({
     where: { module_id: module.id, type: 'find_manual', status: ['pending', 'running'] },
   });
@@ -127,14 +128,14 @@ export function createWorker(db, options = {}) {
 
     await Module.update({ manual_status: 'searching' }, { where: { id: module.id } });
     progress(`searching for manual: ${module.manufacturer} ${module.name}`.trim());
-    const manualName = await findManualForModule(db, backend, module, manualsDir, {
+    const hash = await findManualForModule(db, backend, module, manualsDir, {
       fetchImpl,
       log: progress,
     });
-    if (!manualName) {
+    if (!hash) {
       throw new Error(`No manual PDF found for ${module.manufacturer} ${module.name}`);
     }
-    progress(`manual saved: ${manualName}`);
+    progress(`manual saved: ${hash}.pdf`);
 
     // Chain the analysis job once the manual is on disk.
     const pending = await db.models.Job.findOne({
@@ -161,13 +162,13 @@ export function createWorker(db, options = {}) {
       throw new Error(`Module ${module.manufacturer} ${module.name} has no manual to analyze`);
     }
     await Module.update({ analysis_status: 'analyzing' }, { where: { id: module.id } });
-    progress(`analyzing manual: ${manual.filename}`);
+    progress(`analyzing manual: ${manual.original_name || `${manual.hash}.pdf`}`);
     try {
       const { components } = await analyzeManualForModule(
         db,
         backend,
         module,
-        path.join(manualsDir, manual.filename)
+        manualPath(manualsDir, manual.hash)
       );
       progress(`analysis complete: ${components.length} component(s) found`);
     } catch (e) {

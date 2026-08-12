@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -36,6 +37,29 @@ export function isProbablyPdf(filePath) {
   } catch (e) {
     return { ok: false, reason: `exception while checking PDF: ${e.message}` };
   }
+}
+
+export function isProbablyPdfBuffer(data) {
+  if (data.length < 8) return { ok: false, reason: 'file too small' };
+  const head = data.subarray(0, 5);
+  if (!head.equals(Buffer.from('%PDF-'))) {
+    return { ok: false, reason: `missing PDF header (%PDF-), got ${head.toString('latin1')}` };
+  }
+  return { ok: true, reason: 'ok' };
+}
+
+export function sha256Buffer(data) {
+  return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+export function sha256File(filePath) {
+  return sha256Buffer(fs.readFileSync(filePath));
+}
+
+// Documents are content-addressed: the stored file name is the sha256 of the
+// PDF bytes, so identical documents land on the same file.
+export function manualPath(manualsDir, hash) {
+  return path.join(manualsDir, `${hash}.pdf`);
 }
 
 export function safeManualName(manufacturer, module, suffix = 'Manual') {

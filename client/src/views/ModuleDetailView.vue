@@ -10,6 +10,13 @@ const module = ref(null);
 const error = ref('');
 const uploadError = ref('');
 const uploading = ref(false);
+const docName = ref('');
+
+// Uploads need a label; 'manual' is reserved for the shared auto-found manual.
+const docNameValid = computed(() => {
+  const name = docName.value.trim();
+  return name !== '' && name.toLowerCase() !== 'manual';
+});
 
 const TYPE_LABELS = {
   input_jack: 'Input jacks',
@@ -66,7 +73,12 @@ async function uploadDocument(file) {
   uploading.value = true;
   try {
     const data_base64 = await fileToBase64(file);
-    await api.post(`/api/modules/${props.id}/manuals`, { filename: file.name, data_base64 });
+    await api.post(`/api/modules/${props.id}/manuals`, {
+      name: docName.value.trim(),
+      filename: file.name,
+      data_base64,
+    });
+    docName.value = '';
     await load();
   } catch (e) {
     uploadError.value = e.message;
@@ -155,6 +167,7 @@ onMounted(load);
       <table v-if="module.manuals?.length">
         <thead>
           <tr>
+            <th>Name</th>
             <th>File</th>
             <th>Kind</th>
             <th></th>
@@ -162,7 +175,12 @@ onMounted(load);
         </thead>
         <tbody>
           <tr v-for="doc in module.manuals" :key="doc.id" :data-test="`doc-${doc.id}`">
-            <td>{{ doc.original_name || doc.filename }}</td>
+            <td>{{ doc.name }}</td>
+            <td>
+              <a :href="`/api/manuals/${doc.hash}`" target="_blank" rel="noopener">
+                {{ doc.original_name || `${doc.hash}.pdf` }}
+              </a>
+            </td>
             <td>
               <span class="badge" :class="doc.user_id === null ? 'found' : 'pending'">
                 {{ doc.user_id === null ? 'shared manual' : 'your document' }}
@@ -183,15 +201,23 @@ onMounted(load);
         </tbody>
       </table>
       <p v-else class="muted">No documents yet.</p>
-      <label for="doc-upload">Attach an additional PDF (visible only to you)</label>
-      <input
-        id="doc-upload"
-        type="file"
-        accept="application/pdf"
-        data-test="doc-upload"
-        :disabled="uploading"
-        @change="onFileChosen"
-      />
+      <label for="doc-name">Attach an additional PDF (visible only to you)</label>
+      <div class="row">
+        <input
+          id="doc-name"
+          v-model="docName"
+          placeholder="Document name (not 'manual')"
+          data-test="doc-name"
+        />
+        <input
+          id="doc-upload"
+          type="file"
+          accept="application/pdf"
+          data-test="doc-upload"
+          :disabled="uploading || !docNameValid"
+          @change="onFileChosen"
+        />
+      </div>
       <p v-if="uploadError" class="error" data-test="upload-error">{{ uploadError }}</p>
     </div>
 

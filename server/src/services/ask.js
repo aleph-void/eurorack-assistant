@@ -2,10 +2,9 @@
 // of the user's modules are in scope, gather their manual PDFs and previous
 // answers, submit everything to the LLM backend, and store the linked answer.
 
-import path from 'node:path';
 import { Op } from 'sequelize';
 import { extractJsonArray } from './json.js';
-import { isProbablyPdf } from './pdf.js';
+import { isProbablyPdf, manualPath } from './pdf.js';
 
 export const MAX_MANUALS = 10;
 
@@ -186,18 +185,18 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
 
   // Collect manual PDFs for the in-scope modules: the shared auto-found
   // manuals plus documents this user attached to their own module instances.
-  // Deduped by filename (some modules share a manual file).
+  // Deduped by content hash (some modules share a manual file).
   const manualRows = await Manual.findAll({
     where: {
       module_id: scoped.map((m) => m.id),
       [Op.or]: [{ user_id: null }, { user_id: question.user_id }],
     },
-    attributes: ['filename'],
+    attributes: ['hash'],
   });
-  const filenames = [...new Set(manualRows.map((r) => r.filename))].sort();
+  const hashes = [...new Set(manualRows.map((r) => r.hash))].sort();
   const pdfPaths = [];
-  for (const filename of filenames) {
-    const pdf = path.join(manualsDir, filename);
+  for (const hash of hashes) {
+    const pdf = manualPath(manualsDir, hash);
     const { ok, reason } = isProbablyPdf(pdf);
     if (ok) pdfPaths.push(pdf);
     else log(`skipping ${pdf}: ${reason}`);

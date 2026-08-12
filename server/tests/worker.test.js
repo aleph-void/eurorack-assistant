@@ -9,6 +9,7 @@ import {
   fakeBackend,
   fakeFetch,
   PDF_BYTES,
+  PDF_HASH,
 } from './helpers.js';
 import { createWorker, enqueueJob, enqueueFindManual, MAX_ATTEMPTS } from '../src/jobs/worker.js';
 import { createBus } from '../src/events.js';
@@ -144,12 +145,13 @@ describe('worker', () => {
     );
   });
 
-  it('skips manual search when another user already got the manual found', async () => {
+  it('re-searches on import even when the manual was already found', async () => {
     const db = await createTestDb();
     const u1 = await createUser(db, { username: 'u1' });
     const u2 = await createUser(db, { username: 'u2' });
-    // u1 already has the module with a found manual.
-    await insertModule(db, u1.id, { manual_filename: 'maths.pdf', manual_status: 'found' });
+    // u1 already has the module with a found manual; imports still always
+    // re-try retrieval (an unchanged manual dedupes by content hash).
+    await insertModule(db, u1.id, { manual_hash: PDF_HASH, manual_status: 'found' });
 
     await enqueueJob(db, 'import', {
       userId: u2.id,
@@ -158,21 +160,21 @@ describe('worker', () => {
     const worker = makeWorker(db, fakeBackend());
     await worker.tick();
 
-    // u2 is mapped to the same shared module and no new search job is queued.
+    // u2 is mapped to the same shared module and a fresh search job is queued.
     const { rows: modules } = await db.query('SELECT * FROM modules');
     expect(modules).toHaveLength(1);
     const { rows: mappings } = await db.query('SELECT user_id FROM user_modules ORDER BY user_id');
     expect(mappings.map((m) => m.user_id)).toEqual([u1.id, u2.id]);
     const { rows: finds } = await db.query("SELECT * FROM jobs WHERE type = 'find_manual'");
-    expect(finds).toHaveLength(0);
+    expect(finds).toHaveLength(1);
   });
 
   it('publishes module job events only to the user who caused the job', async () => {
     const db = await createTestDb();
     const u1 = await createUser(db, { username: 'u1' });
     const u2 = await createUser(db, { username: 'u2' });
-    fs.writeFileSync(path.join(manualsDir, 'maths.pdf'), PDF_BYTES);
-    const module = await insertModule(db, u1.id, { manual_filename: 'maths.pdf' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, u1.id, { manual_hash: PDF_HASH });
     // u2 has the same shared module, but u1 triggered the job.
     await db.query('INSERT INTO user_modules (user_id, module_id) VALUES ($1, $2)', [
       u2.id,
@@ -249,9 +251,9 @@ describe('worker', () => {
   it('processes an analyze_manual job into components', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
-    fs.writeFileSync(path.join(manualsDir, 'maths.pdf'), PDF_BYTES);
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
     const module = await insertModule(db, user.id, {
-      manual_filename: 'maths.pdf',
+      manual_hash: PDF_HASH,
       manual_status: 'found',
     });
     await enqueue(db, 'analyze_manual', { module_id: module.id });
@@ -273,8 +275,8 @@ describe('worker', () => {
   it('processes an answer_question job end to end', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
-    fs.writeFileSync(path.join(manualsDir, 'maths.pdf'), PDF_BYTES);
-    await insertModule(db, user.id, { manual_filename: 'maths.pdf', manual_status: 'found' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    await insertModule(db, user.id, { manual_hash: PDF_HASH, manual_status: 'found' });
     const { rows: q } = await db.query(
       `INSERT INTO questions (user_id, prompt) VALUES ($1, 'How?') RETURNING *`,
       [user.id]
@@ -297,7 +299,7 @@ describe('worker', () => {
   it('marks the question failed when answering fails', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
-    await insertModule(db, user.id, { manual_filename: null });
+    await insertModule(db, user.id, { manual_hash: null });
     const { rows: q } = await db.query(
       `INSERT INTO questions (user_id, prompt) VALUES ($1, 'How?') RETURNING *`,
       [user.id]
@@ -353,8 +355,8 @@ describe('worker', () => {
   it('start/stop polls the queue in the background', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
-    fs.writeFileSync(path.join(manualsDir, 'maths.pdf'), PDF_BYTES);
-    const module = await insertModule(db, user.id, { manual_filename: 'maths.pdf' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, { manual_hash: PDF_HASH });
     await enqueue(db, 'analyze_manual', { module_id: module.id });
 
     const backend = fakeBackend({

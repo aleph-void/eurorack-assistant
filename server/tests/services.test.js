@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,7 @@ import {
   fakeBackend,
   fakeFetch,
   PDF_BYTES,
+  PDF_HASH,
 } from './helpers.js';
 import { findManualForModule, researchModule } from '../src/services/manualFinder.js';
 import {
@@ -95,9 +97,10 @@ describe('findManualForModule', () => {
     });
     const fetchImpl = fakeFetch({ 'makenoise.com/maths.pdf': { body: PDF_BYTES } });
 
-    const name = await findManualForModule(db, backend, module, manualsDir, { fetchImpl });
-    expect(name).toBe('Make_Noise_Maths_Manual.pdf');
-    expect(fs.existsSync(path.join(manualsDir, name))).toBe(true);
+    const hash = await findManualForModule(db, backend, module, manualsDir, { fetchImpl });
+    expect(hash).toBe(PDF_HASH);
+    // Stored content-addressed: the file lives at <hash>.pdf.
+    expect(fs.existsSync(path.join(manualsDir, `${hash}.pdf`))).toBe(true);
 
     const { rows } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
     expect(rows[0].manual_status).toBe('found');
@@ -107,7 +110,36 @@ describe('findManualForModule', () => {
       module.id,
     ]);
     expect(manualRows).toHaveLength(1);
-    expect(manualRows[0]).toMatchObject({ filename: name, user_id: null, source: 'found' });
+    expect(manualRows[0]).toMatchObject({
+      hash,
+      user_id: null,
+      name: 'manual',
+      original_name: 'Make_Noise_Maths_Manual.pdf',
+      source: 'found',
+    });
+  });
+
+  it('re-running references the existing document instead of duplicating it', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id);
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Make Noise',
+        module: 'Maths',
+        pdf_urls: ['https://makenoise.com/maths.pdf'],
+        product_page_url: null,
+      }),
+    });
+    const fetchImpl = fakeFetch({ 'makenoise.com/maths.pdf': { body: PDF_BYTES } });
+
+    await findManualForModule(db, backend, module, manualsDir, { fetchImpl });
+    await findManualForModule(db, backend, module, manualsDir, { fetchImpl });
+
+    const { rows } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [module.id]);
+    expect(rows).toHaveLength(1);
+    expect(fs.readdirSync(manualsDir)).toEqual([`${PDF_HASH}.pdf`]);
   });
 
   it('falls back to archive.org when direct downloads fail', async () => {
@@ -130,8 +162,8 @@ describe('findManualForModule', () => {
       'archive.org/download/maths-manual': { body: PDF_BYTES },
     });
 
-    const name = await findManualForModule(db, backend, module, manualsDir, { fetchImpl });
-    expect(name).toBe('Make_Noise_Maths_Manual.pdf');
+    const hash = await findManualForModule(db, backend, module, manualsDir, { fetchImpl });
+    expect(hash).toBe(PDF_HASH);
   });
 
   it('marks the module failed when nothing is found', async () => {
@@ -237,7 +269,7 @@ describe('analyzeManualForModule', () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id, {
-      manual_filename: 'maths.pdf',
+      manual_hash: PDF_HASH,
       manual_status: 'found',
     });
 
@@ -287,7 +319,7 @@ describe('analyzeManualForModule', () => {
   it('replaces components on re-analysis', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
-    const module = await insertModule(db, user.id, { manual_filename: 'm.pdf' });
+    const module = await insertModule(db, user.id, { manual_hash: PDF_HASH });
     await db.query(
       `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'other', 'Stale')`,
       [module.id]
@@ -306,7 +338,7 @@ describe('analyzeManualForModule', () => {
   it('rejects an empty analysis', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
-    const module = await insertModule(db, user.id, { manual_filename: 'm.pdf' });
+    const module = await insertModule(db, user.id, { manual_hash: PDF_HASH });
     const backend = fakeBackend({ analyzeDocument: '{"summary": "", "components": []}' });
     await expect(analyzeManualForModule(db, backend, module, '/tmp/m.pdf')).rejects.toThrow(
       /neither a summary nor components/
@@ -401,9 +433,9 @@ describe('answerQuestion', () => {
   async function fixture() {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
-    fs.writeFileSync(path.join(manualsDir, 'maths.pdf'), PDF_BYTES);
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
     const module = await insertModule(db, user.id, {
-      manual_filename: 'maths.pdf',
+      manual_hash: PDF_HASH,
       manual_status: 'found',
     });
     const { rows } = await db.query(
@@ -435,7 +467,7 @@ describe('answerQuestion', () => {
     const [prompt, pdfs] = backend.calls.answerWithDocuments[0];
     expect(prompt).toContain('How do I patch a krell?');
     expect(prompt).toContain('Make Noise Maths');
-    expect(pdfs).toEqual([path.join(manualsDir, 'maths.pdf')]);
+    expect(pdfs).toEqual([path.join(manualsDir, `${PDF_HASH}.pdf`)]);
   });
 
   it('links the specific jacks a question pertains to', async () => {
@@ -533,11 +565,14 @@ describe('answerQuestion', () => {
   it("attaches the user's own uploaded documents but not other users'", async () => {
     const { db, user, module, question } = await fixture();
     const other = await createUser(db, { username: 'other' });
-    fs.writeFileSync(path.join(manualsDir, 'my-notes.pdf'), PDF_BYTES);
-    fs.writeFileSync(path.join(manualsDir, 'their-notes.pdf'), PDF_BYTES);
+    const sha = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+    const myHash = sha(Buffer.concat([PDF_BYTES, Buffer.from('mine')]));
+    const theirHash = sha(Buffer.concat([PDF_BYTES, Buffer.from('theirs')]));
+    fs.writeFileSync(path.join(manualsDir, `${myHash}.pdf`), PDF_BYTES);
+    fs.writeFileSync(path.join(manualsDir, `${theirHash}.pdf`), PDF_BYTES);
     await db.query(
-      `INSERT INTO manuals (module_id, user_id, filename, source) VALUES
-       ($1, $2, 'my-notes.pdf', 'upload'), ($1, $3, 'their-notes.pdf', 'upload')`,
+      `INSERT INTO manuals (module_id, user_id, hash, name, source) VALUES
+       ($1, $2, '${myHash}', 'my notes', 'upload'), ($1, $3, '${theirHash}', 'their notes', 'upload')`,
       [module.id, user.id, other.id]
     );
 
@@ -548,8 +583,8 @@ describe('answerQuestion', () => {
     await answerQuestion(db, backend, question, manualsDir);
     const [, pdfs] = backend.calls.answerWithDocuments[0];
     const names = pdfs.map((p) => path.basename(p));
-    expect(names).toContain('maths.pdf');
-    expect(names).toContain('my-notes.pdf');
-    expect(names).not.toContain('their-notes.pdf');
+    expect(names).toContain(`${PDF_HASH}.pdf`);
+    expect(names).toContain(`${myHash}.pdf`);
+    expect(names).not.toContain(`${theirHash}.pdf`);
   });
 });
