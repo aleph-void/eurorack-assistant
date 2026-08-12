@@ -2,7 +2,7 @@ import { deleteUserSessions, generateHexPassword, hashPassword } from './auth.js
 
 // Create the initial admin account with a random hex password. The cleartext
 // password is only ever returned to the caller (the setup script prints it
-// once); the database stores only the bcrypt hash. The admin is flagged
+// once); the database stores only the PBKDF2 hash. The admin is flagged
 // must_change_password so the generated password works exactly once: the
 // first login forces them to pick their own.
 //

@@ -1,16 +1,51 @@
 import crypto from 'node:crypto';
-import bcrypt from 'bcryptjs';
 import { Op } from 'sequelize';
 
 export const SESSION_COOKIE = 'session';
 export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 
+// Passwords are stored as PBKDF2-HMAC-SHA512 hashes in a self-describing
+// format: pbkdf2$<digest>$<iterations>$<salt hex>$<derived key hex>.
+// Verification reads the parameters from the stored hash, so these constants
+// can be raised later without invalidating existing hashes.
+export const PBKDF2_DIGEST = 'sha512';
+export const PBKDF2_ITERATIONS = 210000; // OWASP recommendation for SHA-512
+export const PBKDF2_KEY_BYTES = 32;
+export const PBKDF2_SALT_BYTES = 16;
+
 export function hashPassword(password) {
-  return bcrypt.hashSync(password, 10);
+  const salt = crypto.randomBytes(PBKDF2_SALT_BYTES);
+  const key = crypto.pbkdf2Sync(
+    String(password),
+    salt,
+    PBKDF2_ITERATIONS,
+    PBKDF2_KEY_BYTES,
+    PBKDF2_DIGEST
+  );
+  return [
+    'pbkdf2',
+    PBKDF2_DIGEST,
+    PBKDF2_ITERATIONS,
+    salt.toString('hex'),
+    key.toString('hex'),
+  ].join('$');
 }
 
-export function verifyPassword(password, hash) {
-  return bcrypt.compareSync(password, hash);
+export function verifyPassword(password, stored) {
+  const parts = String(stored || '').split('$');
+  if (parts.length !== 5 || parts[0] !== 'pbkdf2') return false;
+  const [, digest, iterationsRaw, saltHex, keyHex] = parts;
+  const iterations = Number(iterationsRaw);
+  const salt = Buffer.from(saltHex, 'hex');
+  const expected = Buffer.from(keyHex, 'hex');
+  if (!Number.isInteger(iterations) || iterations < 1 || expected.length === 0) return false;
+  try {
+    const actual = crypto.pbkdf2Sync(String(password), salt, iterations, expected.length, digest);
+    return crypto.timingSafeEqual(actual, expected);
+  } catch {
+    // Unknown digest or malformed hash — never authenticates.
+    return false;
+  }
 }
 
 export function generatePassword(length = 20) {

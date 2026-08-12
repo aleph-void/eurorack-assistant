@@ -1,5 +1,5 @@
 // Creates the initial admin account and prints its credentials ONCE.
-// The password is stored only as a bcrypt hash. Pass --reset to generate a
+// The password is stored only as a PBKDF2 hash. Pass --reset to generate a
 // new random password for an existing admin.
 
 import { createDatabase } from '../src/db/index.js';

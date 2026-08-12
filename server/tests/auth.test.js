@@ -1,9 +1,56 @@
+import crypto from 'node:crypto';
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { createTestApp, createTestDb, createUser, login } from './helpers.js';
 import { createApp } from '../src/app.js';
-import { generatePassword } from '../src/auth.js';
+import {
+  generatePassword,
+  hashPassword,
+  verifyPassword,
+  PBKDF2_DIGEST,
+  PBKDF2_ITERATIONS,
+} from '../src/auth.js';
 import { ensureAdmin } from '../src/setupAdmin.js';
+
+describe('PBKDF2 password hashing', () => {
+  it('hashes in the self-describing pbkdf2 format and verifies round-trip', () => {
+    const stored = hashPassword('correct horse battery staple');
+    const [scheme, digest, iterations, salt, key] = stored.split('$');
+    expect(scheme).toBe('pbkdf2');
+    expect(digest).toBe(PBKDF2_DIGEST);
+    expect(Number(iterations)).toBe(PBKDF2_ITERATIONS);
+    expect(salt).toMatch(/^[0-9a-f]{32}$/);
+    expect(key).toMatch(/^[0-9a-f]{64}$/);
+
+    expect(verifyPassword('correct horse battery staple', stored)).toBe(true);
+    expect(verifyPassword('wrong password', stored)).toBe(false);
+  });
+
+  it('salts every hash uniquely', () => {
+    expect(hashPassword('same')).not.toBe(hashPassword('same'));
+  });
+
+  it('verifies with the parameters stored in the hash, not the constants', () => {
+    // A hash produced with different parameters still verifies — the
+    // constants can be raised later without invalidating existing hashes.
+    const salt = 'aabbccddeeff00112233445566778899';
+    const key = crypto
+      .pbkdf2Sync('pw', Buffer.from(salt, 'hex'), 1000, 24, 'sha256')
+      .toString('hex');
+    const legacy = `pbkdf2$sha256$1000$${salt}$${key}`;
+    expect(verifyPassword('pw', legacy)).toBe(true);
+    expect(verifyPassword('not pw', legacy)).toBe(false);
+  });
+
+  it('never authenticates against malformed or foreign hashes', () => {
+    expect(verifyPassword('pw', '')).toBe(false);
+    expect(verifyPassword('pw', null)).toBe(false);
+    expect(verifyPassword('pw', '$2a$10$abcdefghijklmnopqrstuv')).toBe(false); // bcrypt
+    expect(verifyPassword('pw', 'pbkdf2$nope$210000$00$00')).toBe(false); // bad digest
+    expect(verifyPassword('pw', 'pbkdf2$sha512$-1$00$00')).toBe(false); // bad iterations
+    expect(verifyPassword('pw', 'pbkdf2$sha512$210000$00$')).toBe(false); // empty key
+  });
+});
 
 describe('auth', () => {
   it('logs in with valid credentials and sets a session cookie', async () => {

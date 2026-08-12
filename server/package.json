@@ -12,7 +12,6 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
     "express": "^4.19.2",
     "pg": "^8.12.0",
