@@ -18,8 +18,11 @@ services:
     environment:
       DATABASE_URL: postgres://eurorack:${POSTGRES_PASSWORD}@db:5432/eurorack
       MANUALS_DIR: /data/manuals
+      EXPORTS_DIR: /data/exports
     volumes:
       - manuals:/data/manuals
+      # Finished rack-export zips; each is deleted after its one download.
+      - exports:/data/exports
       # Subscription logins for the LLM provider CLIs, from the host.
       # Log in on the host first: `claude` + /login, and/or `codex login`.
       - ${CLAUDE_CONFIG_DIR:-~/.claude}:/home/node/.claude
@@ -42,3 +45,4 @@ services:
 volumes:
   pgdata:
   manuals:
+  exports:

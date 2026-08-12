@@ -2,11 +2,12 @@ import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { findRackByName } from '../services/racks.js';
 import { deleteModulesDeep } from '../services/moduleDeletion.js';
+import { enqueueJob } from '../jobs/worker.js';
 
 // A user's racks. Every route operates on the requesting user's racks only —
 // racks (and their module lists) are never visible to other users.
 export function rackRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/data/manuals' } = {}) {
-  const { Rack, RackModule } = db.models;
+  const { Rack, RackModule, Job } = db.models;
   const router = Router();
   router.use(requireAuth(db));
 
@@ -97,6 +98,39 @@ export function rackRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/data/
       }
       await deleteModulesDeep(db, req.user.id, orphaned, { manualsDir });
       res.json({ ok: true, deleted_modules: orphaned.length });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Queue a background export of everything about the rack's modules —
+  // manual PDFs plus the user's notes and questions rendered to PDF — into
+  // one zip. The client auto-downloads the zip when the job's 'completed'
+  // event arrives over the WebSocket (the link also shows on the Jobs page).
+  router.post('/:id/export', async (req, res, next) => {
+    try {
+      const rack = await ownRack(req.user.id, req.params.id);
+      if (!rack) return res.status(404).json({ error: 'Rack not found' });
+      // Re-use a queued/running export of the same rack instead of stacking
+      // duplicates (payload is TEXT, so filter the few live rows in JS).
+      const live = (
+        await Job.findAll({
+          where: { type: 'export_rack', user_id: req.user.id, status: ['pending', 'running'] },
+        })
+      ).find((j) => {
+        try {
+          return JSON.parse(j.payload || '{}').rack_id === rack.id;
+        } catch {
+          return false;
+        }
+      });
+      const job = live
+        ? live.get({ plain: true })
+        : await enqueueJob(db, 'export_rack', {
+            userId: req.user.id,
+            payload: { rack_id: rack.id, rack_name: rack.name },
+          });
+      res.status(202).json({ id: job.id, type: job.type, status: job.status, reused: !!live });
     } catch (e) {
       next(e);
     }

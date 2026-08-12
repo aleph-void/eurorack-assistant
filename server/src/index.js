@@ -9,18 +9,20 @@ import { attachWebSocketServer } from './ws.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const MANUALS_DIR = process.env.MANUALS_DIR || '/data/manuals';
+const EXPORTS_DIR = process.env.EXPORTS_DIR || '/data/exports';
 
 async function main() {
   const db = createDatabase();
   await migrate(db);
   fs.mkdirSync(MANUALS_DIR, { recursive: true });
+  fs.mkdirSync(EXPORTS_DIR, { recursive: true });
 
   const bus = createBus();
-  const app = createApp(db, { manualsDir: MANUALS_DIR });
+  const app = createApp(db, { manualsDir: MANUALS_DIR, exportsDir: EXPORTS_DIR });
   const server = http.createServer(app);
   const ws = attachWebSocketServer(server, db, bus);
 
-  const worker = createWorker(db, { manualsDir: MANUALS_DIR, bus });
+  const worker = createWorker(db, { manualsDir: MANUALS_DIR, exportsDir: EXPORTS_DIR, bus });
   worker.start();
 
   server.listen(PORT, () => {

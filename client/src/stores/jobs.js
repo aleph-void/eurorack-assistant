@@ -31,6 +31,11 @@ export const useJobsStore = defineStore('jobs', {
       } else if (event.event === 'started') {
         this.jobs.unshift({ ...event.job });
       }
+      // A finished rack export downloads itself; the server deletes the zip
+      // once it has been served, so the link in the job row goes stale after.
+      if (event.event === 'completed' && event.job.type === 'export_rack' && event.job.download) {
+        this.triggerDownload(event.job.download);
+      }
       this.feed.unshift({
         at: event.at,
         jobId: event.job.id,
@@ -39,6 +44,16 @@ export const useJobsStore = defineStore('jobs', {
         message: event.message || event.event,
       });
       if (this.feed.length > this.feedLimit) this.feed.length = this.feedLimit;
+    },
+    // Navigate an invisible anchor so the browser saves the file without
+    // leaving the page.
+    triggerDownload(url) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = '';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     },
   },
 });

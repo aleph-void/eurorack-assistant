@@ -4,6 +4,7 @@ import { api } from '../api.js';
 
 const racks = ref([]);
 const error = ref('');
+const notice = ref('');
 const loading = ref(true);
 const newName = ref('');
 const renamingId = ref(null);
@@ -48,6 +49,21 @@ async function rename(rack) {
 
 onMounted(load);
 
+// The zip is built by a background job; when its 'completed' event arrives
+// over the WebSocket the jobs store starts the download automatically.
+async function exportRack(rack) {
+  error.value = '';
+  notice.value = '';
+  try {
+    await api.post(`/api/racks/${rack.id}/export`);
+    notice.value =
+      `Export of '${rack.name}' queued — the zip downloads automatically when it is ready ` +
+      '(progress is on the Jobs page).';
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
 async function remove(rack) {
   if (
     !confirm(
@@ -74,6 +90,7 @@ async function remove(rack) {
     survives only if it is still in another rack.
   </p>
   <p v-if="error" class="error" data-test="error">{{ error }}</p>
+  <p v-if="notice" class="success" data-test="notice">{{ notice }}</p>
   <p v-if="loading" class="muted">Loading…</p>
   <div v-else class="panel">
     <table v-if="racks.length" data-test="rack-table">
@@ -117,6 +134,15 @@ async function remove(rack) {
               @click="startRename(rack)"
             >
               Rename
+            </button>
+            <button
+              class="secondary"
+              style="margin: 0 0.4rem 0 0"
+              :disabled="rack.module_count === 0"
+              :data-test="`export-${rack.id}`"
+              @click="exportRack(rack)"
+            >
+              Export Rack
             </button>
             <button class="danger" style="margin: 0" :data-test="`delete-${rack.id}`" @click="remove(rack)">
               Delete

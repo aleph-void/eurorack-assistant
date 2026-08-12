@@ -22,6 +22,19 @@ export function jobRoutes(db) {
         jobs.map((job) => {
           const { id, type, status, attempts, error, created_at, updated_at, module_id, question_id } =
             job;
+          // export_rack jobs carry their target rack and, while the zip is
+          // still on disk, the download link in the payload.
+          let rack_name = null;
+          let download = null;
+          if (job.payload) {
+            try {
+              const payload = JSON.parse(job.payload);
+              rack_name = payload.rack_name ?? null;
+              download = payload.download ?? null;
+            } catch {
+              // payload is not JSON
+            }
+          }
           return {
             id,
             type,
@@ -35,6 +48,10 @@ export function jobRoutes(db) {
             module_manufacturer: job.Module?.manufacturer ?? null,
             module_name: job.Module?.name ?? null,
             question_prompt: job.Question?.prompt ?? null,
+            rack_name,
+            // Downloads are owner-only (the zip holds private notes and
+            // questions), so don't dangle a dead link in the admin view.
+            download: job.user_id === req.user.id ? download : null,
           };
         })
       );

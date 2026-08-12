@@ -51,12 +51,13 @@ export async function login(app, username, password = 'password123') {
 export async function createTestApp() {
   const db = await createTestDb();
   const manualsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-manuals-'));
-  const app = createApp(db, { manualsDir });
+  const exportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-exports-'));
+  const app = createApp(db, { manualsDir, exportsDir });
   await createUser(db, { username: 'admin', isAdmin: true });
   await createUser(db, { username: 'alice' });
   const adminCookie = await login(app, 'admin');
   const aliceCookie = await login(app, 'alice');
-  return { db, app, manualsDir, adminCookie, aliceCookie };
+  return { db, app, manualsDir, exportsDir, adminCookie, aliceCookie };
 }
 
 // Creates a shared module record, maps it into one of userId's racks (their

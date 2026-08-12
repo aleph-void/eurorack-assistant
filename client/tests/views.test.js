@@ -186,6 +186,22 @@ describe('RacksView', () => {
     expect(api.put).toHaveBeenCalledWith('/api/racks/2', { name: 'live case' });
   });
 
+  it('queues a rack export and tells the user the download is automatic', async () => {
+    api.get.mockResolvedValue(racksResponse);
+    api.post.mockResolvedValue({ id: 12, type: 'export_rack', status: 'pending' });
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="export-1"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/racks/1/export');
+    expect(wrapper.find('[data-test="notice"]').text()).toContain('downloads automatically');
+
+    api.post.mockRejectedValue(new Error('Rack not found'));
+    await wrapper.find('[data-test="export-2"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="error"]').text()).toContain('Rack not found');
+  });
+
   it('deletes a rack after confirmation and surfaces errors', async () => {
     api.get.mockResolvedValue(racksResponse);
     api.delete.mockResolvedValue({ ok: true });
@@ -797,6 +813,27 @@ describe('JobsView', () => {
     await wrapper.find('[data-test="retry-1"]').trigger('click');
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith('/api/jobs/1/retry');
+  });
+
+  it('labels rack exports and links the not-yet-taken download', async () => {
+    api.get.mockResolvedValue([
+      {
+        id: 2,
+        type: 'export_rack',
+        status: 'complete',
+        attempts: 1,
+        rack_name: 'main rack',
+        download: '/api/exports/2',
+      },
+      { id: 3, type: 'export_rack', status: 'complete', attempts: 1, rack_name: 'travel case', download: null },
+    ]);
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="job-table"]').text()).toContain('main rack');
+    const link = wrapper.find('[data-test="download-2"]');
+    expect(link.attributes('href')).toBe('/api/exports/2');
+    // Already-downloaded exports have no link (the zip is gone).
+    expect(wrapper.find('[data-test="download-3"]').exists()).toBe(false);
   });
 });
 

@@ -107,6 +107,50 @@ describe('jobs store', () => {
     expect(jobs.feed[0].message).toBe('9');
   });
 
+  it('auto-downloads a finished rack export exactly once', () => {
+    const jobs = useJobsStore();
+    const downloads = [];
+    jobs.triggerDownload = (url) => downloads.push(url);
+
+    jobs.applyEvent({
+      kind: 'job',
+      event: 'started',
+      job: { id: 7, type: 'export_rack', status: 'running', rack_name: 'main rack' },
+      at: 't1',
+    });
+    expect(downloads).toHaveLength(0);
+
+    jobs.applyEvent({
+      kind: 'job',
+      event: 'completed',
+      job: { id: 7, type: 'export_rack', status: 'complete', download: '/api/exports/7' },
+      at: 't2',
+    });
+    expect(downloads).toEqual(['/api/exports/7']);
+
+    // Completions of other job types don't download anything.
+    jobs.applyEvent({
+      kind: 'job',
+      event: 'completed',
+      job: { id: 8, type: 'find_manual', status: 'complete' },
+      at: 't3',
+    });
+    expect(downloads).toHaveLength(1);
+  });
+
+  it('triggerDownload clicks a temporary anchor pointing at the url', () => {
+    const jobs = useJobsStore();
+    const clicked = [];
+    const anchor = document.createElement('a');
+    anchor.click = () => clicked.push(anchor.getAttribute('href'));
+    const createElement = vi.spyOn(document, 'createElement').mockReturnValue(anchor);
+    jobs.triggerDownload('/api/exports/7');
+    expect(clicked).toEqual(['/api/exports/7']);
+    expect(anchor.hasAttribute('download')).toBe(true);
+    expect(document.body.contains(anchor)).toBe(false); // removed after click
+    createElement.mockRestore();
+  });
+
   it('retry updates the job in place', async () => {
     api.post.mockResolvedValue({ id: 4, status: 'pending', error: null });
     const jobs = useJobsStore();

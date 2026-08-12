@@ -10,8 +10,9 @@ import { questionRoutes } from './routes/questions.js';
 import { configRoutes } from './routes/config.js';
 import { jobRoutes } from './routes/jobs.js';
 import { noteRoutes } from './routes/notes.js';
+import { exportRoutes } from './routes/exports.js';
 
-export function createApp(db, { manualsDir } = {}) {
+export function createApp(db, { manualsDir, exportsDir } = {}) {
   const app = express();
   app.use(express.json({ limit: '40mb' }));
   app.use(cookieParser());
@@ -28,6 +29,7 @@ export function createApp(db, { manualsDir } = {}) {
   app.use('/api/config', configRoutes(db));
   app.use('/api/jobs', jobRoutes(db));
   app.use('/api/notes', noteRoutes(db));
+  app.use('/api/exports', exportRoutes(db, { exportsDir }));
 
   app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

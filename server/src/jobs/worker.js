@@ -8,6 +8,8 @@
 //   scope_question  — determine which modules/jacks a question applies to,
 //                     then leave the question 'scoped' for the user to review
 //   answer_question — ask the LLM with the reviewed scope and attachments
+//   export_rack     — zip a rack's manuals, notes and questions into a
+//                     one-shot download served by the exports route
 //
 // Progress is published per-user on the event bus, which the WebSocket server
 // forwards to the browser.
@@ -24,6 +26,7 @@ import {
 import { findManualForModule } from '../services/manualFinder.js';
 import { analyzeManualForModule } from '../services/manualAnalyzer.js';
 import { answerQuestion, scopeQuestion } from '../services/ask.js';
+import { safeSegment, writeRackExport } from '../services/rackExport.js';
 
 export const MAX_ATTEMPTS = 3;
 
@@ -54,6 +57,7 @@ export async function enqueueFindManual(db, module, userId) {
 export function createWorker(db, options = {}) {
   const {
     manualsDir = process.env.MANUALS_DIR || '/data/manuals',
+    exportsDir = process.env.EXPORTS_DIR || '/data/exports',
     pollIntervalMs = 5000,
     backendFactory = createBackend,
     fetchImpl = fetch,
@@ -106,6 +110,19 @@ export function createWorker(db, options = {}) {
       module_name = null,
       question_prompt = null,
     } = job;
+    // export_rack jobs carry their target rack and, once complete, the
+    // download link in the payload.
+    let rack_name = null;
+    let download = null;
+    if (job.payload) {
+      try {
+        const payload = JSON.parse(job.payload);
+        rack_name = payload.rack_name ?? null;
+        download = payload.download ?? null;
+      } catch {
+        // payload is not JSON (never the case for export jobs)
+      }
+    }
     return {
       id,
       type,
@@ -117,6 +134,8 @@ export function createWorker(db, options = {}) {
       module_manufacturer,
       module_name,
       question_prompt,
+      rack_name,
+      download,
     };
   }
 
@@ -259,12 +278,40 @@ export function createWorker(db, options = {}) {
     }
   }
 
+  async function handleExportRack(job, backend, progress) {
+    const payload = JSON.parse(job.payload || '{}');
+    const rack = await db.models.Rack.findOne({
+      where: { id: payload.rack_id, user_id: job.user_id },
+    });
+    if (!rack) throw new Error(`Rack ${payload.rack_id} no longer exists`);
+    progress(`collecting documents for rack '${rack.name}'`);
+    const { entryCount } = await writeRackExport(db, job.user_id, rack, job.id, {
+      manualsDir,
+      exportsDir,
+      log: progress,
+    });
+    // The 'completed' event carries the link (via jobSummary); the client
+    // auto-downloads it, and the exports route deletes the file once served.
+    await db.models.Job.update(
+      {
+        payload: JSON.stringify({
+          ...payload,
+          filename: `${safeSegment(rack.name)}.zip`,
+          download: `/api/exports/${job.id}`,
+        }),
+      },
+      { where: { id: job.id } }
+    );
+    progress(`zipped ${entryCount} document(s)`);
+  }
+
   const handlers = {
     import: handleImport,
     find_manual: handleFindManual,
     analyze_manual: handleAnalyzeManual,
     scope_question: handleScopeQuestion,
     answer_question: handleAnswerQuestion,
+    export_rack: handleExportRack,
   };
 
   // Process a single pending job if there is one. Returns the finished job row

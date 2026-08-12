@@ -8,6 +8,7 @@ const error = ref('');
 function describe(job) {
   if (job.module_name) return `${job.module_manufacturer || ''} ${job.module_name}`.trim();
   if (job.question_prompt) return job.question_prompt;
+  if (job.rack_name) return job.rack_name;
   return '';
 }
 
@@ -67,6 +68,16 @@ onMounted(async () => {
           <td>{{ job.attempts }}</td>
           <td class="muted">{{ job.error || '' }}</td>
           <td>
+            <!-- Finished exports normally download themselves; the link
+                 covers a missed event (page closed). It dies once used —
+                 the server deletes the zip after serving it. -->
+            <a
+              v-if="job.download && job.status === 'complete'"
+              :href="job.download"
+              :data-test="`download-${job.id}`"
+            >
+              Download
+            </a>
             <button
               v-if="job.status === 'failed'"
               class="secondary"
