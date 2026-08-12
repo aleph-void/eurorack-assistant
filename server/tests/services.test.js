@@ -548,6 +548,8 @@ describe('normalizeComponents', () => {
         voltage_max: 5,
         polarity: 'bipolar',
         group_label: null,
+        port_kind: null,
+        panel: null,
         values: [],
       },
       {
@@ -558,6 +560,8 @@ describe('normalizeComponents', () => {
         voltage_max: null,
         polarity: null,
         group_label: null,
+        port_kind: null,
+        panel: null,
         values: [],
       },
     ]);
@@ -575,11 +579,28 @@ describe('normalizeNormalizations', () => {
       null,
     ]);
     expect(normalizations).toEqual([
-      { target: 'IN 2', source: 'IN 1', source_label: null, description: 'Chained' },
+      {
+        target: 'IN 2',
+        target_panel: null,
+        source: 'IN 1',
+        source_panel: null,
+        source_label: null,
+        condition: null,
+        alt_group: null,
+        break_jack: null,
+        break_on: 'cable_in',
+        description: 'Chained',
+      },
       {
         target: 'Filter In',
+        target_panel: null,
         source: null,
+        source_panel: null,
         source_label: 'internal oscillator',
+        condition: null,
+        alt_group: null,
+        break_jack: null,
+        break_on: 'cable_in',
         description: null,
       },
     ]);
@@ -609,6 +630,11 @@ describe('resolveNormalizations', () => {
         source_component_id: 1,
         source_label: null,
         kind: 'input',
+        condition_component_id: null,
+        condition_value: null,
+        alt_group: null,
+        break_component_id: null,
+        break_on: 'cable_in',
         description: 'Input chaining',
       },
       {
@@ -616,6 +642,11 @@ describe('resolveNormalizations', () => {
         source_component_id: 3,
         source_label: null,
         kind: 'output',
+        condition_component_id: null,
+        condition_value: null,
+        alt_group: null,
+        break_component_id: null,
+        break_on: 'cable_in',
         description: null,
       },
       {
@@ -623,6 +654,11 @@ describe('resolveNormalizations', () => {
         source_component_id: null,
         source_label: 'internal noise source',
         kind: 'internal',
+        condition_component_id: null,
+        condition_value: null,
+        alt_group: null,
+        break_component_id: null,
+        break_on: 'cable_in',
         description: null,
       },
     ]);
@@ -644,6 +680,11 @@ describe('resolveNormalizations', () => {
         source_component_id: null,
         source_label: 'Mystery Out',
         kind: 'internal',
+        condition_component_id: null,
+        condition_value: null,
+        alt_group: null,
+        break_component_id: null,
+        break_on: 'cable_in',
         description: null,
       },
     ]);
@@ -1055,10 +1096,10 @@ describe('answerQuestion', () => {
     const [prompt] = backend.calls.answerWithDocuments[0];
     expect(prompt).toContain('normalled (default, unpatched) connections');
     expect(prompt).toContain(
-      '- Make Noise Maths: input "Filter In" is normalled to the "Osc Out" output — The oscillator feeds the filter by default.'
+      '- Make Noise Maths: "Filter In" is normalled to the "Osc Out" output — The oscillator feeds the filter by default.'
     );
     expect(prompt).toContain(
-      '- Make Noise Maths: input "Filter In" is normalled to the internal signal "internal noise source"'
+      '- Make Noise Maths: "Filter In" is normalled to the internal signal "internal noise source"'
     );
   });
 

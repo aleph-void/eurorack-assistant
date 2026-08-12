@@ -1,7 +1,10 @@
 import { Router } from 'express';
+import { Op } from 'sequelize';
 import { requireAuth } from '../auth.js';
+import { buildPatchTopology } from '../services/patchTopology.js';
 import { resolveNormalledSignals } from '../services/patchSignals.js';
 import { buildSignalFlow } from '../services/patchFlow.js';
+import { PORT_KINDS } from '../services/manualAnalyzer.js';
 
 // A user's patches. A patch is created FROM a rack but owns a snapshot of the
 // rack's contents (patch_modules, one row per module instance): modules can
@@ -9,6 +12,14 @@ import { buildSignalFlow } from '../services/patchFlow.js';
 // ids) or be deleted afterwards, and the patch keeps showing the rack as it
 // was. Live module/component rows are joined in at read time for as long as
 // they exist — the denormalized name columns take over when they don't.
+//
+// A patch is not limited to that snapshot, because real patches are not:
+// instances carry labels and belong to named buses, off-rack gear (a DAW, a
+// MIDI interface, the PA) and modules the rack does not hold take part with
+// connection points declared inside the patch, and instances can be wired to
+// each other without patch cables — a host and its expander panel, or a pair
+// of modules bridging two cases.
+//
 // Patches are strictly private to their owner.
 export function patchRoutes(db) {
   const {
@@ -21,13 +32,25 @@ export function patchRoutes(db) {
     ComponentRoute,
     ComponentSwitch,
     ComponentSwitchStep,
+    ComponentPair,
+    ModuleExpander,
     Patch,
     PatchModule,
     PatchCable,
     PatchSetting,
+    PatchGroup,
+    PatchModulePort,
+    PatchModuleLink,
+    PatchModuleLinkJack,
   } = db.models;
   const router = Router();
   router.use(requireAuth(db));
+
+  const JACK_TYPES = ['input_jack', 'output_jack', 'bidirectional_jack'];
+  const LINK_KINDS = ['expander', 'bridge'];
+  // A jack with no port_kind is an ordinary eurorack 3.5mm patch point; a
+  // cable only ever joins two connections of the same kind.
+  const portKind = (component) => component.port_kind || 'eurorack';
 
   function ownPatch(userId, id) {
     return Patch.findOne({ where: { id: Number(id) || 0, user_id: userId } });
@@ -43,6 +66,285 @@ export function patchRoutes(db) {
     updated_at: patch.updated_at,
     ...extra,
   });
+
+  const componentJson = (c) => ({
+    id: c.id,
+    type: c.type,
+    name: c.name,
+    description: c.description,
+    voltage_min: c.voltage_min ?? null,
+    voltage_max: c.voltage_max ?? null,
+    polarity: c.polarity ?? null,
+    group_label: c.group_label ?? null,
+    port_kind: c.port_kind ?? null,
+  });
+
+  // A connection point declared inside the patch (external gear, or a module
+  // the rack does not hold) presented in the same shape as a component, so
+  // cables, settings and the tracers need no special case.
+  const portJson = (p) => ({
+    id: p.id,
+    type: p.type,
+    name: p.name,
+    description: p.description,
+    voltage_min: null,
+    voltage_max: null,
+    polarity: null,
+    group_label: null,
+    port_kind: p.port_kind ?? null,
+    declared: true,
+  });
+
+  const cableJson = (c) => ({
+    id: c.id,
+    from_patch_module_id: c.from_patch_module_id,
+    from_component_id: c.from_component_id,
+    from_component_name: c.from_component_name,
+    to_patch_module_id: c.to_patch_module_id,
+    to_component_id: c.to_component_id,
+    to_component_name: c.to_component_name,
+    note: c.note ?? null,
+    optional: Boolean(c.optional),
+    stacked: Boolean(c.stacked),
+    alt_group: c.alt_group ?? null,
+  });
+
+  const moduleJson = (pm, { live, components }) => ({
+    id: pm.id,
+    module_id: pm.module_id,
+    manufacturer: pm.manufacturer,
+    module_name: pm.module_name,
+    instance: pm.instance,
+    label: pm.label ?? null,
+    group_id: pm.group_id ?? null,
+    external: Boolean(pm.external),
+    // false when the module record has since been deleted (or was never in
+    // the rack) — the snapshot row still renders, and its connection points
+    // are whatever the patch declares on it.
+    live,
+    components,
+  });
+
+  // Everything the patch is made of, resolved: the snapshot instances with
+  // their jacks, the cables and settings, and the graph the tracers walk.
+  async function loadPatchDetail(patch) {
+    const patchModules = await PatchModule.findAll({
+      where: { patch_id: patch.id },
+      order: [['id', 'ASC']],
+    });
+    const moduleIds = [...new Set(patchModules.map((pm) => pm.module_id).filter(Boolean))];
+    const liveModules = moduleIds.length === 0 ? [] : await Module.findAll({ where: { id: moduleIds } });
+    const liveIds = new Set(liveModules.map((m) => m.id));
+
+    // An expander's jacks belong to its own module record, which may not be
+    // in this patch — but a route declared on the host can still reach them,
+    // so the components of every linked panel are loaded too.
+    const expanderRows =
+      liveIds.size === 0
+        ? []
+        : await ModuleExpander.findAll({
+            where: {
+              [Op.or]: [{ host_module_id: [...liveIds] }, { expander_module_id: [...liveIds] }],
+            },
+          });
+    const relatedIds = new Set(liveIds);
+    for (const e of expanderRows) {
+      relatedIds.add(e.host_module_id);
+      relatedIds.add(e.expander_module_id);
+    }
+
+    const components =
+      relatedIds.size === 0
+        ? []
+        : await ModuleComponent.findAll({
+            where: { module_id: [...relatedIds] },
+            order: [
+              ['type', 'ASC'],
+              ['id', 'ASC'],
+            ],
+          });
+    const valueRows =
+      components.length === 0
+        ? []
+        : await ComponentValue.findAll({
+            where: { component_id: components.map((c) => c.id) },
+            order: [['id', 'ASC']],
+          });
+    const valuesByComponent = new Map();
+    for (const v of valueRows) {
+      if (!valuesByComponent.has(v.component_id)) valuesByComponent.set(v.component_id, []);
+      valuesByComponent.get(v.component_id).push({
+        id: v.id,
+        type: v.type,
+        value: v.value,
+        description: v.description,
+      });
+    }
+    const componentsByModule = new Map();
+    for (const c of components) {
+      if (!componentsByModule.has(c.module_id)) componentsByModule.set(c.module_id, []);
+      componentsByModule.get(c.module_id).push({
+        ...componentJson(c),
+        values: valuesByComponent.get(c.id) ?? [],
+      });
+    }
+
+    const portRows = await PatchModulePort.findAll({
+      where: { patch_module_id: patchModules.map((pm) => pm.id) },
+      order: [
+        ['position', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
+    const portsByPatchModule = new Map();
+    for (const p of portRows) {
+      if (!portsByPatchModule.has(p.patch_module_id)) portsByPatchModule.set(p.patch_module_id, []);
+      portsByPatchModule.get(p.patch_module_id).push({ ...portJson(p), values: [] });
+    }
+
+    const cables = await PatchCable.findAll({
+      where: { patch_id: patch.id },
+      order: [['id', 'ASC']],
+    });
+    const settings = await PatchSetting.findAll({
+      where: { patch_id: patch.id },
+      order: [['id', 'ASC']],
+    });
+    const groups = await PatchGroup.findAll({
+      where: { patch_id: patch.id },
+      order: [
+        ['position', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
+
+    const linkRows = await PatchModuleLink.findAll({
+      where: { patch_id: patch.id },
+      order: [['id', 'ASC']],
+    });
+    const linkJackRows =
+      linkRows.length === 0
+        ? []
+        : await PatchModuleLinkJack.findAll({
+            where: { link_id: linkRows.map((l) => l.id) },
+            order: [['id', 'ASC']],
+          });
+    const links = linkRows.map((l) => ({
+      id: l.id,
+      kind: l.kind,
+      a_patch_module_id: l.a_patch_module_id,
+      b_patch_module_id: l.b_patch_module_id,
+      description: l.description,
+      jacks: linkJackRows
+        .filter((j) => j.link_id === l.id)
+        .map((j) => ({
+          id: j.id,
+          a_component_id: j.a_component_id,
+          a_component_name: j.a_component_name,
+          b_component_id: j.b_component_id,
+          b_component_name: j.b_component_name,
+        })),
+    }));
+
+    const load = async (model, extra = {}) =>
+      relatedIds.size === 0
+        ? []
+        : model.findAll({ where: { module_id: [...relatedIds] }, order: [['id', 'ASC']], ...extra });
+    const groupByModule = (rows) => {
+      const map = new Map();
+      for (const r of rows) {
+        if (!map.has(r.module_id)) map.set(r.module_id, []);
+        map.get(r.module_id).push(r.get ? r.get({ plain: true }) : r);
+      }
+      return map;
+    };
+    const normalizationsByModule = groupByModule(await load(ComponentNormalization));
+    const routesByModule = groupByModule(await load(ComponentRoute));
+    const pairsByModule = groupByModule(await load(ComponentPair));
+
+    const switchRows = await load(ComponentSwitch);
+    const switchStepRows =
+      switchRows.length === 0
+        ? []
+        : await ComponentSwitchStep.findAll({
+            where: { switch_id: switchRows.map((s) => s.id) },
+            order: [
+              ['position', 'ASC'],
+              ['component_id', 'ASC'],
+            ],
+          });
+    const switchesByModule = new Map();
+    for (const s of switchRows) {
+      if (!switchesByModule.has(s.module_id)) switchesByModule.set(s.module_id, []);
+      switchesByModule.get(s.module_id).push({
+        id: s.id,
+        name: s.name,
+        common_component_id: s.common_component_id,
+        step_component_ids: switchStepRows
+          .filter((st) => st.switch_id === s.id)
+          .map((st) => st.component_id),
+      });
+    }
+
+    const plainPatchModules = patchModules.map((pm) => ({
+      id: pm.id,
+      module_id: pm.module_id !== null && liveIds.has(pm.module_id) ? pm.module_id : null,
+      external: Boolean(pm.external),
+    }));
+    const topology = buildPatchTopology({
+      patchModules: plainPatchModules,
+      componentsByModule,
+      portsByPatchModule,
+      routesByModule,
+      normalizationsByModule,
+      switchesByModule,
+      pairsByModule,
+      links,
+      settings: settings.map((s) => s.get({ plain: true })),
+      cables: cables.map((c) => c.get({ plain: true })),
+    });
+
+    return {
+      patchModules,
+      liveIds,
+      topology,
+      json: {
+        modules: patchModules.map((pm) =>
+          moduleJson(pm, {
+            live: pm.module_id !== null && liveIds.has(pm.module_id),
+            components: topology.jacksByPatchModule.get(pm.id) ?? [],
+          })
+        ),
+        groups: groups.map((g) => ({
+          id: g.id,
+          name: g.name,
+          description: g.description,
+          position: g.position,
+        })),
+        links,
+        cables: cables.map(cableJson),
+        settings: settings.map((s) => ({
+          id: s.id,
+          patch_module_id: s.patch_module_id,
+          component_id: s.component_id,
+          component_name: s.component_name,
+          value: s.value,
+        })),
+        // Jacks that carry the two halves of one signal, per instance, so the
+        // GUI can offer "patch the stereo pair" as one action.
+        pairs: topology.pairs,
+        // Normalled connections, resolved against THIS patch: each one is
+        // active until the cable that cancels it is patched, and its signal
+        // is traced through the chain to where it really comes from.
+        normalizations: resolveNormalledSignals(topology),
+        // Whole-patch signal flow: internal routes carry signal across each
+        // module, so a generator output can be followed through cables,
+        // mults, normals, switches, expanders and bridges to everywhere it
+        // ends up.
+        flow: buildSignalFlow(topology),
+      },
+    };
+  }
 
   router.get('/', async (req, res, next) => {
     try {
@@ -110,7 +412,18 @@ export function patchRoutes(db) {
           instance: i + 1,
         }))
       );
+      // Hosts and expanders in the same rack arrive already wired together —
+      // that is what the ribbon cable does — so the patch links them without
+      // being asked, instance by instance.
+      const rackModuleIds = [...new Set(snapshot.map((s) => s.module_id))];
+      const expanderPairs = await ModuleExpander.findAll({
+        where: {
+          host_module_id: rackModuleIds,
+          expander_module_id: rackModuleIds,
+        },
+      });
       let patch;
+      let created = [];
       await db.sequelize.transaction(async (transaction) => {
         patch = await Patch.create(
           {
@@ -126,6 +439,28 @@ export function patchRoutes(db) {
           snapshot.map((m) => ({ ...m, patch_id: patch.id })),
           { transaction }
         );
+        created = await PatchModule.findAll({
+          where: { patch_id: patch.id },
+          order: [['id', 'ASC']],
+          transaction,
+        });
+        const instancesOf = (moduleId) => created.filter((pm) => pm.module_id === moduleId);
+        const linkRows = [];
+        for (const pair of expanderPairs) {
+          const hosts = instancesOf(pair.host_module_id);
+          const expanders = instancesOf(pair.expander_module_id);
+          // Pair them off in order; a spare panel on either side is left
+          // unlinked for the user to wire up by hand.
+          for (let i = 0; i < Math.min(hosts.length, expanders.length); i += 1) {
+            linkRows.push({
+              patch_id: patch.id,
+              a_patch_module_id: hosts[i].id,
+              b_patch_module_id: expanders[i].id,
+              kind: 'expander',
+            });
+          }
+        }
+        if (linkRows.length > 0) await PatchModuleLink.bulkCreate(linkRows, { transaction });
       });
       res.status(201).json(patchJson(patch, { module_count: snapshot.length, cable_count: 0 }));
     } catch (e) {
@@ -133,184 +468,15 @@ export function patchRoutes(db) {
     }
   });
 
-  // Full detail: the snapshot modules (with each live module's components and
-  // their valid values joined in), the cables, and the settings.
+  // Full detail: the snapshot instances (with each live module's components
+  // and their valid values joined in), the cables, settings, groups, links,
+  // and the traced normalled connections and signal flow.
   router.get('/:id', async (req, res, next) => {
     try {
       const patch = await ownPatch(req.user.id, req.params.id);
       if (!patch) return res.status(404).json({ error: 'Patch not found' });
-      const patchModules = await PatchModule.findAll({
-        where: { patch_id: patch.id },
-        order: [['id', 'ASC']],
-      });
-      const moduleIds = [...new Set(patchModules.map((pm) => pm.module_id).filter(Boolean))];
-      const liveModules =
-        moduleIds.length === 0 ? [] : await Module.findAll({ where: { id: moduleIds } });
-      const liveIds = new Set(liveModules.map((m) => m.id));
-      const components =
-        liveIds.size === 0
-          ? []
-          : await ModuleComponent.findAll({
-              where: { module_id: [...liveIds] },
-              order: [
-                ['type', 'ASC'],
-                ['id', 'ASC'],
-              ],
-            });
-      const valueRows =
-        components.length === 0
-          ? []
-          : await ComponentValue.findAll({
-              where: { component_id: components.map((c) => c.id) },
-              order: [['id', 'ASC']],
-            });
-      const valuesByComponent = new Map();
-      for (const v of valueRows) {
-        if (!valuesByComponent.has(v.component_id)) valuesByComponent.set(v.component_id, []);
-        valuesByComponent.get(v.component_id).push({
-          id: v.id,
-          type: v.type,
-          value: v.value,
-          description: v.description,
-        });
-      }
-      const componentsByModule = new Map();
-      for (const c of components) {
-        if (!componentsByModule.has(c.module_id)) componentsByModule.set(c.module_id, []);
-        componentsByModule.get(c.module_id).push({
-          id: c.id,
-          type: c.type,
-          name: c.name,
-          description: c.description,
-          voltage_min: c.voltage_min,
-          voltage_max: c.voltage_max,
-          polarity: c.polarity,
-          group_label: c.group_label,
-          values: valuesByComponent.get(c.id) ?? [],
-        });
-      }
-      const cables = await PatchCable.findAll({
-        where: { patch_id: patch.id },
-        order: [['id', 'ASC']],
-      });
-      const settings = await PatchSetting.findAll({
-        where: { patch_id: patch.id },
-        order: [['id', 'ASC']],
-      });
-      // Normalled connections, resolved against THIS patch's cables: each one
-      // is active until a cable lands in its target input, and its actual
-      // signal is traced through input→input chains to the patched origin.
-      const normalizationRows =
-        liveIds.size === 0
-          ? []
-          : await ComponentNormalization.findAll({
-              where: { module_id: [...liveIds] },
-              order: [['id', 'ASC']],
-            });
-      const normalizationsByModule = new Map();
-      for (const n of normalizationRows) {
-        if (!normalizationsByModule.has(n.module_id)) normalizationsByModule.set(n.module_id, []);
-        normalizationsByModule.get(n.module_id).push(n.get({ plain: true }));
-      }
-      const plainPatchModules = patchModules.map((pm) => ({
-        id: pm.id,
-        module_id: pm.module_id !== null && liveIds.has(pm.module_id) ? pm.module_id : null,
-      }));
-      const plainCables = cables.map((c) => c.get({ plain: true }));
-      const normalled = resolveNormalledSignals({
-        patchModules: plainPatchModules,
-        componentsByModule,
-        normalizationsByModule,
-        cables: plainCables,
-      });
-      // Whole-patch signal flow: module-internal routes carry signal across
-      // each module, so a generator output can be followed through cables,
-      // mults, normals and modules to everywhere it ends up.
-      const routeRows =
-        liveIds.size === 0
-          ? []
-          : await ComponentRoute.findAll({
-              where: { module_id: [...liveIds] },
-              order: [['id', 'ASC']],
-            });
-      const routesByModule = new Map();
-      for (const r of routeRows) {
-        if (!routesByModule.has(r.module_id)) routesByModule.set(r.module_id, []);
-        routesByModule.get(r.module_id).push(r.get({ plain: true }));
-      }
-      // Routing switch sections: the common jack connects to one step jack
-      // at a time, so the flow tracer draws every cabled step as a selected
-      // (not simultaneous) path.
-      const switchRows =
-        liveIds.size === 0
-          ? []
-          : await ComponentSwitch.findAll({
-              where: { module_id: [...liveIds] },
-              order: [['id', 'ASC']],
-            });
-      const switchStepRows =
-        switchRows.length === 0
-          ? []
-          : await ComponentSwitchStep.findAll({
-              where: { switch_id: switchRows.map((s) => s.id) },
-              order: [
-                ['position', 'ASC'],
-                ['component_id', 'ASC'],
-              ],
-            });
-      const switchesByModule = new Map();
-      for (const s of switchRows) {
-        if (!switchesByModule.has(s.module_id)) switchesByModule.set(s.module_id, []);
-        switchesByModule.get(s.module_id).push({
-          id: s.id,
-          name: s.name,
-          common_component_id: s.common_component_id,
-          step_component_ids: switchStepRows
-            .filter((st) => st.switch_id === s.id)
-            .map((st) => st.component_id),
-        });
-      }
-      const flow = buildSignalFlow({
-        patchModules: plainPatchModules,
-        componentsByModule,
-        routesByModule,
-        normalizationsByModule,
-        switchesByModule,
-        cables: plainCables,
-      });
-      res.json(
-        patchJson(patch, {
-          modules: patchModules.map((pm) => ({
-            id: pm.id,
-            module_id: pm.module_id,
-            manufacturer: pm.manufacturer,
-            module_name: pm.module_name,
-            instance: pm.instance,
-            // false when the module record has since been deleted — the
-            // snapshot row still renders, but has no components to patch.
-            live: pm.module_id !== null && liveIds.has(pm.module_id),
-            components: componentsByModule.get(pm.module_id) ?? [],
-          })),
-          cables: cables.map((c) => ({
-            id: c.id,
-            from_patch_module_id: c.from_patch_module_id,
-            from_component_id: c.from_component_id,
-            from_component_name: c.from_component_name,
-            to_patch_module_id: c.to_patch_module_id,
-            to_component_id: c.to_component_id,
-            to_component_name: c.to_component_name,
-          })),
-          settings: settings.map((s) => ({
-            id: s.id,
-            patch_module_id: s.patch_module_id,
-            component_id: s.component_id,
-            component_name: s.component_name,
-            value: s.value,
-          })),
-          normalizations: normalled,
-          flow,
-        })
-      );
+      const { json } = await loadPatchDetail(patch);
+      res.json(patchJson(patch, json));
     } catch (e) {
       next(e);
     }
@@ -348,6 +514,426 @@ export function patchRoutes(db) {
     }
   });
 
+  // ---- instances: labels, groups, ad-hoc modules and external gear ----
+
+  // Add something to the patch that the rack snapshot does not hold:
+  //   { module_id }                        — another instance of a module you
+  //                                          have racked (a second Batumi)
+  //   { manufacturer, module_name }        — a module the rack does not hold
+  //                                          (a borrowed A-140)
+  //   { name, external: true }             — off-rack gear: a DAW, a MIDI
+  //                                          interface, the monitors
+  // Instances with no live module behind them declare their own connection
+  // points with POST /:id/modules/:pmId/ports.
+  router.post('/:id/modules', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const external = Boolean(req.body?.external);
+      let manufacturer = String(req.body?.manufacturer || '').trim();
+      let moduleName = String(req.body?.module_name || req.body?.name || '').trim();
+      let moduleId = null;
+
+      if (req.body?.module_id !== undefined && req.body?.module_id !== null && !external) {
+        // Only modules the user actually has racked can be referenced live.
+        const mapping = await RackModule.findOne({
+          where: { module_id: Number(req.body.module_id) || 0 },
+          include: [{ model: Rack, where: { user_id: req.user.id } }, Module],
+        });
+        if (!mapping || !mapping.Module) {
+          return res.status(400).json({ error: 'module_id must be a module in one of your racks' });
+        }
+        moduleId = mapping.Module.id;
+        manufacturer = mapping.Module.manufacturer;
+        moduleName = mapping.Module.name;
+      }
+      if (!moduleName) {
+        return res
+          .status(400)
+          .json({ error: 'module_id, or a name for the module or piece of gear, is required' });
+      }
+      const instances = await PatchModule.findAll({
+        where: { patch_id: patch.id },
+      });
+      const instance = moduleId
+        ? instances.filter((pm) => pm.module_id === moduleId).length + 1
+        : instances.filter(
+            (pm) =>
+              pm.module_id === null &&
+              pm.module_name.toLowerCase() === moduleName.toLowerCase() &&
+              (pm.manufacturer || '').toLowerCase() === manufacturer.toLowerCase()
+          ).length + 1;
+      const pm = await PatchModule.create({
+        patch_id: patch.id,
+        module_id: moduleId,
+        manufacturer: manufacturer || (external ? 'external' : ''),
+        module_name: moduleName,
+        instance,
+        external,
+        label: String(req.body?.label || '').trim() || null,
+      });
+      res.status(201).json(moduleJson(pm, { live: Boolean(moduleId), components: [] }));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  async function ownPatchModule(patch, patchModuleId) {
+    return PatchModule.findOne({
+      where: { id: Number(patchModuleId) || 0, patch_id: patch.id },
+    });
+  }
+
+  // Name an instance's role in this patch and file it under a bus/layer.
+  // Body: { label?, group_id? } (group_id null clears it)
+  router.put('/:id/modules/:pmId', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const pm = await ownPatchModule(patch, req.params.pmId);
+      if (!pm) return res.status(404).json({ error: 'Module not found in this patch' });
+      const updates = {};
+      if (req.body?.label !== undefined) {
+        updates.label = String(req.body.label || '').trim() || null;
+      }
+      if (req.body?.group_id !== undefined) {
+        if (req.body.group_id === null || req.body.group_id === '') {
+          updates.group_id = null;
+        } else {
+          const group = await PatchGroup.findOne({
+            where: { id: Number(req.body.group_id) || 0, patch_id: patch.id },
+          });
+          if (!group) return res.status(400).json({ error: 'group_id must be a group of this patch' });
+          updates.group_id = group.id;
+        }
+      }
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'label or group_id is required' });
+      }
+      await pm.update(updates);
+      res.json(moduleJson(pm, { live: pm.module_id !== null, components: [] }));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Remove an instance from the patch, along with everything patched into it.
+  router.delete('/:id/modules/:pmId', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const pm = await ownPatchModule(patch, req.params.pmId);
+      if (!pm) return res.status(404).json({ error: 'Module not found in this patch' });
+      await db.sequelize.transaction(async (transaction) => {
+        await PatchCable.destroy({
+          where: {
+            patch_id: patch.id,
+            [Op.or]: [{ from_patch_module_id: pm.id }, { to_patch_module_id: pm.id }],
+          },
+          transaction,
+        });
+        await PatchSetting.destroy({ where: { patch_module_id: pm.id }, transaction });
+        await PatchModulePort.destroy({ where: { patch_module_id: pm.id }, transaction });
+        const links = await PatchModuleLink.findAll({
+          where: {
+            patch_id: patch.id,
+            [Op.or]: [{ a_patch_module_id: pm.id }, { b_patch_module_id: pm.id }],
+          },
+          transaction,
+        });
+        if (links.length > 0) {
+          await PatchModuleLinkJack.destroy({
+            where: { link_id: links.map((l) => l.id) },
+            transaction,
+          });
+          await PatchModuleLink.destroy({ where: { id: links.map((l) => l.id) }, transaction });
+        }
+        await pm.destroy({ transaction });
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Declare a connection point on an instance with no analyzed module behind
+  // it. Body: { name, type?, port_kind?, description? }
+  router.post('/:id/modules/:pmId/ports', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const pm = await ownPatchModule(patch, req.params.pmId);
+      if (!pm) return res.status(404).json({ error: 'Module not found in this patch' });
+      if (pm.module_id !== null && (await Module.count({ where: { id: pm.module_id } })) > 0) {
+        return res.status(400).json({
+          error: "this module's connections come from its analyzed components, not from the patch",
+        });
+      }
+      const name = String(req.body?.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'name is required' });
+      const type = String(req.body?.type || 'input_jack').trim().toLowerCase();
+      if (!JACK_TYPES.includes(type)) {
+        return res.status(400).json({ error: `type must be one of: ${JACK_TYPES.join(', ')}` });
+      }
+      const kind = String(req.body?.port_kind || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      if (kind && !PORT_KINDS.includes(kind)) {
+        return res.status(400).json({ error: `port_kind must be one of: ${PORT_KINDS.join(', ')}` });
+      }
+      const existing = await PatchModulePort.findAll({ where: { patch_module_id: pm.id } });
+      if (existing.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
+        return res.status(409).json({ error: `'${name}' is already declared on this module` });
+      }
+      const port = await PatchModulePort.create({
+        patch_module_id: pm.id,
+        name,
+        type,
+        port_kind: kind || null,
+        description: String(req.body?.description || '').trim() || null,
+        position: existing.length + 1,
+      });
+      res.status(201).json({ ...portJson(port), patch_module_id: pm.id });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.delete('/:id/modules/:pmId/ports/:portId', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const pm = await ownPatchModule(patch, req.params.pmId);
+      if (!pm) return res.status(404).json({ error: 'Module not found in this patch' });
+      const port = await PatchModulePort.findOne({
+        where: { id: Number(req.params.portId) || 0, patch_module_id: pm.id },
+      });
+      if (!port) return res.status(404).json({ error: 'Port not found' });
+      await db.sequelize.transaction(async (transaction) => {
+        await PatchCable.destroy({
+          where: {
+            patch_id: patch.id,
+            [Op.or]: [
+              { from_patch_module_id: pm.id, from_component_id: port.id },
+              { to_patch_module_id: pm.id, to_component_id: port.id },
+            ],
+          },
+          transaction,
+        });
+        await port.destroy({ transaction });
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // ---- groups (named buses / layers) ----
+
+  const groupJson = (g) => ({
+    id: g.id,
+    name: g.name,
+    description: g.description,
+    position: g.position,
+  });
+
+  router.post('/:id/groups', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const name = String(req.body?.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'name is required' });
+      const existing = await PatchGroup.findAll({ where: { patch_id: patch.id } });
+      if (existing.some((g) => g.name.toLowerCase() === name.toLowerCase())) {
+        return res.status(409).json({ error: `this patch already has a group named '${name}'` });
+      }
+      const group = await PatchGroup.create({
+        patch_id: patch.id,
+        name,
+        description: String(req.body?.description || '').trim() || null,
+        position: Number(req.body?.position) || existing.length + 1,
+      });
+      res.status(201).json(groupJson(group));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.put('/:id/groups/:groupId', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const group = await PatchGroup.findOne({
+        where: { id: Number(req.params.groupId) || 0, patch_id: patch.id },
+      });
+      if (!group) return res.status(404).json({ error: 'Group not found' });
+      const updates = {};
+      if (req.body?.name !== undefined) {
+        const name = String(req.body.name || '').trim();
+        if (!name) return res.status(400).json({ error: 'name is required' });
+        updates.name = name;
+      }
+      if (req.body?.description !== undefined) {
+        updates.description = String(req.body.description || '').trim() || null;
+      }
+      if (req.body?.position !== undefined) updates.position = Number(req.body.position) || 0;
+      await group.update(updates);
+      res.json(groupJson(group));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Deleting a group leaves its members in the patch, ungrouped.
+  router.delete('/:id/groups/:groupId', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const group = await PatchGroup.findOne({
+        where: { id: Number(req.params.groupId) || 0, patch_id: patch.id },
+      });
+      if (!group) return res.status(404).json({ error: 'Group not found' });
+      await db.sequelize.transaction(async (transaction) => {
+        await PatchModule.update(
+          { group_id: null },
+          { where: { patch_id: patch.id, group_id: group.id }, transaction }
+        );
+        await group.destroy({ transaction });
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // ---- links between instances (expander panels, bridges) ----
+
+  // Body: { a_patch_module_id, b_patch_module_id, kind: 'expander'|'bridge',
+  //         jacks?: [{ a_component_id, b_component_id }], description? }
+  // A bridge with no explicit jack list pairs the two panels' jacks by name,
+  // which is exactly how a 7Path pair works (jack 4 ↔ jack 4).
+  router.post('/:id/links', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const a = await ownPatchModule(patch, req.body?.a_patch_module_id);
+      const b = await ownPatchModule(patch, req.body?.b_patch_module_id);
+      if (!a || !b) {
+        return res.status(400).json({ error: 'both modules must be part of this patch' });
+      }
+      if (a.id === b.id) {
+        return res.status(400).json({ error: 'a module cannot be linked to itself' });
+      }
+      const kind = String(req.body?.kind || 'expander').trim().toLowerCase();
+      if (!LINK_KINDS.includes(kind)) {
+        return res.status(400).json({ error: `kind must be one of: ${LINK_KINDS.join(', ')}` });
+      }
+      const existing = await PatchModuleLink.findAll({ where: { patch_id: patch.id } });
+      if (
+        existing.some(
+          (l) =>
+            (l.a_patch_module_id === a.id && l.b_patch_module_id === b.id) ||
+            (l.a_patch_module_id === b.id && l.b_patch_module_id === a.id)
+        )
+      ) {
+        return res.status(409).json({ error: 'these two modules are already linked' });
+      }
+
+      const detail = await loadPatchDetail(patch);
+      const jacksOf = (pm) =>
+        (detail.topology.jacksByPatchModule.get(pm.id) || []).filter((c) => c.type.endsWith('_jack'));
+      let jackRows = [];
+      if (kind === 'bridge') {
+        const requested = Array.isArray(req.body?.jacks) ? req.body.jacks : [];
+        const aJacks = jacksOf(a);
+        const bJacks = jacksOf(b);
+        if (requested.length > 0) {
+          for (const pair of requested) {
+            const aJack = aJacks.find((c) => c.id === Number(pair?.a_component_id));
+            const bJack = bJacks.find((c) => c.id === Number(pair?.b_component_id));
+            if (!aJack || !bJack) {
+              return res
+                .status(400)
+                .json({ error: 'every bridged pair must name a jack on each of the two modules' });
+            }
+            jackRows.push({
+              a_component_id: aJack.id,
+              a_component_name: aJack.name,
+              b_component_id: bJack.id,
+              b_component_name: bJack.name,
+            });
+          }
+        } else {
+          const byName = new Map(bJacks.map((c) => [c.name.trim().toLowerCase(), c]));
+          for (const aJack of aJacks) {
+            const bJack = byName.get(aJack.name.trim().toLowerCase());
+            if (!bJack) continue;
+            jackRows.push({
+              a_component_id: aJack.id,
+              a_component_name: aJack.name,
+              b_component_id: bJack.id,
+              b_component_name: bJack.name,
+            });
+          }
+        }
+        if (jackRows.length === 0) {
+          return res.status(400).json({
+            error:
+              'a bridge needs at least one pair of jacks — name them explicitly when the two panels use different labels',
+          });
+        }
+      }
+
+      let link;
+      await db.sequelize.transaction(async (transaction) => {
+        link = await PatchModuleLink.create(
+          {
+            patch_id: patch.id,
+            a_patch_module_id: a.id,
+            b_patch_module_id: b.id,
+            kind,
+            description: String(req.body?.description || '').trim() || null,
+          },
+          { transaction }
+        );
+        if (jackRows.length > 0) {
+          await PatchModuleLinkJack.bulkCreate(
+            jackRows.map((j) => ({ ...j, link_id: link.id })),
+            { transaction }
+          );
+        }
+      });
+      res.status(201).json({
+        id: link.id,
+        kind: link.kind,
+        a_patch_module_id: link.a_patch_module_id,
+        b_patch_module_id: link.b_patch_module_id,
+        description: link.description,
+        jacks: jackRows,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.delete('/:id/links/:linkId', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const link = await PatchModuleLink.findOne({
+        where: { id: Number(req.params.linkId) || 0, patch_id: patch.id },
+      });
+      if (!link) return res.status(404).json({ error: 'Link not found' });
+      await db.sequelize.transaction(async (transaction) => {
+        await PatchModuleLinkJack.destroy({ where: { link_id: link.id }, transaction });
+        await link.destroy({ transaction });
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // ---- cables ----
+
   // The jacks of a module that belong to one of its routing switch sections
   // (common or step). Switch jacks are exempt from the mult rules: an N→1
   // switch legitimately takes cables into several jacks of the section —
@@ -365,22 +951,176 @@ export function patchRoutes(db) {
     return ids;
   }
 
+  // The jacks of an instance that are bridged to another instance. Like
+  // switch jacks, these are exempt from the mult rules: a bridge pairs jacks
+  // one to one, so several jacks of one panel legitimately take cables — a
+  // 7Path's jacks are interchangeable but they are not copies of each other.
+  async function bridgeMemberIds(patch, patchModuleId) {
+    const links = await PatchModuleLink.findAll({
+      where: {
+        patch_id: patch.id,
+        kind: 'bridge',
+        [Op.or]: [{ a_patch_module_id: patchModuleId }, { b_patch_module_id: patchModuleId }],
+      },
+    });
+    if (links.length === 0) return new Set();
+    const jacks = await PatchModuleLinkJack.findAll({
+      where: { link_id: links.map((l) => l.id) },
+    });
+    const linkById = new Map(links.map((l) => [l.id, l]));
+    const ids = new Set();
+    for (const j of jacks) {
+      const link = linkById.get(j.link_id);
+      if (link.a_patch_module_id === patchModuleId) ids.add(j.a_component_id);
+      if (link.b_patch_module_id === patchModuleId) ids.add(j.b_component_id);
+    }
+    return ids;
+  }
+
+  // Every jack of one instance: an analyzed module's components, or the
+  // connection points the patch declares on it.
+  async function componentsOfPatchModule(pm) {
+    if (pm.module_id) {
+      const rows = await ModuleComponent.findAll({ where: { module_id: pm.module_id } });
+      if (rows.length > 0) return rows.map((c) => componentJson(c));
+    }
+    const ports = await PatchModulePort.findAll({ where: { patch_module_id: pm.id } });
+    return ports.map((p) => portJson(p));
+  }
+
   // A patch_modules row of this patch, with the component (when given)
-  // verified to belong to the snapshot's live module.
+  // verified to be one of that instance's connection points.
   async function resolveEndpoint(patch, patchModuleId, componentId) {
     const pm = await PatchModule.findOne({
       where: { id: Number(patchModuleId) || 0, patch_id: patch.id },
     });
     if (!pm) return { error: 'that module is not part of this patch' };
-    const component = await ModuleComponent.findOne({
-      where: { id: Number(componentId) || 0, module_id: pm.module_id ?? 0 },
-    });
+    const jacks = await componentsOfPatchModule(pm);
+    const component = jacks.find((c) => c.id === (Number(componentId) || 0));
     if (!component) return { error: 'that component does not belong to this module' };
     return { pm, component };
   }
 
+  // Everything that makes one cable legal, given the cables already patched.
+  // Returns null when the cable is fine, or { status, error }.
+  async function cableProblem(patch, from, to, existing) {
+    const BIDIRECTIONAL = 'bidirectional_jack';
+    if (from.component.type !== 'output_jack' && from.component.type !== BIDIRECTIONAL) {
+      return { status: 400, error: 'a cable must start at an output or mult jack' };
+    }
+    if (to.component.type !== 'input_jack' && to.component.type !== BIDIRECTIONAL) {
+      return { status: 400, error: 'a cable must end at an input or mult jack' };
+    }
+    // A MIDI socket, a USB port and a 3.5mm patch point do not connect to
+    // each other; patch a piece of gear in between instead.
+    if (portKind(from.component) !== portKind(to.component)) {
+      return {
+        status: 400,
+        error: `'${from.component.name}' is a ${portKind(from.component).replace(/_/g, ' ')} connection and '${to.component.name}' is a ${portKind(to.component).replace(/_/g, ' ')} one — a cable cannot join them`,
+      };
+    }
+    // The interchangeable jacks of one mult section: same module, same group
+    // label (ungrouped bidirectional jacks count as one group).
+    const groupKey = (c) => (c.group_label || '').trim().toLowerCase();
+    // Switch-section and bridged jacks opt out of every mult rule below.
+    const exemptJacks = async (end) => {
+      if (end.component.type !== BIDIRECTIONAL) return new Set();
+      const ids = await switchMemberIds(end.pm.module_id);
+      for (const id of await bridgeMemberIds(patch, end.pm.id)) ids.add(id);
+      return ids;
+    };
+    const fromSwitchJacks = await exemptJacks(from);
+    const toSwitchJacks = await exemptJacks(to);
+    const sameMultGroup = (a, b) =>
+      a.type === BIDIRECTIONAL &&
+      b.type === BIDIRECTIONAL &&
+      !fromSwitchJacks.has(a.id) &&
+      !toSwitchJacks.has(b.id) &&
+      groupKey(a) === groupKey(b);
+    if (from.pm.id === to.pm.id && sameMultGroup(from.component, to.component)) {
+      return {
+        status: 400,
+        error: 'both jacks belong to the same mult group — that cable does nothing',
+      };
+    }
+    // An input takes exactly one cable; the same output may fan out via
+    // multiples/stackcables, but not twice into the same input.
+    const inputTaken = existing.some(
+      (c) => c.to_patch_module_id === to.pm.id && c.to_component_id === to.component.id
+    );
+    if (inputTaken) {
+      return {
+        status: 409,
+        error: `'${to.component.name}' on ${to.pm.manufacturer} ${to.pm.module_name} already has a cable in it`,
+      };
+    }
+    // Mult rules. Cabling INTO a bidirectional jack makes it its group's
+    // input, so the jack must not already carry a copy out, and the group
+    // must not already have an input on another jack.
+    if (to.component.type === BIDIRECTIONAL && !toSwitchJacks.has(to.component.id)) {
+      if (
+        existing.some(
+          (c) => c.from_patch_module_id === to.pm.id && c.from_component_id === to.component.id
+        )
+      ) {
+        return {
+          status: 409,
+          error: `'${to.component.name}' is already carrying a copy out of the mult`,
+        };
+      }
+      const groupJacks = (await componentsOfPatchModule(to.pm)).filter(
+        (j) =>
+          j.type === BIDIRECTIONAL &&
+          !toSwitchJacks.has(j.id) &&
+          groupKey(j) === groupKey(to.component)
+      );
+      const groupIds = new Set(groupJacks.map((j) => j.id));
+      const groupInput = existing.find(
+        (c) => c.to_patch_module_id === to.pm.id && groupIds.has(c.to_component_id)
+      );
+      if (groupInput) {
+        return {
+          status: 409,
+          error: `this mult group already takes its input at '${groupInput.to_component_name}'`,
+        };
+      }
+    }
+    // ... and cabling OUT of one only works while the jack is not already
+    // the group's input.
+    if (
+      from.component.type === BIDIRECTIONAL &&
+      !fromSwitchJacks.has(from.component.id) &&
+      existing.some(
+        (c) => c.to_patch_module_id === from.pm.id && c.to_component_id === from.component.id
+      )
+    ) {
+      return {
+        status: 409,
+        error: `'${from.component.name}' is already the mult group's input — copies come out of the other jacks`,
+      };
+    }
+    return null;
+  }
+
+  // The other half of a stereo (or other) pair: the jack that carries the
+  // signal's second half on the same instance.
+  async function pairedJack(pm, component) {
+    if (!pm.module_id) return null;
+    const pairs = await ComponentPair.findAll({ where: { module_id: pm.module_id } });
+    const pair = pairs.find(
+      (p) => p.a_component_id === component.id || p.b_component_id === component.id
+    );
+    if (!pair) return null;
+    const otherId = pair.a_component_id === component.id ? pair.b_component_id : pair.a_component_id;
+    const jacks = await componentsOfPatchModule(pm);
+    return jacks.find((c) => c.id === otherId) ?? null;
+  }
+
   // Plug a cable: an output jack into an input jack. Body:
-  // { from_patch_module_id, from_component_id, to_patch_module_id, to_component_id }
+  // { from_patch_module_id, from_component_id, to_patch_module_id,
+  //   to_component_id, note?, optional?, stacked?, alt_group?, pair? }
+  // With pair: true and both ends part of a stereo pair, the second cable is
+  // plugged at the same time — a stereo connection is one decision.
   router.post('/:id/cables', async (req, res, next) => {
     try {
       const patch = await ownPatch(req.user.id, req.params.id);
@@ -397,106 +1137,85 @@ export function patchRoutes(db) {
         req.body?.to_component_id
       );
       if (to.error) return res.status(400).json({ error: `to: ${to.error}` });
-      // A bidirectional (mult) jack can sit at either end of a cable — its
-      // role in this patch is decided by which end it is.
-      const BIDIRECTIONAL = 'bidirectional_jack';
-      if (from.component.type !== 'output_jack' && from.component.type !== BIDIRECTIONAL) {
-        return res.status(400).json({ error: 'a cable must start at an output or mult jack' });
-      }
-      if (to.component.type !== 'input_jack' && to.component.type !== BIDIRECTIONAL) {
-        return res.status(400).json({ error: 'a cable must end at an input or mult jack' });
-      }
-      // The interchangeable jacks of one mult section: same module, same
-      // group label (ungrouped bidirectional jacks count as one group).
-      const groupKey = (c) => (c.group_label || '').trim().toLowerCase();
-      // Switch-section jacks opt out of every mult rule below.
-      const fromSwitchJacks =
-        from.component.type === BIDIRECTIONAL
-          ? await switchMemberIds(from.pm.module_id)
-          : new Set();
-      const toSwitchJacks =
-        to.component.type === BIDIRECTIONAL ? await switchMemberIds(to.pm.module_id) : new Set();
-      const sameMultGroup = (a, b) =>
-        a.type === BIDIRECTIONAL &&
-        b.type === BIDIRECTIONAL &&
-        !fromSwitchJacks.has(a.id) &&
-        !toSwitchJacks.has(b.id) &&
-        groupKey(a) === groupKey(b);
-      if (from.pm.id === to.pm.id && sameMultGroup(from.component, to.component)) {
-        return res
-          .status(400)
-          .json({ error: 'both jacks belong to the same mult group — that cable does nothing' });
-      }
+
+      const extras = {
+        note: String(req.body?.note || '').trim() || null,
+        optional: Boolean(req.body?.optional),
+        stacked: Boolean(req.body?.stacked),
+        alt_group: String(req.body?.alt_group || '').trim() || null,
+      };
+
       const existing = await PatchCable.findAll({ where: { patch_id: patch.id } });
-      // An input takes exactly one cable; the same output may fan out via
-      // multiples/stackcables, but not twice into the same input.
-      const inputTaken = existing.some(
-        (c) => c.to_patch_module_id === to.pm.id && c.to_component_id === to.component.id
-      );
-      if (inputTaken) {
-        return res.status(409).json({
-          error: `'${to.component.name}' on ${to.pm.manufacturer} ${to.pm.module_name} already has a cable in it`,
-        });
-      }
-      // Mult rules. Cabling INTO a bidirectional jack makes it its group's
-      // input, so the jack must not already carry a copy out, and the group
-      // must not already have an input on another jack.
-      if (to.component.type === BIDIRECTIONAL && !toSwitchJacks.has(to.component.id)) {
-        if (
-          existing.some(
-            (c) => c.from_patch_module_id === to.pm.id && c.from_component_id === to.component.id
-          )
-        ) {
-          return res.status(409).json({
-            error: `'${to.component.name}' is already carrying a copy out of the mult`,
+      const problem = await cableProblem(patch, from, to, existing);
+      if (problem) return res.status(problem.status).json({ error: problem.error });
+
+      // The second half of a stereo connection, when asked for and available.
+      let second = null;
+      if (req.body?.pair) {
+        const fromPartner = await pairedJack(from.pm, from.component);
+        const toPartner = await pairedJack(to.pm, to.component);
+        if (!fromPartner || !toPartner) {
+          return res.status(400).json({
+            error: 'both jacks must be part of a recorded pair to patch them as one connection',
           });
         }
-        const groupJacks = (
-          await ModuleComponent.findAll({
-            where: { module_id: to.pm.module_id, type: BIDIRECTIONAL },
-          })
-        ).filter((j) => !toSwitchJacks.has(j.id) && groupKey(j) === groupKey(to.component));
-        const groupIds = new Set(groupJacks.map((j) => j.id));
-        const groupInput = existing.find(
-          (c) => c.to_patch_module_id === to.pm.id && groupIds.has(c.to_component_id)
-        );
-        if (groupInput) {
-          return res.status(409).json({
-            error: `this mult group already takes its input at '${groupInput.to_component_name}'`,
-          });
+        second = {
+          from: { pm: from.pm, component: fromPartner },
+          to: { pm: to.pm, component: toPartner },
+        };
+        const secondProblem = await cableProblem(patch, second.from, second.to, existing);
+        if (secondProblem) {
+          return res
+            .status(secondProblem.status)
+            .json({ error: `the other half of the pair: ${secondProblem.error}` });
         }
       }
-      // ... and cabling OUT of one only works while the jack is not already
-      // the group's input.
-      if (
-        from.component.type === BIDIRECTIONAL &&
-        !fromSwitchJacks.has(from.component.id) &&
-        existing.some(
-          (c) => c.to_patch_module_id === from.pm.id && c.to_component_id === from.component.id
-        )
-      ) {
-        return res.status(409).json({
-          error: `'${from.component.name}' is already the mult group's input — copies come out of the other jacks`,
-        });
-      }
-      const cable = await PatchCable.create({
+
+      const row = (end) => ({
         patch_id: patch.id,
-        from_patch_module_id: from.pm.id,
-        from_component_id: from.component.id,
-        from_component_name: from.component.name,
-        to_patch_module_id: to.pm.id,
-        to_component_id: to.component.id,
-        to_component_name: to.component.name,
+        from_patch_module_id: end.from.pm.id,
+        from_component_id: end.from.component.id,
+        from_component_name: end.from.component.name,
+        to_patch_module_id: end.to.pm.id,
+        to_component_id: end.to.component.id,
+        to_component_name: end.to.component.name,
+        ...extras,
       });
-      res.status(201).json({
-        id: cable.id,
-        from_patch_module_id: cable.from_patch_module_id,
-        from_component_id: cable.from_component_id,
-        from_component_name: cable.from_component_name,
-        to_patch_module_id: cable.to_patch_module_id,
-        to_component_id: cable.to_component_id,
-        to_component_name: cable.to_component_name,
+      let cable;
+      let paired = null;
+      await db.sequelize.transaction(async (transaction) => {
+        cable = await PatchCable.create(row({ from, to }), { transaction });
+        if (second) paired = await PatchCable.create(row(second), { transaction });
       });
+      res.status(201).json({ ...cableJson(cable), paired_cable: paired ? cableJson(paired) : null });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Annotate a cable: why it is there, whether it is provisional, whether it
+  // is stacked onto the source jack, which alternative it belongs to.
+  // Body: { note?, optional?, stacked?, alt_group? }
+  router.put('/:id/cables/:cableId', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const cable = await PatchCable.findOne({
+        where: { id: Number(req.params.cableId) || 0, patch_id: patch.id },
+      });
+      if (!cable) return res.status(404).json({ error: 'Cable not found' });
+      const updates = {};
+      if (req.body?.note !== undefined) updates.note = String(req.body.note || '').trim() || null;
+      if (req.body?.optional !== undefined) updates.optional = Boolean(req.body.optional);
+      if (req.body?.stacked !== undefined) updates.stacked = Boolean(req.body.stacked);
+      if (req.body?.alt_group !== undefined) {
+        updates.alt_group = String(req.body.alt_group || '').trim() || null;
+      }
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'note, optional, stacked or alt_group is required' });
+      }
+      await cable.update(updates);
+      res.json(cableJson(cable));
     } catch (e) {
       next(e);
     }

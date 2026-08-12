@@ -107,6 +107,10 @@ export function defineModels(sequelize) {
       // Which mult section a bidirectional jack belongs to (see migration
       // 005); null on other component types and on single-group mults.
       group_label: { type: DataTypes.TEXT },
+      // The physical connector when it is not an ordinary 3.5mm eurorack
+      // patch point: 'midi_din', 'usb', 'spdif', 'microphone', ... (see
+      // migration 009). Cables only join ports of the same kind.
+      port_kind: { type: DataTypes.TEXT },
     },
     { tableName: 'module_components', createdAt: 'created_at', updatedAt: false }
   );
@@ -125,9 +129,65 @@ export function defineModels(sequelize) {
       source_component_id: { type: DataTypes.INTEGER },
       source_label: { type: DataTypes.TEXT },
       kind: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'internal' },
+      // Only live while this control sits at this value (migration 008) —
+      // switch-selected normals like Atlantix's PWM Source. Rows sharing an
+      // alt_group are alternatives: at most one at a time, so they render as
+      // a selection rather than as signals summing.
+      condition_component_id: { type: DataTypes.INTEGER },
+      condition_value: { type: DataTypes.TEXT },
+      alt_group: { type: DataTypes.TEXT },
+      // Which jack's cable breaks this normal, and how (migration 011). NULL
+      // break_component_id means the target itself; break_on is 'cable_in'
+      // (a cable arriving) or 'cable_out' (a cable leaving, as on Vhikk X's
+      // L output normalled to its R output).
+      break_component_id: { type: DataTypes.INTEGER },
+      break_on: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'cable_in' },
       description: { type: DataTypes.TEXT },
     },
     { tableName: 'component_normalizations', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // A host module and one of its expanders: two panels joined by a ribbon
+  // cable that behave as one instrument, so routes and normalizations
+  // declared on the host may reference the expander's jacks.
+  const ModuleExpander = define(
+    'ModuleExpander',
+    {
+      id,
+      host_module_id: { type: DataTypes.INTEGER, allowNull: false },
+      expander_module_id: { type: DataTypes.INTEGER, allowNull: false },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'module_expanders', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // Something a manual states that could not be stored as a row yet: a signal
+  // path running to another panel, or the name of an expander whose module
+  // record does not exist or is not linked. Kept by name and materialized
+  // once resolution becomes possible (see migration 012).
+  const ModulePathHint = define(
+    'ModulePathHint',
+    {
+      id,
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      kind: { type: DataTypes.TEXT, allowNull: false },
+      payload: { type: DataTypes.TEXT, allowNull: false },
+    },
+    { tableName: 'module_path_hints', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // Two jacks that are the two halves of one signal (a stereo L/R pair).
+  const ComponentPair = define(
+    'ComponentPair',
+    {
+      id,
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      a_component_id: { type: DataTypes.INTEGER, allowNull: false },
+      b_component_id: { type: DataTypes.INTEGER, allowNull: false },
+      kind: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'stereo' },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'component_pairs', createdAt: 'created_at', updatedAt: false }
   );
 
   // A routing switch section: the common jack connects to exactly one of the
@@ -165,6 +225,12 @@ export function defineModels(sequelize) {
       module_id: { type: DataTypes.INTEGER, allowNull: false },
       input_component_id: { type: DataTypes.INTEGER, allowNull: false },
       output_component_id: { type: DataTypes.INTEGER, allowNull: false },
+      // Only live while this control sits at this value; rows sharing an
+      // alt_group are mutually exclusive (migration 008) — Levit8's MIX
+      // switches turning OUT 4 from a pass-through into a 4-channel mix.
+      condition_component_id: { type: DataTypes.INTEGER },
+      condition_value: { type: DataTypes.TEXT },
+      alt_group: { type: DataTypes.TEXT },
       description: { type: DataTypes.TEXT },
     },
     { tableName: 'component_routes', createdAt: 'created_at', updatedAt: false }
@@ -213,8 +279,78 @@ export function defineModels(sequelize) {
       manufacturer: { type: DataTypes.TEXT, allowNull: false },
       module_name: { type: DataTypes.TEXT, allowNull: false },
       instance: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+      // What this instance does in this patch ("snare voice"), and which
+      // named bus/layer it belongs to (soft reference into patch_groups).
+      label: { type: DataTypes.TEXT },
+      group_id: { type: DataTypes.INTEGER },
+      // Off-rack gear (a DAW, a MIDI interface, the PA) rather than a module.
+      // Both external gear and modules the rack does not hold declare their
+      // connection points in patch_module_ports.
+      external: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     },
     { tableName: 'patch_modules', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // A named bus or layer within a patch ("Rhythm", "Granular bus").
+  const PatchGroup = define(
+    'PatchGroup',
+    {
+      id,
+      patch_id: { type: DataTypes.INTEGER, allowNull: false },
+      name: { type: DataTypes.TEXT, allowNull: false },
+      description: { type: DataTypes.TEXT },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'patch_groups', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // A connection point declared inside the patch, for an instance with no
+  // analyzed component list behind it: external gear, or a module the rack
+  // does not hold. Cables address these exactly like components — the
+  // patch_module at each end says which of the two namespaces the id is in.
+  const PatchModulePort = define(
+    'PatchModulePort',
+    {
+      id,
+      patch_module_id: { type: DataTypes.INTEGER, allowNull: false },
+      name: { type: DataTypes.TEXT, allowNull: false },
+      type: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'input_jack' },
+      port_kind: { type: DataTypes.TEXT },
+      description: { type: DataTypes.TEXT },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'patch_module_ports', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // Two instances wired together without patch cables: kind 'expander' (host
+  // + expander panel, one instrument) or 'bridge' (a pair like Omnitone
+  // 7Path carrying signals between two points over one non-patch link).
+  const PatchModuleLink = define(
+    'PatchModuleLink',
+    {
+      id,
+      patch_id: { type: DataTypes.INTEGER, allowNull: false },
+      a_patch_module_id: { type: DataTypes.INTEGER, allowNull: false },
+      b_patch_module_id: { type: DataTypes.INTEGER, allowNull: false },
+      kind: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'expander' },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'patch_module_links', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // Which jack on side A of a bridge carries the same signal as which jack
+  // on side B.
+  const PatchModuleLinkJack = define(
+    'PatchModuleLinkJack',
+    {
+      id,
+      link_id: { type: DataTypes.INTEGER, allowNull: false },
+      a_component_id: { type: DataTypes.INTEGER },
+      a_component_name: { type: DataTypes.TEXT, allowNull: false },
+      b_component_id: { type: DataTypes.INTEGER },
+      b_component_name: { type: DataTypes.TEXT, allowNull: false },
+    },
+    { tableName: 'patch_module_link_jacks', createdAt: 'created_at', updatedAt: false }
   );
 
   const PatchCable = define(
@@ -228,6 +364,13 @@ export function defineModels(sequelize) {
       to_patch_module_id: { type: DataTypes.INTEGER, allowNull: false },
       to_component_id: { type: DataTypes.INTEGER },
       to_component_name: { type: DataTypes.TEXT, allowNull: false },
+      note: { type: DataTypes.TEXT },
+      // Provisional ("add the distortion layer later"), one of several
+      // alternatives (same alt_group), or physically stacked onto the source
+      // jack with a stackcable / passive mult.
+      optional: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+      stacked: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+      alt_group: { type: DataTypes.TEXT },
     },
     { tableName: 'patch_cables', createdAt: 'created_at', updatedAt: false }
   );
@@ -387,6 +530,27 @@ export function defineModels(sequelize) {
   ComponentSwitchStep.belongsTo(ComponentSwitch, { foreignKey: 'switch_id' });
   ComponentSwitchStep.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
 
+  ComponentNormalization.belongsTo(ModuleComponent, {
+    foreignKey: 'condition_component_id',
+    as: 'Condition',
+  });
+  ComponentNormalization.belongsTo(ModuleComponent, {
+    foreignKey: 'break_component_id',
+    as: 'Break',
+  });
+
+  Module.hasMany(ModulePathHint, { foreignKey: 'module_id' });
+  ModulePathHint.belongsTo(Module, { foreignKey: 'module_id' });
+
+  Module.hasMany(ModuleExpander, { foreignKey: 'host_module_id', as: 'Expanders' });
+  ModuleExpander.belongsTo(Module, { foreignKey: 'host_module_id', as: 'Host' });
+  ModuleExpander.belongsTo(Module, { foreignKey: 'expander_module_id', as: 'Expander' });
+
+  Module.hasMany(ComponentPair, { foreignKey: 'module_id' });
+  ComponentPair.belongsTo(Module, { foreignKey: 'module_id' });
+  ComponentPair.belongsTo(ModuleComponent, { foreignKey: 'a_component_id', as: 'A' });
+  ComponentPair.belongsTo(ModuleComponent, { foreignKey: 'b_component_id', as: 'B' });
+
   Module.hasMany(ComponentRoute, { foreignKey: 'module_id' });
   ComponentRoute.belongsTo(Module, { foreignKey: 'module_id' });
   ComponentRoute.belongsTo(ModuleComponent, { foreignKey: 'input_component_id', as: 'Input' });
@@ -403,6 +567,16 @@ export function defineModels(sequelize) {
   PatchCable.belongsTo(Patch, { foreignKey: 'patch_id' });
   Patch.hasMany(PatchSetting, { foreignKey: 'patch_id' });
   PatchSetting.belongsTo(Patch, { foreignKey: 'patch_id' });
+  Patch.hasMany(PatchGroup, { foreignKey: 'patch_id' });
+  PatchGroup.belongsTo(Patch, { foreignKey: 'patch_id' });
+  PatchModule.hasMany(PatchModulePort, { foreignKey: 'patch_module_id' });
+  PatchModulePort.belongsTo(PatchModule, { foreignKey: 'patch_module_id' });
+  Patch.hasMany(PatchModuleLink, { foreignKey: 'patch_id' });
+  PatchModuleLink.belongsTo(Patch, { foreignKey: 'patch_id' });
+  PatchModuleLink.belongsTo(PatchModule, { foreignKey: 'a_patch_module_id', as: 'A' });
+  PatchModuleLink.belongsTo(PatchModule, { foreignKey: 'b_patch_module_id', as: 'B' });
+  PatchModuleLink.hasMany(PatchModuleLinkJack, { foreignKey: 'link_id' });
+  PatchModuleLinkJack.belongsTo(PatchModuleLink, { foreignKey: 'link_id' });
 
   Note.hasMany(NoteModule, { foreignKey: 'note_id' });
   NoteModule.belongsTo(Note, { foreignKey: 'note_id' });
@@ -450,10 +624,17 @@ export function defineModels(sequelize) {
     ComponentSwitch,
     ComponentSwitchStep,
     ComponentValue,
+    ComponentPair,
+    ModuleExpander,
+    ModulePathHint,
     Patch,
     PatchModule,
     PatchCable,
     PatchSetting,
+    PatchGroup,
+    PatchModulePort,
+    PatchModuleLink,
+    PatchModuleLinkJack,
     Note,
     NoteModule,
     NoteComponent,

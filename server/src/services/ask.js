@@ -204,8 +204,17 @@ export async function normalizationSummary({ ModuleComponent, ComponentNormaliza
       ? `the "${componentName.get(n.source_component_id)}" ${n.kind === 'input' ? 'input (its patched signal)' : 'output'}`
       : `the internal signal "${n.source_label}"`;
     const target = `"${componentName.get(n.target_component_id)}"`;
+    // A default that only holds in one position of a control, and one that a
+    // cable somewhere else cancels, are both easy to state wrongly.
+    const condition = n.condition_component_id
+      ? `, but only while "${componentName.get(n.condition_component_id)}" is set to ${n.condition_value}`
+      : '';
+    const broken =
+      n.break_component_id && n.break_component_id !== n.target_component_id
+        ? ` (cancelled by a cable ${n.break_on === 'cable_out' ? 'out of' : 'into'} "${componentName.get(n.break_component_id)}", not by patching ${target})`
+        : '';
     const detail = n.description ? ` — ${n.description}` : '';
-    return `- ${moduleLabel.get(n.module_id)}: input ${target} is normalled to ${source}${detail}`;
+    return `- ${moduleLabel.get(n.module_id)}: ${target} is normalled to ${source}${condition}${broken}${detail}`;
   });
 }
 

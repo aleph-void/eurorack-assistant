@@ -6,6 +6,7 @@ import {
   normalizeComponentValues,
 } from '../src/services/manualAnalyzer.js';
 import { resolveNormalledSignals } from '../src/services/patchSignals.js';
+import { buildPatchTopology } from '../src/services/patchTopology.js';
 
 // Fixture: alice has a rack with an analyzed module (jacks + a knob + a
 // switch, with valid values recorded) and a second plain module.
@@ -346,20 +347,22 @@ describe('normalled connections in patches', () => {
       { id: 2, type: 'input_jack', name: 'B' },
     ];
     // A and B normalled to each other — a cycle with no signal anywhere.
-    const rows = resolveNormalledSignals({
-      patchModules: [{ id: 10, module_id: 1 }],
-      componentsByModule: new Map([[1, components]]),
-      normalizationsByModule: new Map([
-        [
-          1,
+    const rows = resolveNormalledSignals(
+      buildPatchTopology({
+        patchModules: [{ id: 10, module_id: 1 }],
+        componentsByModule: new Map([[1, components]]),
+        normalizationsByModule: new Map([
           [
-            { id: 1, target_component_id: 1, source_component_id: 2, source_label: null, kind: 'input' },
-            { id: 2, target_component_id: 2, source_component_id: 1, source_label: null, kind: 'input' },
+            1,
+            [
+              { id: 1, target_component_id: 1, source_component_id: 2, source_label: null, kind: 'input' },
+              { id: 2, target_component_id: 2, source_component_id: 1, source_label: null, kind: 'input' },
+            ],
           ],
-        ],
-      ]),
-      cables: [],
-    });
+        ]),
+        cables: [],
+      })
+    );
     expect(rows).toHaveLength(2);
     for (const row of rows) {
       expect(row.active).toBe(true);

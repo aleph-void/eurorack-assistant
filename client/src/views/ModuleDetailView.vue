@@ -51,10 +51,68 @@ const NORMALIZATION_KIND_LABELS = {
   internal: 'internal signal',
 };
 
+// The physical connector, for connection points that are not ordinary 3.5mm
+// patch points.
+const PORT_KINDS = [
+  'midi_din',
+  'midi_trs',
+  'usb',
+  'spdif',
+  'adat',
+  'audio_quarter_inch',
+  'audio_rca',
+  'ethernet',
+  'microphone',
+  'speaker',
+  'memory_card',
+  'ribbon',
+  'other',
+];
+const portKindLabel = (kind) => (kind ? kind.replace(/_/g, ' ') : '3.5mm');
+
+// An expander's jacks live on its own module record but take part in this
+// module's signal paths, so both sets are offered wherever a path is
+// recorded — an expander jack is shown with the panel it sits on.
+const linkedComponents = computed(() => module.value?.expander_components || []);
+function panelName(moduleId) {
+  const partner = (module.value?.expanders || []).find((e) => e.module_id === moduleId);
+  return partner ? `${partner.manufacturer} ${partner.name}` : 'linked panel';
+}
+const patchableComponents = computed(() => [
+  ...(module.value?.components || []),
+  ...linkedComponents.value.map((c) => ({ ...c, panel: panelName(c.module_id) })),
+]);
+const componentLabel = (c) => (c.panel ? `${c.name} — ${c.panel}` : c.name);
+
 // Human-readable source of a normalled connection: another jack on the
 // module, or an internal signal with no panel component.
 function normalizationSource(n) {
   return n.source_component_id ? componentName(n.source_component_id) : n.source_label;
+}
+
+// "MODE = LP", the control position a signal path depends on.
+function conditionText(row) {
+  if (!row.condition_component_id) return null;
+  return `${componentName(row.condition_component_id)} = ${row.condition_value}`;
+}
+
+// What cancels a normalled connection, when it is not simply a cable in the
+// target: Vhikk X's L output normalled to its R output breaks when a cable
+// leaves L.
+function breakText(n) {
+  if (!n.break_component_id) return null;
+  const how = n.break_on === 'cable_out' ? 'a cable out of' : 'a cable into';
+  return `${how} ${componentName(n.break_component_id)}`;
+}
+
+// Controls (anything that isn't a jack) can gate a signal path, and their
+// recorded positions become the values to choose from.
+const controls = computed(
+  () => module.value?.components?.filter((c) => !c.type.endsWith('_jack')) || []
+);
+function controlValues(componentId) {
+  const control = controls.value.find((c) => c.id === Number(componentId));
+  return (control?.values || []).filter((v) => v.type === 'enum');
 }
 
 // ---- manually recording normalled connections ----
@@ -62,34 +120,65 @@ const normTarget = ref(''); // component id
 const normSource = ref(''); // component id, or 'internal' for a free-text signal
 const normSourceLabel = ref('');
 const normDescription = ref('');
+const normConditionControl = ref('');
+const normConditionValue = ref('');
+const normAltGroup = ref('');
+const normBreakJack = ref('');
+const normBreakOn = ref('cable_in');
 const normError = ref('');
 
-// Normalled signals always land on an input; they come from another jack or
-// an internal signal.
+// A normalled signal usually lands on an input, but an output normalled to
+// another output is just as real, so every jack is offered as a target.
 const inputJacks = computed(
-  () => module.value?.components?.filter((c) => c.type === 'input_jack') || []
+  () => patchableComponents.value.filter((c) => c.type === 'input_jack') || []
 );
-const jacks = computed(
+const jacks = computed(() => patchableComponents.value.filter((c) => c.type.endsWith('_jack')));
+const ownJacks = computed(
   () => module.value?.components?.filter((c) => c.type.endsWith('_jack')) || []
 );
 const normValid = computed(() => {
   if (!normTarget.value || !normSource.value) return false;
+  if (normConditionControl.value && !normConditionValue.value.trim()) return false;
   if (normSource.value === 'internal') return normSourceLabel.value.trim() !== '';
   return Number(normSource.value) !== Number(normTarget.value);
 });
 
+// The condition and alternative-group fields shared by normalizations and
+// routes: a path that only exists in one position of a control.
+function conditionPayload(control, value, altGroup) {
+  const payload = {};
+  if (control) {
+    payload.condition_component_id = Number(control);
+    payload.condition_value = value.trim();
+  }
+  if (altGroup.trim()) payload.alt_group = altGroup.trim();
+  return payload;
+}
+
 async function createNormalization() {
   normError.value = '';
   try {
-    const payload = { target_component_id: Number(normTarget.value) };
+    const payload = {
+      target_component_id: Number(normTarget.value),
+      ...conditionPayload(normConditionControl.value, normConditionValue.value, normAltGroup.value),
+    };
     if (normSource.value === 'internal') payload.source_label = normSourceLabel.value.trim();
     else payload.source_component_id = Number(normSource.value);
+    if (normBreakJack.value) {
+      payload.break_component_id = Number(normBreakJack.value);
+      payload.break_on = normBreakOn.value;
+    }
     if (normDescription.value.trim()) payload.description = normDescription.value.trim();
     await api.post(`/api/modules/${props.id}/normalizations`, payload);
     normTarget.value = '';
     normSource.value = '';
     normSourceLabel.value = '';
     normDescription.value = '';
+    normConditionControl.value = '';
+    normConditionValue.value = '';
+    normAltGroup.value = '';
+    normBreakJack.value = '';
+    normBreakOn.value = 'cable_in';
     await load();
   } catch (e) {
     normError.value = e.message;
@@ -112,10 +201,13 @@ async function removeNormalization(n) {
 const routeInput = ref('');
 const routeOutput = ref('');
 const routeDescription = ref('');
+const routeConditionControl = ref('');
+const routeConditionValue = ref('');
+const routeAltGroup = ref('');
 const routeError = ref('');
 
 const outputJacks = computed(
-  () => module.value?.components?.filter((c) => c.type === 'output_jack') || []
+  () => patchableComponents.value.filter((c) => c.type === 'output_jack') || []
 );
 
 // 'generator' for outputs nothing feeds, otherwise the inputs that reach it.
@@ -132,12 +224,20 @@ async function createRoute() {
     const payload = {
       input_component_id: Number(routeInput.value),
       output_component_id: Number(routeOutput.value),
+      ...conditionPayload(
+        routeConditionControl.value,
+        routeConditionValue.value,
+        routeAltGroup.value
+      ),
     };
     if (routeDescription.value.trim()) payload.description = routeDescription.value.trim();
     await api.post(`/api/modules/${props.id}/routes`, payload);
     routeInput.value = '';
     routeOutput.value = '';
     routeDescription.value = '';
+    routeConditionControl.value = '';
+    routeConditionValue.value = '';
+    routeAltGroup.value = '';
     await load();
   } catch (e) {
     routeError.value = e.message;
@@ -195,6 +295,82 @@ async function removeSwitch(section) {
   }
 }
 
+// ---- stereo (and other) jack pairs ----
+// Two jacks that carry the two halves of one signal, so a patch can plug
+// both ends in one step.
+const pairA = ref('');
+const pairB = ref('');
+const pairKind = ref('stereo');
+const pairError = ref('');
+
+const pairValid = computed(
+  () => pairA.value && pairB.value && Number(pairA.value) !== Number(pairB.value)
+);
+
+async function createPair() {
+  pairError.value = '';
+  try {
+    await api.post(`/api/modules/${props.id}/pairs`, {
+      a_component_id: Number(pairA.value),
+      b_component_id: Number(pairB.value),
+      kind: pairKind.value.trim() || 'stereo',
+    });
+    pairA.value = '';
+    pairB.value = '';
+    await load();
+  } catch (e) {
+    pairError.value = e.message;
+  }
+}
+
+async function removePair(pair) {
+  pairError.value = '';
+  try {
+    await api.delete(`/api/modules/${props.id}/pairs/${pair.id}`);
+    await load();
+  } catch (e) {
+    pairError.value = e.message;
+  }
+}
+
+// ---- expander panels ----
+// Two modules joined by a ribbon cable that behave as one instrument. Once
+// linked, this module's signal paths may reach the expander's jacks.
+const expanderTarget = ref('');
+const expanderError = ref('');
+const rackModules = ref([]);
+
+const expanderCandidates = computed(() =>
+  rackModules.value.filter(
+    (m) =>
+      m.id !== Number(props.id) &&
+      !(module.value?.expanders || []).some((e) => e.module_id === m.id)
+  )
+);
+
+async function createExpander() {
+  expanderError.value = '';
+  try {
+    await api.post(`/api/modules/${props.id}/expanders`, {
+      expander_module_id: Number(expanderTarget.value),
+    });
+    expanderTarget.value = '';
+    await load();
+  } catch (e) {
+    expanderError.value = e.message;
+  }
+}
+
+async function removeExpander(link) {
+  expanderError.value = '';
+  try {
+    await api.delete(`/api/modules/${props.id}/expanders/${link.id}`);
+    await load();
+  } catch (e) {
+    expanderError.value = e.message;
+  }
+}
+
 // ---- reclassifying components ----
 // The analysis sometimes types a mult's jacks as plain inputs/outputs; any
 // user with the module racked can correct a component's type and, for
@@ -214,12 +390,14 @@ const COMPONENT_TYPES = [
 const editingComponentId = ref(null);
 const editType = ref('');
 const editGroup = ref('');
+const editPortKind = ref('');
 const editError = ref('');
 
 function startEditComponent(c) {
   editingComponentId.value = c.id;
   editType.value = c.type;
   editGroup.value = c.group_label || '';
+  editPortKind.value = c.port_kind || '';
   editError.value = '';
 }
 
@@ -229,6 +407,7 @@ async function saveComponent(c) {
     await api.put(`/api/modules/${props.id}/components/${c.id}`, {
       type: editType.value,
       group_label: editGroup.value,
+      port_kind: editPortKind.value,
     });
     editingComponentId.value = null;
     await load();
@@ -303,6 +482,13 @@ async function load() {
   } catch (e) {
     error.value = e.message;
   }
+  // Candidates for an expander link: the other modules in your racks.
+  try {
+    const list = await api.get('/api/modules');
+    rackModules.value = Array.isArray(list) ? list : [];
+  } catch {
+    rackModules.value = [];
+  }
 }
 
 function fileToBase64(file) {
@@ -355,7 +541,12 @@ const noteTarget = ref('module'); // 'module' or a component id
 const noteError = ref('');
 
 function componentName(componentId) {
-  return module.value?.components?.find((c) => c.id === componentId)?.name || `#${componentId}`;
+  const own = module.value?.components?.find((c) => c.id === componentId);
+  if (own) return own.name;
+  // A jack on a linked expander panel, named with the panel it sits on.
+  const linked = linkedComponents.value.find((c) => c.id === componentId);
+  if (linked) return `${linked.name} (${panelName(linked.module_id)})`;
+  return `#${componentId}`;
 }
 
 async function createNote() {
@@ -416,15 +607,21 @@ onMounted(load);
     <div v-if="module.components?.length" class="panel" data-test="normalizations">
       <h2>Normalled connections</h2>
       <p class="muted">
-        Default connections that exist until a cable is patched into the target input —
-        they are part of the signal path even with nothing plugged in.
+        Default connections that exist until a cable overrides them — they are part of the
+        signal path even with nothing plugged in. A default usually breaks when a cable is
+        patched into its target, but an output normalled to another output breaks when a cable
+        leaves the other jack instead. A default that only exists in one position of a switch
+        carries that condition, and defaults sharing an alternatives label are never live at the
+        same time.
       </p>
       <table v-if="module.normalizations?.length">
         <thead>
           <tr>
-            <th>Input</th>
+            <th>Jack</th>
             <th>Normalled to</th>
             <th>Kind</th>
+            <th>Only when</th>
+            <th>Breaks on</th>
             <th>Description</th>
             <th></th>
           </tr>
@@ -434,6 +631,11 @@ onMounted(load);
             <td>{{ componentName(n.target_component_id) }}</td>
             <td>{{ normalizationSource(n) }}</td>
             <td>{{ NORMALIZATION_KIND_LABELS[n.kind] || n.kind }}</td>
+            <td :data-test="`normalization-condition-${n.id}`">
+              {{ conditionText(n) || 'always' }}
+              <span v-if="n.alt_group" class="badge pending">{{ n.alt_group }}</span>
+            </td>
+            <td>{{ breakText(n) || 'a cable into it' }}</td>
             <td>{{ n.description || '—' }}</td>
             <td>
               <button
@@ -453,10 +655,10 @@ onMounted(load);
       <form @submit.prevent="createNormalization">
         <div class="row">
           <div>
-            <label for="norm-target">Input</label>
+            <label for="norm-target">Jack that receives it</label>
             <select id="norm-target" v-model="normTarget" data-test="norm-target">
-              <option value="" disabled>Select an input…</option>
-              <option v-for="c in inputJacks" :key="c.id" :value="c.id">{{ c.name }}</option>
+              <option value="" disabled>Select a jack…</option>
+              <option v-for="c in jacks" :key="c.id" :value="c.id">{{ componentLabel(c) }}</option>
             </select>
           </div>
           <div>
@@ -464,7 +666,7 @@ onMounted(load);
             <select id="norm-source" v-model="normSource" data-test="norm-source">
               <option value="" disabled>Select a source…</option>
               <option v-for="c in jacks" :key="c.id" :value="c.id">
-                {{ c.name }}
+                {{ componentLabel(c) }}
                 ({{ c.type === 'input_jack' ? 'input' : c.type === 'bidirectional_jack' ? 'mult' : 'output' }})
               </option>
               <option value="internal">Internal / unlisted signal…</option>
@@ -482,6 +684,64 @@ onMounted(load);
           <div style="flex: 2">
             <label for="norm-description">Description (optional)</label>
             <input id="norm-description" v-model="normDescription" data-test="norm-description" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="norm-break">Broken by (optional)</label>
+            <select id="norm-break" v-model="normBreakJack" data-test="norm-break">
+              <option value="">A cable into the target</option>
+              <option v-for="c in jacks" :key="c.id" :value="c.id">{{ componentLabel(c) }}</option>
+            </select>
+          </div>
+          <div v-if="normBreakJack">
+            <label for="norm-break-on">…when it gets</label>
+            <select id="norm-break-on" v-model="normBreakOn" data-test="norm-break-on">
+              <option value="cable_in">a cable patched in</option>
+              <option value="cable_out">a cable patched out</option>
+            </select>
+          </div>
+          <div>
+            <label for="norm-condition">Only when (optional)</label>
+            <select
+              id="norm-condition"
+              v-model="normConditionControl"
+              data-test="norm-condition"
+              @change="normConditionValue = ''"
+            >
+              <option value="">Always</option>
+              <option v-for="c in controls" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </div>
+          <div v-if="normConditionControl">
+            <label for="norm-condition-value">is set to</label>
+            <select
+              v-if="controlValues(normConditionControl).length"
+              id="norm-condition-value"
+              v-model="normConditionValue"
+              data-test="norm-condition-value"
+            >
+              <option value="" disabled>Select a position…</option>
+              <option v-for="v in controlValues(normConditionControl)" :key="v.id" :value="v.value">
+                {{ v.value }}
+              </option>
+            </select>
+            <input
+              v-else
+              id="norm-condition-value"
+              v-model="normConditionValue"
+              placeholder="e.g. left"
+              data-test="norm-condition-value"
+            />
+          </div>
+          <div>
+            <label for="norm-alt-group">Alternatives label (optional)</label>
+            <input
+              id="norm-alt-group"
+              v-model="normAltGroup"
+              placeholder="e.g. pwm source"
+              data-test="norm-alt-group"
+            />
           </div>
           <div class="shrink">
             <button type="submit" style="margin: 0" :disabled="!normValid" data-test="norm-create">
@@ -573,6 +833,7 @@ onMounted(load);
           <tr>
             <th>Input</th>
             <th>Appears at</th>
+            <th>Only when</th>
             <th>Description</th>
             <th></th>
           </tr>
@@ -581,6 +842,10 @@ onMounted(load);
           <tr v-for="r in module.routes" :key="r.id" :data-test="`route-${r.id}`">
             <td>{{ componentName(r.input_component_id) }}</td>
             <td>{{ componentName(r.output_component_id) }}</td>
+            <td :data-test="`route-condition-${r.id}`">
+              {{ conditionText(r) || 'always' }}
+              <span v-if="r.alt_group" class="badge pending">{{ r.alt_group }}</span>
+            </td>
             <td>{{ r.description || '—' }}</td>
             <td>
               <button
@@ -605,15 +870,56 @@ onMounted(load);
             <label for="route-input">Input</label>
             <select id="route-input" v-model="routeInput" data-test="route-input">
               <option value="" disabled>Select an input…</option>
-              <option v-for="c in inputJacks" :key="c.id" :value="c.id">{{ c.name }}</option>
+              <option v-for="c in inputJacks" :key="c.id" :value="c.id">
+                {{ componentLabel(c) }}
+              </option>
             </select>
           </div>
           <div>
             <label for="route-output">Appears at output</label>
             <select id="route-output" v-model="routeOutput" data-test="route-output">
               <option value="" disabled>Select an output…</option>
-              <option v-for="c in outputJacks" :key="c.id" :value="c.id">{{ c.name }}</option>
+              <option v-for="c in outputJacks" :key="c.id" :value="c.id">
+                {{ componentLabel(c) }}
+              </option>
             </select>
+          </div>
+          <div>
+            <label for="route-condition">Only when (optional)</label>
+            <select
+              id="route-condition"
+              v-model="routeConditionControl"
+              data-test="route-condition"
+              @change="routeConditionValue = ''"
+            >
+              <option value="">Always</option>
+              <option v-for="c in controls" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </div>
+          <div v-if="routeConditionControl">
+            <label for="route-condition-value">is set to</label>
+            <select
+              v-if="controlValues(routeConditionControl).length"
+              id="route-condition-value"
+              v-model="routeConditionValue"
+              data-test="route-condition-value"
+            >
+              <option value="" disabled>Select a position…</option>
+              <option v-for="v in controlValues(routeConditionControl)" :key="v.id" :value="v.value">
+                {{ v.value }}
+              </option>
+            </select>
+            <input
+              v-else
+              id="route-condition-value"
+              v-model="routeConditionValue"
+              placeholder="e.g. up"
+              data-test="route-condition-value"
+            />
+          </div>
+          <div>
+            <label for="route-alt-group">Alternatives label (optional)</label>
+            <input id="route-alt-group" v-model="routeAltGroup" data-test="route-alt-group" />
           </div>
           <div style="flex: 2">
             <label for="route-description">Description (optional)</label>
@@ -623,7 +929,11 @@ onMounted(load);
             <button
               type="submit"
               style="margin: 0"
-              :disabled="!routeInput || !routeOutput"
+              :disabled="
+                !routeInput ||
+                !routeOutput ||
+                (routeConditionControl && !routeConditionValue.trim())
+              "
               data-test="route-create"
             >
               Add
@@ -631,6 +941,154 @@ onMounted(load);
           </div>
         </div>
         <p v-if="routeError" class="error" data-test="route-error">{{ routeError }}</p>
+      </form>
+    </div>
+
+    <div v-if="module.components?.length" class="panel" data-test="pairs">
+      <h2>Stereo pairs</h2>
+      <p class="muted">
+        Two jacks that carry the two halves of one signal. A patch can plug both ends of a pair
+        in a single step instead of remembering to patch left and right separately.
+      </p>
+      <table v-if="module.pairs?.length">
+        <thead>
+          <tr>
+            <th>Jack</th>
+            <th>Paired with</th>
+            <th>Kind</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="p in module.pairs" :key="p.id" :data-test="`pair-${p.id}`">
+            <td>{{ componentName(p.a_component_id) }}</td>
+            <td>{{ componentName(p.b_component_id) }}</td>
+            <td>{{ p.kind }}</td>
+            <td>
+              <button
+                class="danger"
+                style="margin: 0"
+                :data-test="`delete-pair-${p.id}`"
+                @click="removePair(p)"
+              >
+                Remove
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="muted">No pairs recorded for this module.</p>
+
+      <form @submit.prevent="createPair">
+        <div class="row">
+          <div>
+            <label for="pair-a">Jack</label>
+            <select id="pair-a" v-model="pairA" data-test="pair-a">
+              <option value="" disabled>Select a jack…</option>
+              <option v-for="c in ownJacks" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </div>
+          <div>
+            <label for="pair-b">Paired with</label>
+            <select id="pair-b" v-model="pairB" data-test="pair-b">
+              <option value="" disabled>Select a jack…</option>
+              <option v-for="c in ownJacks" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </div>
+          <div>
+            <label for="pair-kind">Kind</label>
+            <input id="pair-kind" v-model="pairKind" data-test="pair-kind" />
+          </div>
+          <div class="shrink">
+            <button type="submit" style="margin: 0" :disabled="!pairValid" data-test="pair-create">
+              Add
+            </button>
+          </div>
+        </div>
+        <p v-if="pairError" class="error" data-test="pair-error">{{ pairError }}</p>
+      </form>
+    </div>
+
+    <div class="panel" data-test="expanders">
+      <h2>Expander panels</h2>
+      <p class="muted">
+        Modules joined to this one by a ribbon cable rather than patch cables — two panels that
+        work as one instrument. Once linked, this module's internal signal paths and normalled
+        connections may reach the expander's jacks, and a patch holding both traces signal
+        straight across the pair.
+      </p>
+      <table v-if="module.expanders?.length">
+        <thead>
+          <tr>
+            <th>Module</th>
+            <th>Relationship</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="e in module.expanders" :key="e.id" :data-test="`expander-${e.id}`">
+            <td>
+              <RouterLink v-if="e.module_id" :to="`/modules/${e.module_id}`">
+                {{ e.manufacturer }} {{ e.name }}
+              </RouterLink>
+            </td>
+            <td>
+              {{ e.role === 'expander' ? 'expands this module' : 'this module expands it' }}
+            </td>
+            <td>
+              <button
+                class="danger"
+                style="margin: 0"
+                :data-test="`delete-expander-${e.id}`"
+                @click="removeExpander(e)"
+              >
+                Unlink
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="muted">No expander linked to this module.</p>
+
+      <p
+        v-for="(s, i) in module.expander_suggestions || []"
+        :key="i"
+        class="muted"
+        :data-test="`expander-suggestion-${i}`"
+      >
+        The manual mentions
+        <strong>{{ s.name }}</strong>
+        {{ s.role === 'host' ? 'as the module this one expands' : 'as an expander for this module' }}.
+        <template v-if="s.module_id">
+          <RouterLink :to="`/modules/${s.module_id}`">It is in your racks</RouterLink> — link it
+          below to trace signal across the pair.
+        </template>
+        <template v-else>It is not in any of your racks yet.</template>
+      </p>
+
+      <form @submit.prevent="createExpander">
+        <div class="row">
+          <div>
+            <label for="expander-target">Link an expander</label>
+            <select id="expander-target" v-model="expanderTarget" data-test="expander-target">
+              <option value="" disabled>Select a module…</option>
+              <option v-for="m in expanderCandidates" :key="m.id" :value="m.id">
+                {{ m.manufacturer }} {{ m.name }}
+              </option>
+            </select>
+          </div>
+          <div class="shrink">
+            <button
+              type="submit"
+              style="margin: 0"
+              :disabled="!expanderTarget"
+              data-test="expander-create"
+            >
+              Link
+            </button>
+          </div>
+        </div>
+        <p v-if="expanderError" class="error" data-test="expander-error">{{ expanderError }}</p>
       </form>
     </div>
 
@@ -827,6 +1285,7 @@ onMounted(load);
           <tr>
             <th>Name</th>
             <th>Description</th>
+            <th v-if="group.type.endsWith('_jack')">Connector</th>
             <th v-if="group.type.endsWith('_jack')">Voltage range</th>
             <th v-if="group.type.endsWith('_jack')">Polarity</th>
             <th v-if="group.type === 'bidirectional_jack'">Group</th>
@@ -839,6 +1298,7 @@ onMounted(load);
           <tr v-for="c in group.components" :key="c.id">
             <td>{{ c.name }}</td>
             <td>{{ c.description || '—' }}</td>
+            <td v-if="group.type.endsWith('_jack')">{{ portKindLabel(c.port_kind) }}</td>
             <td v-if="group.type.endsWith('_jack')">{{ voltageRange(c) }}</td>
             <td v-if="group.type.endsWith('_jack')">{{ c.polarity || '—' }}</td>
             <td v-if="group.type === 'bidirectional_jack'">{{ c.group_label || '—' }}</td>
@@ -856,6 +1316,17 @@ onMounted(load);
                   :data-test="`edit-group-${c.id}`"
                   style="width: auto; margin-left: 0.4rem"
                 />
+                <select
+                  v-if="editType.endsWith('_jack')"
+                  v-model="editPortKind"
+                  :data-test="`edit-port-kind-${c.id}`"
+                  style="width: auto; margin-left: 0.4rem"
+                >
+                  <option value="">3.5mm patch point</option>
+                  <option v-for="k in PORT_KINDS" :key="k" :value="k">
+                    {{ portKindLabel(k) }}
+                  </option>
+                </select>
                 <button
                   style="margin: 0 0 0 0.4rem"
                   :data-test="`edit-save-${c.id}`"

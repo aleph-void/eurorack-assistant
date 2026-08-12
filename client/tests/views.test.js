@@ -1637,6 +1637,9 @@ describe('ModuleDetailView component values', () => {
     expect(api.put).toHaveBeenCalledWith('/api/modules/1/components/4', {
       type: 'bidirectional_jack',
       group_label: '1',
+      // Jacks also carry the physical connector; '' keeps it an ordinary
+      // 3.5mm patch point.
+      port_kind: '',
     });
   });
 
@@ -1662,5 +1665,447 @@ describe('ModuleDetailView component values', () => {
     await wrapper.find('[data-test="delete-value-1"]').trigger('click');
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/modules/1/components/3/values/1');
+  });
+});
+
+// Signal paths that are not simply "this jack to that jack": defaults that
+// depend on a switch, connections that are not 3.5mm patch points, expander
+// panels, bridges, and everything a patch records beyond its cables.
+describe('ModuleDetailView signal-path detail', () => {
+  const conditionalModule = {
+    id: 1,
+    manufacturer: 'Intellijel',
+    name: 'Atlantix',
+    manual_status: 'found',
+    analysis_status: 'complete',
+    summary: 'x',
+    quantity: 1,
+    racks: [{ id: 1, name: 'main rack', quantity: 1 }],
+    manuals: [],
+    notes: [],
+    components: [
+      { id: 1, type: 'input_jack', name: 'PWM IN', values: [] },
+      { id: 2, type: 'output_jack', name: 'SINE B', values: [] },
+      { id: 3, type: 'output_jack', name: 'L', port_kind: null, values: [] },
+      { id: 4, type: 'output_jack', name: 'R', values: [] },
+      {
+        id: 5,
+        type: 'switch',
+        name: 'PWM SOURCE',
+        values: [
+          { id: 9, type: 'enum', value: 'left' },
+          { id: 10, type: 'enum', value: 'right' },
+        ],
+      },
+      { id: 6, type: 'input_jack', name: 'MIDI IN', port_kind: 'midi_din', values: [] },
+    ],
+    normalizations: [
+      {
+        id: 41,
+        target_component_id: 1,
+        source_component_id: 2,
+        source_label: null,
+        kind: 'output',
+        condition_component_id: 5,
+        condition_value: 'left',
+        alt_group: 'pwm source',
+        break_component_id: null,
+        break_on: 'cable_in',
+        description: null,
+      },
+      {
+        id: 42,
+        target_component_id: 4,
+        source_component_id: 3,
+        source_label: null,
+        kind: 'output',
+        condition_component_id: null,
+        condition_value: null,
+        alt_group: null,
+        break_component_id: 3,
+        break_on: 'cable_out',
+        description: 'Patching only R gives a mono sum.',
+      },
+    ],
+    routes: [
+      {
+        id: 51,
+        input_component_id: 1,
+        output_component_id: 2,
+        condition_component_id: 5,
+        condition_value: 'right',
+        alt_group: 'pwm source',
+        description: null,
+      },
+    ],
+    switches: [],
+    pairs: [{ id: 61, a_component_id: 3, b_component_id: 4, kind: 'stereo', description: null }],
+    expanders: [
+      { id: 71, role: 'expander', module_id: 2, manufacturer: 'Intellijel', name: 'Atlx', description: null },
+    ],
+    expander_components: [{ id: 80, module_id: 2, type: 'output_jack', name: 'LP', port_kind: null }],
+    expander_suggestions: [
+      { name: 'Performer', role: 'expander', description: null, module_id: null },
+    ],
+  };
+
+  it('shows the control position a default or a path depends on, and what breaks it', async () => {
+    api.get.mockResolvedValue(conditionalModule);
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const condition = wrapper.find('[data-test="normalization-condition-41"]');
+    expect(condition.text()).toContain('PWM SOURCE = left');
+    expect(condition.text()).toContain('pwm source');
+    // The output-to-output default names the cable that cancels it.
+    expect(wrapper.find('[data-test="normalization-42"]').text()).toContain('a cable out of L');
+    expect(wrapper.find('[data-test="route-condition-51"]').text()).toContain('PWM SOURCE = right');
+    // A default with no condition reads as unconditional.
+    expect(wrapper.find('[data-test="normalization-42"]').text()).toContain('always');
+  });
+
+  it('records a default that only exists in one switch position', async () => {
+    api.get.mockResolvedValue(conditionalModule);
+    api.post.mockResolvedValue({ id: 43 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="norm-target"]').setValue('1');
+    await wrapper.find('[data-test="norm-source"]').setValue('2');
+    await wrapper.find('[data-test="norm-condition"]').setValue('5');
+    // The switch's recorded positions become the choices.
+    const values = wrapper.findAll('[data-test="norm-condition-value"] option').map((o) => o.text());
+    expect(values).toContain('right');
+    await wrapper.find('[data-test="norm-condition-value"]').setValue('right');
+    await wrapper.find('[data-test="norm-alt-group"]').setValue('pwm source');
+    await wrapper.find('[data-test="normalizations"] form').trigger('submit');
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/normalizations', {
+      target_component_id: 1,
+      source_component_id: 2,
+      condition_component_id: 5,
+      condition_value: 'right',
+      alt_group: 'pwm source',
+    });
+  });
+
+  it('records the jack whose outgoing cable breaks a default', async () => {
+    api.get.mockResolvedValue(conditionalModule);
+    api.post.mockResolvedValue({ id: 44 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="norm-target"]').setValue('4');
+    await wrapper.find('[data-test="norm-source"]').setValue('3');
+    await wrapper.find('[data-test="norm-break"]').setValue('3');
+    await wrapper.find('[data-test="norm-break-on"]').setValue('cable_out');
+    await wrapper.find('[data-test="normalizations"] form').trigger('submit');
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/normalizations', {
+      target_component_id: 4,
+      source_component_id: 3,
+      break_component_id: 3,
+      break_on: 'cable_out',
+    });
+  });
+
+  it('shows connectors that are not 3.5mm patch points', async () => {
+    api.get.mockResolvedValue(conditionalModule);
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    const inputs = wrapper.find('[data-test="group-input_jack"]').text();
+    expect(inputs).toContain('midi din');
+    expect(inputs).toContain('3.5mm');
+  });
+
+  it('lists stereo pairs and expander panels, and offers the expander’s jacks in a path', async () => {
+    api.get.mockResolvedValue(conditionalModule);
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="pair-61"]').text()).toContain('stereo');
+    expect(wrapper.find('[data-test="expander-71"]').text()).toContain('Atlx');
+    expect(wrapper.find('[data-test="expander-71"]').text()).toContain('expands this module');
+    // A route may end at a jack on the linked panel.
+    const outputs = wrapper.findAll('[data-test="route-output"] option').map((o) => o.text());
+    expect(outputs.some((t) => t.includes('LP — Intellijel Atlx'))).toBe(true);
+  });
+
+  it('adds a stereo pair and an expander link', async () => {
+    api.get.mockResolvedValue(conditionalModule);
+    api.post.mockResolvedValue({ id: 62 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="pair-a"]').setValue('3');
+    await wrapper.find('[data-test="pair-b"]').setValue('4');
+    await wrapper.find('[data-test="pairs"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/pairs', {
+      a_component_id: 3,
+      b_component_id: 4,
+      kind: 'stereo',
+    });
+
+    await wrapper.find('[data-test="delete-expander-71"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/expanders/71');
+  });
+
+  it('points out a panel the manual named that is not linked yet', async () => {
+    api.get.mockResolvedValue(conditionalModule);
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    const suggestion = wrapper.find('[data-test="expander-suggestion-0"]');
+    expect(suggestion.text()).toContain('Performer');
+    expect(suggestion.text()).toContain('not in any of your racks');
+  });
+});
+
+describe('PatchDetailView beyond the rack', () => {
+  const richPatch = {
+    id: 7,
+    name: 'Full system',
+    description: null,
+    rack_id: 1,
+    rack_name: 'main rack',
+    created_at: '2026-08-12T10:00:00Z',
+    modules: [
+      {
+        id: 11,
+        module_id: 1,
+        manufacturer: 'Erica Synths',
+        module_name: 'LXR',
+        instance: 1,
+        label: 'snare voice',
+        group_id: 5,
+        external: false,
+        live: true,
+        components: [{ id: 1, type: 'output_jack', name: 'OUT', values: [] }],
+      },
+      {
+        id: 12,
+        module_id: null,
+        manufacturer: 'external',
+        module_name: 'UMC404HD',
+        instance: 1,
+        label: 'the computer',
+        group_id: null,
+        external: true,
+        live: false,
+        components: [
+          { id: 90, type: 'output_jack', name: 'MIDI OUT', port_kind: 'midi_din', declared: true, values: [] },
+        ],
+      },
+      {
+        id: 13,
+        module_id: 4,
+        manufacturer: 'Omnitone',
+        module_name: '7Path',
+        instance: 1,
+        label: null,
+        group_id: null,
+        external: false,
+        live: true,
+        components: [{ id: 7, type: 'bidirectional_jack', name: '1', values: [] }],
+      },
+    ],
+    groups: [{ id: 5, name: 'Rhythm', description: null, position: 1 }],
+    links: [
+      {
+        id: 81,
+        kind: 'bridge',
+        a_patch_module_id: 13,
+        b_patch_module_id: 11,
+        description: null,
+        jacks: [{ id: 1, a_component_id: 7, a_component_name: '1', b_component_id: 1, b_component_name: '1' }],
+      },
+    ],
+    cables: [
+      {
+        id: 21,
+        from_patch_module_id: 12,
+        from_component_id: 90,
+        from_component_name: 'MIDI OUT',
+        to_patch_module_id: 11,
+        to_component_id: 1,
+        to_component_name: 'OUT',
+        note: 'adds the distortion layer',
+        optional: true,
+        stacked: true,
+        alt_group: 'drive choice',
+      },
+    ],
+    settings: [],
+    pairs: [],
+    normalizations: [
+      {
+        patch_module_id: 11,
+        normalization_id: 41,
+        target_component_id: 1,
+        target_component_name: 'R',
+        source_component_id: 2,
+        source_component_name: 'L',
+        source_label: null,
+        kind: 'output',
+        break_component_name: 'L',
+        break_on: 'cable_out',
+        condition: { component_name: 'MIX 4', value: 'up', state: 'unset' },
+        alt_group: 'mix',
+        exclusive: true,
+        description: null,
+        active: false,
+        overriding_cable_id: 21,
+        signals: [],
+      },
+    ],
+    flow: [
+      {
+        key: 'pm12:c90',
+        kind: 'jack',
+        patch_module_id: 12,
+        component_id: 90,
+        name: 'MIDI OUT',
+        jack_type: 'output_jack',
+        port_kind: 'midi_din',
+        via: null,
+        switched: false,
+        conditional: false,
+        condition: null,
+        merge: false,
+        switched_merge: false,
+        cycle: false,
+        truncated: false,
+        truncated_tree: true,
+        children: [
+          {
+            key: 'pm13:c7',
+            kind: 'jack',
+            patch_module_id: 13,
+            component_id: 7,
+            name: '1',
+            jack_type: 'bidirectional_jack',
+            port_kind: null,
+            via: 'bridge',
+            switched: false,
+            conditional: true,
+            condition: { component_name: 'MIX 4', value: 'up', state: 'unset' },
+            optional: true,
+            merge: false,
+            switched_merge: false,
+            cycle: false,
+            truncated: true,
+            children: [],
+          },
+        ],
+      },
+    ],
+  };
+
+  it('labels instances by their role and shows bridged links and off-rack gear', async () => {
+    api.get.mockResolvedValue(richPatch);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="patch-module-11"]').text()).toContain('LXR (snare voice)');
+    expect(wrapper.find('[data-test="patch-module-11"]').text()).toContain('Rhythm');
+    expect(wrapper.find('[data-test="patch-module-12"]').text()).toContain('off-rack gear');
+    expect(wrapper.find('[data-test="link-81"]').text()).toContain('bridge');
+    expect(wrapper.find('[data-test="link-81"]').text()).toContain('1↔1');
+    // The declared connection point of the off-rack gear is listed.
+    expect(wrapper.find('[data-test="declared-12"]').text()).toContain('MIDI OUT');
+    expect(wrapper.find('[data-test="declared-12"]').text()).toContain('midi din');
+  });
+
+  it('shows what a cable is for and lets it be marked provisional', async () => {
+    api.get.mockResolvedValue(richPatch);
+    api.put.mockResolvedValue({});
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    const cable = wrapper.find('[data-test="cable-21"]');
+    expect(cable.text()).toContain('adds the distortion layer');
+    expect(cable.text()).toContain('optional');
+    expect(cable.text()).toContain('stacked');
+    expect(cable.text()).toContain('drive choice');
+
+    await wrapper.find('[data-test="cable-optional-21"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/patches/7/cables/21', { optional: false });
+  });
+
+  it('flags bridged, conditional, optional and cut-short paths in the flow', async () => {
+    api.get.mockResolvedValue(richPatch);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="flow-row-0"]').text()).toContain('midi din');
+    const bridged = wrapper.find('[data-test="flow-row-1"]');
+    expect(bridged.text()).toContain('bridged link');
+    expect(bridged.text()).toContain('MIX 4 set to up');
+    expect(bridged.text()).toContain('not recorded in this patch');
+    expect(bridged.text()).toContain('optional cable');
+    expect(bridged.text()).toContain('path cut short');
+    expect(wrapper.find('[data-test="flow-truncated"]').exists()).toBe(true);
+  });
+
+  it('explains a default cancelled by a cable leaving another jack', async () => {
+    api.get.mockResolvedValue(richPatch);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    const row = wrapper.find('[data-test="normalled-11-41"]');
+    expect(row.text()).toContain('overridden');
+    expect(row.text()).toContain('a cable is patched out of L');
+    expect(row.text()).toContain('one of several');
+  });
+
+  it('names a bus, labels an instance and adds off-rack gear', async () => {
+    api.get.mockResolvedValue(richPatch);
+    api.post.mockResolvedValue({ id: 99 });
+    api.put.mockResolvedValue({});
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="group-name"]').setValue('Granular bus');
+    await wrapper.find('[data-test="groups"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/groups', { name: 'Granular bus' });
+
+    await wrapper.find('[data-test="label-input-13"]').setValue('case link');
+    await wrapper.find('[data-test="label-save-13"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/patches/7/modules/13', { label: 'case link' });
+
+    await wrapper.find('[data-test="add-kind"]').setValue('external');
+    await wrapper.find('[data-test="add-name"]').setValue('Monitors');
+    await wrapper.findAll('[data-test="extras"] form')[0].trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/modules', {
+      module_name: 'Monitors',
+      manufacturer: undefined,
+      external: true,
+      label: undefined,
+    });
+  });
+
+  it('declares a connection point on gear the patch invented', async () => {
+    api.get.mockResolvedValue(richPatch);
+    api.post.mockResolvedValue({ id: 91 });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="port-module"]').setValue('12');
+    await wrapper.find('[data-test="port-name"]').setValue('MAIN OUT');
+    await wrapper.find('[data-test="port-type"]').setValue('input_jack');
+    await wrapper.find('[data-test="port-kind"]').setValue('audio_quarter_inch');
+    await wrapper.findAll('[data-test="extras"] form')[1].trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/modules/12/ports', {
+      name: 'MAIN OUT',
+      type: 'input_jack',
+      port_kind: 'audio_quarter_inch',
+    });
   });
 });

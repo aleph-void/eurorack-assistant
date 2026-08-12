@@ -39,6 +39,28 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
 - **LLM provider is admin-configurable** in the web UI: Claude Code CLI
   (`claude -p`) or Codex CLI (`codex exec`), with an optional model override —
   both use your existing subscription login, no API key needed.
+- **Patches**: record a patch against a snapshot of a rack — the cables, how
+  every control is dialed in, what each instance is doing in this patch
+  ("LXR #2 — ghost layer") and which bus or layer it belongs to. The snapshot
+  keeps rendering after modules move racks, get re-analyzed or are deleted.
+- **Signal flow**: patches are traced, not just listed. The analysis records
+  each module's internal signal paths, normalled connections, routing switch
+  sections, mult groups and stereo pairs, and the patch view follows every
+  signal from its source through cables, mult copies, defaults, switches and
+  module internals to everywhere it ends up — flagging splits, merges,
+  feedback loops and paths that are only one of several alternatives.
+- **Hardware that doesn't fit one panel**: connections that are not 3.5mm
+  patch points (MIDI DIN/TRS, USB, S/PDIF, mics, ethernet) are typed as such
+  and only patch into their own kind; expander panels joined by ribbon cable
+  are declared on the module so signal traces across the pair; bridged pairs
+  carry signals between two points of a system; and off-rack gear (a DAW, a
+  MIDI interface, the PA) and modules the rack does not hold take part in a
+  patch with connection points declared inside it.
+- **Paths that depend on a setting**: a switch that chooses which signal is
+  normalled to an input, or turns an output from a channel pass-through into a
+  mix, is recorded with the control position it needs. Alternatives are shown
+  as a selection rather than as signals summing, and recording the switch's
+  position in a patch resolves the flow.
 - **Private notes**: attach notes to modules and to specific components; a
   note can be reused across any number of modules/components and is never
   visible to other users.
@@ -127,7 +149,21 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `racks` | a user's named racks (unique name per user, `main rack` by default); strictly private to their owner |
 | `rack_modules` | maps racks to the modules in them (per-rack quantity); "deleting" a module only unlinks it, and the same module can sit in many racks |
 | `manuals` | PDF documents mapped to modules — `user_id NULL` is the shared auto-found manual; rows with a `user_id` are private documents that user attached to their own module instance |
-| `module_components` | typed components (`input_jack`, `output_jack`, `knob`, `slider`, `button`, `toggle`, `switch`, `display`, `other`) with `voltage_min`/`voltage_max`/`polarity` |
+| `module_components` | typed components (`input_jack`, `output_jack`, `bidirectional_jack`, `knob`, `slider`, `button`, `toggle`, `switch`, `display`, `other`) with `voltage_min`/`voltage_max`/`polarity`, a mult `group_label`, and `port_kind` for connections that are not 3.5mm patch points (`midi_din`, `usb`, `microphone`, …) |
+| `component_values` | the valid settings of a control: a `min`/`max` pair, or one `enum` row per discrete position |
+| `component_routes` | module-internal signal paths (input jack → output jack) — what carries flow across a module; an output no route feeds is a signal generator |
+| `component_normalizations` | default connections that hold until something overrides them, with what breaks them (`break_component_id` + `break_on`, for outputs normalled to outputs) |
+| `component_switches` / `component_switch_steps` | routing switch sections: a common jack connected to exactly one step jack at a time |
+| `component_pairs` | two jacks carrying the two halves of one signal (stereo L/R) |
+| `module_expanders` | a host module and an expander panel joined by a ribbon cable, so routes and normals may cross between them |
+| `module_path_hints` | what a manual said that could not be stored yet — a signal path running to another panel, or the name of an expander whose record does not exist or is not linked. Materialized whenever resolution becomes possible (the other panel is analyzed, or the two are linked), and kept afterwards so re-analyzing that panel does not lose the paths again |
+| `patches` | a patch against a snapshot of a rack (module/component references are soft, so the snapshot survives changes to the rack) |
+| `patch_modules` | one row per module instance in the patch, with its `label`, bus (`group_id`) and an `external` flag for off-rack gear |
+| `patch_module_ports` | connection points declared inside the patch, for instances with no analyzed module behind them |
+| `patch_cables` | a cable between two jacks, plus `note`, `optional`, `stacked` and `alt_group` |
+| `patch_settings` | how a control is dialed in for this patch — and what resolves paths that depend on a switch position |
+| `patch_groups` | named buses / layers within a patch |
+| `patch_module_links` / `patch_module_link_jacks` | instances wired together without patch cables: `expander` pairs and `bridge` pairs (jack N ↔ jack N) |
 | `notes` | per-user private notes |
 | `note_modules` / `note_components` | attach one note to any number of modules / components |
 | `questions` | prompt, answer, status, error |

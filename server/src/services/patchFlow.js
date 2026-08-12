@@ -6,8 +6,9 @@
 //   cable  — a patch cable, output jack → input jack
 //   route  — a module-internal signal path (component_routes): the input's
 //            signal appears at the output (mixer channel → mix out, filter
-//            in → LP/BP/HP). This is what carries flow ACROSS a module.
-//   normal — an ACTIVE normalled connection (nothing patched into its target)
+//            in → LP/BP/HP). This is what carries flow ACROSS a module, and
+//            it may end on an expander's panel (Atlantix → Atlx).
+//   normal — an ACTIVE normalled connection (nothing overriding it)
 //   mult   — a mult-group copy: the jack a cable lands in feeds the group's
 //            other jacks that send cables onward
 //   switch — a routing switch section: the common jack and its step jacks,
@@ -15,6 +16,9 @@
 //            into the common makes the cabled steps its (selectable)
 //            destinations; cables into steps make the common their shared
 //            destination.
+//   bridge — a non-patch link between two instances that carries a signal
+//            between them (Omnitone 7Path's ethernet pair): the side a cable
+//            lands in feeds its partner jack on the other instance.
 //
 // Sources (tree roots) are nodes that emit signal but receive none: output
 // jacks no route feeds (= signal generators — oscillators, noise, LFOs) and
@@ -23,33 +27,38 @@
 // nodes with more than one incoming edge, flagged `merge` (mixer outputs);
 // feedback loops are cut with a `cycle` flag instead of recursing forever.
 //
-// A switch's branches are alternatives, not simultaneous: children reached
-// by a 'switch' edge carry `switched: true`, and a node whose incoming edges
-// are all 'switch' edges is flagged `switched_merge` instead of `merge` — it
-// receives one of those signals at a time, it does not mix them.
+// Not every path is live at the same time. A switch's branches are
+// alternatives, and so are paths that depend on a control the patch has not
+// pinned down — a mix switch that turns an output into a channel mix, a
+// source switch choosing which signal is normalled to an input. Both arrive
+// here marked EXCLUSIVE: children reached that way carry `switched: true`
+// (and `conditional`/`condition` when a control decides it), and a node whose
+// incoming edges are all exclusive is flagged `switched_merge` instead of
+// `merge` — it receives one of those signals at a time, it does not mix them.
 
 export const MAX_FLOW_NODES = 200;
 
-export function buildSignalFlow({
-  patchModules,
-  componentsByModule,
-  routesByModule,
-  normalizationsByModule,
-  switchesByModule = new Map(),
-  cables,
-}) {
+export function buildSignalFlow(topology) {
+  const {
+    patchModules = [],
+    jacksByPatchModule = new Map(),
+    routes = [],
+    normalizations = [],
+    switches = [],
+    bridges = [],
+    cables = [],
+  } = topology || {};
+
   const nodes = new Map();
   const edges = [];
-  const pmById = new Map(patchModules.map((pm) => [pm.id, pm]));
   const jackKey = (pmId, componentId) => `pm${pmId}:c${componentId}`;
+  const componentAt = (pmId, componentId) =>
+    (jacksByPatchModule.get(pmId) || []).find((c) => c.id === componentId) || null;
 
   const addJackNode = (pmId, componentId, fallbackName) => {
     const key = jackKey(pmId, componentId);
     if (nodes.has(key)) return key;
-    const pm = pmById.get(pmId);
-    const component = pm?.module_id
-      ? (componentsByModule.get(pm.module_id) || []).find((c) => c.id === componentId)
-      : null;
+    const component = componentAt(pmId, componentId);
     nodes.set(key, {
       key,
       kind: 'jack',
@@ -57,6 +66,8 @@ export function buildSignalFlow({
       component_id: componentId,
       name: component?.name ?? fallbackName ?? `#${componentId}`,
       jack_type: component?.type ?? null,
+      // 'midi_din', 'usb', ... on connections that leave the eurorack format.
+      port_kind: component?.port_kind ?? null,
     });
     return key;
   };
@@ -70,80 +81,119 @@ export function buildSignalFlow({
         component_id: null,
         name: label,
         jack_type: null,
+        port_kind: null,
       });
     }
     return key;
   };
 
-  // Cables first — they also decide which normals are active and which mult
-  // jack is its group's input.
+  // Cables first — they also decide which normals are active, which mult jack
+  // is its group's input, and which way a switch or bridge runs.
   const cabledInto = new Set();
+  const cablesOutOf = new Set();
   for (const c of cables) {
     const from = addJackNode(c.from_patch_module_id, c.from_component_id, c.from_component_name);
     const to = addJackNode(c.to_patch_module_id, c.to_component_id, c.to_component_name);
-    edges.push({ from, to, kind: 'cable' });
+    edges.push({ from, to, kind: 'cable', optional: Boolean(c.optional) });
     cabledInto.add(to);
+    cablesOutOf.add(from);
   }
 
-  for (const pm of patchModules) {
-    if (!pm.module_id) continue;
-    const components = componentsByModule.get(pm.module_id) || [];
+  for (const r of routes) {
+    edges.push({
+      from: addJackNode(r.from_patch_module_id, r.from_component_id),
+      to: addJackNode(r.to_patch_module_id, r.to_component_id),
+      kind: 'route',
+      exclusive: r.exclusive,
+      condition: r.condition,
+    });
+  }
 
-    for (const r of routesByModule.get(pm.module_id) || []) {
-      edges.push({
-        from: addJackNode(pm.id, r.input_component_id),
-        to: addJackNode(pm.id, r.output_component_id),
-        kind: 'route',
-      });
-    }
+  for (const n of normalizations) {
+    if (n.broken_by_cable_id) continue; // overridden by a cable
+    const from = n.source_component_id
+      ? addJackNode(n.source_patch_module_id, n.source_component_id)
+      : addInternalNode(n.patch_module_id, n.source_label || 'internal signal');
+    edges.push({
+      from,
+      to: addJackNode(n.target_patch_module_id, n.target_component_id),
+      kind: 'normal',
+      exclusive: n.exclusive,
+      condition: n.condition,
+    });
+  }
 
-    for (const n of normalizationsByModule.get(pm.module_id) || []) {
-      const target = jackKey(pm.id, n.target_component_id);
-      if (cabledInto.has(target)) continue; // broken by the cable
-      const from = n.source_component_id
-        ? addJackNode(pm.id, n.source_component_id)
-        : addInternalNode(pm.id, n.source_label || 'internal signal');
-      edges.push({ from, to: addJackNode(pm.id, n.target_component_id), kind: 'normal' });
-    }
-
-    // Routing switches: which way the section runs is decided by the cables.
-    // A cable into the common → the common feeds every step that cables
-    // onward (1-to-many distribution, one step live at a time). Cables into
-    // steps → those steps feed the common (many-to-one selection).
-    const switchJackIds = new Set();
-    for (const section of switchesByModule.get(pm.module_id) || []) {
-      const commonKey = jackKey(pm.id, section.common_component_id);
-      switchJackIds.add(section.common_component_id);
-      for (const id of section.step_component_ids) switchJackIds.add(id);
-      const commonFed = cabledInto.has(commonKey);
-      for (const stepId of section.step_component_ids) {
-        const stepKey = jackKey(pm.id, stepId);
-        const stepFed = cabledInto.has(stepKey);
-        if (commonFed && !stepFed) {
-          // The step only matters as a destination if it cables onward.
-          if (edges.some((e) => e.kind === 'cable' && e.from === stepKey)) {
-            edges.push({
-              from: addJackNode(pm.id, section.common_component_id),
-              to: addJackNode(pm.id, stepId),
-              kind: 'switch',
-            });
-          }
-        } else if (stepFed && !commonFed) {
+  // Routing switches: which way the section runs is decided by the cables.
+  // A cable into the common → the common feeds every step that cables
+  // onward (1-to-many distribution, one step live at a time). Cables into
+  // steps → those steps feed the common (many-to-one selection).
+  const switchJackKeys = new Set();
+  for (const section of switches) {
+    const commonKey = jackKey(section.common_patch_module_id, section.common_component_id);
+    switchJackKeys.add(commonKey);
+    for (const step of section.steps) switchJackKeys.add(jackKey(step.patch_module_id, step.component_id));
+    const commonFed = cabledInto.has(commonKey);
+    for (const step of section.steps) {
+      const stepKey = jackKey(step.patch_module_id, step.component_id);
+      const stepFed = cabledInto.has(stepKey);
+      if (commonFed && !stepFed) {
+        // The step only matters as a destination if it cables onward.
+        if (cablesOutOf.has(stepKey)) {
           edges.push({
-            from: addJackNode(pm.id, stepId),
-            to: addJackNode(pm.id, section.common_component_id),
+            from: addJackNode(section.common_patch_module_id, section.common_component_id),
+            to: addJackNode(step.patch_module_id, step.component_id),
             kind: 'switch',
+            exclusive: true,
           });
         }
+      } else if (stepFed && !commonFed) {
+        edges.push({
+          from: addJackNode(step.patch_module_id, step.component_id),
+          to: addJackNode(section.common_patch_module_id, section.common_component_id),
+          kind: 'switch',
+          exclusive: true,
+        });
       }
     }
+  }
 
-    // Mult copies: the group jack a cable lands in feeds every sibling that
-    // sends a cable onward. Switch-section jacks are excluded — a switch
-    // selects one connection, it does not copy to all of them.
+  // Bridges: the bridged pair carries one signal between two instances, in
+  // whichever direction it is cabled. Unlike a mult, the partner jack is the
+  // whole point of the link, so the edge is drawn whether or not it cables
+  // onward — that is how the patch shows the signal reaching the other case.
+  for (const b of bridges) {
+    const aKey = jackKey(b.a_patch_module_id, b.a_component_id);
+    const bKey = jackKey(b.b_patch_module_id, b.b_component_id);
+    const aFed = cabledInto.has(aKey);
+    const bFed = cabledInto.has(bKey);
+    if (aFed === bFed) continue; // both ends driven, or neither: nothing flows
+    const [fromPm, fromId, toPm, toId] = aFed
+      ? [b.a_patch_module_id, b.a_component_id, b.b_patch_module_id, b.b_component_id]
+      : [b.b_patch_module_id, b.b_component_id, b.a_patch_module_id, b.a_component_id];
+    edges.push({
+      from: addJackNode(fromPm, fromId),
+      to: addJackNode(toPm, toId),
+      kind: 'bridge',
+    });
+  }
+
+  // Mult copies: the group jack a cable lands in feeds every sibling that
+  // sends a cable onward. Switch-section jacks are excluded — a switch
+  // selects one connection, it does not copy to all of them — and so are
+  // bridged jacks, which are paired one to one with the other panel rather
+  // than being copies of each other.
+  const bridgedKeys = new Set();
+  for (const b of bridges) {
+    bridgedKeys.add(jackKey(b.a_patch_module_id, b.a_component_id));
+    bridgedKeys.add(jackKey(b.b_patch_module_id, b.b_component_id));
+  }
+  for (const pm of patchModules) {
     const groups = new Map();
-    for (const j of components.filter(
-      (c) => c.type === 'bidirectional_jack' && !switchJackIds.has(c.id)
+    for (const j of (jacksByPatchModule.get(pm.id) || []).filter(
+      (c) =>
+        c.type === 'bidirectional_jack' &&
+        !switchJackKeys.has(jackKey(pm.id, c.id)) &&
+        !bridgedKeys.has(jackKey(pm.id, c.id))
     )) {
       const key = (j.group_label || '').trim().toLowerCase();
       if (!groups.has(key)) groups.set(key, []);
@@ -155,7 +205,7 @@ export function buildSignalFlow({
       for (const j of jacks) {
         if (j.id === input.id) continue;
         const from = jackKey(pm.id, j.id);
-        if (edges.some((e) => e.kind === 'cable' && e.from === from)) {
+        if (cablesOutOf.has(from)) {
           edges.push({ from: jackKey(pm.id, input.id), to: from, kind: 'mult' });
         }
       }
@@ -164,13 +214,15 @@ export function buildSignalFlow({
 
   const out = new Map();
   const inDegree = new Map();
-  const switchOnlyIn = new Map();
+  const exclusiveIn = new Map();
   for (const e of edges) {
     if (!out.has(e.from)) out.set(e.from, []);
     out.get(e.from).push(e);
     inDegree.set(e.to, (inDegree.get(e.to) ?? 0) + 1);
-    // A convergence fed only through switch edges is a selection, not a mix.
-    switchOnlyIn.set(e.to, (switchOnlyIn.get(e.to) ?? true) && e.kind === 'switch');
+    // A convergence reached only by paths that are alternatives to each other
+    // is a selection, not a mix.
+    const exclusive = e.kind === 'switch' || Boolean(e.exclusive);
+    exclusiveIn.set(e.to, (exclusiveIn.get(e.to) ?? true) && exclusive);
   }
 
   // A source emits signal without receiving any: internal normalled signals,
@@ -186,30 +238,49 @@ export function buildSignalFlow({
     .sort((a, b) => a.patch_module_id - b.patch_module_id || a.key.localeCompare(b.key));
 
   // One tree per source. A node already on the path to itself is a feedback
-  // loop and stops the walk; a per-tree node budget bounds diamond blow-ups.
-  const expand = (key, via, path, budget) => {
+  // loop and stops the walk; a per-tree node budget bounds diamond blow-ups,
+  // and says so rather than silently showing a partial tree.
+  const expand = (key, edge, path, budget) => {
     const node = nodes.get(key);
     const converges = (inDegree.get(key) ?? 0) > 1;
-    const selected = converges && switchOnlyIn.get(key) === true;
+    const selected = converges && exclusiveIn.get(key) === true;
+    const exclusive = edge ? edge.kind === 'switch' || Boolean(edge.exclusive) : false;
     const row = {
       ...node,
-      via, // edge kind that reached this node; null on roots
-      // Reached through a switch: this branch is one of several alternatives.
-      switched: via === 'switch',
-      // A real mix (several signals summing) vs a switch picking one of them.
+      via: edge ? edge.kind : null, // edge kind that reached this node; null on roots
+      // Reached by a path that is one of several alternatives.
+      switched: exclusive,
+      conditional: Boolean(edge?.condition),
+      condition: edge?.condition ?? null,
+      optional: Boolean(edge?.optional),
+      // A real mix (several signals summing) vs a selection of one of them.
       merge: converges && !selected,
       switched_merge: selected,
       cycle: path.has(key),
+      truncated: false,
       children: [],
     };
     budget.count += 1;
-    if (row.cycle || budget.count >= MAX_FLOW_NODES) return row;
+    if (row.cycle) return row;
+    if (budget.count >= MAX_FLOW_NODES) {
+      // Only a real cut is worth flagging: a node with nowhere left to go is
+      // simply the end of the path.
+      row.truncated = (out.get(key) || []).length > 0;
+      if (row.truncated) budget.truncated = true;
+      return row;
+    }
     const next = new Set(path);
     next.add(key);
     for (const e of out.get(key) || []) {
-      row.children.push(expand(e.to, e.kind, next, budget));
+      row.children.push(expand(e.to, e, next, budget));
     }
     return row;
   };
-  return sources.map((s) => expand(s.key, null, new Set(), { count: 0 }));
+  return sources.map((s) => {
+    const budget = { count: 0, truncated: false };
+    const tree = expand(s.key, null, new Set(), budget);
+    // The root carries the summary so the GUI can warn once per tree.
+    tree.truncated_tree = budget.truncated;
+    return tree;
+  });
 }
