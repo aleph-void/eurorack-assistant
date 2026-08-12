@@ -1,0 +1,103 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+
+vi.mock('../src/api.js', () => ({
+  api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
+}));
+
+import { api } from '../src/api.js';
+import { useAuthStore } from '../src/stores/auth.js';
+import { useJobsStore } from '../src/stores/jobs.js';
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+  vi.clearAllMocks();
+});
+
+describe('auth store', () => {
+  it('logs in and exposes admin state', async () => {
+    api.post.mockResolvedValue({ id: 1, username: 'admin', is_admin: true });
+    const auth = useAuthStore();
+    await auth.login('admin', 'pw');
+    expect(auth.isLoggedIn).toBe(true);
+    expect(auth.isAdmin).toBe(true);
+    expect(api.post).toHaveBeenCalledWith('/api/auth/login', { username: 'admin', password: 'pw' });
+  });
+
+  it('fetchMe tolerates 401', async () => {
+    api.get.mockRejectedValue(new Error('Not authenticated'));
+    const auth = useAuthStore();
+    expect(await auth.fetchMe()).toBeNull();
+    expect(auth.loaded).toBe(true);
+    expect(auth.isLoggedIn).toBe(false);
+  });
+
+  it('logout clears the user even if the call fails', async () => {
+    api.post.mockResolvedValueOnce({ id: 1, username: 'u', is_admin: false });
+    const auth = useAuthStore();
+    await auth.login('u', 'pw');
+    api.post.mockRejectedValueOnce(new Error('network'));
+    await auth.logout().catch(() => {});
+    expect(auth.user).toBeNull();
+  });
+});
+
+describe('jobs store', () => {
+  it('fetches jobs and counts active ones', async () => {
+    api.get.mockResolvedValue([
+      { id: 1, status: 'pending' },
+      { id: 2, status: 'complete' },
+      { id: 3, status: 'running' },
+    ]);
+    const jobs = useJobsStore();
+    await jobs.fetchJobs();
+    expect(jobs.activeCount).toBe(2);
+  });
+
+  it('applies websocket events to the job list and feed', () => {
+    const jobs = useJobsStore();
+    jobs.jobs = [{ id: 5, status: 'pending', type: 'find_manual' }];
+
+    jobs.applyEvent({
+      kind: 'job',
+      event: 'progress',
+      job: { id: 5, type: 'find_manual', status: 'running' },
+      message: 'searching for manual',
+      at: 't1',
+    });
+    expect(jobs.jobs[0].status).toBe('running');
+    expect(jobs.feed[0].message).toBe('searching for manual');
+
+    // A started event for an unknown job is added to the list.
+    jobs.applyEvent({
+      kind: 'job',
+      event: 'started',
+      job: { id: 9, type: 'import', status: 'running' },
+      at: 't2',
+    });
+    expect(jobs.jobs.map((j) => j.id)).toContain(9);
+
+    // Non-job events are ignored.
+    jobs.applyEvent({ kind: 'hello' });
+    expect(jobs.feed).toHaveLength(2);
+  });
+
+  it('caps the feed length', () => {
+    const jobs = useJobsStore();
+    jobs.feedLimit = 5;
+    for (let i = 0; i < 10; i++) {
+      jobs.applyEvent({ kind: 'job', event: 'progress', job: { id: i, type: 't' }, message: `${i}` });
+    }
+    expect(jobs.feed).toHaveLength(5);
+    expect(jobs.feed[0].message).toBe('9');
+  });
+
+  it('retry updates the job in place', async () => {
+    api.post.mockResolvedValue({ id: 4, status: 'pending', error: null });
+    const jobs = useJobsStore();
+    jobs.jobs = [{ id: 4, status: 'failed', error: 'boom', type: 'find_manual' }];
+    await jobs.retry(4);
+    expect(api.post).toHaveBeenCalledWith('/api/jobs/4/retry');
+    expect(jobs.jobs[0].status).toBe('pending');
+  });
+});

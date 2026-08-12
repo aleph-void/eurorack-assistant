@@ -1,0 +1,26 @@
+{
+  "name": "eurorack-web-server",
+  "version": "0.1.0",
+  "description": "Express API for asking LLMs about your eurorack modules",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "node src/index.js",
+    "migrate": "node scripts/migrate.js",
+    "create-admin": "node scripts/create-admin.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2",
+    "pg": "^8.12.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "pg-mem": "^2.8.1",
+    "supertest": "^7.0.0",
+    "vitest": "^2.0.5"
+  }
+}

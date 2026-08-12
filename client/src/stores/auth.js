@@ -1,0 +1,37 @@
+import { defineStore } from 'pinia';
+import { api } from '../api.js';
+
+export const useAuthStore = defineStore('auth', {
+  state: () => ({
+    user: null,
+    loaded: false,
+  }),
+  getters: {
+    isLoggedIn: (state) => !!state.user,
+    isAdmin: (state) => !!state.user?.is_admin,
+  },
+  actions: {
+    async fetchMe() {
+      try {
+        this.user = await api.get('/api/auth/me');
+      } catch {
+        this.user = null;
+      } finally {
+        this.loaded = true;
+      }
+      return this.user;
+    },
+    async login(username, password) {
+      this.user = await api.post('/api/auth/login', { username, password });
+      this.loaded = true;
+      return this.user;
+    },
+    async logout() {
+      try {
+        await api.post('/api/auth/logout');
+      } finally {
+        this.user = null;
+      }
+    },
+  },
+});
