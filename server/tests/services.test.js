@@ -38,16 +38,24 @@ afterEach(() => {
 describe('config service', () => {
   it('returns defaults and persists updates', async () => {
     const db = await createTestDb();
+    const perTypeDefaults = {
+      llm_model_find_manual: '',
+      llm_model_analyze_manual: '',
+      llm_model_scope_question: '',
+      llm_model_answer_question: '',
+    };
     expect(await getConfig(db)).toEqual({
       llm_provider: 'claude',
       llm_model: '',
       import_workers: '4',
+      ...perTypeDefaults,
     });
     await setConfig(db, { llm_provider: 'codex', llm_model: 'gpt-5.1' });
     expect(await getConfig(db)).toEqual({
       llm_provider: 'codex',
       llm_model: 'gpt-5.1',
       import_workers: '4',
+      ...perTypeDefaults,
     });
     await setConfig(db, { llm_model: '' });
     expect((await getLlmSettings(db)).model).toBe('gpt-5.1-codex');
@@ -65,6 +73,19 @@ describe('config service', () => {
     const db = await createTestDb();
     const settings = await getLlmSettings(db);
     expect(settings).toEqual({ provider: 'claude', model: 'claude-fable-5' });
+  });
+
+  it('resolves per-job-type model overrides', async () => {
+    const db = await createTestDb();
+    await setConfig(db, { llm_model_find_manual: 'claude-haiku-4-5' });
+    expect((await getLlmSettings(db, 'find_manual')).model).toBe('claude-haiku-4-5');
+    // Other types fall back to the global model, then the provider default.
+    expect((await getLlmSettings(db, 'analyze_manual')).model).toBe('claude-fable-5');
+    await setConfig(db, { llm_model: 'claude-sonnet-5' });
+    expect((await getLlmSettings(db, 'analyze_manual')).model).toBe('claude-sonnet-5');
+    expect((await getLlmSettings(db, 'find_manual')).model).toBe('claude-haiku-4-5');
+    // Non-LLM job types (import, export_rack) have no override key.
+    expect((await getLlmSettings(db, 'import')).model).toBe('claude-sonnet-5');
   });
 });
 

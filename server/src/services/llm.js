@@ -16,6 +16,10 @@ export const KNOWN_MODELS = {
 
 export const DEFAULT_MODELS = { claude: 'claude-fable-5', codex: 'gpt-5.1-codex' };
 
+// Job types that invoke an LLM backend and accept a per-type model override.
+// (import and export_rack never call the LLM.)
+export const LLM_JOB_TYPES = ['find_manual', 'analyze_manual', 'scope_question', 'answer_question'];
+
 // Runs `cmd args...`, writing `input` to stdin; resolves with stdout.
 export function runCli(cmd, args, input, { timeoutMs = 600000 } = {}) {
   return new Promise((resolve, reject) => {

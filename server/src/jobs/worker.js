@@ -332,7 +332,7 @@ export function createWorker(db, options = {}) {
     try {
       const handler = handlers[job.type];
       if (!handler) throw new Error(`Unknown job type: ${job.type}`);
-      const backend = backendFactory(await getLlmSettings(db));
+      const backend = backendFactory(await getLlmSettings(db, job.type));
       await handler(job, backend, progress);
       const [, doneRows] = await db.models.Job.update(
         { status: 'complete', error: null },

@@ -285,6 +285,40 @@ describe('worker', () => {
     expect(chained[0].status).toBe('pending');
   });
 
+  it('builds the backend with the job type model override', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id);
+    await db.query(
+      "INSERT INTO app_config (key, value) VALUES ('llm_model_find_manual', 'claude-haiku-4-5')"
+    );
+    await enqueueJob(db, 'import', { userId: user.id, payload: { type: 'text', content: 'A,B' } });
+    await enqueue(db, 'find_manual', { module_id: module.id });
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Make Noise',
+        module: 'Maths',
+        pdf_urls: ['https://makenoise.com/maths.pdf'],
+        product_page_url: null,
+      }),
+    });
+    const seen = [];
+    const worker = makeWorker(db, backend, fakeFetch({ 'makenoise.com': { body: PDF_BYTES } }), null, {
+      backendFactory: (settings) => {
+        seen.push(settings);
+        return backend;
+      },
+    });
+    await worker.tick(); // import: no override key, global default applies
+    await worker.tick(); // find_manual: per-type override applies
+
+    expect(seen).toEqual([
+      { provider: 'claude', model: 'claude-fable-5' },
+      { provider: 'claude', model: 'claude-haiku-4-5' },
+    ]);
+  });
+
   it('find_manual falls back to rendering the product page as a PDF', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });

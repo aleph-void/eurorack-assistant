@@ -410,6 +410,28 @@ describe('config API', () => {
     expect(res.body.import_workers).toBe('4');
     expect(res.body.providers).toEqual(['claude', 'codex']);
     expect(res.body.known_models.claude).toContain('claude-fable-5');
+    expect(res.body.llm_job_types).toEqual([
+      'find_manual',
+      'analyze_manual',
+      'scope_question',
+      'answer_question',
+    ]);
+    expect(res.body.llm_model_find_manual).toBe('');
+  });
+
+  it('updates per-job-type models', async () => {
+    const { app, adminCookie } = await createTestApp();
+    const res = await request(app)
+      .put('/api/config')
+      .set('Cookie', adminCookie)
+      .send({ llm_model_find_manual: 'claude-haiku-4-5', llm_model_scope_question: 'claude-sonnet-5' });
+    expect(res.status).toBe(200);
+    expect(res.body.llm_model_find_manual).toBe('claude-haiku-4-5');
+
+    const again = await request(app).get('/api/config').set('Cookie', adminCookie);
+    expect(again.body.llm_model_find_manual).toBe('claude-haiku-4-5');
+    expect(again.body.llm_model_scope_question).toBe('claude-sonnet-5');
+    expect(again.body.llm_model_analyze_manual).toBe('');
   });
 
   it('updates import_workers and rejects non-integer values', async () => {

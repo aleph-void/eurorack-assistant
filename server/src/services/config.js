@@ -1,9 +1,12 @@
-import { PROVIDERS, DEFAULT_MODELS } from './llm.js';
+import { PROVIDERS, DEFAULT_MODELS, LLM_JOB_TYPES } from './llm.js';
 
 export const CONFIG_DEFAULTS = {
   llm_provider: 'claude',
   llm_model: '',
   import_workers: '4',
+  // Per-job-type model overrides (llm_model_find_manual, ...); blank falls
+  // back to the global llm_model.
+  ...Object.fromEntries(LLM_JOB_TYPES.map((type) => [`llm_model_${type}`, ''])),
 };
 
 export const DEFAULT_IMPORT_WORKERS = Number(CONFIG_DEFAULTS.import_workers);
@@ -46,12 +49,13 @@ export async function getImportWorkerCount(db) {
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_IMPORT_WORKERS;
 }
 
-// Provider/model pair for creating an LLM backend; empty model falls back to
-// the provider default.
-export async function getLlmSettings(db) {
+// Provider/model pair for creating an LLM backend. Resolution order: the
+// job type's override, then the global llm_model, then the provider default.
+export async function getLlmSettings(db, jobType = null) {
   const config = await getConfig(db);
+  const override = jobType ? config[`llm_model_${jobType}`] : '';
   return {
     provider: config.llm_provider,
-    model: config.llm_model || DEFAULT_MODELS[config.llm_provider] || null,
+    model: override || config.llm_model || DEFAULT_MODELS[config.llm_provider] || null,
   };
 }

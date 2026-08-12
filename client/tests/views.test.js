@@ -934,9 +934,14 @@ describe('ConfigView', () => {
     llm_provider: 'claude',
     llm_model: '',
     import_workers: '4',
+    llm_model_find_manual: '',
+    llm_model_analyze_manual: 'claude-haiku-4-5',
+    llm_model_scope_question: '',
+    llm_model_answer_question: '',
     providers: ['claude', 'codex'],
     known_models: { claude: ['claude-fable-5'], codex: ['gpt-5.1-codex'] },
     default_models: { claude: 'claude-fable-5', codex: 'gpt-5.1-codex' },
+    llm_job_types: ['find_manual', 'analyze_manual', 'scope_question', 'answer_question'],
   };
 
   it('loads current config and saves changes', async () => {
@@ -946,9 +951,13 @@ describe('ConfigView', () => {
     await flushPromises();
     expect(wrapper.find('[data-test="provider"]').element.value).toBe('claude');
     expect(wrapper.find('[data-test="import-workers"]').element.value).toBe('4');
+    // Per-job-type model fields are populated from the config response.
+    expect(wrapper.find('[data-test="model-analyze_manual"]').element.value).toBe('claude-haiku-4-5');
+    expect(wrapper.find('[data-test="model-find_manual"]').element.value).toBe('');
 
     await wrapper.find('[data-test="provider"]').setValue('codex');
     await wrapper.find('[data-test="model"]').setValue('gpt-5.1-codex');
+    await wrapper.find('[data-test="model-find_manual"]').setValue('gpt-5.1-codex-mini');
     await wrapper.find('[data-test="import-workers"]').setValue('6');
     await wrapper.find('form').trigger('submit');
     await flushPromises();
@@ -956,6 +965,10 @@ describe('ConfigView', () => {
       llm_provider: 'codex',
       llm_model: 'gpt-5.1-codex',
       import_workers: 6,
+      llm_model_find_manual: 'gpt-5.1-codex-mini',
+      llm_model_analyze_manual: 'claude-haiku-4-5',
+      llm_model_scope_question: '',
+      llm_model_answer_question: '',
     });
     expect(wrapper.find('[data-test="saved"]').exists()).toBe(true);
   });

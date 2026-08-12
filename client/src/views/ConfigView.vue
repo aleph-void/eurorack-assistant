@@ -10,8 +10,11 @@ const error = ref('');
 const saved = ref(false);
 const busy = ref(false);
 
+const jobModels = ref({});
+
 const knownModels = computed(() => config.value?.known_models?.[provider.value] || []);
 const defaultModel = computed(() => config.value?.default_models?.[provider.value] || '');
+const jobTypes = computed(() => config.value?.llm_job_types || []);
 
 onMounted(async () => {
   try {
@@ -19,6 +22,9 @@ onMounted(async () => {
     provider.value = config.value.llm_provider;
     model.value = config.value.llm_model;
     importWorkers.value = Number(config.value.import_workers);
+    for (const type of config.value.llm_job_types || []) {
+      jobModels.value[type] = config.value[`llm_model_${type}`] || '';
+    }
   } catch (e) {
     error.value = e.message;
   }
@@ -33,6 +39,7 @@ async function save() {
       llm_provider: provider.value,
       llm_model: model.value,
       import_workers: importWorkers.value,
+      ...Object.fromEntries(jobTypes.value.map((type) => [`llm_model_${type}`, jobModels.value[type] || ''])),
     })) };
     saved.value = true;
   } catch (e) {
@@ -63,6 +70,14 @@ async function save() {
       <datalist id="known-models">
         <option v-for="m in knownModels" :key="m" :value="m" />
       </datalist>
+
+      <fieldset v-if="jobTypes.length">
+        <legend>Model per job type (blank = model above)</legend>
+        <template v-for="t in jobTypes" :key="t">
+          <label :for="`model-${t}`">{{ t.replaceAll('_', ' ') }}</label>
+          <input :id="`model-${t}`" v-model="jobModels[t]" :data-test="`model-${t}`" list="known-models" />
+        </template>
+      </fieldset>
 
       <label for="import-workers">Import job workers (jobs processed in parallel)</label>
       <input
