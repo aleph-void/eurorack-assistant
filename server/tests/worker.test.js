@@ -6,6 +6,7 @@ import {
   createTestDb,
   createUser,
   insertModule,
+  mapModule,
   fakeBackend,
   fakeFetch,
   PDF_BYTES,
@@ -63,10 +64,13 @@ describe('worker', () => {
     const { rows: modules } = await db.query('SELECT * FROM modules ORDER BY manufacturer');
     expect(modules).toHaveLength(2);
     const { rows: mappings } = await db.query(
-      'SELECT * FROM user_modules WHERE user_id = $1',
+      'SELECT rm.* FROM rack_modules rm JOIN racks r ON r.id = rm.rack_id WHERE r.user_id = $1',
       [user.id]
     );
     expect(mappings).toHaveLength(2);
+    // Without a rack in the payload, modules land in the default rack.
+    const { rows: racks } = await db.query('SELECT name FROM racks WHERE user_id = $1', [user.id]);
+    expect(racks.map((r) => r.name)).toEqual(['main rack']);
 
     const { rows: jobs } = await db.query(
       "SELECT * FROM jobs WHERE type = 'find_manual' AND status = 'pending'"
@@ -115,7 +119,7 @@ describe('worker', () => {
 
     const { rows: modules } = await db.query('SELECT * FROM modules');
     expect(modules).toHaveLength(1);
-    const { rows: mappings } = await db.query('SELECT quantity FROM user_modules');
+    const { rows: mappings } = await db.query('SELECT quantity FROM rack_modules');
     expect(mappings[0].quantity).toBe(2);
     const { rows: finds } = await db.query("SELECT * FROM jobs WHERE type = 'find_manual'");
     expect(finds).toHaveLength(1);
@@ -193,7 +197,9 @@ describe('worker', () => {
     // u2 is mapped to the same shared module and a fresh search job is queued.
     const { rows: modules } = await db.query('SELECT * FROM modules');
     expect(modules).toHaveLength(1);
-    const { rows: mappings } = await db.query('SELECT user_id FROM user_modules ORDER BY user_id');
+    const { rows: mappings } = await db.query(
+      'SELECT r.user_id FROM rack_modules rm JOIN racks r ON r.id = rm.rack_id ORDER BY r.user_id'
+    );
     expect(mappings.map((m) => m.user_id)).toEqual([u1.id, u2.id]);
     const { rows: finds } = await db.query("SELECT * FROM jobs WHERE type = 'find_manual'");
     expect(finds).toHaveLength(1);
@@ -206,10 +212,7 @@ describe('worker', () => {
     fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
     const module = await insertModule(db, u1.id, { manual_hash: PDF_HASH });
     // u2 has the same shared module, but u1 triggered the job.
-    await db.query('INSERT INTO user_modules (user_id, module_id) VALUES ($1, $2)', [
-      u2.id,
-      module.id,
-    ]);
+    await mapModule(db, u2.id, module.id);
     await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: u1.id });
 
     const bus = createBus();

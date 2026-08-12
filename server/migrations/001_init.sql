@@ -21,8 +21,8 @@ CREATE TABLE app_config (
 );
 
 -- Modules are shared records: the manual and its analysis are found once and
--- reused by every user who has the module. user_modules maps users to the
--- modules in their systems (with their per-user quantity).
+-- reused by every user who has the module. rack_modules maps racks to the
+-- modules in them (with a per-rack quantity).
 CREATE TABLE modules (
   id SERIAL PRIMARY KEY,
   manufacturer TEXT NOT NULL,
@@ -60,12 +60,25 @@ CREATE INDEX manuals_hash_idx ON manuals (hash);
 -- revised manual (new hash) may coexist under the same name.
 CREATE UNIQUE INDEX manuals_module_name_hash_uidx ON manuals (module_id, name, hash);
 
-CREATE TABLE user_modules (
+-- A user's racks. Modules live in racks (not directly on users): each user
+-- has any number of named racks, and the same shared module record can appear
+-- in many racks. Imports target a rack by name ('main rack' by default).
+-- Racks are strictly private to their owner.
+CREATE TABLE racks (
+  id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, name)
+);
+
+CREATE TABLE rack_modules (
+  rack_id INTEGER NOT NULL REFERENCES racks(id) ON DELETE CASCADE,
   module_id INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
   quantity INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (user_id, module_id)
+  PRIMARY KEY (rack_id, module_id)
 );
 
 CREATE TABLE module_components (

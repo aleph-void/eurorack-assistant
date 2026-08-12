@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
-import { createTestApp, insertModule, PDF_BYTES, PDF_HASH } from './helpers.js';
+import { createTestApp, insertModule, mapModule, PDF_BYTES, PDF_HASH } from './helpers.js';
 
 describe('modules API', () => {
   it('lists only the current user’s modules', async () => {
@@ -97,10 +97,7 @@ describe('module documents API', () => {
     );
     // Another user's private document on the same shared module.
     const { rows: admin } = await db.query("SELECT id FROM users WHERE username = 'admin'");
-    await db.query('INSERT INTO user_modules (user_id, module_id) VALUES ($1, $2)', [
-      admin[0].id,
-      module.id,
-    ]);
+    await mapModule(db, admin[0].id, module.id);
     await db.query(
       `INSERT INTO manuals (module_id, user_id, hash, source)
        VALUES ($1, $2, '${SECRET_HASH}', 'upload')`,
@@ -470,7 +467,7 @@ describe('questions API', () => {
   async function withScopedQuestion() {
     const fixture = await withModules();
     const { rows: modules } = await fixture.db.query(
-      'SELECT module_id AS id FROM user_modules WHERE user_id = $1',
+      'SELECT rm.module_id AS id FROM rack_modules rm JOIN racks r ON r.id = rm.rack_id WHERE r.user_id = $1',
       [fixture.alice.id]
     );
     const { rows: q } = await fixture.db.query(
@@ -703,7 +700,7 @@ describe('questions API', () => {
   it('lists own questions newest first and shows detail with linked modules', async () => {
     const { app, db, aliceCookie, alice } = await withModules();
     const { rows: modules } = await db.query(
-      'SELECT module_id AS id FROM user_modules WHERE user_id = $1',
+      'SELECT rm.module_id AS id FROM rack_modules rm JOIN racks r ON r.id = rm.rack_id WHERE r.user_id = $1',
       [alice.id]
     );
     const { rows: q } = await db.query(
@@ -730,7 +727,7 @@ describe('questions API', () => {
   it('includes the specific jacks linked to a question', async () => {
     const { app, db, aliceCookie, alice } = await withModules();
     const { rows: modules } = await db.query(
-      'SELECT module_id AS id FROM user_modules WHERE user_id = $1',
+      'SELECT rm.module_id AS id FROM rack_modules rm JOIN racks r ON r.id = rm.rack_id WHERE r.user_id = $1',
       [alice.id]
     );
     const { rows: jack } = await db.query(
@@ -817,10 +814,7 @@ describe('jobs API', () => {
       .send({ username: 'bob', password: 'password123' });
     const bobCookie = bobLogin.headers['set-cookie'][0].split(';')[0];
     const { rows: bob } = await db.query("SELECT id FROM users WHERE username = 'bob'");
-    await db.query('INSERT INTO user_modules (user_id, module_id) VALUES ($1, $2)', [
-      bob[0].id,
-      module.id,
-    ]);
+    await mapModule(db, bob[0].id, module.id);
 
     const bobList = await request(app).get('/api/jobs').set('Cookie', bobCookie);
     expect(bobList.body).toHaveLength(0);

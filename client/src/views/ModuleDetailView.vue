@@ -156,6 +156,11 @@ onMounted(load);
         analysis: {{ module.analysis_status }}
       </span>
     </p>
+    <p v-if="module.racks?.length" data-test="racks">
+      In {{ module.racks.length === 1 ? 'rack' : 'racks' }}:
+      {{ module.racks.map((r) => `${r.name} (×${r.quantity})`).join(', ') }}
+      — <RouterLink to="/racks">manage racks</RouterLink>
+    </p>
 
     <div v-if="module.summary" class="panel" data-test="summary">
       <h2>Summary</h2>

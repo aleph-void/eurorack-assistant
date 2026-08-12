@@ -9,6 +9,7 @@ import { createDatabase } from '../src/db/index.js';
 import { migrate } from '../src/db/migrate.js';
 import { createApp } from '../src/app.js';
 import { hashPassword } from '../src/auth.js';
+import { DEFAULT_RACK_NAME, findOrCreateRack } from '../src/services/racks.js';
 
 // pg-mem hands timestamps to Sequelize as strings moment can only parse via
 // its js-Date fallback; the resulting deprecation warning would spam the run.
@@ -58,13 +59,15 @@ export async function createTestApp() {
   return { db, app, manualsDir, adminCookie, aliceCookie };
 }
 
-// Creates a shared module record, maps it into userId's system, and (when
+// Creates a shared module record, maps it into one of userId's racks (their
+// 'main rack' unless `rack` names another, created on demand), and (when
 // manual_hash is given) records it as the shared auto-found manual.
 export async function insertModule(db, userId, fields = {}) {
   const {
     manufacturer = 'Make Noise',
     name = 'Maths',
     quantity = 1,
+    rack = DEFAULT_RACK_NAME,
     manual_hash = null,
     manual_status = manual_hash ? 'found' : 'pending',
     analysis_status = 'pending',
@@ -77,8 +80,11 @@ export async function insertModule(db, userId, fields = {}) {
     analysis_status,
     summary,
   });
+  let rackId = null;
   if (userId) {
-    await db.models.UserModule.create({ user_id: userId, module_id: module.id, quantity });
+    const rackRow = await findOrCreateRack(db, userId, rack);
+    rackId = rackRow.id;
+    await db.models.RackModule.create({ rack_id: rackId, module_id: module.id, quantity });
   }
   if (manual_hash) {
     await db.models.Manual.create({
@@ -88,7 +94,16 @@ export async function insertModule(db, userId, fields = {}) {
       source: 'found',
     });
   }
-  return { ...module.get({ plain: true }), quantity };
+  return { ...module.get({ plain: true }), quantity, rack_id: rackId };
+}
+
+// Maps an existing shared module into one of userId's racks (their 'main
+// rack' unless `rack` names another, created on demand).
+export async function mapModule(db, userId, moduleId, fields = {}) {
+  const { rack = DEFAULT_RACK_NAME, quantity = 1 } = fields;
+  const rackRow = await findOrCreateRack(db, userId, rack);
+  await db.models.RackModule.create({ rack_id: rackRow.id, module_id: moduleId, quantity });
+  return rackRow.get({ plain: true });
 }
 
 // A minimal-but-valid PDF file body, and its content hash (documents are

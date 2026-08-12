@@ -8,6 +8,7 @@ const jobs = useJobsStore();
 const mode = ref('text');
 const content = ref('');
 const url = ref('');
+const rack = ref('main rack');
 const error = ref('');
 const queuedJobId = ref(null);
 const busy = ref(false);
@@ -26,8 +27,8 @@ async function submit() {
   try {
     const body =
       mode.value === 'modulargrid'
-        ? { type: 'modulargrid', url: url.value }
-        : { type: mode.value, content: content.value };
+        ? { type: 'modulargrid', url: url.value, rack: rack.value }
+        : { type: mode.value, content: content.value, rack: rack.value };
     const res = await api.post('/api/imports', body);
     queuedJobId.value = res.job_id;
   } catch (e) {
@@ -49,6 +50,10 @@ async function submit() {
           <option value="csv">CSV file</option>
           <option value="modulargrid">ModularGrid rack URL</option>
         </select>
+      </div>
+      <div>
+        <label for="rack">Into rack</label>
+        <input id="rack" v-model="rack" data-test="rack" placeholder="main rack" />
       </div>
     </div>
 

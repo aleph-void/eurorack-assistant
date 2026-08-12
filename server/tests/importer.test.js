@@ -116,44 +116,76 @@ describe('fetchModulargridRack', () => {
 });
 
 describe('importModules', () => {
-  it('creates new module rows and increments the user quantity for duplicates', async () => {
+  it('creates new module rows and increments the rack quantity for duplicates', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u1' });
 
-    const first = await importModules(db, user.id, [
+    const first = await importModules(db, user.id, 'main rack', [
       { manufacturer: 'Make Noise', name: 'Maths', quantity: 1 },
     ]);
-    expect(first[0].created).toBe(true);
-    expect(first[0].added).toBe(true);
-    expect(first[0].quantity).toBe(1);
+    expect(first.rack.name).toBe('main rack');
+    expect(first.results[0].created).toBe(true);
+    expect(first.results[0].added).toBe(true);
+    expect(first.results[0].quantity).toBe(1);
 
-    const second = await importModules(db, user.id, [
+    // The rack name matches case-insensitively — no duplicate rack.
+    const second = await importModules(db, user.id, 'Main Rack', [
       { manufacturer: 'make noise', name: 'MATHS', quantity: 2 },
     ]);
-    expect(second[0].created).toBe(false);
-    expect(second[0].added).toBe(false);
-    expect(second[0].quantity).toBe(3);
-    expect(second[0].module.id).toBe(first[0].module.id);
+    expect(second.rack.id).toBe(first.rack.id);
+    expect(second.results[0].created).toBe(false);
+    expect(second.results[0].added).toBe(false);
+    expect(second.results[0].quantity).toBe(3);
+    expect(second.results[0].module.id).toBe(first.results[0].module.id);
 
     const { rows: modules } = await db.query('SELECT * FROM modules');
     expect(modules).toHaveLength(1);
+    const { rows: racks } = await db.query('SELECT * FROM racks');
+    expect(racks).toHaveLength(1);
   });
 
-  it('shares one module record between users, with per-user quantities', async () => {
+  it('shares one module record between users, with per-rack quantities', async () => {
     const db = await createTestDb();
     const u1 = await createUser(db, { username: 'u1' });
     const u2 = await createUser(db, { username: 'u2' });
-    const r1 = await importModules(db, u1.id, [{ manufacturer: 'ALM', name: 'Pam', quantity: 1 }]);
-    const r2 = await importModules(db, u2.id, [{ manufacturer: 'ALM', name: 'Pam', quantity: 2 }]);
+    const r1 = await importModules(db, u1.id, 'main rack', [
+      { manufacturer: 'ALM', name: 'Pam', quantity: 1 },
+    ]);
+    const r2 = await importModules(db, u2.id, 'main rack', [
+      { manufacturer: 'ALM', name: 'Pam', quantity: 2 },
+    ]);
 
-    // One shared module record, two user mappings.
-    expect(r2[0].created).toBe(false);
-    expect(r2[0].added).toBe(true);
-    expect(r2[0].module.id).toBe(r1[0].module.id);
+    // One shared module record; each user gets their own rack and mapping.
+    expect(r2.results[0].created).toBe(false);
+    expect(r2.results[0].added).toBe(true);
+    expect(r2.results[0].module.id).toBe(r1.results[0].module.id);
+    expect(r2.rack.id).not.toBe(r1.rack.id);
     const { rows: modules } = await db.query('SELECT * FROM modules');
     expect(modules).toHaveLength(1);
-    const { rows: mappings } = await db.query('SELECT * FROM user_modules ORDER BY user_id');
-    expect(mappings).toHaveLength(2);
+    const { rows: mappings } = await db.query(
+      'SELECT rm.quantity FROM rack_modules rm JOIN racks r ON r.id = rm.rack_id ORDER BY r.user_id'
+    );
+    expect(mappings.map((m) => m.quantity)).toEqual([1, 2]);
+  });
+
+  it('keeps the same module in two racks of one user independently', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u1' });
+    await importModules(db, user.id, 'main rack', [
+      { manufacturer: 'ALM', name: 'Pam', quantity: 1 },
+    ]);
+    const second = await importModules(db, user.id, 'travel case', [
+      { manufacturer: 'ALM', name: 'Pam', quantity: 2 },
+    ]);
+
+    expect(second.results[0].created).toBe(false);
+    expect(second.results[0].added).toBe(true);
+    expect(second.results[0].quantity).toBe(2);
+    const { rows: racks } = await db.query('SELECT * FROM racks ORDER BY id');
+    expect(racks.map((r) => r.name)).toEqual(['main rack', 'travel case']);
+    const { rows: mappings } = await db.query(
+      'SELECT rm.quantity FROM rack_modules rm JOIN racks r ON r.id = rm.rack_id ORDER BY r.id'
+    );
     expect(mappings.map((m) => m.quantity)).toEqual([1, 2]);
   });
 });

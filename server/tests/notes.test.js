@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
-import { createTestApp, insertModule } from './helpers.js';
+import { createTestApp, insertModule, mapModule } from './helpers.js';
 
 // Fixture: alice has a module with two components; admin has their own module.
 async function withNotesFixture() {
@@ -168,10 +168,7 @@ describe('notes API', () => {
     expect(componentNote.component_id).toBe(components[1].id);
 
     // Admin also maps the shared module — but must not see alice's notes.
-    await db.query('INSERT INTO user_modules (user_id, module_id) VALUES ($1, $2)', [
-      admin.id,
-      module.id,
-    ]);
+    await mapModule(db, admin.id, module.id);
     const adminDetail = await request(app)
       .get(`/api/modules/${module.id}`)
       .set('Cookie', adminCookie);

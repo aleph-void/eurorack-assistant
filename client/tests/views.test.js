@@ -20,6 +20,7 @@ import { api } from '../src/api.js';
 import LoginView from '../src/views/LoginView.vue';
 import ModulesView from '../src/views/ModulesView.vue';
 import ModuleDetailView from '../src/views/ModuleDetailView.vue';
+import RacksView from '../src/views/RacksView.vue';
 import ImportView from '../src/views/ImportView.vue';
 import AskView from '../src/views/AskView.vue';
 import QuestionsView from '../src/views/QuestionsView.vue';
@@ -63,36 +64,76 @@ describe('LoginView', () => {
 });
 
 describe('ModulesView', () => {
-  it('renders the module table with status badges', async () => {
-    api.get.mockResolvedValue([
+  const racksResponse = [
+    { id: 1, name: 'main rack', module_count: 1 },
+    { id: 2, name: 'travel case', module_count: 0 },
+  ];
+
+  // ModulesView loads the rack list and the (optionally rack-scoped) modules.
+  function mockLists(modules) {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/racks' ? racksResponse : modules)
+    );
+  }
+
+  it('renders the module table with status badges and rack placements', async () => {
+    mockLists([
       {
         id: 1,
         manufacturer: 'Make Noise',
         name: 'Maths',
         quantity: 2,
+        racks: [{ id: 1, name: 'main rack', quantity: 2 }],
         manual_status: 'found',
         analysis_status: 'complete',
       },
     ]);
     const wrapper = mount(ModulesView, { global: testGlobal() });
     await flushPromises();
+    expect(api.get).toHaveBeenCalledWith('/api/modules');
     const row = wrapper.find('[data-test="module-1"]');
     expect(row.text()).toContain('Make Noise');
     expect(row.text()).toContain('Maths');
+    expect(row.text()).toContain('main rack');
     expect(row.text()).toContain('found');
     expect(row.text()).toContain('complete');
   });
 
   it('shows the empty state', async () => {
-    api.get.mockResolvedValue([]);
+    mockLists([]);
     const wrapper = mount(ModulesView, { global: testGlobal() });
     await flushPromises();
     expect(wrapper.text()).toContain('No modules yet');
   });
 
-  it('deletes a module after confirmation', async () => {
-    api.get.mockResolvedValue([
-      { id: 1, manufacturer: 'ALM', name: 'Pam', quantity: 1, manual_status: 'pending', analysis_status: 'pending' },
+  it('narrows the list to the selected rack', async () => {
+    mockLists([
+      { id: 1, manufacturer: 'ALM', name: 'Pam', quantity: 1, racks: [], manual_status: 'pending', analysis_status: 'pending' },
+    ]);
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="rack-select"]').setValue(2);
+    await flushPromises();
+    expect(api.get).toHaveBeenCalledWith('/api/modules?rack_id=2');
+  });
+
+  it('moves a module to another rack from the rack-scoped view', async () => {
+    mockLists([
+      { id: 1, manufacturer: 'ALM', name: 'Pam', quantity: 1, racks: [], manual_status: 'pending', analysis_status: 'pending' },
+    ]);
+    api.post.mockResolvedValue({ ok: true });
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="rack-select"]').setValue(1);
+    await flushPromises();
+    await wrapper.find('[data-test="move-1"]').setValue(2);
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/racks/1/modules/1/move', { to_rack_id: 2 });
+  });
+
+  it('deletes a module after confirmation, scoped to the selected rack', async () => {
+    mockLists([
+      { id: 1, manufacturer: 'ALM', name: 'Pam', quantity: 1, racks: [], manual_status: 'pending', analysis_status: 'pending' },
     ]);
     api.delete.mockResolvedValue({ ok: true });
     vi.stubGlobal('confirm', vi.fn(() => true));
@@ -101,7 +142,65 @@ describe('ModulesView', () => {
     await wrapper.find('[data-test="module-1"] button').trigger('click');
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/modules/1');
+
+    await wrapper.find('[data-test="rack-select"]').setValue(1);
+    await flushPromises();
+    await wrapper.find('[data-test="module-1"] button.danger').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1?rack_id=1');
     expect(wrapper.find('[data-test="module-1"]').exists()).toBe(false);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('RacksView', () => {
+  const racksResponse = [
+    { id: 1, name: 'main rack', module_count: 3 },
+    { id: 2, name: 'travel case', module_count: 1 },
+  ];
+
+  it('lists racks with module counts and creates a new one', async () => {
+    api.get.mockResolvedValue(racksResponse);
+    api.post.mockResolvedValue({ id: 3, name: 'studio', module_count: 0 });
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="rack-1"]').text()).toContain('main rack');
+    expect(wrapper.find('[data-test="rack-1"]').text()).toContain('3');
+    expect(wrapper.find('[data-test="rack-2"]').text()).toContain('travel case');
+
+    await wrapper.find('[data-test="new-rack"]').setValue('studio');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/racks', { name: 'studio' });
+  });
+
+  it('renames a rack', async () => {
+    api.get.mockResolvedValue(racksResponse);
+    api.put.mockResolvedValue({ id: 2, name: 'live case', module_count: 1 });
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="rename-2"]').trigger('click');
+    await wrapper.find('[data-test="rename-input-2"]').setValue('live case');
+    await wrapper.find('[data-test="rack-2"] form').trigger('submit');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/racks/2', { name: 'live case' });
+  });
+
+  it('deletes a rack after confirmation and surfaces errors', async () => {
+    api.get.mockResolvedValue(racksResponse);
+    api.delete.mockResolvedValue({ ok: true });
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="delete-2"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/racks/2');
+    expect(wrapper.find('[data-test="rack-2"]').exists()).toBe(false);
+
+    api.delete.mockRejectedValue(new Error('nope'));
+    await wrapper.find('[data-test="delete-1"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="error"]').text()).toContain('nope');
     vi.unstubAllGlobals();
   });
 });
@@ -114,6 +213,11 @@ describe('ModuleDetailView', () => {
     manual_status: 'found',
     analysis_status: 'complete',
     summary: 'A dual function generator.',
+    quantity: 3,
+    racks: [
+      { id: 1, name: 'main rack', quantity: 2 },
+      { id: 2, name: 'travel case', quantity: 1 },
+    ],
     manuals: [
       { id: 1, hash: 'a'.repeat(64), name: 'manual', original_name: 'Make_Noise_Maths_Manual.pdf', source: 'found', user_id: null },
       { id: 2, hash: 'b'.repeat(64), name: 'my notes', original_name: 'my-notes.pdf', source: 'upload', user_id: 2 },
@@ -130,6 +234,7 @@ describe('ModuleDetailView', () => {
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
     expect(wrapper.find('[data-test="summary"]').text()).toContain('dual function generator');
+    expect(wrapper.find('[data-test="racks"]').text()).toContain('main rack (×2), travel case (×1)');
     expect(wrapper.find('[data-test="group-input_jack"]').text()).toContain('-10V … 10V');
     expect(wrapper.find('[data-test="group-output_jack"]').text()).toContain('unipolar');
     expect(wrapper.find('[data-test="group-knob"]').text()).toContain('Rise');
@@ -241,6 +346,7 @@ describe('ImportView', () => {
     expect(api.post).toHaveBeenCalledWith('/api/imports', {
       type: 'text',
       content: 'Make Noise,Maths',
+      rack: 'main rack',
     });
     expect(wrapper.find('[data-test="queued"]').text()).toContain('#42');
     expect(wrapper.find('[data-test="feed"]').exists()).toBe(true);
@@ -256,6 +362,21 @@ describe('ImportView', () => {
     expect(api.post).toHaveBeenCalledWith('/api/imports', {
       type: 'modulargrid',
       url: 'https://modulargrid.net/e/racks/view/1',
+      rack: 'main rack',
+    });
+  });
+
+  it('imports into a custom rack name', async () => {
+    api.post.mockResolvedValue({ job_id: 2, status: 'pending' });
+    const wrapper = mount(ImportView, { global: testGlobal() });
+    await wrapper.find('[data-test="rack"]').setValue('travel case');
+    await wrapper.find('[data-test="content"]').setValue('ALM,Pam');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/imports', {
+      type: 'text',
+      content: 'ALM,Pam',
+      rack: 'travel case',
     });
   });
 

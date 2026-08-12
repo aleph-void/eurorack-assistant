@@ -153,10 +153,11 @@ export function createWorker(db, options = {}) {
     if (items.length === 0) throw new Error('No modules found in the input');
 
     progress(`importing ${items.length} module(s)`);
-    const results = await importModules(db, job.user_id, items);
+    const { rack, results } = await importModules(db, job.user_id, payload.rack, items);
+    progress(`importing into rack '${rack.name}'`);
     let queued = 0;
     for (const { module, created, added } of results) {
-      const verb = created ? 'created' : added ? 'added to your system' : 'updated';
+      const verb = created ? 'created' : added ? `added to '${rack.name}'` : 'updated';
       progress(`${verb}: ${module.manufacturer} ${module.name}`.trim());
       if (await enqueueFindManual(db, module, job.user_id)) queued += 1;
     }

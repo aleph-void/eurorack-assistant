@@ -7,47 +7,75 @@ import { isProbablyPdfBuffer, manualPath, sha256Buffer } from '../services/pdf.j
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/data/manuals' } = {}) {
-  const { Module, UserModule, ModuleComponent, Manual, Note, NoteModule, NoteComponent } =
+  const { Module, Rack, RackModule, ModuleComponent, Manual, Note, NoteModule, NoteComponent } =
     db.models;
   const router = Router();
   router.use(requireAuth(db));
 
-  // The user's mapping row for a module, or null if it isn't in their system.
+  // The user's rack mappings for a module (across all their racks), or null
+  // if it isn't in any of them. Returns the module plus its per-rack
+  // placements and the total quantity.
   async function userModule(userId, moduleId) {
-    const mapping = await UserModule.findOne({
-      where: { user_id: userId, module_id: Number(moduleId) },
-      include: Module,
+    const mappings = await RackModule.findAll({
+      where: { module_id: Number(moduleId) },
+      include: [{ model: Rack, where: { user_id: userId } }, Module],
+      order: [[Rack, 'name', 'ASC']],
     });
-    if (!mapping || !mapping.Module) return null;
-    return { ...mapping.Module.get({ plain: true }), quantity: mapping.quantity };
+    if (mappings.length === 0 || !mappings[0].Module) return null;
+    return {
+      ...mappings[0].Module.get({ plain: true }),
+      quantity: mappings.reduce((sum, rm) => sum + rm.quantity, 0),
+      racks: mappings.map((rm) => ({
+        id: rm.Rack.id,
+        name: rm.Rack.name,
+        quantity: rm.quantity,
+      })),
+    };
   }
 
+  // The user's modules, either across all their racks (deduped, quantities
+  // summed) or filtered to one rack via ?rack_id=. Each entry carries its
+  // per-rack placements.
   router.get('/', async (req, res, next) => {
     try {
-      const mappings = await UserModule.findAll({
-        where: { user_id: req.user.id },
-        include: Module,
+      const rackWhere = { user_id: req.user.id };
+      if (req.query.rack_id) {
+        const rack = await Rack.findOne({
+          where: { id: Number(req.query.rack_id), user_id: req.user.id },
+        });
+        if (!rack) return res.status(404).json({ error: 'Rack not found' });
+        rackWhere.id = rack.id;
+      }
+      const mappings = await RackModule.findAll({
+        include: [{ model: Rack, where: rackWhere }, Module],
         order: [
           [Module, 'manufacturer', 'ASC'],
           [Module, 'name', 'ASC'],
+          [Rack, 'name', 'ASC'],
         ],
       });
-      res.json(
-        mappings.map((um) => {
-          const m = um.Module;
-          return {
+      const byModule = new Map();
+      for (const rm of mappings) {
+        const m = rm.Module;
+        if (!byModule.has(m.id)) {
+          byModule.set(m.id, {
             id: m.id,
             manufacturer: m.manufacturer,
             name: m.name,
-            quantity: um.quantity,
+            quantity: 0,
+            racks: [],
             manual_status: m.manual_status,
             analysis_status: m.analysis_status,
             summary: m.summary,
             created_at: m.created_at,
             updated_at: m.updated_at,
-          };
-        })
-      );
+          });
+        }
+        const entry = byModule.get(m.id);
+        entry.quantity += rm.quantity;
+        entry.racks.push({ id: rm.Rack.id, name: rm.Rack.name, quantity: rm.quantity });
+      }
+      res.json([...byModule.values()]);
     } catch (e) {
       next(e);
     }
@@ -109,13 +137,20 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
     }
   });
 
-  // Removing a module removes it from *your* system only; the shared module
-  // record (manual, analysis) remains for other users.
+  // Removing a module removes it from *your* racks only (one rack when
+  // ?rack_id= is given, otherwise all of them); the shared module record
+  // (manual, analysis) remains for other users.
   router.delete('/:id', async (req, res, next) => {
     try {
-      const deleted = await UserModule.destroy({
-        where: { user_id: req.user.id, module_id: Number(req.params.id) },
-      });
+      const rackWhere = { user_id: req.user.id };
+      if (req.query.rack_id) rackWhere.id = Number(req.query.rack_id);
+      const racks = await Rack.findAll({ where: rackWhere });
+      const deleted =
+        racks.length === 0
+          ? 0
+          : await RackModule.destroy({
+              where: { rack_id: racks.map((r) => r.id), module_id: Number(req.params.id) },
+            });
       if (deleted === 0) return res.status(404).json({ error: 'Module not found' });
       res.json({ ok: true });
     } catch (e) {

@@ -72,14 +72,25 @@ export function defineModels(sequelize) {
     { tableName: 'manuals', createdAt: 'created_at', updatedAt: false }
   );
 
-  const UserModule = define(
-    'UserModule',
+  // A user's racks; modules are mapped into racks, not directly onto users.
+  const Rack = define(
+    'Rack',
     {
-      user_id: { type: DataTypes.INTEGER, primaryKey: true },
+      id,
+      user_id: { type: DataTypes.INTEGER, allowNull: false },
+      name: { type: DataTypes.TEXT, allowNull: false },
+    },
+    { tableName: 'racks', createdAt: 'created_at', updatedAt: 'updated_at' }
+  );
+
+  const RackModule = define(
+    'RackModule',
+    {
+      rack_id: { type: DataTypes.INTEGER, primaryKey: true },
       module_id: { type: DataTypes.INTEGER, primaryKey: true },
       quantity: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
     },
-    { tableName: 'user_modules', createdAt: 'created_at', updatedAt: false }
+    { tableName: 'rack_modules', createdAt: 'created_at', updatedAt: false }
   );
 
   const ModuleComponent = define(
@@ -207,8 +218,13 @@ export function defineModels(sequelize) {
   // which produce flat joins.
   Session.belongsTo(User, { foreignKey: 'user_id' });
 
-  Module.hasMany(UserModule, { foreignKey: 'module_id' });
-  UserModule.belongsTo(Module, { foreignKey: 'module_id' });
+  Rack.belongsTo(User, { foreignKey: 'user_id' });
+  User.hasMany(Rack, { foreignKey: 'user_id' });
+
+  Rack.hasMany(RackModule, { foreignKey: 'rack_id' });
+  RackModule.belongsTo(Rack, { foreignKey: 'rack_id' });
+  Module.hasMany(RackModule, { foreignKey: 'module_id' });
+  RackModule.belongsTo(Module, { foreignKey: 'module_id' });
 
   Module.hasMany(Manual, { foreignKey: 'module_id' });
   Manual.belongsTo(Module, { foreignKey: 'module_id' });
@@ -254,7 +270,8 @@ export function defineModels(sequelize) {
     AppConfig,
     Module,
     Manual,
-    UserModule,
+    Rack,
+    RackModule,
     ModuleComponent,
     Note,
     NoteModule,

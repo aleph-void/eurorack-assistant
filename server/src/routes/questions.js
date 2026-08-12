@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import { Op } from 'sequelize';
 import { requireAuth } from '../auth.js';
+import { userModuleIds } from '../services/racks.js';
 
 // Positive integer ids from a client-supplied array, deduped.
 function uniqueIds(value) {
@@ -29,7 +30,6 @@ export function questionRoutes(db) {
     Note,
     NoteModule,
     NoteComponent,
-    UserModule,
     Job,
   } = db.models;
   const router = Router();
@@ -132,16 +132,18 @@ export function questionRoutes(db) {
       });
       if (!question) return res.status(404).json({ error: 'Question not found' });
 
-      const mappings = await UserModule.findAll({
-        where: { user_id: req.user.id },
-        include: Module,
-        order: [
-          [Module, 'manufacturer', 'ASC'],
-          [Module, 'name', 'ASC'],
-        ],
-      });
-      const rack = mappings.map((um) => um.Module);
-      const rackIds = rack.map((m) => m.id);
+      // Every module across all of the user's racks, deduped.
+      const rackIds = await userModuleIds(db, req.user.id);
+      const rack =
+        rackIds.length === 0
+          ? []
+          : await Module.findAll({
+              where: { id: rackIds },
+              order: [
+                ['manufacturer', 'ASC'],
+                ['name', 'ASC'],
+              ],
+            });
       const scopedLinks = await QuestionModule.findAll({ where: { question_id: question.id } });
       const scopedIds = new Set(scopedLinks.map((l) => l.module_id));
 
@@ -281,8 +283,8 @@ export function questionRoutes(db) {
       const prompt = String(req.body?.prompt || '').trim();
       if (!prompt) return res.status(400).json({ error: 'prompt is required' });
 
-      const moduleCount = await UserModule.count({ where: { user_id: req.user.id } });
-      if (moduleCount === 0) {
+      const ownedIds = await userModuleIds(db, req.user.id);
+      if (ownedIds.length === 0) {
         return res.status(400).json({ error: 'Import some modules before asking questions' });
       }
 
@@ -326,11 +328,9 @@ export function questionRoutes(db) {
       if (moduleIds.length === 0) {
         return res.status(400).json({ error: 'Select at least one module' });
       }
-      const owned = await UserModule.count({
-        where: { user_id: req.user.id, module_id: moduleIds },
-      });
-      if (owned !== moduleIds.length) {
-        return res.status(400).json({ error: 'module_ids must be modules in your system' });
+      const ownedIds = new Set(await userModuleIds(db, req.user.id));
+      if (!moduleIds.every((id) => ownedIds.has(id))) {
+        return res.status(400).json({ error: 'module_ids must be modules in your racks' });
       }
 
       const componentIds = uniqueIds(req.body?.component_ids);

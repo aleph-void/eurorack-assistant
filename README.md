@@ -107,7 +107,8 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | --- | --- |
 | `users` | accounts; `is_admin` flag |
 | `modules` | **shared** module records with `manual_status` / `analysis_status` — the manual is found and analyzed once, for everyone |
-| `user_modules` | maps users to the modules in their system (per-user quantity); "deleting" a module only unlinks it |
+| `racks` | a user's named racks (unique name per user, `main rack` by default); strictly private to their owner |
+| `rack_modules` | maps racks to the modules in them (per-rack quantity); "deleting" a module only unlinks it, and the same module can sit in many racks |
 | `manuals` | PDF documents mapped to modules — `user_id NULL` is the shared auto-found manual; rows with a `user_id` are private documents that user attached to their own module instance |
 | `module_components` | typed components (`input_jack`, `output_jack`, `knob`, `slider`, `button`, `toggle`, `switch`, `display`, `other`) with `voltage_min`/`voltage_max`/`polarity` |
 | `notes` | per-user private notes |

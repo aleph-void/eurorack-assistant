@@ -1,38 +1,37 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
+import { userHasModule } from '../services/racks.js';
 
 // Per-user notes, attachable to any number of the user's modules and module
 // components. Attachments can be added or removed after creation so one note
 // can be reused across modules/components.
 export function noteRoutes(db) {
-  const { Note, NoteModule, NoteComponent, Module, ModuleComponent, UserModule } = db.models;
+  const { Note, NoteModule, NoteComponent, Module, ModuleComponent } = db.models;
   const router = Router();
   router.use(requireAuth(db));
 
-  // Module ids from the user's system only.
+  // Module ids from the user's racks only.
   async function validModuleIds(userId, ids) {
     const out = [];
     for (const raw of ids || []) {
       const id = Number(raw);
-      const mapping = await UserModule.findOne({ where: { user_id: userId, module_id: id } });
-      if (!mapping) return { error: `Module ${raw} is not in your system` };
+      if (!(await userHasModule(db, userId, id))) {
+        return { error: `Module ${raw} is not in your system` };
+      }
       out.push(id);
     }
     return { ids: out };
   }
 
-  // Component ids whose parent module is in the user's system.
+  // Component ids whose parent module is in one of the user's racks.
   async function validComponentIds(userId, ids) {
     const out = [];
     for (const raw of ids || []) {
       const id = Number(raw);
       const component = await ModuleComponent.findByPk(id);
-      const mapping =
-        component &&
-        (await UserModule.findOne({
-          where: { user_id: userId, module_id: component.module_id },
-        }));
-      if (!mapping) return { error: `Component ${raw} is not in your system` };
+      if (!component || !(await userHasModule(db, userId, component.module_id))) {
+        return { error: `Component ${raw} is not in your system` };
+      }
       out.push(id);
     }
     return { ids: out };

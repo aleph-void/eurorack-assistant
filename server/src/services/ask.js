@@ -7,6 +7,7 @@
 
 import { extractJsonArray } from './json.js';
 import { isProbablyPdf, manualPath } from './pdf.js';
+import { userModuleIds } from './racks.js';
 
 export const MAX_MANUALS = 10;
 
@@ -120,17 +121,18 @@ export async function jackComponentsForModules(db, moduleIds) {
 // the user can review the scope and pick attachments before it is answered.
 // An empty scope is not an error — the user adds modules during review.
 export async function scopeQuestion(db, backend, question, { log = () => {} } = {}) {
-  const { Module, UserModule, Question, QuestionModule, QuestionComponent } = db.models;
-  const mappings = await UserModule.findAll({
-    where: { user_id: question.user_id },
-    include: Module,
+  const { Module, Question, QuestionModule, QuestionComponent } = db.models;
+  // Every module across all of the user's racks, deduped.
+  const ownedIds = await userModuleIds(db, question.user_id);
+  if (ownedIds.length === 0) throw new Error('No modules imported yet');
+  const records = await Module.findAll({
+    where: { id: ownedIds },
     order: [
-      [Module, 'manufacturer', 'ASC'],
-      [Module, 'name', 'ASC'],
+      ['manufacturer', 'ASC'],
+      ['name', 'ASC'],
     ],
   });
-  const modules = mappings.map((um) => um.Module.get({ plain: true }));
-  if (modules.length === 0) throw new Error('No modules imported yet');
+  const modules = records.map((m) => m.get({ plain: true }));
 
   const scoped = await determineScope(backend, question.prompt, modules);
   log(
