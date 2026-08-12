@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { useJobsStore } from '../stores/jobs.js';
 
@@ -8,10 +8,32 @@ const jobs = useJobsStore();
 const mode = ref('text');
 const content = ref('');
 const url = ref('');
-const rack = ref('main rack');
+// '' selects "create a new rack"; otherwise the id of an existing rack.
+const NEW_RACK = '';
+const racks = ref([]);
+const rackChoice = ref(NEW_RACK);
+const newRackName = ref('');
 const error = ref('');
 const queuedJobId = ref(null);
 const busy = ref(false);
+
+onMounted(async () => {
+  try {
+    racks.value = (await api.get('/api/racks')) || [];
+  } catch {
+    racks.value = [];
+  }
+  if (racks.value.length > 0) {
+    const main = racks.value.find((r) => r.name.toLowerCase() === 'main rack');
+    rackChoice.value = (main || racks.value[0]).id;
+  }
+});
+
+const rack = computed(() =>
+  rackChoice.value === NEW_RACK
+    ? newRackName.value.trim()
+    : racks.value.find((r) => r.id === rackChoice.value)?.name || ''
+);
 
 const jobFeed = computed(() => jobs.feed.filter((f) => f.jobId != null));
 
@@ -52,8 +74,15 @@ async function submit() {
         </select>
       </div>
       <div>
-        <label for="rack">Into rack</label>
-        <input id="rack" v-model="rack" data-test="rack" placeholder="main rack" />
+        <label for="rack-select">Into rack</label>
+        <select id="rack-select" v-model="rackChoice" data-test="rack-select">
+          <option v-for="r in racks" :key="r.id" :value="r.id">{{ r.name }}</option>
+          <option :value="NEW_RACK">+ Create a new rack…</option>
+        </select>
+      </div>
+      <div v-if="rackChoice === NEW_RACK">
+        <label for="rack">New rack name</label>
+        <input id="rack" v-model="newRackName" data-test="rack" placeholder="main rack" />
       </div>
     </div>
 

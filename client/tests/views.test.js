@@ -337,9 +337,17 @@ describe('ModuleDetailView', () => {
 });
 
 describe('ImportView', () => {
-  it('submits a text import and shows the queued job', async () => {
+  // ImportView loads the user's racks on mount to populate the rack selector.
+  const racksResponse = [
+    { id: 1, name: 'main rack', module_count: 1 },
+    { id: 2, name: 'travel case', module_count: 0 },
+  ];
+
+  it('submits a text import into the default rack and shows the queued job', async () => {
+    api.get.mockResolvedValue(racksResponse);
     api.post.mockResolvedValue({ job_id: 42, status: 'pending' });
     const wrapper = mount(ImportView, { global: testGlobal() });
+    await flushPromises();
     await wrapper.find('[data-test="content"]').setValue('Make Noise,Maths');
     await wrapper.find('form').trigger('submit');
     await flushPromises();
@@ -353,8 +361,10 @@ describe('ImportView', () => {
   });
 
   it('submits a modulargrid import', async () => {
+    api.get.mockResolvedValue(racksResponse);
     api.post.mockResolvedValue({ job_id: 1, status: 'pending' });
     const wrapper = mount(ImportView, { global: testGlobal() });
+    await flushPromises();
     await wrapper.find('[data-test="mode"]').setValue('modulargrid');
     await wrapper.find('[data-test="url"]').setValue('https://modulargrid.net/e/racks/view/1');
     await wrapper.find('form').trigger('submit');
@@ -366,10 +376,12 @@ describe('ImportView', () => {
     });
   });
 
-  it('imports into a custom rack name', async () => {
+  it('imports into a selected existing rack', async () => {
+    api.get.mockResolvedValue(racksResponse);
     api.post.mockResolvedValue({ job_id: 2, status: 'pending' });
     const wrapper = mount(ImportView, { global: testGlobal() });
-    await wrapper.find('[data-test="rack"]').setValue('travel case');
+    await flushPromises();
+    await wrapper.find('[data-test="rack-select"]').setValue(2);
     await wrapper.find('[data-test="content"]').setValue('ALM,Pam');
     await wrapper.find('form').trigger('submit');
     await flushPromises();
@@ -377,6 +389,41 @@ describe('ImportView', () => {
       type: 'text',
       content: 'ALM,Pam',
       rack: 'travel case',
+    });
+  });
+
+  it('creates a new rack to import into', async () => {
+    api.get.mockResolvedValue(racksResponse);
+    api.post.mockResolvedValue({ job_id: 3, status: 'pending' });
+    const wrapper = mount(ImportView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="rack"]').exists()).toBe(false);
+    await wrapper.find('[data-test="rack-select"]').setValue('');
+    await wrapper.find('[data-test="rack"]').setValue('modular on the go');
+    await wrapper.find('[data-test="content"]').setValue('ALM,Pam');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/imports', {
+      type: 'text',
+      content: 'ALM,Pam',
+      rack: 'modular on the go',
+    });
+  });
+
+  it('defaults to creating a new rack when the user has none', async () => {
+    api.get.mockResolvedValue([]);
+    api.post.mockResolvedValue({ job_id: 4, status: 'pending' });
+    const wrapper = mount(ImportView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="rack"]').exists()).toBe(true);
+    await wrapper.find('[data-test="rack"]').setValue('first rack');
+    await wrapper.find('[data-test="content"]').setValue('Make Noise,Maths');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/imports', {
+      type: 'text',
+      content: 'Make Noise,Maths',
+      rack: 'first rack',
     });
   });
 
