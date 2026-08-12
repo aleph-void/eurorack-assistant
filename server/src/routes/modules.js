@@ -164,10 +164,22 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
       }
 
       // Re-uploading a document you already attached references the existing
-      // record instead of creating a duplicate.
+      // record instead of creating a duplicate (the original name is kept).
       const existing = await Manual.findOne({
         where: { module_id: module.id, user_id: req.user.id, hash },
       });
+      // A database name may not be reused for different content (backed by
+      // the unique index on (module_id, name, hash)).
+      if (!existing) {
+        const nameTaken = await Manual.findOne({
+          where: { module_id: module.id, user_id: req.user.id, name },
+        });
+        if (nameTaken) {
+          return res
+            .status(409)
+            .json({ error: `you already have a document named '${name}' on this module` });
+        }
+      }
       const manual =
         existing ||
         (await Manual.create({

@@ -4,8 +4,9 @@
 #
 #   1. Installs Docker (docker.io + docker-compose-v2) on Ubuntu if missing.
 #   2. Installs the LLM provider CLIs (claude, codex) if missing.
-#   3. Asks which provider to use and guides you through authenticating.
-#   4. Generates secrets, builds containers, migrates the database.
+#   3. Generates secrets, builds containers, migrates the database.
+#   4. Asks which provider to use and guides you through authenticating —
+#      skipped entirely when a provider is already configured in the database.
 #   5. Creates the admin account — its random password is printed ONCE below
 #      and stored nowhere else in cleartext.
 set -euo pipefail
@@ -173,8 +174,6 @@ random_hex() {
 
 ensure_docker
 ensure_llm_clis
-choose_provider
-authenticate_provider
 
 if [ ! -f .env ]; then
   cat > .env <<EOF
@@ -199,9 +198,18 @@ done
 info "running database migrations..."
 $DOCKER compose run --rm --no-deps server node scripts/migrate.js
 
-if [ -n "$PROVIDER" ]; then
-  info "setting LLM provider to '$PROVIDER'..."
-  $DOCKER compose run --rm --no-deps server node scripts/set-config.js llm_provider "$PROVIDER"
+# Provider selection is skipped when one is already configured (the raw
+# app_config row, not the built-in default).
+EXISTING_PROVIDER=$($DOCKER compose run --rm --no-deps -T server node scripts/get-config.js llm_provider 2>/dev/null | tail -n 1 | tr -d '[:space:]' || true)
+if [ -n "$EXISTING_PROVIDER" ]; then
+  info "LLM provider already configured ('$EXISTING_PROVIDER'); skipping provider setup."
+else
+  choose_provider
+  authenticate_provider
+  if [ -n "$PROVIDER" ]; then
+    info "setting LLM provider to '$PROVIDER'..."
+    $DOCKER compose run --rm --no-deps server node scripts/set-config.js llm_provider "$PROVIDER"
+  fi
 fi
 
 info "creating the admin account..."
@@ -214,6 +222,6 @@ APP_PORT=$(grep -E '^APP_PORT=' .env | cut -d= -f2)
 echo ""
 info "done — the app is at http://localhost:${APP_PORT:-8080}"
 info "log in with the admin credentials printed above."
-if [ -z "$PROVIDER" ]; then
+if [ -z "$PROVIDER" ] && [ -z "$EXISTING_PROVIDER" ]; then
   info "LLM provider defaults to Claude Code; change it on the admin LLM Config page."
 fi

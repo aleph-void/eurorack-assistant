@@ -19,8 +19,14 @@ export async function ensureAdmin(db, { username = 'admin', reset = false } = {}
 
   const password = generateHexPassword(16);
   if (admin) {
-    await admin.update({ password_hash: hashPassword(password), must_change_password: true });
-    await deleteUserSessions(db, admin.id);
+    // The reset and the session invalidation land atomically.
+    await db.sequelize.transaction(async (transaction) => {
+      await admin.update(
+        { password_hash: hashPassword(password), must_change_password: true },
+        { transaction }
+      );
+      await deleteUserSessions(db, admin.id, { transaction });
+    });
     return { created: false, reset: true, username: admin.username, password };
   }
 

@@ -172,22 +172,31 @@ export async function findManualForModule(db, backend, module, manualsDir, deps 
 
   const hash = await acquireManual(info, manualsDir, { fetchImpl, log });
   if (hash) {
-    // A document with this content is already recorded for the module:
-    // reference the existing shared (user_id NULL) record instead of
-    // creating a duplicate.
-    const existing = await Manual.findOne({
-      where: { module_id: module.id, user_id: null, hash },
-    });
-    if (!existing) {
-      await Manual.create({
-        module_id: module.id,
-        user_id: null,
-        hash,
-        original_name: safeManualName(info.manufacturer, info.module),
-        source: 'found',
+    // Recording the document and flipping the module's status commit
+    // together. A document with this content already recorded for the module
+    // is referenced instead of duplicated.
+    await db.sequelize.transaction(async (transaction) => {
+      const existing = await Manual.findOne({
+        where: { module_id: module.id, user_id: null, hash },
+        transaction,
       });
-    }
-    await Module.update({ manual_status: 'found' }, { where: { id: module.id } });
+      if (!existing) {
+        await Manual.create(
+          {
+            module_id: module.id,
+            user_id: null,
+            hash,
+            original_name: safeManualName(info.manufacturer, info.module),
+            source: 'found',
+          },
+          { transaction }
+        );
+      }
+      await Module.update(
+        { manual_status: 'found' },
+        { where: { id: module.id }, transaction }
+      );
+    });
     return hash;
   }
   await Module.update({ manual_status: 'failed' }, { where: { id: module.id } });

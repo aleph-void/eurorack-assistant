@@ -74,16 +74,23 @@ export function questionRoutes(db) {
         return res.status(400).json({ error: 'Import some modules before asking questions' });
       }
 
-      const question = await Question.create({
-        user_id: req.user.id,
-        prompt,
-        status: 'pending',
-      });
-      await Job.create({
-        type: 'answer_question',
-        user_id: req.user.id,
-        question_id: question.id,
-        status: 'pending',
+      // The question and the job that answers it are created together — a
+      // question without its job would sit pending forever.
+      const question = await db.sequelize.transaction(async (transaction) => {
+        const created = await Question.create(
+          { user_id: req.user.id, prompt, status: 'pending' },
+          { transaction }
+        );
+        await Job.create(
+          {
+            type: 'answer_question',
+            user_id: req.user.id,
+            question_id: created.id,
+            status: 'pending',
+          },
+          { transaction }
+        );
+        return created;
       });
       res.status(201).json(question);
     } catch (e) {

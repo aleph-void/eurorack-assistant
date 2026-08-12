@@ -39,10 +39,10 @@ export async function deleteSession(db, token) {
 
 // Invalidates every session of a user, optionally sparing one token (so a
 // user changing their own password stays logged in on the current browser).
-export async function deleteUserSessions(db, userId, { exceptToken = null } = {}) {
+export async function deleteUserSessions(db, userId, { exceptToken = null, transaction = null } = {}) {
   const where = { user_id: userId };
   if (exceptToken) where.token = { [Op.ne]: exceptToken };
-  await db.models.Session.destroy({ where });
+  await db.models.Session.destroy({ where, transaction });
 }
 
 export async function getSessionUser(db, token) {

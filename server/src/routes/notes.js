@@ -38,16 +38,22 @@ export function noteRoutes(db) {
     return { ids: out };
   }
 
-  async function attach(noteId, moduleIds, componentIds) {
+  async function attach(noteId, moduleIds, componentIds, transaction) {
     for (const id of moduleIds) {
-      const existing = await NoteModule.findOne({ where: { note_id: noteId, module_id: id } });
-      if (!existing) await NoteModule.create({ note_id: noteId, module_id: id });
+      const existing = await NoteModule.findOne({
+        where: { note_id: noteId, module_id: id },
+        transaction,
+      });
+      if (!existing) await NoteModule.create({ note_id: noteId, module_id: id }, { transaction });
     }
     for (const id of componentIds) {
       const existing = await NoteComponent.findOne({
         where: { note_id: noteId, component_id: id },
+        transaction,
       });
-      if (!existing) await NoteComponent.create({ note_id: noteId, component_id: id });
+      if (!existing) {
+        await NoteComponent.create({ note_id: noteId, component_id: id }, { transaction });
+      }
     }
   }
 
@@ -114,8 +120,16 @@ export function noteRoutes(db) {
       const components = await validComponentIds(req.user.id, req.body?.component_ids);
       if (components.error) return res.status(400).json({ error: components.error });
 
-      const note = await Note.create({ user_id: req.user.id, title, body });
-      await attach(note.id, modules.ids, components.ids);
+      // The note and its attachments are written across three tables; they
+      // commit or roll back together.
+      const note = await db.sequelize.transaction(async (transaction) => {
+        const created = await Note.create(
+          { user_id: req.user.id, title, body },
+          { transaction }
+        );
+        await attach(created.id, modules.ids, components.ids, transaction);
+        return created;
+      });
       res.status(201).json(await noteWithAttachments(note));
     } catch (e) {
       next(e);
@@ -165,7 +179,9 @@ export function noteRoutes(db) {
         return res.status(400).json({ error: 'module_ids or component_ids required' });
       }
 
-      await attach(note.id, modules.ids, components.ids);
+      await db.sequelize.transaction((transaction) =>
+        attach(note.id, modules.ids, components.ids, transaction)
+      );
       res.json(await noteWithAttachments(note));
     } catch (e) {
       next(e);

@@ -89,11 +89,19 @@ export async function analyzeManualForModule(db, backend, module, manualPath) {
   }
 
   const { Module, ModuleComponent } = db.models;
-  await ModuleComponent.destroy({ where: { module_id: module.id } });
-  await ModuleComponent.bulkCreate(components.map((c) => ({ ...c, module_id: module.id })));
-  await Module.update(
-    { summary, analysis_status: 'complete' },
-    { where: { id: module.id } }
-  );
+  // Replacing the component inventory and marking the analysis complete is
+  // one atomic step — a failure mid-way must not leave the module stripped of
+  // its previous components.
+  await db.sequelize.transaction(async (transaction) => {
+    await ModuleComponent.destroy({ where: { module_id: module.id }, transaction });
+    await ModuleComponent.bulkCreate(
+      components.map((c) => ({ ...c, module_id: module.id })),
+      { transaction }
+    );
+    await Module.update(
+      { summary, analysis_status: 'complete' },
+      { where: { id: module.id }, transaction }
+    );
+  });
   return { summary, components };
 }

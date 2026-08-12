@@ -239,6 +239,33 @@ describe('module documents API', () => {
     ).toBe(404);
   });
 
+  it('rejects reusing a database name for different content', async () => {
+    const { app, db, aliceCookie, module } = await withModule();
+    const third = Buffer.concat([PDF_BYTES, Buffer.from('% third\n')]).toString('base64');
+    const first = await request(app)
+      .post(`/api/modules/${module.id}/manuals`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'notes', filename: 'a.pdf', data_base64: otherBase64 });
+    expect(first.status).toBe(201);
+
+    const clash = await request(app)
+      .post(`/api/modules/${module.id}/manuals`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'notes', filename: 'b.pdf', data_base64: third });
+    expect(clash.status).toBe(409);
+    expect(clash.body.error).toMatch(/already have a document named/);
+
+    // The unique index on (module_id, name, hash) also blocks exact
+    // duplicates at the database level.
+    await expect(
+      db.query(
+        `INSERT INTO manuals (module_id, user_id, hash, name, source)
+         VALUES ($1, NULL, '${PDF_HASH}', 'manual', 'found')`,
+        [module.id]
+      )
+    ).rejects.toThrow();
+  });
+
   it("requires a document name and reserves 'manual' for the shared manual", async () => {
     const { app, aliceCookie, module } = await withModule();
     const post = (body) =>

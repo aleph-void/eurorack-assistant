@@ -71,12 +71,21 @@ export function authRoutes(db) {
       if (!user || !verifyPassword(String(current_password), user.password_hash)) {
         return res.status(401).json({ error: 'Current password is incorrect' });
       }
-      await user.update({
-        password_hash: hashPassword(String(new_password)),
-        must_change_password: false,
+      // The new password and the logout of every other browser (the session
+      // making the change survives) land atomically.
+      await db.sequelize.transaction(async (transaction) => {
+        await user.update(
+          {
+            password_hash: hashPassword(String(new_password)),
+            must_change_password: false,
+          },
+          { transaction }
+        );
+        await deleteUserSessions(db, user.id, {
+          exceptToken: req.cookies?.[SESSION_COOKIE],
+          transaction,
+        });
       });
-      // Log out every other browser; the session making the change survives.
-      await deleteUserSessions(db, user.id, { exceptToken: req.cookies?.[SESSION_COOKIE] });
       res.json({
         id: user.id,
         username: user.username,

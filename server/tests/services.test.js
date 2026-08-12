@@ -81,6 +81,31 @@ describe('researchModule', () => {
   });
 });
 
+describe('transactions', () => {
+  // Multi-table writes run inside sequelize.transaction. pg-mem parses
+  // BEGIN/COMMIT/ROLLBACK but auto-commits every statement (rollback is a
+  // no-op), so real atomicity is only exercised against actual PostgreSQL —
+  // this just pins down that the transaction plumbing (dedicated connection,
+  // { transaction } threading, error propagation) works against the test db.
+  it('commits writes and propagates errors through sequelize.transaction', async () => {
+    const db = await createTestDb();
+    await db.sequelize.transaction(async (transaction) => {
+      await db.models.Module.create(
+        { manufacturer: 'Make Noise', name: 'Maths' },
+        { transaction }
+      );
+    });
+    const { rows } = await db.query('SELECT * FROM modules');
+    expect(rows).toHaveLength(1);
+
+    await expect(
+      db.sequelize.transaction(async () => {
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
+  });
+});
+
 describe('findManualForModule', () => {
   it('downloads the researched PDF and marks the module found', async () => {
     const db = await createTestDb();

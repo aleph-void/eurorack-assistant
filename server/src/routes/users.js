@@ -87,11 +87,17 @@ export function userRoutes(db) {
       } else if (String(password).length < 8) {
         return res.status(400).json({ error: 'password must be at least 8 characters' });
       }
-      await user.update({
-        password_hash: hashPassword(String(password)),
-        must_change_password: true,
+      // The reset and the forced logout everywhere land atomically.
+      await db.sequelize.transaction(async (transaction) => {
+        await user.update(
+          {
+            password_hash: hashPassword(String(password)),
+            must_change_password: true,
+          },
+          { transaction }
+        );
+        await deleteUserSessions(db, user.id, { transaction });
       });
-      await deleteUserSessions(db, user.id);
       const result = { ok: true, username: user.username };
       res.json(generated ? { ...result, generated_password: generated } : result);
     } catch (e) {

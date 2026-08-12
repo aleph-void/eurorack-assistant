@@ -54,6 +54,12 @@ CREATE TABLE manuals (
 
 CREATE INDEX manuals_hash_idx ON manuals (hash);
 
+-- module_id stands in for the unique (manufacturer, name) module pair: one
+-- document record per (manufacturer, module, database name, content hash).
+-- Re-imports of an UNCHANGED manual reuse the existing 'manual' row, while a
+-- revised manual (new hash) may coexist under the same name.
+CREATE UNIQUE INDEX manuals_module_name_hash_uidx ON manuals (module_id, name, hash);
+
 CREATE TABLE user_modules (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   module_id INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
