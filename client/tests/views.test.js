@@ -145,9 +145,15 @@ describe('ModuleDetailView', () => {
     expect(docs.text()).toContain('Make_Noise_Maths_Manual.pdf');
     expect(docs.text()).toContain('my notes');
     expect(docs.text()).toContain('shared manual');
-    // Documents are retrieved by content hash.
+    // Documents are retrieved by content hash, and every document exports.
     expect(wrapper.find('[data-test="doc-1"] a').attributes('href')).toBe(
       `/api/manuals/${'a'.repeat(64)}`
+    );
+    expect(wrapper.find('[data-test="export-doc-1"]').attributes('href')).toBe(
+      `/api/manuals/${'a'.repeat(64)}/export`
+    );
+    expect(wrapper.find('[data-test="export-doc-2"]').attributes('href')).toBe(
+      `/api/manuals/${'b'.repeat(64)}/export`
     );
     expect(wrapper.find('[data-test="delete-doc-1"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="delete-doc-2"]').exists()).toBe(true);

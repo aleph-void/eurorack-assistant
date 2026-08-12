@@ -182,6 +182,43 @@ describe('module documents API', () => {
     ).toBe(404);
   });
 
+  it('exports a document as an attachment named Manufacturer_Module_Name.pdf', async () => {
+    const { app, aliceCookie, adminCookie, module } = await withModule();
+    // Shared manual (name defaults to 'manual') on the Make Noise Maths module.
+    const shared = await request(app)
+      .get(`/api/manuals/${PDF_HASH}/export`)
+      .set('Cookie', aliceCookie);
+    expect(shared.status).toBe(200);
+    expect(shared.headers['content-type']).toContain('application/pdf');
+    expect(shared.headers['content-disposition']).toBe(
+      'attachment; filename="Make_Noise_Maths_manual.pdf"'
+    );
+    expect(Buffer.compare(shared.body, PDF_BYTES)).toBe(0);
+
+    // Own uploads export too, named after their database name.
+    const upload = await request(app)
+      .post(`/api/modules/${module.id}/manuals`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'calibration guide', filename: 'x.pdf', data_base64: otherBase64 });
+    const mine = await request(app)
+      .get(`/api/manuals/${upload.body.hash}/export`)
+      .set('Cookie', aliceCookie);
+    expect(mine.status).toBe(200);
+    expect(mine.headers['content-disposition']).toBe(
+      'attachment; filename="Make_Noise_Maths_calibration_guide.pdf"'
+    );
+
+    // Same access rules as retrieval: no exporting other users' documents.
+    expect(
+      (
+        await request(app)
+          .get(`/api/manuals/${upload.body.hash}/export`)
+          .set('Cookie', adminCookie)
+      ).status
+    ).toBe(404);
+    expect((await request(app).get(`/api/manuals/${PDF_HASH}/export`)).status).toBe(401);
+  });
+
   it('rejects non-PDF uploads and uploads to unmapped modules', async () => {
     const { app, aliceCookie, adminCookie, module } = await withModule();
     expect(

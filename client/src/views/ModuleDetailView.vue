@@ -187,6 +187,13 @@ onMounted(load);
               </span>
             </td>
             <td>
+              <a
+                :href="`/api/manuals/${doc.hash}/export`"
+                :data-test="`export-doc-${doc.id}`"
+                style="margin-right: 0.6rem"
+              >
+                Export
+              </a>
               <button
                 v-if="doc.user_id !== null"
                 class="danger"
