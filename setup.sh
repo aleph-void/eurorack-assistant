@@ -217,6 +217,39 @@ done
 info "running database migrations..."
 $DOCKER compose run --rm --no-deps server node scripts/migrate.js
 
+# This app is pre-release: schema changes are folded into the initial
+# migration, so a database initialized from an older revision can lack newer
+# columns even though migrations report clean. Detect that and offer a reset.
+SCHEMA_STATUS=$($DOCKER compose run --rm --no-deps -T server node scripts/check-schema.js 2>/dev/null | tail -n 1 | tr -d '\r' || true)
+if [ "$SCHEMA_STATUS" != "ok" ]; then
+  warn "the database schema does not match this revision (${SCHEMA_STATUS:-no response from schema check})"
+  warn "fixing this recreates the docker volumes — ALL app data (users, modules, manuals) is lost."
+  RESET_ANSWER="n"
+  if [ "$INTERACTIVE" = "1" ]; then
+    read -r -p "Recreate the database now? [y/N]: " RESET_ANSWER
+  else
+    warn "non-interactive shell: refusing to delete data."
+  fi
+  case "$RESET_ANSWER" in
+    y|Y|yes|YES)
+      info "recreating containers and volumes..."
+      $DOCKER compose down -v
+      info "starting the database..."
+      $DOCKER compose up -d db
+      until $DOCKER compose exec -T db pg_isready -U eurorack -d eurorack >/dev/null 2>&1; do
+        sleep 1
+      done
+      info "running database migrations..."
+      $DOCKER compose run --rm --no-deps server node scripts/migrate.js
+      ;;
+    *)
+      echo "ERROR: cannot continue with a stale schema. Reset manually with:" >&2
+      echo "  docker compose down -v && ./setup.sh" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 # Provider selection is skipped when one is already configured (the raw
 # app_config row, not the built-in default).
 EXISTING_PROVIDER=$($DOCKER compose run --rm --no-deps -T server node scripts/get-config.js llm_provider 2>/dev/null | tail -n 1 | tr -d '[:space:]' || true)
