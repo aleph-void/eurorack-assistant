@@ -17,6 +17,7 @@ const selectedComponents = ref([]);
 const selectedManuals = ref([]);
 const selectedAnswers = ref([]);
 const selectedNotes = ref([]);
+const selectedCaptures = ref([]);
 let pollTimer = null;
 
 const answerHtml = computed(() => {
@@ -65,8 +66,25 @@ const chosenAnswerIds = computed(() =>
 const chosenNoteIds = computed(() =>
   visibleNotes.value.filter((n) => selectedNotes.value.includes(n.id)).map((n) => n.id)
 );
+// Oscilloscope captures of the selected modules: the waveform image plus the
+// tuner reading taken with it go to the model alongside the manuals.
+const visibleCaptures = computed(
+  () =>
+    options.value?.captures?.filter(
+      (c) =>
+        c.module_ids.some((id) => selectedModules.value.includes(id)) ||
+        c.component_ids.some((id) => chosenComponentIds.value.includes(id))
+    ) ?? []
+);
+const chosenCaptureIds = computed(() =>
+  visibleCaptures.value.filter((c) => selectedCaptures.value.includes(c.id)).map((c) => c.id)
+);
 const attachmentCount = computed(
-  () => chosenManualIds.value.length + chosenAnswerIds.value.length + chosenNoteIds.value.length
+  () =>
+    chosenManualIds.value.length +
+    chosenAnswerIds.value.length +
+    chosenNoteIds.value.length +
+    chosenCaptureIds.value.length
 );
 
 function moduleLabel(moduleId) {
@@ -91,6 +109,7 @@ async function loadOptions() {
     .map((m) => m.id);
   selectedAnswers.value = [];
   selectedNotes.value = [];
+  selectedCaptures.value = [];
 }
 
 async function load() {
@@ -115,6 +134,7 @@ async function requestAnswer() {
       manual_ids: chosenManualIds.value,
       answer_ids: chosenAnswerIds.value,
       note_ids: chosenNoteIds.value,
+      capture_ids: chosenCaptureIds.value,
     });
     options.value = null;
     pollTimer = setTimeout(load, 3000);
@@ -246,9 +266,31 @@ onUnmounted(() => clearTimeout(pollTimer));
         </ul>
       </template>
 
+      <template v-if="visibleCaptures.length > 0">
+        <h3>Oscilloscope captures</h3>
+        <ul class="check-list">
+          <li v-for="c in visibleCaptures" :key="c.id">
+            <label>
+              <input
+                type="checkbox"
+                :value="c.id"
+                v-model="selectedCaptures"
+                data-test="capture-option"
+              />
+              <span>
+                {{ c.title || `Capture #${c.id}` }}
+                <span class="muted">
+                  — {{ c.channel_count }} channels, {{ new Date(c.captured_at).toLocaleString() }}
+                </span>
+              </span>
+            </label>
+          </li>
+        </ul>
+      </template>
+
       <p v-if="selectedModules.length === 0" class="muted">Select at least one module.</p>
       <p v-else-if="attachmentCount === 0" class="muted">
-        Attach at least one document (manual, previous answer, or note).
+        Attach at least one document (manual, previous answer, note, or capture).
       </p>
       <button
         type="button"
@@ -284,7 +326,12 @@ onUnmounted(() => clearTimeout(pollTimer));
       </div>
 
       <div
-        v-if="question.manuals?.length || question.answers?.length || question.notes?.length"
+        v-if="
+          question.manuals?.length ||
+          question.answers?.length ||
+          question.notes?.length ||
+          question.captures?.length
+        "
         class="panel"
         data-test="attachments"
       >
@@ -301,6 +348,10 @@ onUnmounted(() => clearTimeout(pollTimer));
           <li v-for="n in question.notes" :key="`note-${n.id}`">
             {{ n.title || `Note ${n.id}` }}
             <span class="badge">note</span>
+          </li>
+          <li v-for="c in question.captures" :key="`capture-${c.id}`">
+            {{ c.title || `Capture ${c.id}` }}
+            <span class="badge">waveform</span>
           </li>
         </ul>
       </div>

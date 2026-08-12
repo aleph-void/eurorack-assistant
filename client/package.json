@@ -1,5 +1,5 @@
 {
-  "name": "eurorack-web-client",
+  "name": "eurorack-assistant-client",
   "version": "0.1.0",
   "private": true,
   "type": "module",

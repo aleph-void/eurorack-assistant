@@ -8,6 +8,8 @@ import request from 'supertest';
 import { createDatabase } from '../src/db/index.js';
 import { migrate } from '../src/db/migrate.js';
 import { createApp } from '../src/app.js';
+import { createDeviceHub } from '../src/deviceHub.js';
+import { issueDeviceToken } from '../src/services/deviceAuth.js';
 import { hashPassword } from '../src/auth.js';
 import { DEFAULT_RACK_NAME, findOrCreateRack } from '../src/services/racks.js';
 import { textToPdf } from '../src/services/textPdf.js';
@@ -49,16 +51,71 @@ export async function login(app, username, password = 'password123') {
 }
 
 // Standard fixture: app + admin ('admin') + regular user ('alice').
-export async function createTestApp() {
+// A device hub is always attached so the oscilloscope routes are exercisable;
+// with no device registered it simply reports nothing connected.
+export async function createTestApp({ hub = createDeviceHub() } = {}) {
   const db = await createTestDb();
   const manualsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-manuals-'));
   const exportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-exports-'));
-  const app = createApp(db, { manualsDir, exportsDir, rateLimit: false });
+  const capturesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-captures-'));
+  const app = createApp(db, { manualsDir, exportsDir, capturesDir, hub, rateLimit: false });
   await createUser(db, { username: 'admin', isAdmin: true });
   await createUser(db, { username: 'alice' });
   const adminCookie = await login(app, 'admin');
   const aliceCookie = await login(app, 'alice');
-  return { db, app, manualsDir, exportsDir, adminCookie, aliceCookie };
+  return { db, app, hub, manualsDir, exportsDir, capturesDir, adminCookie, aliceCookie };
+}
+
+// A fake oscilloscope: registers with the hub, answers requests from a
+// scripted map of action -> payload (or function), and records what it was
+// asked. `state` is what the device announces about itself.
+//
+// Pass `db` to have it hold a real device token, which is what a capture
+// records itself as coming from.
+export async function connectFakeDevice(hub, db, options = {}) {
+  const { token } = await issueDeviceToken(db, {
+    userId: options.userId,
+    clientId: 'cvosc',
+    name: options.name || 'CVOsc',
+    scopes: 'oscilloscope',
+  });
+  return fakeDevice(hub, { ...options, tokenId: token.id });
+}
+
+export function fakeDevice(hub, { userId, tokenId = 1, name = 'CVOsc', state = {}, answers = {} }) {
+  const sent = [];
+  const connection = hub.register({
+    userId,
+    tokenId,
+    name,
+    clientId: 'cvosc',
+    send: (message) => {
+      sent.push(message);
+      if (message.type !== 'request') return;
+      const responder = answers[message.action];
+      // An action with no scripted answer is left hanging on purpose, so
+      // tests can exercise the timeout path.
+      if (responder === undefined) return;
+      Promise.resolve(typeof responder === 'function' ? responder(message.params) : responder)
+        .then((payload) =>
+          hub.handleMessage(connection, {
+            type: 'result',
+            request_id: message.request_id,
+            payload,
+          })
+        )
+        .catch((e) =>
+          hub.handleMessage(connection, {
+            type: 'error',
+            request_id: message.request_id,
+            error: e.message,
+          })
+        );
+    },
+    close: () => hub.unregister(connection),
+  });
+  hub.handleMessage(connection, { type: 'hello', ...state });
+  return { connection, sent };
 }
 
 // Creates a shared module record, maps it into one of userId's racks (their
@@ -118,6 +175,13 @@ export const PDF_HASH = crypto.createHash('sha256').update(PDF_BYTES).digest('he
 // The same PDF cut short mid-body: header intact, xref table and %%EOF gone —
 // the shape of a manual served truncated by its host.
 export const TRUNCATED_PDF_BYTES = PDF_BYTES.subarray(0, 400);
+
+// A valid 1x1 PNG — the smallest thing a device can plausibly send back as a
+// captured waveform, with a real PNG signature so the capture parser accepts
+// it.
+export const PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+export const PNG_BYTES = Buffer.from(PNG_BASE64, 'base64');
 
 // Fake LLM backend whose responses are scripted per method.
 export function fakeBackend(responses = {}) {

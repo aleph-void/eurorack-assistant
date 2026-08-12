@@ -13,8 +13,12 @@ import { jobRoutes } from './routes/jobs.js';
 import { noteRoutes } from './routes/notes.js';
 import { exportRoutes } from './routes/exports.js';
 import { patchRoutes } from './routes/patches.js';
+import { oauthRoutes } from './routes/oauth.js';
+import { deviceRoutes } from './routes/devices.js';
+import { scopeRoutes } from './routes/scope.js';
+import { captureRoutes } from './routes/captures.js';
 
-export function createApp(db, { manualsDir, exportsDir, rateLimit } = {}) {
+export function createApp(db, { manualsDir, exportsDir, capturesDir, rateLimit, hub } = {}) {
   const app = express();
   // nginx is the only hop in front of the server and it sets X-Forwarded-For.
   // Without this the rate limiters would see every request as coming from the
@@ -44,6 +48,12 @@ export function createApp(db, { manualsDir, exportsDir, rateLimit } = {}) {
   app.use('/api/notes', noteRoutes(db));
   app.use('/api/exports', exportRoutes(db, { exportsDir }));
   app.use('/api/patches', patchRoutes(db));
+  // Oscilloscope integration: /api/oauth is the device's half of the linking
+  // flow (unauthenticated by necessity), everything else is the user's.
+  app.use('/api/oauth', oauthRoutes(db));
+  app.use('/api/devices', deviceRoutes(db, { hub }));
+  app.use('/api/scope', scopeRoutes(db, { hub, capturesDir }));
+  app.use('/api/captures', captureRoutes(db, { capturesDir }));
 
   app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

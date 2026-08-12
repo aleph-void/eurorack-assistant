@@ -3,17 +3,25 @@ import { onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth.js';
 import { useJobsStore } from './stores/jobs.js';
+import { useDevicesStore } from './stores/devices.js';
 import { createProgressSocket } from './progressSocket.js';
 
 const auth = useAuthStore();
 const jobs = useJobsStore();
+const devices = useDevicesStore();
 const router = useRouter();
 
 let socket = null;
 
+// One socket, two consumers: job progress and oscilloscope presence.
+function dispatch(event) {
+  if (event.kind === 'device') devices.applyEvent(event);
+  else jobs.applyEvent(event);
+}
+
 function ensureSocket() {
   if (auth.isLoggedIn && !socket) {
-    socket = createProgressSocket({ onEvent: (event) => jobs.applyEvent(event) });
+    socket = createProgressSocket({ onEvent: dispatch });
   } else if (!auth.isLoggedIn && socket) {
     socket.close();
     socket = null;
@@ -40,6 +48,12 @@ async function logout() {
     <RouterLink to="/ask">Ask</RouterLink>
     <RouterLink to="/questions">Questions</RouterLink>
     <RouterLink to="/notes">Notes</RouterLink>
+    <RouterLink to="/devices" data-test="nav-devices">
+      Devices
+      <span v-if="devices.connectionCount > 0" class="badge running">
+        {{ devices.connectionCount }}
+      </span>
+    </RouterLink>
     <RouterLink to="/jobs">
       Jobs
       <span v-if="jobs.activeCount > 0" class="badge running">{{ jobs.activeCount }}</span>

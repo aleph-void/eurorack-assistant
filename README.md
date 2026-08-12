@@ -61,9 +61,19 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   mix, is recorded with the control position it needs. Alternatives are shown
   as a selection rather than as signals summing, and recording the switch's
   position in a patch resolves the flow.
-- **Private notes**: attach notes to modules and to specific components; a
-  note can be reused across any number of modules/components and is never
-  visible to other users.
+- **Private notes**: attach notes to modules, to specific components and to
+  patches; a note can be reused across any number of them and is never visible
+  to other users.
+- **Oscilloscope integration**: an oscilloscope application (such as
+  [CVOsc](https://github.com/aleph-void/CVOsc.com)) links itself to your
+  account with an OAuth 2.0 device code you approve in the browser, then holds
+  a WebSocket open. With a scope connected, a patch maps its channels to the
+  jacks of the audio interface in it — an ES-9's inputs are matched and named
+  after whatever the patch cables into them — and you can ask the scope for a
+  waveform image and the tuner reading taken with it. Captures are filed under
+  the patch's notes and can be attached to a question, so the LLM sees the
+  measurement alongside the manuals. See
+  [docs/oscilloscope-protocol.md](docs/oscilloscope-protocol.md).
 - **Job privacy**: background jobs (and their live progress) are visible only
   to the user who triggered them (admins see all jobs). Shared module state
   still benefits everyone.
@@ -128,7 +138,10 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
                                         ├── job worker (import / find_manual /
                                         │   analyze_manual / scope_question /
                                         │   answer_question)
-                                        ├── /api/ws WebSocket (live job progress)
+                                        ├── /api/ws WebSocket (live job progress
+                                        │   and oscilloscope presence)
+                                        ├── /api/devices/ws WebSocket (connected
+                                        │   oscilloscope apps, request/response)
                                         └── claude -p / codex exec (LLM calls)
 ```
 
@@ -165,11 +178,16 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `patch_groups` | named buses / layers within a patch |
 | `patch_module_links` / `patch_module_link_jacks` | instances wired together without patch cables: `expander` pairs and `bridge` pairs (jack N ↔ jack N) |
 | `notes` | per-user private notes |
-| `note_modules` / `note_components` | attach one note to any number of modules / components |
+| `note_modules` / `note_components` / `note_patches` | attach one note to any number of modules / components / patches |
+| `oauth_clients` | applications allowed to obtain a device token (public clients; `cvosc` is seeded) |
+| `device_authorizations` | in-flight device-grant codes: the hashed device code, the short user code, and whether the user approved it |
+| `device_tokens` | issued device credentials (access + refresh stored as sha256 hashes), revocable from the web UI |
+| `patch_scope_channels` | which scope channel watches which jack of which module instance, per patch — derived from the patch, overridable by hand |
+| `captures` / `capture_channels` | a waveform image (content-addressed PNG under `CAPTURES_DIR`) and the tuner reading taken with it, per channel |
 | `questions` | prompt, answer, status, error |
 | `question_modules` | links a question to the modules in scope (LLM-suggested, then user-reviewed) |
 | `question_components` | links a question to the specific components it pertains to (LLM-suggested, then user-reviewed) |
-| `question_manuals` / `question_answers` / `question_notes` | the documents the user attached during review: manual PDFs, previous answers, notes |
+| `question_manuals` / `question_answers` / `question_notes` / `question_captures` | the documents the user attached during review: manual PDFs, previous answers, notes, oscilloscope captures |
 | `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `scope_question`, `answer_question`) with attempts + errors |
 | `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`) and job worker count (`import_workers`, default 4) |
 
@@ -207,5 +225,11 @@ database are all injected fakes (`pg-mem` in-memory Postgres for the server).
   link in the nav; admins can reset any other user's password without it.
 - Only admins can create users (always non-admin) and change the LLM config.
 - Each user sees only their own module mappings, questions, notes, uploaded
-  documents, and jobs (admins see all jobs).
+  documents, captures, and jobs (admins see all jobs).
 - LLM answers are rendered as markdown sanitized with DOMPurify.
+- An oscilloscope never sees a password: it gets a token only after the user
+  approves its short code in an already-authenticated browser session. Device
+  tokens are stored as sha256 hashes, carry a single `oscilloscope` scope, are
+  refreshed with rotation (both halves change on every refresh), and are never
+  accepted by the session-authenticated routes. Revoking one in the web UI also
+  drops the socket it has open.

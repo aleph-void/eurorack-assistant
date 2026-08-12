@@ -830,6 +830,7 @@ describe('QuestionDetailView', () => {
       manual_ids: [11],
       answer_ids: [7],
       note_ids: [5],
+      capture_ids: [],
     });
     expect(wrapper.find('[data-test="answer-pending"]').exists()).toBe(true);
     wrapper.unmount();

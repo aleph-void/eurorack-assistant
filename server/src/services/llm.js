@@ -68,14 +68,24 @@ export class ClaudeBackend {
     return this._exec(prompt, ['--allowedTools', 'WebSearch,WebFetch']);
   }
 
-  // Answer a question given local manual PDFs and extra text documents.
-  async answerWithDocuments(prompt, pdfPaths, textDocs = []) {
+  // Answer a question given local manual PDFs, extra text documents, and
+  // images (captured oscilloscope waveforms). The Read tool handles PNGs as
+  // well as PDFs, so images need nothing beyond their directory being allowed.
+  async answerWithDocuments(prompt, pdfPaths, textDocs = [], imagePaths = []) {
     const pdfList = pdfPaths.map((p) => `- ${path.resolve(p)}`).join('\n');
     let fullPrompt = `${prompt}\n\nRead the following manual PDFs before answering:\n${pdfList}\n`;
+    if (imagePaths.length > 0) {
+      const imageList = imagePaths.map((p) => `- ${path.resolve(p)}`).join('\n');
+      fullPrompt +=
+        `\nAlso look at these captured oscilloscope images. Each pane is one ` +
+        `channel, in the order described in the capture document below:\n${imageList}\n`;
+    }
     for (const doc of textDocs) {
       fullPrompt += `\n--- Previous answer document: ${doc.name} ---\n\n${doc.text}\n`;
     }
-    const dirs = [...new Set(pdfPaths.map((p) => path.dirname(path.resolve(p))))];
+    const dirs = [
+      ...new Set([...pdfPaths, ...imagePaths].map((p) => path.dirname(path.resolve(p)))),
+    ];
     const addDirs = dirs.flatMap((d) => ['--add-dir', d]);
     return this._exec(fullPrompt, ['--allowedTools', 'Read', ...addDirs]);
   }
@@ -128,11 +138,22 @@ export class CodexBackend {
     return this._exec(prompt, ['--search']);
   }
 
-  async answerWithDocuments(prompt, pdfPaths, textDocs = []) {
+  async answerWithDocuments(prompt, pdfPaths, textDocs = [], imagePaths = []) {
     const pdfList = pdfPaths.map((p) => `- ${path.resolve(p)}`).join('\n');
     let fullPrompt =
       `${prompt}\n\nRead the following manual PDFs before answering ` +
       `(extract their text with a tool such as pdftotext if needed):\n${pdfList}\n`;
+    if (imagePaths.length > 0) {
+      // Passed as paths rather than through an image flag: the flag's name
+      // has moved between codex releases, and a wrong one fails the whole
+      // job. Everything the image shows is also written out in the capture
+      // text document, so an agent that cannot open a PNG still has the
+      // readings.
+      const imageList = imagePaths.map((p) => `- ${path.resolve(p)}`).join('\n');
+      fullPrompt +=
+        `\nCaptured oscilloscope images (view them if you can; their readings ` +
+        `are also written out below):\n${imageList}\n`;
+    }
     for (const doc of textDocs) {
       fullPrompt += `\n--- Previous answer document: ${doc.name} ---\n\n${doc.text}\n`;
     }

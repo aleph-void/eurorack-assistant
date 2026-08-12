@@ -12,6 +12,8 @@ import QuestionsView from './views/QuestionsView.vue';
 import QuestionDetailView from './views/QuestionDetailView.vue';
 import JobsView from './views/JobsView.vue';
 import NotesView from './views/NotesView.vue';
+import DevicesView from './views/DevicesView.vue';
+import LinkDeviceView from './views/LinkDeviceView.vue';
 import UsersView from './views/UsersView.vue';
 import ConfigView from './views/ConfigView.vue';
 import ChangePasswordView from './views/ChangePasswordView.vue';
@@ -31,6 +33,9 @@ export const routes = [
   { path: '/questions/:id', name: 'question-detail', component: QuestionDetailView, props: true },
   { path: '/jobs', name: 'jobs', component: JobsView },
   { path: '/notes', name: 'notes', component: NotesView },
+  { path: '/devices', name: 'devices', component: DevicesView },
+  // Where a device's verification_uri points; the code may ride along as ?code=
+  { path: '/link', name: 'link-device', component: LinkDeviceView },
   { path: '/admin/users', name: 'users', component: UsersView, meta: { admin: true } },
   { path: '/admin/config', name: 'config', component: ConfigView, meta: { admin: true } },
 ];

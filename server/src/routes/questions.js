@@ -2,8 +2,8 @@
 // that determines which modules (and specific components) the question
 // applies to; once the question is 'scoped' the user reviews the module and
 // component selection and picks attachments (manual documents, previous
-// answers, notes) via GET /:id/options, and POST /:id/answer saves the
-// selection and queues the answer_question job.
+// answers, notes, oscilloscope captures) via GET /:id/options, and POST
+// /:id/answer saves the selection and queues the answer_question job.
 
 import { Router } from 'express';
 import { Op } from 'sequelize';
@@ -24,16 +24,66 @@ export function questionRoutes(db) {
     QuestionManual,
     QuestionAnswer,
     QuestionNote,
+    QuestionCapture,
     Module,
     ModuleComponent,
     Manual,
     Note,
     NoteModule,
     NoteComponent,
+    Capture,
+    CaptureChannel,
+    PatchModule,
     Job,
   } = db.models;
   const router = Router();
   router.use(requireAuth(db));
+
+  // Which modules and components a set of captures is about: the jacks its
+  // channels were watching, and the modules of the patch it was taken on.
+  // Used both to offer captures in the review step and to check that the ones
+  // submitted belong to the question's scope.
+  async function captureLinks(captures) {
+    const ids = captures.map((c) => c.id);
+    const channels =
+      ids.length === 0 ? [] : await CaptureChannel.findAll({ where: { capture_id: ids } });
+    const componentIds = [
+      ...new Set(channels.map((c) => c.component_id).filter((id) => Number.isInteger(id))),
+    ];
+    const componentRows =
+      componentIds.length === 0
+        ? []
+        : await ModuleComponent.findAll({ where: { id: componentIds } });
+    const moduleOfComponent = new Map(componentRows.map((c) => [c.id, c.module_id]));
+
+    const patchIds = [...new Set(captures.map((c) => c.patch_id).filter(Boolean))];
+    const patchModules =
+      patchIds.length === 0 ? [] : await PatchModule.findAll({ where: { patch_id: patchIds } });
+    const modulesOfPatch = new Map();
+    for (const pm of patchModules) {
+      if (!pm.module_id) continue;
+      if (!modulesOfPatch.has(pm.patch_id)) modulesOfPatch.set(pm.patch_id, new Set());
+      modulesOfPatch.get(pm.patch_id).add(pm.module_id);
+    }
+
+    const byCapture = new Map();
+    for (const capture of captures) {
+      const own = channels.filter((c) => c.capture_id === capture.id);
+      const components = [
+        ...new Set(own.map((c) => c.component_id).filter((id) => Number.isInteger(id))),
+      ];
+      const modules = new Set(
+        components.map((id) => moduleOfComponent.get(id)).filter((id) => Number.isInteger(id))
+      );
+      for (const id of modulesOfPatch.get(capture.patch_id) ?? []) modules.add(id);
+      byCapture.set(capture.id, {
+        module_ids: [...modules],
+        component_ids: components,
+        channels: own,
+      });
+    }
+    return byCapture;
+  }
 
   router.get('/', async (req, res, next) => {
     try {
@@ -85,6 +135,11 @@ export function questionRoutes(db) {
         include: Note,
         order: [['note_id', 'ASC']],
       });
+      const captureLinkRows = await QuestionCapture.findAll({
+        where: { question_id: question.id },
+        include: Capture,
+        order: [['capture_id', 'ASC']],
+      });
       res.json({
         ...question.get({ plain: true }),
         modules: links.map(({ Module: m }) => ({
@@ -115,6 +170,15 @@ export function questionRoutes(db) {
           answered_at: q.answered_at,
         })),
         notes: noteLinks.map(({ Note: n }) => ({ id: n.id, title: n.title })),
+        captures: captureLinkRows
+          .filter((l) => l.Capture)
+          .map(({ Capture: c }) => ({
+            id: c.id,
+            title: c.title,
+            patch_id: c.patch_id,
+            captured_at: c.captured_at,
+            image_hash: c.image_hash,
+          })),
       });
     } catch (e) {
       next(e);
@@ -247,6 +311,35 @@ export function questionRoutes(db) {
             n.component_ids.some((id) => componentIdSet.has(id))
         );
 
+      // Oscilloscope captures the user has taken, offered like notes: each
+      // carries the modules and jacks it is about so the client can narrow
+      // them to the current selection.
+      const captureRows = await Capture.findAll({
+        where: { user_id: req.user.id },
+        order: [['id', 'DESC']],
+      });
+      const captureLinkMap = await captureLinks(captureRows);
+      const captures = captureRows
+        .map((c) => {
+          const links = captureLinkMap.get(c.id) ?? { module_ids: [], component_ids: [], channels: [] };
+          return {
+            id: c.id,
+            title: c.title,
+            caption: c.caption,
+            patch_id: c.patch_id,
+            captured_at: c.captured_at,
+            image_hash: c.image_hash,
+            channel_count: links.channels.length,
+            module_ids: links.module_ids,
+            component_ids: links.component_ids,
+          };
+        })
+        .filter(
+          (c) =>
+            c.module_ids.some((id) => rackIds.includes(id)) ||
+            c.component_ids.some((id) => componentIdSet.has(id))
+        );
+
       res.json({
         modules: rack.map((m) => ({
           id: m.id,
@@ -270,6 +363,7 @@ export function questionRoutes(db) {
         })),
         answers,
         notes,
+        captures,
       });
     } catch (e) {
       next(e);
@@ -417,10 +511,35 @@ export function questionRoutes(db) {
         }
       }
 
-      if (manualIds.length + answerIds.length + noteIds.length === 0) {
-        return res
-          .status(400)
-          .json({ error: 'Attach at least one document (manual, previous answer, or note)' });
+      const captureIds = uniqueIds(req.body?.capture_ids);
+      if (captureIds.length > 0) {
+        const rows = await Capture.findAll({
+          where: { id: captureIds, user_id: req.user.id },
+        });
+        if (rows.length !== captureIds.length) {
+          return res.status(400).json({ error: 'capture_ids must be your captures' });
+        }
+        const links = await captureLinks(rows);
+        const selectedModules = new Set(moduleIds);
+        const selectedComponents = new Set(componentIds);
+        const unrelated = rows.find((c) => {
+          const link = links.get(c.id);
+          return (
+            !link.module_ids.some((id) => selectedModules.has(id)) &&
+            !link.component_ids.some((id) => selectedComponents.has(id))
+          );
+        });
+        if (unrelated) {
+          return res.status(400).json({
+            error: 'capture_ids must be captures of the selected modules or components',
+          });
+        }
+      }
+
+      if (manualIds.length + answerIds.length + noteIds.length + captureIds.length === 0) {
+        return res.status(400).json({
+          error: 'Attach at least one document (manual, previous answer, note, or capture)',
+        });
       }
 
       await db.sequelize.transaction(async (transaction) => {
@@ -454,6 +573,13 @@ export function questionRoutes(db) {
         if (noteIds.length > 0) {
           await QuestionNote.bulkCreate(
             noteIds.map((id) => ({ question_id: question.id, note_id: id })),
+            { transaction }
+          );
+        }
+        await QuestionCapture.destroy({ where: { question_id: question.id }, transaction });
+        if (captureIds.length > 0) {
+          await QuestionCapture.bulkCreate(
+            captureIds.map((id) => ({ question_id: question.id, capture_id: id })),
             { transaction }
           );
         }

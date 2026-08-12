@@ -5,7 +5,9 @@
 // documents, previous answers, and notes — before answerQuestion submits the
 // question with exactly those attachments to the LLM backend.
 
+import fs from 'node:fs';
 import { extractJsonArray } from './json.js';
+import { capturePath, captureTextDocument } from './captures.js';
 import { isProbablyPdf, manualPath } from './pdf.js';
 import { userModuleIds } from './racks.js';
 
@@ -221,19 +223,29 @@ export async function normalizationSummary({ ModuleComponent, ComponentNormaliza
 // Phase two, after the user confirmed the review step: submit the question
 // with exactly the linked modules and explicitly attached documents (manual
 // PDFs, previous answers, notes) and store the answer.
-export async function answerQuestion(db, backend, question, manualsDir, { log = () => {} } = {}) {
+export async function answerQuestion(
+  db,
+  backend,
+  question,
+  manualsDir,
+  { log = () => {}, capturesDir = process.env.CAPTURES_DIR || '/data/captures' } = {}
+) {
   const {
     Module,
     ModuleComponent,
     ComponentNormalization,
     Manual,
     Note,
+    Patch,
     Question,
     QuestionModule,
     QuestionComponent,
     QuestionManual,
     QuestionAnswer,
     QuestionNote,
+    QuestionCapture,
+    Capture,
+    CaptureChannel,
   } = db.models;
 
   const links = await QuestionModule.findAll({
@@ -300,9 +312,44 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
       text: l.Note.title ? `# ${l.Note.title}\n\n${l.Note.body}` : l.Note.body,
     }));
 
-  const textDocs = [...previous, ...notes];
+  // Attached oscilloscope captures contribute both ways: the rendered image
+  // for the model to look at, and a text document spelling out every reading
+  // in the image so the answer never depends on the model being able to see.
+  const captureLinks = await QuestionCapture.findAll({
+    where: { question_id: question.id },
+    include: Capture,
+    order: [['capture_id', 'ASC']],
+  });
+  const captures = [];
+  const imagePaths = [];
+  for (const link of captureLinks) {
+    const capture = link.Capture;
+    if (!capture) continue;
+    const channels = await CaptureChannel.findAll({
+      where: { capture_id: capture.id },
+      order: [['channel_index', 'ASC']],
+    });
+    const patch = capture.patch_id ? await Patch.findByPk(capture.patch_id) : null;
+    captures.push({
+      name: `capture-${capture.id}.txt`,
+      text: captureTextDocument(
+        capture.get({ plain: true }),
+        channels.map((c) => c.get({ plain: true })),
+        { patchName: patch?.name ?? null }
+      ),
+    });
+    if (capture.image_hash) {
+      const image = capturePath(capturesDir, capture.image_hash);
+      if (fs.existsSync(image)) imagePaths.push(image);
+      else log(`skipping capture ${capture.id}: image file is missing`);
+    }
+  }
+
+  const textDocs = [...previous, ...notes, ...captures];
   if (pdfPaths.length === 0 && textDocs.length === 0) {
-    throw new Error('No valid manual PDFs, previous answers, or notes are attached to this question.');
+    throw new Error(
+      'No valid manual PDFs, previous answers, notes, or captures are attached to this question.'
+    );
   }
   const manuals = pdfPaths.slice(0, MAX_MANUALS);
 
@@ -310,6 +357,7 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
   if (manuals.length > 0) kinds.push('module manuals');
   if (previous.length > 0) kinds.push('previous question-and-answer documents');
   if (notes.length > 0) kinds.push("the user's own notes");
+  if (captures.length > 0) kinds.push('oscilloscope captures of the live patch');
   const moduleNames = scoped.map((m) => `${m.manufacturer} ${m.name}`).join(', ');
   let answerPrompt =
     `You are a eurorack modular synthesizer expert. Using the attached ${kinds.join(', ')} ` +
@@ -331,7 +379,7 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
   }
   answerPrompt += `Format your answer as markdown.\n\nQuestion: ${question.prompt}`;
 
-  const answer = await backend.answerWithDocuments(answerPrompt, manuals, textDocs);
+  const answer = await backend.answerWithDocuments(answerPrompt, manuals, textDocs, imagePaths);
 
   const [, updated] = await Question.update(
     { answer, status: 'answered', error: null, answered_at: new Date() },

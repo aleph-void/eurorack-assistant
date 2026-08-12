@@ -417,6 +417,15 @@ export function defineModels(sequelize) {
     { tableName: 'note_components', timestamps: false }
   );
 
+  const NotePatch = define(
+    'NotePatch',
+    {
+      note_id: { type: DataTypes.INTEGER, primaryKey: true },
+      patch_id: { type: DataTypes.INTEGER, primaryKey: true },
+    },
+    { tableName: 'note_patches', timestamps: false }
+  );
+
   const Question = define(
     'Question',
     {
@@ -474,6 +483,135 @@ export function defineModels(sequelize) {
       note_id: { type: DataTypes.INTEGER, primaryKey: true },
     },
     { tableName: 'question_notes', timestamps: false }
+  );
+
+  const QuestionCapture = define(
+    'QuestionCapture',
+    {
+      question_id: { type: DataTypes.INTEGER, primaryKey: true },
+      capture_id: { type: DataTypes.INTEGER, primaryKey: true },
+    },
+    { tableName: 'question_captures', timestamps: false }
+  );
+
+  // An application allowed to obtain a device token. Public clients only —
+  // see migration 013.
+  const OAuthClient = define(
+    'OAuthClient',
+    {
+      id,
+      client_id: { type: DataTypes.TEXT, allowNull: false, unique: true },
+      name: { type: DataTypes.TEXT, allowNull: false },
+      scopes: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'oscilloscope' },
+      enabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    },
+    { tableName: 'oauth_clients', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // One in-flight device authorization grant (RFC 8628).
+  const DeviceAuthorization = define(
+    'DeviceAuthorization',
+    {
+      id,
+      client_id: { type: DataTypes.TEXT, allowNull: false },
+      device_code_hash: { type: DataTypes.TEXT, allowNull: false, unique: true },
+      user_code: { type: DataTypes.TEXT, allowNull: false, unique: true },
+      scopes: { type: DataTypes.TEXT, allowNull: false },
+      device_name: { type: DataTypes.TEXT },
+      status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'pending' },
+      user_id: { type: DataTypes.INTEGER },
+      interval_seconds: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 5 },
+      last_polled_at: { type: DataTypes.DATE },
+      expires_at: { type: DataTypes.DATE, allowNull: false },
+    },
+    { tableName: 'device_authorizations', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // An issued device credential; token values are stored hashed.
+  const DeviceToken = define(
+    'DeviceToken',
+    {
+      id,
+      user_id: { type: DataTypes.INTEGER, allowNull: false },
+      client_id: { type: DataTypes.TEXT, allowNull: false },
+      name: { type: DataTypes.TEXT, allowNull: false },
+      access_token_hash: { type: DataTypes.TEXT, allowNull: false, unique: true },
+      refresh_token_hash: { type: DataTypes.TEXT, unique: true },
+      scopes: { type: DataTypes.TEXT, allowNull: false },
+      expires_at: { type: DataTypes.DATE, allowNull: false },
+      revoked_at: { type: DataTypes.DATE },
+      last_seen_at: { type: DataTypes.DATE },
+    },
+    { tableName: 'device_tokens', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // Which scope channel watches which jack, per patch. component_id and
+  // patch_module_id are soft references (see migration 013).
+  const PatchScopeChannel = define(
+    'PatchScopeChannel',
+    {
+      id,
+      patch_id: { type: DataTypes.INTEGER, allowNull: false },
+      channel_index: { type: DataTypes.INTEGER, allowNull: false },
+      audio_device_id: { type: DataTypes.TEXT },
+      patch_module_id: { type: DataTypes.INTEGER },
+      component_id: { type: DataTypes.INTEGER },
+      component_name: { type: DataTypes.TEXT },
+      label: { type: DataTypes.TEXT },
+      signal_type: { type: DataTypes.TEXT },
+      source: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'auto' },
+    },
+    { tableName: 'patch_scope_channels', createdAt: 'created_at', updatedAt: 'updated_at' }
+  );
+
+  // A waveform image plus the tuner reading taken with it.
+  const Capture = define(
+    'Capture',
+    {
+      id,
+      user_id: { type: DataTypes.INTEGER, allowNull: false },
+      patch_id: { type: DataTypes.INTEGER },
+      note_id: { type: DataTypes.INTEGER },
+      device_token_id: { type: DataTypes.INTEGER },
+      device_name: { type: DataTypes.TEXT },
+      audio_device_id: { type: DataTypes.TEXT },
+      audio_device_name: { type: DataTypes.TEXT },
+      title: { type: DataTypes.TEXT },
+      caption: { type: DataTypes.TEXT },
+      image_hash: { type: DataTypes.TEXT },
+      image_width: { type: DataTypes.INTEGER },
+      image_height: { type: DataTypes.INTEGER },
+      image_bytes: { type: DataTypes.INTEGER },
+      sample_rate: { type: DataTypes.REAL },
+      captured_at: { type: DataTypes.DATE },
+    },
+    { tableName: 'captures', createdAt: 'created_at', updatedAt: false }
+  );
+
+  const CaptureChannel = define(
+    'CaptureChannel',
+    {
+      id,
+      capture_id: { type: DataTypes.INTEGER, allowNull: false },
+      channel_index: { type: DataTypes.INTEGER, allowNull: false },
+      label: { type: DataTypes.TEXT },
+      signal_type: { type: DataTypes.TEXT },
+      patch_module_id: { type: DataTypes.INTEGER },
+      component_id: { type: DataTypes.INTEGER },
+      component_name: { type: DataTypes.TEXT },
+      module_label: { type: DataTypes.TEXT },
+      source_description: { type: DataTypes.TEXT },
+      note_name: { type: DataTypes.TEXT },
+      midi_note: { type: DataTypes.INTEGER },
+      cents: { type: DataTypes.REAL },
+      frequency: { type: DataTypes.REAL },
+      confidence: { type: DataTypes.REAL },
+      voltage: { type: DataTypes.REAL },
+      vertical_range: { type: DataTypes.REAL },
+      vertical_offset: { type: DataTypes.REAL },
+      time_base: { type: DataTypes.REAL },
+    },
+    { tableName: 'capture_channels', createdAt: 'created_at', updatedAt: false }
   );
 
   const Job = define(
@@ -606,6 +744,27 @@ export function defineModels(sequelize) {
   QuestionNote.belongsTo(Question, { foreignKey: 'question_id' });
   QuestionNote.belongsTo(Note, { foreignKey: 'note_id' });
 
+  Note.hasMany(NotePatch, { foreignKey: 'note_id' });
+  NotePatch.belongsTo(Note, { foreignKey: 'note_id' });
+  NotePatch.belongsTo(Patch, { foreignKey: 'patch_id' });
+
+  Question.hasMany(QuestionCapture, { foreignKey: 'question_id' });
+  QuestionCapture.belongsTo(Question, { foreignKey: 'question_id' });
+  QuestionCapture.belongsTo(Capture, { foreignKey: 'capture_id' });
+
+  DeviceToken.belongsTo(User, { foreignKey: 'user_id' });
+  User.hasMany(DeviceToken, { foreignKey: 'user_id' });
+  DeviceAuthorization.belongsTo(User, { foreignKey: 'user_id' });
+
+  Patch.hasMany(PatchScopeChannel, { foreignKey: 'patch_id' });
+  PatchScopeChannel.belongsTo(Patch, { foreignKey: 'patch_id' });
+
+  Capture.belongsTo(User, { foreignKey: 'user_id' });
+  Capture.belongsTo(Patch, { foreignKey: 'patch_id' });
+  Capture.belongsTo(Note, { foreignKey: 'note_id' });
+  Capture.hasMany(CaptureChannel, { foreignKey: 'capture_id' });
+  CaptureChannel.belongsTo(Capture, { foreignKey: 'capture_id' });
+
   Job.belongsTo(User, { foreignKey: 'user_id' });
   Job.belongsTo(Module, { foreignKey: 'module_id' });
   Job.belongsTo(Question, { foreignKey: 'question_id' });
@@ -638,12 +797,20 @@ export function defineModels(sequelize) {
     Note,
     NoteModule,
     NoteComponent,
+    NotePatch,
     Question,
     QuestionModule,
     QuestionComponent,
     QuestionManual,
     QuestionAnswer,
     QuestionNote,
+    QuestionCapture,
+    OAuthClient,
+    DeviceAuthorization,
+    DeviceToken,
+    PatchScopeChannel,
+    Capture,
+    CaptureChannel,
     Job,
   };
 }

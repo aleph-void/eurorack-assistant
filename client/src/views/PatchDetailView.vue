@@ -1,8 +1,15 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue';
 import { api } from '../api.js';
+import ScopePanel from '../components/ScopePanel.vue';
+import PatchNotesPanel from '../components/PatchNotesPanel.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
+
+// A capture files itself under a note on this patch, so the notes panel is
+// refreshed when one is taken.
+const notesPanel = ref(null);
+const onCaptured = () => notesPanel.value?.load();
 
 const patch = ref(null);
 const error = ref('');
@@ -1194,6 +1201,10 @@ onMounted(async () => {
         <p v-if="portError" class="error" data-test="port-error">{{ portError }}</p>
       </form>
     </div>
+
+    <ScopePanel :patch-id="props.id" :modules="modules" @captured="onCaptured" />
+
+    <PatchNotesPanel ref="notesPanel" :patch-id="props.id" />
 
     <div class="panel" data-test="snapshot">
       <h2>Modules in this patch</h2>

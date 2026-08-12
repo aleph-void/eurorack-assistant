@@ -58,6 +58,7 @@ export function createWorker(db, options = {}) {
   const {
     manualsDir = process.env.MANUALS_DIR || '/data/manuals',
     exportsDir = process.env.EXPORTS_DIR || '/data/exports',
+    capturesDir = process.env.CAPTURES_DIR || '/data/captures',
     pollIntervalMs = 5000,
     backendFactory = createBackend,
     fetchImpl = fetch,
@@ -270,7 +271,10 @@ export function createWorker(db, options = {}) {
     const question = record.get({ plain: true });
     await Question.update({ status: 'answering' }, { where: { id: question.id } });
     try {
-      await answerQuestion(db, backend, question, manualsDir, { log: progress });
+      await answerQuestion(db, backend, question, manualsDir, {
+        log: progress,
+        capturesDir,
+      });
       progress('answer saved');
     } catch (e) {
       await Question.update({ status: 'failed', error: e.message }, { where: { id: question.id } });

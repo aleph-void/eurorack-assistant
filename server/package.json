@@ -1,5 +1,5 @@
 {
-  "name": "eurorack-web-server",
+  "name": "eurorack-assistant-server",
   "version": "0.1.0",
   "description": "Express API for asking LLMs about your eurorack modules",
   "type": "module",

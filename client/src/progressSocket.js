@@ -1,6 +1,6 @@
-// WebSocket connection to /api/ws for live job progress. Reconnects with
-// backoff while the page is open. The WebSocket constructor is injectable for
-// tests.
+// WebSocket connection to /api/ws for live job progress and oscilloscope
+// connect/disconnect. Reconnects with backoff while the page is open. The
+// WebSocket constructor is injectable for tests.
 
 export function createProgressSocket({
   onEvent,
@@ -23,7 +23,8 @@ export function createProgressSocket({
     ws.onmessage = (msg) => {
       try {
         const event = JSON.parse(msg.data);
-        if (event.kind === 'job') onEvent(event);
+        // 'hello' is the server greeting the socket; it carries no state.
+        if (event.kind === 'job' || event.kind === 'device') onEvent(event);
       } catch {
         /* ignore malformed frames */
       }
