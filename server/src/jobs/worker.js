@@ -13,7 +13,7 @@
 // forwards to the browser.
 
 import { createBackend } from '../services/llm.js';
-import { manualPath } from '../services/pdf.js';
+import { manualPath, renderPageToPdf } from '../services/pdf.js';
 import { getLlmSettings, getImportWorkerCount, DEFAULT_IMPORT_WORKERS } from '../services/config.js';
 import {
   parseModuleCsv,
@@ -57,6 +57,7 @@ export function createWorker(db, options = {}) {
     pollIntervalMs = 5000,
     backendFactory = createBackend,
     fetchImpl = fetch,
+    renderImpl = renderPageToPdf,
     bus = null,
     log = (...args) => console.log('[worker]', ...args),
   } = options;
@@ -179,6 +180,7 @@ export function createWorker(db, options = {}) {
     progress(`searching for manual: ${module.manufacturer} ${module.name}`.trim());
     const hash = await findManualForModule(db, backend, module, manualsDir, {
       fetchImpl,
+      renderImpl,
       log: progress,
     });
     if (!hash) {

@@ -199,6 +199,207 @@ describe('findManualForModule', () => {
     expect(hash).toBe(PDF_HASH);
   });
 
+  // Render stub: url-substring -> PDF bytes to "render"; unmatched urls fail.
+  function fakeRender(routes) {
+    const calls = [];
+    const impl = async (url, dest) => {
+      calls.push(String(url));
+      const match = Object.keys(routes).find((k) => String(url).includes(k));
+      if (!match) return false;
+      fs.writeFileSync(dest, routes[match]);
+      return true;
+    };
+    impl.calls = calls;
+    return impl;
+  }
+
+  const RENDER_A = Buffer.from('%PDF-1.4 product page render A');
+  const RENDER_A_HASH = crypto.createHash('sha256').update(RENDER_A).digest('hex');
+  const RENDER_B = Buffer.from('%PDF-1.4 product page render B');
+  const RENDER_B_HASH = crypto.createHash('sha256').update(RENDER_B).digest('hex');
+
+  it('renders the product page when no PDF manual can be downloaded', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id);
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Make Noise',
+        module: 'Maths',
+        pdf_urls: ['https://dead.example.com/maths.pdf'],
+        product_page_url: 'https://makenoise.com/maths',
+      }),
+    });
+    const fetchImpl = fakeFetch({
+      'dead.example.com': { status: 404 },
+      // No archived copy of the dead manual URL either.
+      'archive.org/wayback/available': { json: {} },
+    });
+    const renderImpl = fakeRender({ 'makenoise.com/maths': RENDER_A });
+
+    const hash = await findManualForModule(db, backend, module, manualsDir, {
+      fetchImpl,
+      renderImpl,
+    });
+    expect(hash).toBe(RENDER_A_HASH);
+    expect(renderImpl.calls).toEqual(['https://makenoise.com/maths']);
+    // The render satisfied the job, so the archive.org item library was
+    // never consulted.
+    expect(fetchImpl.requested.some((u) => u.includes('advancedsearch'))).toBe(false);
+
+    const { rows } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [module.id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].original_name).toBe('Make_Noise_Maths_Product_Page.pdf');
+    expect(fs.existsSync(path.join(manualsDir, `${hash}.pdf`))).toBe(true);
+  });
+
+  it('recovers a dead manual URL from the wayback machine', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id, { manufacturer: 'IO Labs', name: 'Flux' });
+
+    const deadUrl = 'https://www.iolabs.co.uk/_files/ugd/41c647_75128f017a3941ef8d5d518bc5b0ba9b.pdf';
+    const snapshot = `https://web.archive.org/web/20241213043433/${deadUrl}`;
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'IO Labs',
+        module: 'Flux',
+        pdf_urls: [deadUrl],
+        product_page_url: 'https://www.iolabs.co.uk/flux',
+      }),
+    });
+    // Route order matters: the availability and snapshot URLs both embed the
+    // dead URL, so the catch-all 404 for the manufacturer site comes last.
+    const fetchImpl = fakeFetch({
+      'archive.org/wayback/available': {
+        json: { archived_snapshots: { closest: { available: true, url: snapshot } } },
+      },
+      'web.archive.org/web/20241213043433': { body: PDF_BYTES },
+      'iolabs.co.uk': { status: 404 },
+    });
+    const renderImpl = fakeRender({});
+
+    const hash = await findManualForModule(db, backend, module, manualsDir, {
+      fetchImpl,
+      renderImpl,
+    });
+    expect(hash).toBe(PDF_HASH);
+    // The archived PDF is the real manual: no page render happened and the
+    // record is named as a manual, not a product-page stand-in.
+    expect(renderImpl.calls).toEqual([]);
+    const { rows } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [module.id]);
+    expect(rows[0].original_name).toBe('IO_Labs_Flux_Manual.pdf');
+  });
+
+  it('falls back to a wayback snapshot render as the last resort', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id);
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Make Noise',
+        module: 'Maths',
+        pdf_urls: [],
+        product_page_url: 'https://makenoise.com/maths',
+      }),
+    });
+    const snapshot = 'https://web.archive.org/web/2024/https://makenoise.com/maths';
+    const fetchImpl = fakeFetch({
+      'archive.org/advancedsearch.php': { json: { response: { docs: [] } } },
+      'archive.org/wayback/available': {
+        json: { archived_snapshots: { closest: { available: true, url: snapshot } } },
+      },
+    });
+    // The live product page fails to render; only the snapshot works.
+    const renderImpl = fakeRender({ 'web.archive.org': RENDER_A });
+
+    const hash = await findManualForModule(db, backend, module, manualsDir, {
+      fetchImpl,
+      renderImpl,
+    });
+    expect(hash).toBe(RENDER_A_HASH);
+    // Chain order: live page render, then archive.org search, then snapshot.
+    expect(renderImpl.calls).toEqual(['https://makenoise.com/maths', snapshot]);
+    const searchIdx = fetchImpl.requested.findIndex((u) => u.includes('advancedsearch'));
+    const waybackIdx = fetchImpl.requested.findIndex((u) => u.includes('wayback/available'));
+    expect(searchIdx).toBeGreaterThanOrEqual(0);
+    expect(waybackIdx).toBeGreaterThan(searchIdx);
+
+    const { rows } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [module.id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].original_name).toBe('Make_Noise_Maths_Product_Page.pdf');
+  });
+
+  it('replaces a stale product-page render instead of accumulating records', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id);
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Make Noise',
+        module: 'Maths',
+        pdf_urls: [],
+        product_page_url: 'https://makenoise.com/maths',
+      }),
+    });
+    const fetchImpl = fakeFetch({});
+
+    await findManualForModule(db, backend, module, manualsDir, {
+      fetchImpl,
+      renderImpl: fakeRender({ 'makenoise.com': RENDER_A }),
+    });
+    // Re-run: the page renders to different bytes, as real pages do.
+    await findManualForModule(db, backend, module, manualsDir, {
+      fetchImpl,
+      renderImpl: fakeRender({ 'makenoise.com': RENDER_B }),
+    });
+
+    const { rows } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [module.id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].hash).toBe(RENDER_B_HASH);
+    expect(fs.readdirSync(manualsDir).sort()).toEqual([`${RENDER_B_HASH}.pdf`]);
+  });
+
+  it('supersedes an old render when a real manual PDF turns up', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id);
+
+    const renderInfo = JSON.stringify({
+      manufacturer: 'Make Noise',
+      module: 'Maths',
+      pdf_urls: [],
+      product_page_url: 'https://makenoise.com/maths',
+    });
+    await findManualForModule(db, fakeBackend({ completeTextWithSearch: renderInfo }), module, manualsDir, {
+      fetchImpl: fakeFetch({}),
+      renderImpl: fakeRender({ 'makenoise.com': RENDER_A }),
+    });
+
+    const manualInfo = JSON.stringify({
+      manufacturer: 'Make Noise',
+      module: 'Maths',
+      pdf_urls: ['https://makenoise.com/maths.pdf'],
+      product_page_url: 'https://makenoise.com/maths',
+    });
+    const hash = await findManualForModule(
+      db,
+      fakeBackend({ completeTextWithSearch: manualInfo }),
+      module,
+      manualsDir,
+      { fetchImpl: fakeFetch({ 'makenoise.com/maths.pdf': { body: PDF_BYTES } }), renderImpl: fakeRender({}) }
+    );
+    expect(hash).toBe(PDF_HASH);
+
+    const { rows } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [module.id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].original_name).toBe('Make_Noise_Maths_Manual.pdf');
+    expect(fs.readdirSync(manualsDir).sort()).toEqual([`${PDF_HASH}.pdf`]);
+  });
+
   it('marks the module failed when nothing is found', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });

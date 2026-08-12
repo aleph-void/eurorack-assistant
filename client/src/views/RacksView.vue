@@ -49,7 +49,13 @@ async function rename(rack) {
 onMounted(load);
 
 async function remove(rack) {
-  if (!confirm(`Delete rack '${rack.name}' and remove its ${rack.module_count} module(s) from it?`))
+  if (
+    !confirm(
+      `Delete rack '${rack.name}' and its ${rack.module_count} module(s)? ` +
+        'Modules not in any other rack are permanently deleted, along with their ' +
+        'manuals, notes and questions.'
+    )
+  )
     return;
   error.value = '';
   try {
@@ -64,8 +70,8 @@ async function remove(rack) {
 <template>
   <h1>Your racks</h1>
   <p class="muted">
-    Racks group the modules in your systems. Deleting a rack only removes the modules from that
-    rack — shared module records (manuals, analyses) are kept.
+    Racks group the modules in your systems. Deleting a rack deletes the modules in it — a module
+    survives only if it is still in another rack.
   </p>
   <p v-if="error" class="error" data-test="error">{{ error }}</p>
   <p v-if="loading" class="muted">Loading…</p>

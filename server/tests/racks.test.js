@@ -1,6 +1,8 @@
+import fs from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
-import { createTestApp, insertModule, mapModule } from './helpers.js';
+import { createTestApp, insertModule, mapModule, PDF_BYTES, PDF_HASH } from './helpers.js';
+import { manualPath } from '../src/services/pdf.js';
 
 describe('racks API', () => {
   it('lists only the current user’s racks with module counts', async () => {
@@ -106,6 +108,61 @@ describe('racks API', () => {
     const detail = await request(app).get(`/api/modules/${module.id}`).set('Cookie', aliceCookie);
     expect(detail.status).toBe(200);
     expect(detail.body.racks.map((r) => r.name)).toEqual(['main rack']);
+  });
+
+  it('deleting the last rack fully deletes its modules and your related records', async () => {
+    const { app, db, manualsDir, aliceCookie } = await createTestApp();
+    const { rows: users } = await db.query('SELECT id, username FROM users');
+    const alice = users.find((u) => u.username === 'alice');
+    const admin = users.find((u) => u.username === 'admin');
+    const module = await insertModule(db, alice.id, { manual_hash: PDF_HASH });
+    fs.writeFileSync(manualPath(manualsDir, PDF_HASH), PDF_BYTES);
+    const { rows: comp } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'input_jack', 'In') RETURNING id`,
+      [module.id]
+    );
+
+    // Alice's question on the module and note on its component must go with
+    // it; the admin's question on the same module must survive.
+    const { rows: q } = await db.query(
+      `INSERT INTO questions (user_id, prompt, answer, status) VALUES ($1, 'Q', 'A', 'answered') RETURNING id`,
+      [alice.id]
+    );
+    await db.query('INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)', [
+      q[0].id,
+      module.id,
+    ]);
+    const { rows: n } = await db.query(
+      `INSERT INTO notes (user_id, body) VALUES ($1, 'patch idea') RETURNING id`,
+      [alice.id]
+    );
+    await db.query('INSERT INTO note_components (note_id, component_id) VALUES ($1, $2)', [
+      n[0].id,
+      comp[0].id,
+    ]);
+    const { rows: adminQ } = await db.query(
+      `INSERT INTO questions (user_id, prompt, status) VALUES ($1, 'Theirs', 'answered') RETURNING id`,
+      [admin.id]
+    );
+    await db.query('INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)', [
+      adminQ[0].id,
+      module.id,
+    ]);
+
+    const racks = (await request(app).get('/api/racks').set('Cookie', aliceCookie)).body;
+    const res = await request(app).delete(`/api/racks/${racks[0].id}`).set('Cookie', aliceCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.deleted_modules).toBe(1);
+
+    expect((await db.query('SELECT * FROM modules')).rows).toHaveLength(0);
+    expect((await db.query('SELECT * FROM module_components')).rows).toHaveLength(0);
+    expect((await db.query('SELECT * FROM manuals')).rows).toHaveLength(0);
+    expect(fs.existsSync(manualPath(manualsDir, PDF_HASH))).toBe(false);
+    expect((await db.query('SELECT * FROM notes')).rows).toHaveLength(0);
+    // Only the admin's question remains, unlinked from the deleted module.
+    const { rows: questions } = await db.query('SELECT id, user_id FROM questions');
+    expect(questions).toEqual([{ id: adminQ[0].id, user_id: admin.id }]);
+    expect((await db.query('SELECT * FROM question_modules')).rows).toHaveLength(0);
   });
 
   it('moves a module between racks, merging quantities', async () => {

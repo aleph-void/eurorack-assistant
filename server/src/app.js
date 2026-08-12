@@ -21,7 +21,7 @@ export function createApp(db, { manualsDir } = {}) {
   app.use('/api/auth', authRoutes(db));
   app.use('/api/users', userRoutes(db));
   app.use('/api/modules', moduleRoutes(db, { manualsDir }));
-  app.use('/api/racks', rackRoutes(db));
+  app.use('/api/racks', rackRoutes(db, { manualsDir }));
   app.use('/api/manuals', manualRoutes(db, { manualsDir }));
   app.use('/api/imports', importRoutes(db));
   app.use('/api/questions', questionRoutes(db));

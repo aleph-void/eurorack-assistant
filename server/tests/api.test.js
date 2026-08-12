@@ -43,14 +43,18 @@ describe('modules API', () => {
     });
   });
 
-  it("hides unmapped modules; delete only unlinks the user's mapping", async () => {
+  it('hides unmapped modules; delete keeps the record only while another user has it', async () => {
     const { app, db, aliceCookie, adminCookie } = await createTestApp();
-    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
-    const module = await insertModule(db, rows[0].id);
+    const { rows: users } = await db.query('SELECT id, username FROM users');
+    const alice = users.find((u) => u.username === 'alice');
+    const admin = users.find((u) => u.username === 'admin');
+    const module = await insertModule(db, alice.id);
 
     expect(
       (await request(app).get(`/api/modules/${module.id}`).set('Cookie', adminCookie)).status
     ).toBe(404);
+
+    await mapModule(db, admin.id, module.id);
     expect(
       (await request(app).delete(`/api/modules/${module.id}`).set('Cookie', aliceCookie)).status
     ).toBe(200);
@@ -58,9 +62,16 @@ describe('modules API', () => {
       (await request(app).get(`/api/modules/${module.id}`).set('Cookie', aliceCookie)).status
     ).toBe(404);
 
-    // The shared module record survives for other users.
+    // The shared module record survives while another user still has it…
     const { rows: still } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
     expect(still).toHaveLength(1);
+
+    // …and is fully deleted once its last rack mapping is removed.
+    expect(
+      (await request(app).delete(`/api/modules/${module.id}`).set('Cookie', adminCookie)).status
+    ).toBe(200);
+    const { rows: gone } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
+    expect(gone).toHaveLength(0);
   });
 
   it('requires authentication', async () => {
@@ -795,6 +806,45 @@ describe('questions API', () => {
     expect(
       (await request(app).get(`/api/questions/${q[0].id}`).set('Cookie', adminCookie)).status
     ).toBe(404);
+  });
+
+  it("deletes own questions with all their links, never another user's", async () => {
+    const { app, db, aliceCookie, adminCookie, alice } = await withModules();
+    // An answered question linked to the module, cited as a source by a
+    // second question.
+    const { rows: modules } = await db.query('SELECT id FROM modules');
+    const { rows: q1 } = await db.query(
+      `INSERT INTO questions (user_id, prompt, answer, status) VALUES ($1, 'First', 'A1', 'answered') RETURNING id`,
+      [alice.id]
+    );
+    await db.query('INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)', [
+      q1[0].id,
+      modules[0].id,
+    ]);
+    const { rows: q2 } = await db.query(
+      `INSERT INTO questions (user_id, prompt, status) VALUES ($1, 'Second', 'pending') RETURNING id`,
+      [alice.id]
+    );
+    await db.query(
+      'INSERT INTO question_answers (question_id, source_question_id) VALUES ($1, $2)',
+      [q2[0].id, q1[0].id]
+    );
+
+    // Another user cannot delete it.
+    expect(
+      (await request(app).delete(`/api/questions/${q1[0].id}`).set('Cookie', adminCookie)).status
+    ).toBe(404);
+
+    const res = await request(app).delete(`/api/questions/${q1[0].id}`).set('Cookie', aliceCookie);
+    expect(res.status).toBe(200);
+    const { rows: remaining } = await db.query('SELECT id FROM questions');
+    expect(remaining.map((r) => r.id)).not.toContain(q1[0].id);
+    // The citing question survives; only the citation link is gone.
+    expect(remaining.map((r) => r.id)).toContain(q2[0].id);
+    expect((await db.query('SELECT * FROM question_answers')).rows).toHaveLength(0);
+    expect(
+      (await db.query('SELECT * FROM question_modules WHERE question_id = $1', [q1[0].id])).rows
+    ).toHaveLength(0);
   });
 });
 

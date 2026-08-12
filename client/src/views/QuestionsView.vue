@@ -19,6 +19,17 @@ onMounted(async () => {
 function formatDate(value) {
   return value ? new Date(value).toLocaleString() : '';
 }
+
+async function remove(q) {
+  if (!confirm('Delete this question and its answer?')) return;
+  error.value = '';
+  try {
+    await api.delete(`/api/questions/${q.id}`);
+    questions.value = questions.value.filter((item) => item.id !== q.id);
+  } catch (e) {
+    error.value = e.message;
+  }
+}
 </script>
 
 <template>
@@ -35,6 +46,7 @@ function formatDate(value) {
           <th>Question</th>
           <th>Status</th>
           <th>Asked</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -44,6 +56,16 @@ function formatDate(value) {
           </td>
           <td><span class="badge" :class="q.status">{{ q.status }}</span></td>
           <td class="muted">{{ formatDate(q.created_at) }}</td>
+          <td>
+            <button
+              class="danger"
+              style="margin: 0"
+              :data-test="`delete-question-${q.id}`"
+              @click="remove(q)"
+            >
+              Delete
+            </button>
+          </td>
         </tr>
       </tbody>
     </table>

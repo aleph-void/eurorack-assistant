@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { Op } from 'sequelize';
 import { requireAuth } from '../auth.js';
 import { isProbablyPdfBuffer, manualPath, sha256Buffer } from '../services/pdf.js';
+import { deleteModulesDeep } from '../services/moduleDeletion.js';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
@@ -137,11 +138,14 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
     }
   });
 
-  // Removing a module removes it from *your* racks only (one rack when
-  // ?rack_id= is given, otherwise all of them); the shared module record
-  // (manual, analysis) remains for other users.
+  // Removing a module removes it from *your* racks (one rack when ?rack_id=
+  // is given, otherwise all of them). Once a module is left in no rack at
+  // all, the module record itself is fully deleted — components, manuals,
+  // and *your* questions and notes about it included (other users' stay).
+  // While another user still has it racked, the shared record survives.
   router.delete('/:id', async (req, res, next) => {
     try {
+      const moduleId = Number(req.params.id);
       const rackWhere = { user_id: req.user.id };
       if (req.query.rack_id) rackWhere.id = Number(req.query.rack_id);
       const racks = await Rack.findAll({ where: rackWhere });
@@ -149,9 +153,12 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
         racks.length === 0
           ? 0
           : await RackModule.destroy({
-              where: { rack_id: racks.map((r) => r.id), module_id: Number(req.params.id) },
+              where: { rack_id: racks.map((r) => r.id), module_id: moduleId },
             });
       if (deleted === 0) return res.status(404).json({ error: 'Module not found' });
+      if ((await RackModule.count({ where: { module_id: moduleId } })) === 0) {
+        await deleteModulesDeep(db, req.user.id, [moduleId], { manualsDir });
+      }
       res.json({ ok: true });
     } catch (e) {
       next(e);

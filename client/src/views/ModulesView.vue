@@ -34,7 +34,14 @@ function rackNames(module) {
 
 async function remove(module) {
   const where = currentRack.value ? `from rack '${currentRack.value.name}'` : 'from all your racks';
-  if (!confirm(`Delete ${module.manufacturer} ${module.name} ${where}?`)) return;
+  if (
+    !confirm(
+      `Delete ${module.manufacturer} ${module.name} ${where}? ` +
+        'If it ends up in no rack at all, the module and its manuals, notes and ' +
+        'questions are permanently deleted.'
+    )
+  )
+    return;
   try {
     const query = selectedRack.value ? `?rack_id=${selectedRack.value}` : '';
     await api.delete(`/api/modules/${module.id}${query}`);

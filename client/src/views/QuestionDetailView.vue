@@ -1,10 +1,12 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { api } from '../api.js';
 
 const props = defineProps({ id: { type: String, required: true } });
+const router = useRouter();
 
 const question = ref(null);
 const options = ref(null);
@@ -123,6 +125,18 @@ async function requestAnswer() {
   }
 }
 
+async function removeQuestion() {
+  if (!confirm('Delete this question and its answer?')) return;
+  error.value = '';
+  try {
+    await api.delete(`/api/questions/${props.id}`);
+    clearTimeout(pollTimer);
+    router.push('/questions');
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
 onMounted(load);
 onUnmounted(() => clearTimeout(pollTimer));
 </script>
@@ -134,6 +148,14 @@ onUnmounted(() => clearTimeout(pollTimer));
     <h1 data-test="prompt">{{ question.prompt }}</h1>
     <p>
       <span class="badge" :class="question.status">{{ question.status }}</span>
+      <button
+        class="danger"
+        style="margin: 0 0 0 0.8rem"
+        data-test="delete-question"
+        @click="removeQuestion"
+      >
+        Delete
+      </button>
     </p>
 
     <div v-if="question.status === 'scoping'" class="panel" data-test="scoping">

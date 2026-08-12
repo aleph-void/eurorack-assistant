@@ -438,6 +438,27 @@ describe('QuestionsView', () => {
     expect(text).toContain('answered');
     expect(text).toContain('pending');
   });
+
+  it('deletes a question after confirmation', async () => {
+    api.get.mockResolvedValue([
+      { id: 1, prompt: 'Q1?', status: 'answered', created_at: new Date().toISOString() },
+      { id: 2, prompt: 'Q2?', status: 'pending', created_at: new Date().toISOString() },
+    ]);
+    api.delete.mockResolvedValue({ ok: true });
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const wrapper = mount(QuestionsView, { global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-question-1"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/questions/1');
+    expect(wrapper.find('[data-test="question-table"]').text()).not.toContain('Q1?');
+
+    // Declining the confirmation leaves the question alone.
+    vi.stubGlobal('confirm', vi.fn(() => false));
+    await wrapper.find('[data-test="delete-question-2"]').trigger('click');
+    expect(api.delete).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('QuestionDetailView', () => {
@@ -475,6 +496,30 @@ describe('QuestionDetailView', () => {
     const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
     expect(wrapper.find('[data-test="scoping"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('deletes the question after confirmation and returns to the list', async () => {
+    api.get.mockResolvedValue({
+      id: 1,
+      prompt: 'How?',
+      status: 'answered',
+      answer: 'A',
+      modules: [],
+      components: [],
+      manuals: [],
+      answers: [],
+      notes: [],
+    });
+    api.delete.mockResolvedValue({ ok: true });
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-question"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/questions/1');
+    expect(routerPush).toHaveBeenCalledWith('/questions');
     wrapper.unmount();
   });
 

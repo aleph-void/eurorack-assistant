@@ -24,13 +24,16 @@ afterEach(() => {
   fs.rmSync(manualsDir, { recursive: true, force: true });
 });
 
-function makeWorker(db, backend, fetchImpl, bus) {
+function makeWorker(db, backend, fetchImpl, bus, options = {}) {
   return createWorker(db, {
     manualsDir,
     backendFactory: () => backend,
     fetchImpl: fetchImpl || fakeFetch({}),
+    // Tests must never launch a real headless chrome.
+    renderImpl: async () => false,
     bus,
     log: () => {},
+    ...options,
   });
 }
 
@@ -280,6 +283,38 @@ describe('worker', () => {
     );
     expect(chained).toHaveLength(1);
     expect(chained[0].status).toBe('pending');
+  });
+
+  it('find_manual falls back to rendering the product page as a PDF', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id);
+    await enqueue(db, 'find_manual', { module_id: module.id });
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Make Noise',
+        module: 'Maths',
+        pdf_urls: [],
+        product_page_url: 'https://makenoise.com/maths',
+      }),
+    });
+    const rendered = [];
+    const renderImpl = async (url, dest) => {
+      rendered.push(url);
+      fs.writeFileSync(dest, PDF_BYTES);
+      return true;
+    };
+    const worker = makeWorker(db, backend, fakeFetch({}), null, { renderImpl });
+
+    const done = await worker.tick();
+    expect(done.status).toBe('complete');
+    expect(rendered).toEqual(['https://makenoise.com/maths']);
+
+    const { rows } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [module.id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].original_name).toBe('Make_Noise_Maths_Product_Page.pdf');
+    expect(fs.existsSync(path.join(manualsDir, `${PDF_HASH}.pdf`))).toBe(true);
   });
 
   it('processes an analyze_manual job into components', async () => {

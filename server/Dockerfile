@@ -2,8 +2,10 @@ FROM node:20-bookworm-slim
 
 # poppler-utils gives the LLM CLIs a way to read the manual PDFs
 # (pdftotext + the poppler renderer used by Claude Code's Read tool).
+# chromium lets the find_manual job save a module's product page as a PDF
+# when no manual PDF can be found (headless render in services/pdf.js).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends poppler-utils ca-certificates \
+    && apt-get install -y --no-install-recommends poppler-utils ca-certificates chromium \
     && rm -rf /var/lib/apt/lists/*
 
 # The LLM provider CLIs the server shells out to (configurable in the admin

@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { isProbablyPdf, safeManualName, downloadPdf } from '../src/services/pdf.js';
+import {
+  isProbablyPdf,
+  safeManualName,
+  downloadPdf,
+  findChrome,
+  renderPageToPdf,
+} from '../src/services/pdf.js';
 import { PDF_BYTES, fakeFetch } from './helpers.js';
 
 let dir;
@@ -51,6 +57,72 @@ describe('safeManualName', () => {
     expect(safeManualName('Mutable/Instruments', 'Beads (2020)')).toBe(
       'Mutable_Instruments_Beads_2020__Manual.pdf'
     );
+  });
+});
+
+describe('findChrome', () => {
+  it('finds an executable chrome name on PATH', () => {
+    fs.writeFileSync(path.join(dir, 'chromium'), '#!/bin/sh\n', { mode: 0o755 });
+    expect(findChrome({ PATH: dir })).toBe(path.join(dir, 'chromium'));
+  });
+
+  it('returns null when nothing matches', () => {
+    expect(findChrome({ PATH: dir })).toBe(null);
+  });
+});
+
+describe('renderPageToPdf', () => {
+  const chromePath = '/usr/bin/fake-chrome';
+
+  it('renders a page and validates the output', async () => {
+    const dest = path.join(dir, 'page.pdf');
+    const execImpl = (bin, args, opts, cb) => {
+      expect(bin).toBe(chromePath);
+      expect(args).toContain(`--print-to-pdf=${dest}`);
+      expect(args[args.length - 1]).toBe('https://example.com/page');
+      fs.writeFileSync(dest, PDF_BYTES);
+      cb(null);
+    };
+    expect(
+      await renderPageToPdf('https://example.com/page', dest, { chromePath, execImpl })
+    ).toBe(true);
+    expect(isProbablyPdf(dest).ok).toBe(true);
+  });
+
+  it('keeps a valid PDF even when chrome exits with an error', async () => {
+    const dest = path.join(dir, 'page.pdf');
+    const execImpl = (bin, args, opts, cb) => {
+      fs.writeFileSync(dest, PDF_BYTES);
+      cb(new Error('timed out'));
+    };
+    expect(
+      await renderPageToPdf('https://example.com/page', dest, { chromePath, execImpl })
+    ).toBe(true);
+  });
+
+  it('cleans up when chrome produces no valid PDF', async () => {
+    const dest = path.join(dir, 'page.pdf');
+    const execImpl = (bin, args, opts, cb) => {
+      fs.writeFileSync(dest, '<html>not a pdf</html>');
+      cb(null);
+    };
+    expect(
+      await renderPageToPdf('https://example.com/page', dest, { chromePath, execImpl })
+    ).toBe(false);
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it('fails without invoking anything when no chrome binary exists', async () => {
+    const dest = path.join(dir, 'page.pdf');
+    let called = false;
+    const execImpl = (bin, args, opts, cb) => {
+      called = true;
+      cb(null);
+    };
+    expect(
+      await renderPageToPdf('https://example.com/page', dest, { chromePath: null, execImpl })
+    ).toBe(false);
+    expect(called).toBe(false);
   });
 });
 

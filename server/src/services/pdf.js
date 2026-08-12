@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -67,6 +68,65 @@ export function safeManualName(manufacturer, module, suffix = 'Manual') {
     .replace(/[^a-zA-Z0-9._-]+/g, '_')
     .replace(/^_+|_+$/g, '');
   return `${base}.pdf`;
+}
+
+const CHROME_NAMES = ['google-chrome', 'chromium', 'chromium-browser', 'chrome'];
+
+// Locate a headless-capable Chrome/Chromium binary on PATH (the server docker
+// image ships `chromium`; local dev machines may have `google-chrome`).
+export function findChrome(env = process.env) {
+  for (const name of CHROME_NAMES) {
+    for (const dir of (env.PATH || '').split(path.delimiter)) {
+      if (!dir) continue;
+      const candidate = path.join(dir, name);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        // not here; keep looking
+      }
+    }
+  }
+  return null;
+}
+
+// Save a web page as a PDF using headless Chrome. Returns true when dest is a
+// valid PDF afterwards. Chrome's exit status is ignored (like the Python
+// original): a timed-out or crashed render may still have produced a usable
+// file, so the validation of dest is what decides. find_manuals.py also fell
+// back to weasyprint when no Chrome exists; there is no Node equivalent, so
+// the docker image guarantees chromium instead.
+export async function renderPageToPdf(url, dest, opts = {}) {
+  const { chromePath = findChrome(), execImpl = execFile, log = () => {} } = opts;
+  if (!chromePath) {
+    log('no chrome/chromium binary found on PATH; cannot render page to PDF');
+    return false;
+  }
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  const args = [
+    '--headless',
+    // Chrome's sandbox needs privileges (SUID helper or unprivileged user
+    // namespaces) that the server container does not have.
+    '--no-sandbox',
+    '--disable-gpu',
+    '--disable-dev-shm-usage',
+    '--no-pdf-header-footer',
+    '--virtual-time-budget=15000',
+    `--print-to-pdf=${dest}`,
+    url,
+  ];
+  try {
+    await new Promise((resolve, reject) => {
+      execImpl(chromePath, args, { timeout: 180_000 }, (err) => (err ? reject(err) : resolve()));
+    });
+  } catch (e) {
+    log(`headless chrome rendering ${url}: ${e.message}`);
+  }
+  const { ok, reason } = isProbablyPdf(dest);
+  if (ok) return true;
+  log(`rendered ${url} is not a valid PDF (${reason})`);
+  fs.rmSync(dest, { force: true });
+  return false;
 }
 
 // Download url to dest and verify it is a real PDF. Retries once with fuller

@@ -49,6 +49,14 @@ describe('parseModuleLines', () => {
       { manufacturer: 'Make Noise', name: 'Maths', quantity: 1 },
     ]);
   });
+
+  it('skips a CSV column-name header on the first line', () => {
+    const text =
+      '"manufacturer","module","quantity","manual file name"\n' + 'Make Noise,Maths\n';
+    expect(parseModuleLines(text)).toEqual([
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 1 },
+    ]);
+  });
 });
 
 describe('parseModuleCsv', () => {

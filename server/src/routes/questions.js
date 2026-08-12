@@ -480,5 +480,22 @@ export function questionRoutes(db) {
     }
   });
 
+  // Deleting a question takes all of its records with it via the schema's
+  // ON DELETE CASCADE rules: scope links, attachment selections, its own
+  // jobs, and any question_answers rows citing it as a source (the citing
+  // questions themselves are untouched).
+  router.delete('/:id', async (req, res, next) => {
+    try {
+      const question = await Question.findOne({
+        where: { id: Number(req.params.id), user_id: req.user.id },
+      });
+      if (!question) return res.status(404).json({ error: 'Question not found' });
+      await question.destroy();
+      res.json({ ok: true });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   return router;
 }
