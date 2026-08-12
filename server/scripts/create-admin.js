@@ -21,6 +21,8 @@ try {
     console.log('==============================================');
     console.log('  Store these credentials now — the password');
     console.log('  is not saved anywhere else in cleartext.');
+    console.log('  The admin must set a new password at the');
+    console.log('  first login with this one.');
     console.log('==============================================');
     console.log('');
   } else {

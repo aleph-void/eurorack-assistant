@@ -60,7 +60,8 @@ installation; on other distros install Docker yourself first):
 4. generates `.env` (random database password), builds the images, migrates
    the database, and
 5. creates the `admin` account — **its random password is printed once during
-   setup and stored only as a bcrypt hash**.
+   setup and stored only as a bcrypt hash**. The admin must set their own
+   password at the first login.
 
 The app is then at <http://localhost:8080>.
 
@@ -71,9 +72,9 @@ with `CLAUDE_CONFIG_DIR` / `CODEX_CONFIG_DIR` in `.env`).
 Useful afterwards:
 
 ```sh
-docker compose logs -f server                                   # watch the job worker
-docker compose run --rm server node scripts/create-admin.js --reset   # new admin password
-docker compose down                                             # stop (data persists in volumes)
+docker compose logs -f server   # watch the job worker
+./reset-admin-password.sh       # new random admin password (printed once; forces a change at next login)
+docker compose down             # stop (data persists in volumes)
 ```
 
 ## Architecture
@@ -141,6 +142,11 @@ database are all injected fakes (`pg-mem` in-memory Postgres for the server).
 
 - The admin password is generated with `crypto.randomBytes` at setup, printed
   once, and stored only as a bcrypt hash. Same for generated user passwords.
+- Accounts with a pending forced password change (the admin after setup or a
+  reset, any user after an admin password reset) are locked out of every API
+  endpoint except the change-password form until they set their own password.
+- Users change their own password (current password required) via the username
+  link in the nav; admins can reset any other user's password without it.
 - Only admins can create users (always non-admin) and change the LLM config.
 - Each user sees only their own module mappings, questions, notes, uploaded
   documents, and jobs (admins see all jobs).

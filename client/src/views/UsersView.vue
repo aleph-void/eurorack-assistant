@@ -9,6 +9,7 @@ const username = ref('');
 const password = ref('');
 const error = ref('');
 const created = ref(null);
+const resetResult = ref(null);
 const busy = ref(false);
 
 async function load() {
@@ -34,6 +35,23 @@ async function createUser() {
     error.value = e.message;
   } finally {
     busy.value = false;
+  }
+}
+
+async function resetPassword(user) {
+  if (
+    !confirm(
+      `Reset the password for ${user.username}? They are logged out everywhere and must set a new password at their next login.`
+    )
+  ) {
+    return;
+  }
+  error.value = '';
+  resetResult.value = null;
+  try {
+    resetResult.value = await api.post(`/api/users/${user.id}/password`);
+  } catch (e) {
+    error.value = e.message;
   }
 }
 
@@ -88,6 +106,17 @@ onMounted(load);
   </div>
 
   <div class="panel">
+    <div v-if="resetResult" class="password-reveal" data-test="reset-result">
+      <p style="margin: 0">
+        Password for <strong>{{ resetResult.username }}</strong> reset. New password:
+        <strong data-test="reset-password-value">{{ resetResult.generated_password }}</strong
+        ><br />
+        <span class="muted">
+          Share it now — it is not stored in cleartext and cannot be shown again. They must
+          pick their own password at their next login.
+        </span>
+      </p>
+    </div>
     <table data-test="user-table">
       <thead>
         <tr>
@@ -107,15 +136,23 @@ onMounted(load);
           </td>
           <td class="muted">{{ new Date(user.created_at).toLocaleDateString() }}</td>
           <td>
-            <button
-              v-if="user.id !== auth.user?.id"
-              class="danger"
-              style="margin: 0"
-              :data-test="`delete-${user.id}`"
-              @click="removeUser(user)"
-            >
-              Delete
-            </button>
+            <template v-if="user.id !== auth.user?.id">
+              <button
+                style="margin: 0 0.5rem 0 0"
+                :data-test="`reset-${user.id}`"
+                @click="resetPassword(user)"
+              >
+                Reset password
+              </button>
+              <button
+                class="danger"
+                style="margin: 0"
+                :data-test="`delete-${user.id}`"
+                @click="removeUser(user)"
+              >
+                Delete
+              </button>
+            </template>
           </td>
         </tr>
       </tbody>

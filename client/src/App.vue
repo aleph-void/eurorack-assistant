@@ -47,7 +47,9 @@ async function logout() {
       <RouterLink to="/admin/config">LLM Config</RouterLink>
     </template>
     <span class="spacer"></span>
-    <span class="muted">{{ auth.user.username }}</span>
+    <RouterLink class="muted" to="/account/password" title="Change password" data-test="account">
+      {{ auth.user.username }}
+    </RouterLink>
     <a href="#" data-test="logout" @click.prevent="logout">Log out</a>
   </nav>
   <main class="container">

@@ -9,6 +9,7 @@ export const useAuthStore = defineStore('auth', {
   getters: {
     isLoggedIn: (state) => !!state.user,
     isAdmin: (state) => !!state.user?.is_admin,
+    mustChangePassword: (state) => !!state.user?.must_change_password,
   },
   actions: {
     async fetchMe() {
@@ -24,6 +25,13 @@ export const useAuthStore = defineStore('auth', {
     async login(username, password) {
       this.user = await api.post('/api/auth/login', { username, password });
       this.loaded = true;
+      return this.user;
+    },
+    async changePassword(currentPassword, newPassword) {
+      this.user = await api.post('/api/auth/password', {
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
       return this.user;
     },
     async logout() {

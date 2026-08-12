@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
+import { Op } from 'sequelize';
 
 export const SESSION_COOKIE = 'session';
 export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
@@ -21,6 +22,10 @@ export function generatePassword(length = 20) {
   return out;
 }
 
+export function generateHexPassword(bytes = 16) {
+  return crypto.randomBytes(bytes).toString('hex');
+}
+
 export async function createSession(db, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
@@ -30,6 +35,14 @@ export async function createSession(db, userId) {
 
 export async function deleteSession(db, token) {
   await db.models.Session.destroy({ where: { token } });
+}
+
+// Invalidates every session of a user, optionally sparing one token (so a
+// user changing their own password stays logged in on the current browser).
+export async function deleteUserSessions(db, userId, { exceptToken = null } = {}) {
+  const where = { user_id: userId };
+  if (exceptToken) where.token = { [Op.ne]: exceptToken };
+  await db.models.Session.destroy({ where });
 }
 
 export async function getSessionUser(db, token) {
@@ -43,15 +56,23 @@ export async function getSessionUser(db, token) {
     await deleteSession(db, token);
     return null;
   }
-  const { id, username, is_admin } = session.User;
-  return { id, username, is_admin };
+  const { id, username, is_admin, must_change_password } = session.User;
+  return { id, username, is_admin, must_change_password };
 }
 
-export function requireAuth(db) {
+// A user flagged must_change_password is locked out of everything except the
+// auth endpoints (which opt in with allowPasswordChange) until they set a new
+// password.
+export function requireAuth(db, { allowPasswordChange = false } = {}) {
   return async (req, res, next) => {
     try {
       const user = await getSessionUser(db, req.cookies?.[SESSION_COOKIE]);
       if (!user) return res.status(401).json({ error: 'Not authenticated' });
+      if (user.must_change_password && !allowPasswordChange) {
+        return res
+          .status(403)
+          .json({ error: 'Password change required', code: 'password_change_required' });
+      }
       req.user = user;
       next();
     } catch (e) {

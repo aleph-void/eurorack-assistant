@@ -1,6 +1,12 @@
 import { Router } from 'express';
 import { fn, col, where } from 'sequelize';
-import { hashPassword, generatePassword, requireAuth, requireAdmin } from '../auth.js';
+import {
+  deleteUserSessions,
+  generatePassword,
+  hashPassword,
+  requireAdmin,
+  requireAuth,
+} from '../auth.js';
 
 function publicUser(user) {
   const { id, username, is_admin, created_at } = user;
@@ -55,6 +61,39 @@ export function userRoutes(db) {
       });
       const user = publicUser(created);
       res.status(201).json(generated ? { ...user, generated_password: generated } : user);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Admins reset another user's password without knowing the current one.
+  // If no password is given, one is generated and returned once. The user is
+  // logged out everywhere and must pick their own password at the next login.
+  router.post('/:id/password', async (req, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      if (id === req.user.id) {
+        return res
+          .status(400)
+          .json({ error: 'Use the change-password form to change your own password' });
+      }
+      const user = await User.findByPk(id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      let { password } = req.body || {};
+      let generated = null;
+      if (!password) {
+        generated = generatePassword();
+        password = generated;
+      } else if (String(password).length < 8) {
+        return res.status(400).json({ error: 'password must be at least 8 characters' });
+      }
+      await user.update({
+        password_hash: hashPassword(String(password)),
+        must_change_password: true,
+      });
+      await deleteUserSessions(db, user.id);
+      const result = { ok: true, username: user.username };
+      res.json(generated ? { ...result, generated_password: generated } : result);
     } catch (e) {
       next(e);
     }

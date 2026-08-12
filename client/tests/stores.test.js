@@ -32,6 +32,21 @@ describe('auth store', () => {
     expect(auth.isLoggedIn).toBe(false);
   });
 
+  it('changePassword updates the user and clears the forced flag', async () => {
+    api.post.mockResolvedValueOnce({ id: 1, username: 'u', is_admin: false, must_change_password: true });
+    const auth = useAuthStore();
+    await auth.login('u', 'pw');
+    expect(auth.mustChangePassword).toBe(true);
+
+    api.post.mockResolvedValueOnce({ id: 1, username: 'u', is_admin: false, must_change_password: false });
+    await auth.changePassword('pw', 'new-pw');
+    expect(api.post).toHaveBeenCalledWith('/api/auth/password', {
+      current_password: 'pw',
+      new_password: 'new-pw',
+    });
+    expect(auth.mustChangePassword).toBe(false);
+  });
+
   it('logout clears the user even if the call fails', async () => {
     api.post.mockResolvedValueOnce({ id: 1, username: 'u', is_admin: false });
     const auth = useAuthStore();

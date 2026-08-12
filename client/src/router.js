@@ -11,10 +11,12 @@ import JobsView from './views/JobsView.vue';
 import NotesView from './views/NotesView.vue';
 import UsersView from './views/UsersView.vue';
 import ConfigView from './views/ConfigView.vue';
+import ChangePasswordView from './views/ChangePasswordView.vue';
 
 export const routes = [
   { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
   { path: '/', redirect: '/modules' },
+  { path: '/account/password', name: 'change-password', component: ChangePasswordView },
   { path: '/modules', name: 'modules', component: ModulesView },
   { path: '/modules/:id', name: 'module-detail', component: ModuleDetailView, props: true },
   { path: '/import', name: 'import', component: ImportView },
@@ -28,8 +30,12 @@ export const routes = [
 ];
 
 // Exported for tests: decides where (if anywhere) to redirect a navigation.
-export function guardRedirect(to, { isLoggedIn, isAdmin }) {
+export function guardRedirect(to, { isLoggedIn, isAdmin, mustChangePassword }) {
   if (!to.meta?.public && !isLoggedIn) return { name: 'login', query: { redirect: to.fullPath } };
+  // A user with a forced password change can only see the change form.
+  if (isLoggedIn && mustChangePassword && to.name !== 'change-password') {
+    return { name: 'change-password' };
+  }
   if (to.meta?.admin && !isAdmin) return { name: 'modules' };
   if (to.name === 'login' && isLoggedIn) return { name: 'modules' };
   return null;
@@ -44,7 +50,11 @@ export function createAppRouter() {
   router.beforeEach(async (to) => {
     const auth = useAuthStore();
     if (!auth.loaded) await auth.fetchMe();
-    const redirect = guardRedirect(to, { isLoggedIn: auth.isLoggedIn, isAdmin: auth.isAdmin });
+    const redirect = guardRedirect(to, {
+      isLoggedIn: auth.isLoggedIn,
+      isAdmin: auth.isAdmin,
+      mustChangePassword: auth.mustChangePassword,
+    });
     return redirect || true;
   });
 

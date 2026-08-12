@@ -18,6 +18,7 @@ export function defineModels(sequelize) {
       username: { type: DataTypes.TEXT, allowNull: false, unique: true },
       password_hash: { type: DataTypes.TEXT, allowNull: false },
       is_admin: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+      must_change_password: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     },
     { tableName: 'users', createdAt: 'created_at', updatedAt: false }
   );

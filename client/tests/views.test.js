@@ -26,9 +26,11 @@ import QuestionsView from '../src/views/QuestionsView.vue';
 import QuestionDetailView from '../src/views/QuestionDetailView.vue';
 import JobsView from '../src/views/JobsView.vue';
 import UsersView from '../src/views/UsersView.vue';
+import ChangePasswordView from '../src/views/ChangePasswordView.vue';
 import ConfigView from '../src/views/ConfigView.vue';
 import NotesView from '../src/views/NotesView.vue';
 import { useJobsStore } from '../src/stores/jobs.js';
+import { useAuthStore } from '../src/stores/auth.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -465,6 +467,22 @@ describe('UsersView', () => {
     expect(wrapper.find('[data-test="generated-password"]').text()).toBe('abc123xyz');
   });
 
+  it('resets a user password and reveals the generated password once', async () => {
+    api.get.mockResolvedValue([
+      { id: 1, username: 'admin', is_admin: true, created_at: new Date().toISOString() },
+      { id: 2, username: 'alice', is_admin: false, created_at: new Date().toISOString() },
+    ]);
+    api.post.mockResolvedValue({ ok: true, username: 'alice', generated_password: 'freshpw123' });
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const wrapper = mount(UsersView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="reset-2"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/users/2/password');
+    expect(wrapper.find('[data-test="reset-password-value"]').text()).toBe('freshpw123');
+    vi.unstubAllGlobals();
+  });
+
   it('lists users with roles', async () => {
     api.get.mockResolvedValue([
       { id: 1, username: 'admin', is_admin: true, created_at: new Date().toISOString() },
@@ -475,6 +493,51 @@ describe('UsersView', () => {
     const text = wrapper.find('[data-test="user-table"]').text();
     expect(text).toContain('admin');
     expect(text).toContain('alice');
+  });
+});
+
+describe('ChangePasswordView', () => {
+  it('changes the password and navigates to modules', async () => {
+    api.post.mockResolvedValue({ id: 1, username: 'alice', is_admin: false, must_change_password: false });
+    const wrapper = mount(ChangePasswordView, { global: testGlobal() });
+    await wrapper.find('[data-test="current-password"]').setValue('old-password');
+    await wrapper.find('[data-test="new-password"]').setValue('new-password');
+    await wrapper.find('[data-test="confirm-password"]').setValue('new-password');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/auth/password', {
+      current_password: 'old-password',
+      new_password: 'new-password',
+    });
+    expect(routerPush).toHaveBeenCalledWith({ name: 'modules' });
+  });
+
+  it('rejects mismatched confirmation without calling the API', async () => {
+    const wrapper = mount(ChangePasswordView, { global: testGlobal() });
+    await wrapper.find('[data-test="current-password"]').setValue('old-password');
+    await wrapper.find('[data-test="new-password"]').setValue('new-password');
+    await wrapper.find('[data-test="confirm-password"]').setValue('different');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="error"]').text()).toContain('do not match');
+  });
+
+  it('shows the forced-change notice and API errors', async () => {
+    api.post.mockRejectedValue(new Error('Current password is incorrect'));
+    const global = testGlobal();
+    const wrapper = mount(ChangePasswordView, { global });
+    const auth = useAuthStore();
+    auth.user = { id: 1, username: 'admin', is_admin: true, must_change_password: true };
+    await flushPromises();
+    expect(wrapper.find('[data-test="forced"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="current-password"]').setValue('wrong');
+    await wrapper.find('[data-test="new-password"]').setValue('new-password');
+    await wrapper.find('[data-test="confirm-password"]').setValue('new-password');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(wrapper.find('[data-test="error"]').text()).toContain('incorrect');
   });
 });
 

@@ -3,6 +3,7 @@ CREATE TABLE users (
   username TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
