@@ -56,6 +56,24 @@ ensure_docker() {
   fi
 }
 
+# Compose ≥2.34 builds via buildx Bake and warns ("configured to build using
+# Bake, but buildx isn't installed") when the plugin is missing — make sure
+# it's there.
+ensure_buildx() {
+  if $DOCKER buildx version >/dev/null 2>&1; then
+    return
+  fi
+  if ! is_ubuntu; then
+    warn "docker buildx plugin missing; compose will fall back to the classic builder."
+    warn "Install it manually: https://docs.docker.com/build/concepts/overview/#install-buildx"
+    return
+  fi
+  info "installing docker-buildx (requires sudo)..."
+  sudo apt-get install -y docker-buildx || {
+    sudo apt-get update && sudo apt-get install -y docker-buildx
+  } || warn "could not install docker-buildx; compose will fall back to the classic builder."
+}
+
 # --------------------------------------------------------------- LLM CLIs ----
 ensure_node() {
   if command -v npm >/dev/null 2>&1; then return 0; fi
@@ -173,6 +191,7 @@ random_hex() {
 }
 
 ensure_docker
+ensure_buildx
 ensure_llm_clis
 
 if [ ! -f .env ]; then
@@ -212,8 +231,14 @@ else
   fi
 fi
 
-info "creating the admin account..."
-$DOCKER compose run --rm --no-deps server node scripts/create-admin.js
+# Admin creation is skipped when an admin account already exists.
+HAS_ADMIN=$($DOCKER compose run --rm --no-deps -T server node scripts/has-admin.js 2>/dev/null | tail -n 1 | tr -d '[:space:]' || true)
+if [ "$HAS_ADMIN" = "yes" ]; then
+  info "admin account already exists; skipping creation (./reset-admin-password.sh resets it)."
+else
+  info "creating the admin account..."
+  $DOCKER compose run --rm --no-deps server node scripts/create-admin.js
+fi
 
 info "starting all services..."
 $DOCKER compose up -d
@@ -221,7 +246,11 @@ $DOCKER compose up -d
 APP_PORT=$(grep -E '^APP_PORT=' .env | cut -d= -f2)
 echo ""
 info "done — the app is at http://localhost:${APP_PORT:-8080}"
-info "log in with the admin credentials printed above."
+if [ "$HAS_ADMIN" = "yes" ]; then
+  info "log in with your existing admin credentials."
+else
+  info "log in with the admin credentials printed above."
+fi
 if [ -z "$PROVIDER" ] && [ -z "$EXISTING_PROVIDER" ]; then
   info "LLM provider defaults to Claude Code; change it on the admin LLM Config page."
 fi
