@@ -44,6 +44,67 @@ const grouped = computed(() => {
   }));
 });
 
+const NORMALIZATION_KIND_LABELS = {
+  input: 'from input',
+  output: 'from output',
+  internal: 'internal signal',
+};
+
+// Human-readable source of a normalled connection: another jack on the
+// module, or an internal signal with no panel component.
+function normalizationSource(n) {
+  return n.source_component_id ? componentName(n.source_component_id) : n.source_label;
+}
+
+// ---- manually recording normalled connections ----
+const normTarget = ref(''); // component id
+const normSource = ref(''); // component id, or 'internal' for a free-text signal
+const normSourceLabel = ref('');
+const normDescription = ref('');
+const normError = ref('');
+
+// Normalled signals always land on an input; they come from another jack or
+// an internal signal.
+const inputJacks = computed(
+  () => module.value?.components?.filter((c) => c.type === 'input_jack') || []
+);
+const jacks = computed(
+  () => module.value?.components?.filter((c) => c.type.endsWith('_jack')) || []
+);
+const normValid = computed(() => {
+  if (!normTarget.value || !normSource.value) return false;
+  if (normSource.value === 'internal') return normSourceLabel.value.trim() !== '';
+  return Number(normSource.value) !== Number(normTarget.value);
+});
+
+async function createNormalization() {
+  normError.value = '';
+  try {
+    const payload = { target_component_id: Number(normTarget.value) };
+    if (normSource.value === 'internal') payload.source_label = normSourceLabel.value.trim();
+    else payload.source_component_id = Number(normSource.value);
+    if (normDescription.value.trim()) payload.description = normDescription.value.trim();
+    await api.post(`/api/modules/${props.id}/normalizations`, payload);
+    normTarget.value = '';
+    normSource.value = '';
+    normSourceLabel.value = '';
+    normDescription.value = '';
+    await load();
+  } catch (e) {
+    normError.value = e.message;
+  }
+}
+
+async function removeNormalization(n) {
+  normError.value = '';
+  try {
+    await api.delete(`/api/modules/${props.id}/normalizations/${n.id}`);
+    await load();
+  } catch (e) {
+    normError.value = e.message;
+  }
+}
+
 function voltageRange(c) {
   if (c.voltage_min === null && c.voltage_max === null) return '—';
   const min = c.voltage_min === null ? '?' : `${c.voltage_min}V`;
@@ -165,6 +226,85 @@ onMounted(load);
     <div v-if="module.summary" class="panel" data-test="summary">
       <h2>Summary</h2>
       <p style="white-space: pre-wrap">{{ module.summary }}</p>
+    </div>
+
+    <div v-if="module.components?.length" class="panel" data-test="normalizations">
+      <h2>Normalled connections</h2>
+      <p class="muted">
+        Default connections that exist until a cable is patched into the target input —
+        they are part of the signal path even with nothing plugged in.
+      </p>
+      <table v-if="module.normalizations?.length">
+        <thead>
+          <tr>
+            <th>Input</th>
+            <th>Normalled to</th>
+            <th>Kind</th>
+            <th>Description</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="n in module.normalizations" :key="n.id" :data-test="`normalization-${n.id}`">
+            <td>{{ componentName(n.target_component_id) }}</td>
+            <td>{{ normalizationSource(n) }}</td>
+            <td>{{ NORMALIZATION_KIND_LABELS[n.kind] || n.kind }}</td>
+            <td>{{ n.description || '—' }}</td>
+            <td>
+              <button
+                class="danger"
+                style="margin: 0"
+                :data-test="`delete-normalization-${n.id}`"
+                @click="removeNormalization(n)"
+              >
+                Remove
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="muted">No normalled connections recorded for this module.</p>
+
+      <form @submit.prevent="createNormalization">
+        <div class="row">
+          <div>
+            <label for="norm-target">Input</label>
+            <select id="norm-target" v-model="normTarget" data-test="norm-target">
+              <option value="" disabled>Select an input…</option>
+              <option v-for="c in inputJacks" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </div>
+          <div>
+            <label for="norm-source">Normalled to</label>
+            <select id="norm-source" v-model="normSource" data-test="norm-source">
+              <option value="" disabled>Select a source…</option>
+              <option v-for="c in jacks" :key="c.id" :value="c.id">
+                {{ c.name }} ({{ c.type === 'input_jack' ? 'input' : 'output' }})
+              </option>
+              <option value="internal">Internal / unlisted signal…</option>
+            </select>
+          </div>
+          <div v-if="normSource === 'internal'">
+            <label for="norm-source-label">Signal name</label>
+            <input
+              id="norm-source-label"
+              v-model="normSourceLabel"
+              placeholder="e.g. internal oscillator"
+              data-test="norm-source-label"
+            />
+          </div>
+          <div style="flex: 2">
+            <label for="norm-description">Description (optional)</label>
+            <input id="norm-description" v-model="normDescription" data-test="norm-description" />
+          </div>
+          <div class="shrink">
+            <button type="submit" style="margin: 0" :disabled="!normValid" data-test="norm-create">
+              Add
+            </button>
+          </div>
+        </div>
+        <p v-if="normError" class="error" data-test="norm-error">{{ normError }}</p>
+      </form>
     </div>
 
     <div class="panel" data-test="documents">

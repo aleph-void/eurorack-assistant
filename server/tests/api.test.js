@@ -26,10 +26,15 @@ describe('modules API', () => {
       summary: 'A function generator.',
       analysis_status: 'complete',
     });
-    await db.query(
+    const { rows: components } = await db.query(
       `INSERT INTO module_components (module_id, type, name, description, voltage_min, voltage_max, polarity)
-       VALUES ($1, 'input_jack', 'Signal In', 'Input', -5, 5, 'bipolar')`,
+       VALUES ($1, 'input_jack', 'Signal In', 'Input', -5, 5, 'bipolar') RETURNING id`,
       [module.id]
+    );
+    await db.query(
+      `INSERT INTO component_normalizations (module_id, target_component_id, source_label, kind, description)
+       VALUES ($1, $2, 'internal oscillator', 'internal', 'Runs into the input by default.')`,
+      [module.id, components[0].id]
     );
 
     const res = await request(app).get(`/api/modules/${module.id}`).set('Cookie', aliceCookie);
@@ -41,6 +46,136 @@ describe('modules API', () => {
       name: 'Signal In',
       polarity: 'bipolar',
     });
+    expect(res.body.normalizations).toHaveLength(1);
+    expect(res.body.normalizations[0]).toMatchObject({
+      target_component_id: components[0].id,
+      source_component_id: null,
+      source_label: 'internal oscillator',
+      kind: 'internal',
+      description: 'Runs into the input by default.',
+    });
+  });
+
+  it('manually adds normalled connections, deriving the kind from the source', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, users[0].id);
+    const { rows: jacks } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES
+         ($1, 'input_jack', 'Filter In'),
+         ($1, 'output_jack', 'Osc Out') RETURNING id, name`,
+      [module.id]
+    );
+    const filterIn = jacks.find((j) => j.name === 'Filter In');
+    const oscOut = jacks.find((j) => j.name === 'Osc Out');
+
+    const fromJack = await request(app)
+      .post(`/api/modules/${module.id}/normalizations`)
+      .set('Cookie', aliceCookie)
+      .send({
+        target_component_id: filterIn.id,
+        source_component_id: oscOut.id,
+        description: 'Oscillator feeds the filter by default.',
+      });
+    expect(fromJack.status).toBe(201);
+    expect(fromJack.body).toMatchObject({
+      target_component_id: filterIn.id,
+      source_component_id: oscOut.id,
+      source_label: null,
+      kind: 'output',
+      description: 'Oscillator feeds the filter by default.',
+    });
+
+    const internal = await request(app)
+      .post(`/api/modules/${module.id}/normalizations`)
+      .set('Cookie', aliceCookie)
+      .send({ target_component_id: filterIn.id, source_label: 'internal noise source' });
+    expect(internal.status).toBe(201);
+    expect(internal.body).toMatchObject({
+      source_component_id: null,
+      source_label: 'internal noise source',
+      kind: 'internal',
+      description: null,
+    });
+
+    const detail = await request(app).get(`/api/modules/${module.id}`).set('Cookie', aliceCookie);
+    expect(detail.body.normalizations).toHaveLength(2);
+  });
+
+  it('validates manual normalizations and rejects duplicates', async () => {
+    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, users[0].id);
+    const other = await insertModule(db, users[0].id, { manufacturer: 'ALM', name: 'Pam' });
+    const { rows: jacks } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES
+         ($1, 'input_jack', 'In 1'),
+         ($1, 'input_jack', 'In 2') RETURNING id, name`,
+      [module.id]
+    );
+    const { rows: foreign } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'output_jack', 'Out') RETURNING id`,
+      [other.id]
+    );
+    const [in1, in2] = jacks;
+    const post = (body, cookie = aliceCookie) =>
+      request(app)
+        .post(`/api/modules/${module.id}/normalizations`)
+        .set('Cookie', cookie)
+        .send(body);
+
+    // Target and source must be components of THIS module.
+    expect((await post({ target_component_id: foreign[0].id, source_component_id: in1.id })).status).toBe(400);
+    expect((await post({ target_component_id: in2.id, source_component_id: foreign[0].id })).status).toBe(400);
+    // A source (component or label) is required, and self-normalling is not a thing.
+    expect((await post({ target_component_id: in2.id })).status).toBe(400);
+    expect((await post({ target_component_id: in2.id, source_component_id: in2.id })).status).toBe(400);
+    // The module must be in one of the requesting user's racks.
+    expect((await post({ target_component_id: in2.id, source_component_id: in1.id }, adminCookie)).status).toBe(404);
+
+    expect((await post({ target_component_id: in2.id, source_component_id: in1.id })).status).toBe(201);
+    expect((await post({ target_component_id: in2.id, source_component_id: in1.id })).status).toBe(409);
+    expect((await post({ target_component_id: in2.id, source_label: 'Ramp' })).status).toBe(201);
+    expect((await post({ target_component_id: in2.id, source_label: 'ramp' })).status).toBe(409);
+  });
+
+  it('deletes normalizations only through a module the user has racked', async () => {
+    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, users[0].id);
+    const { rows: jacks } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'input_jack', 'In') RETURNING id`,
+      [module.id]
+    );
+    const { rows: norm } = await db.query(
+      `INSERT INTO component_normalizations (module_id, target_component_id, source_label, kind)
+       VALUES ($1, $2, 'internal LFO', 'internal') RETURNING id`,
+      [module.id, jacks[0].id]
+    );
+
+    // Admin hasn't racked the module, so even an admin gets a 404.
+    expect(
+      (
+        await request(app)
+          .delete(`/api/modules/${module.id}/normalizations/${norm[0].id}`)
+          .set('Cookie', adminCookie)
+      ).status
+    ).toBe(404);
+
+    const res = await request(app)
+      .delete(`/api/modules/${module.id}/normalizations/${norm[0].id}`)
+      .set('Cookie', aliceCookie);
+    expect(res.status).toBe(200);
+    const { rows: left } = await db.query('SELECT * FROM component_normalizations');
+    expect(left).toHaveLength(0);
+
+    expect(
+      (
+        await request(app)
+          .delete(`/api/modules/${module.id}/normalizations/${norm[0].id}`)
+          .set('Cookie', aliceCookie)
+      ).status
+    ).toBe(404);
   });
 
   it('hides unmapped modules; delete keeps the record only while another user has it', async () => {

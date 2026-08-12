@@ -16,6 +16,8 @@ import { findManualForModule, researchModule } from '../src/services/manualFinde
 import {
   analyzeManualForModule,
   normalizeComponents,
+  normalizeNormalizations,
+  resolveNormalizations,
   ANALYSIS_TEMPLATE,
 } from '../src/services/manualAnalyzer.js';
 import {
@@ -519,6 +521,92 @@ describe('normalizeComponents', () => {
   });
 });
 
+describe('normalizeNormalizations', () => {
+  it('keeps entries with a target and a source or label, trimming strings', () => {
+    const normalizations = normalizeNormalizations([
+      { target: ' IN 2 ', source: 'IN 1', description: ' Chained ' },
+      { target: 'Filter In', source: null, source_label: 'internal oscillator' },
+      { target: '', source: 'IN 1' },
+      { target: 'IN 3' },
+      'nope',
+      null,
+    ]);
+    expect(normalizations).toEqual([
+      { target: 'IN 2', source: 'IN 1', source_label: null, description: 'Chained' },
+      {
+        target: 'Filter In',
+        source: null,
+        source_label: 'internal oscillator',
+        description: null,
+      },
+    ]);
+  });
+});
+
+describe('resolveNormalizations', () => {
+  const components = [
+    { id: 1, name: 'IN 1', type: 'input_jack' },
+    { id: 2, name: 'IN 2', type: 'input_jack' },
+    { id: 3, name: 'Osc Out', type: 'output_jack' },
+    { id: 4, name: 'Filter In', type: 'input_jack' },
+  ];
+
+  it('resolves names to component ids and derives the kind', () => {
+    const rows = resolveNormalizations(
+      normalizeNormalizations([
+        { target: 'in 2', source: 'IN 1', description: 'Input chaining' },
+        { target: 'Filter In', source: 'Osc Out' },
+        { target: 'Filter In', source_label: 'internal noise source' },
+      ]),
+      components
+    );
+    expect(rows).toEqual([
+      {
+        target_component_id: 2,
+        source_component_id: 1,
+        source_label: null,
+        kind: 'input',
+        description: 'Input chaining',
+      },
+      {
+        target_component_id: 4,
+        source_component_id: 3,
+        source_label: null,
+        kind: 'output',
+        description: null,
+      },
+      {
+        target_component_id: 4,
+        source_component_id: null,
+        source_label: 'internal noise source',
+        kind: 'internal',
+        description: null,
+      },
+    ]);
+  });
+
+  it('drops unknown targets and self-references, keeps unresolved sources as labels, dedupes', () => {
+    const rows = resolveNormalizations(
+      normalizeNormalizations([
+        { target: 'Nope', source: 'IN 1' },
+        { target: 'IN 2', source: 'IN 2' },
+        { target: 'IN 2', source: 'Mystery Out' },
+        { target: 'IN 2', source: 'Mystery Out' },
+      ]),
+      components
+    );
+    expect(rows).toEqual([
+      {
+        target_component_id: 2,
+        source_component_id: null,
+        source_label: 'Mystery Out',
+        kind: 'internal',
+        description: null,
+      },
+    ]);
+  });
+});
+
 describe('analyzeManualForModule', () => {
   it('stores the summary and typed components', async () => {
     const db = await createTestDb();
@@ -550,11 +638,20 @@ describe('analyzeManualForModule', () => {
           },
           { type: 'button', name: 'Cycle', description: 'Toggles cycling' },
         ],
+        normalizations: [
+          {
+            target: 'Signal In 1',
+            source: 'EOR',
+            description: 'EOR is normalled to the channel 1 input.',
+          },
+          { target: 'Signal In 1', source_label: 'internal +10V offset' },
+        ],
       }),
     });
 
     const result = await analyzeManualForModule(db, backend, module, '/tmp/maths.pdf');
     expect(result.components).toHaveLength(3);
+    expect(result.normalizations).toHaveLength(2);
     expect(backend.calls.analyzeDocument[0][0]).toContain('Make Noise Maths');
 
     const { rows: stored } = await db.query(
@@ -566,18 +663,41 @@ describe('analyzeManualForModule', () => {
     expect(stored[1].polarity).toBe('unipolar');
     expect(stored[2].voltage_min).toBeNull();
 
+    const { rows: normalled } = await db.query(
+      'SELECT * FROM component_normalizations WHERE module_id = $1 ORDER BY id',
+      [module.id]
+    );
+    expect(normalled).toHaveLength(2);
+    expect(normalled[0]).toMatchObject({
+      target_component_id: stored[0].id,
+      source_component_id: stored[1].id,
+      kind: 'output',
+      description: 'EOR is normalled to the channel 1 input.',
+    });
+    expect(normalled[1]).toMatchObject({
+      target_component_id: stored[0].id,
+      source_component_id: null,
+      source_label: 'internal +10V offset',
+      kind: 'internal',
+    });
+
     const { rows: mod } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
     expect(mod[0].analysis_status).toBe('complete');
     expect(mod[0].summary).toContain('dual function generator');
   });
 
-  it('replaces components on re-analysis', async () => {
+  it('replaces components and normalizations on re-analysis', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id, { manual_hash: PDF_HASH });
-    await db.query(
-      `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'other', 'Stale')`,
+    const { rows: stale } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'other', 'Stale') RETURNING id`,
       [module.id]
+    );
+    await db.query(
+      `INSERT INTO component_normalizations (module_id, target_component_id, source_label, kind)
+       VALUES ($1, $2, 'stale signal', 'internal')`,
+      [module.id, stale[0].id]
     );
 
     const backend = fakeBackend({
@@ -588,6 +708,11 @@ describe('analyzeManualForModule', () => {
       module.id,
     ]);
     expect(rows.map((r) => r.name)).toEqual(['Rise']);
+    const { rows: normalled } = await db.query(
+      'SELECT * FROM component_normalizations WHERE module_id = $1',
+      [module.id]
+    );
+    expect(normalled).toHaveLength(0);
   });
 
   it('rejects an empty analysis', async () => {
@@ -600,9 +725,19 @@ describe('analyzeManualForModule', () => {
     );
   });
 
-  it('asks for every component type in the prompt', () => {
+  it('asks for every component type and for normalled connections in the prompt', () => {
     const prompt = ANALYSIS_TEMPLATE('Make Noise', 'Maths');
-    for (const term of ['input_jack', 'output_jack', 'button', 'toggle', 'unipolar', 'bipolar']) {
+    for (const term of [
+      'input_jack',
+      'output_jack',
+      'button',
+      'toggle',
+      'unipolar',
+      'bipolar',
+      'normalizations',
+      'NORMALLED',
+      'source_label',
+    ]) {
       expect(prompt).toContain(term);
     }
   });
@@ -848,6 +983,40 @@ describe('answerQuestion', () => {
     expect(prompt).toContain('How do I patch a krell?');
     expect(prompt).toContain('Make Noise Maths');
     expect(pdfs).toEqual([path.join(manualsDir, `${PDF_HASH}.pdf`)]);
+  });
+
+  it('describes normalled connections of in-scope modules in the prompt', async () => {
+    const { db, module, question } = await fixture();
+    const { rows: jacks } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES
+         ($1, 'input_jack', 'Filter In'),
+         ($1, 'output_jack', 'Osc Out') RETURNING id, name`,
+      [module.id]
+    );
+    const filterIn = jacks.find((j) => j.name === 'Filter In');
+    const oscOut = jacks.find((j) => j.name === 'Osc Out');
+    await db.query(
+      `INSERT INTO component_normalizations
+         (module_id, target_component_id, source_component_id, kind, description)
+       VALUES ($1, $2, $3, 'output', 'The oscillator feeds the filter by default.')`,
+      [module.id, filterIn.id, oscOut.id]
+    );
+    await db.query(
+      `INSERT INTO component_normalizations (module_id, target_component_id, source_label, kind)
+       VALUES ($1, $2, 'internal noise source', 'internal')`,
+      [module.id, filterIn.id]
+    );
+
+    const backend = fakeBackend({ answerWithDocuments: 'ok' });
+    await answerQuestion(db, backend, question, manualsDir);
+    const [prompt] = backend.calls.answerWithDocuments[0];
+    expect(prompt).toContain('normalled (default, unpatched) connections');
+    expect(prompt).toContain(
+      '- Make Noise Maths: input "Filter In" is normalled to the "Osc Out" output — The oscillator feeds the filter by default.'
+    );
+    expect(prompt).toContain(
+      '- Make Noise Maths: input "Filter In" is normalled to the internal signal "internal noise source"'
+    );
   });
 
   it('feeds attached previous answers and notes as text documents', async () => {

@@ -1,6 +1,8 @@
 // Manual analysis: submit a module's manual PDF to the LLM backend and store a
 // summary plus a structured inventory of the module's components (jacks,
-// buttons, toggles, ...) with voltage ranges and polarity.
+// buttons, toggles, ...) with voltage ranges and polarity, and the normalled
+// connections between them (defaults that exist until a patch cable overrides
+// them) so a patch's real signal path can be traced.
 
 import { extractJsonObject } from './json.js';
 
@@ -32,6 +34,14 @@ Respond with ONLY a JSON object, no prose and no code fences, shaped exactly lik
       "voltage_max": 5,
       "polarity": "bipolar"
     }
+  ],
+  "normalizations": [
+    {
+      "target": "IN 2",
+      "source": "IN 1",
+      "source_label": null,
+      "description": "Input 2 is normalled to input 1 until a cable is patched into input 2."
+    }
   ]
 }
 
@@ -44,6 +54,18 @@ Rules:
   "bipolar". Use null when unknown.
 - For non-jack components, use null for voltage_min, voltage_max, and polarity.
 - "description" explains what the component does.
+- "normalizations" lists every NORMALLED (normalized) connection the manual
+  describes: a default connection into an input that exists only while nothing
+  is patched into that input. This covers both an input jack normalled to
+  another input jack (the source input's signal also feeds the target until
+  the target is patched directly) and an output or internal signal normalled
+  to an input (e.g. an oscillator normalled to a filter's audio input).
+- In each normalization, "target" is the exact "name" of the input-jack
+  component that receives the normalled signal. "source" is the exact "name"
+  of the component (input or output jack) the signal comes from; when the
+  source is an internal signal with no panel jack, use null for "source" and
+  name the signal in "source_label" (e.g. "internal oscillator"). Use [] if
+  the manual describes no normalled connections.
 `;
 
 function toVoltage(value) {
@@ -75,7 +97,68 @@ export function normalizeComponents(rawComponents) {
   return components;
 }
 
-// Analyze one module's manual and persist summary + components.
+export function normalizeNormalizations(rawNormalizations) {
+  if (!Array.isArray(rawNormalizations)) return [];
+  const normalizations = [];
+  for (const raw of rawNormalizations) {
+    if (!raw || typeof raw !== 'object') continue;
+    const target = String(raw.target || '').trim();
+    const source = String(raw.source || '').trim();
+    const sourceLabel = String(raw.source_label || '').trim();
+    if (!target || (!source && !sourceLabel)) continue;
+    normalizations.push({
+      target,
+      source: source || null,
+      source_label: sourceLabel || null,
+      description: raw.description ? String(raw.description).trim() : null,
+    });
+  }
+  return normalizations;
+}
+
+// Where a normalled signal comes from: another input jack (whose patched
+// signal carries over), an output jack, or — when there is no source
+// component — an internal signal with no panel representation.
+export function normalizationKind(sourceComponent) {
+  if (sourceComponent?.type === 'input_jack') return 'input';
+  if (sourceComponent?.type === 'output_jack') return 'output';
+  return 'internal';
+}
+
+// Turn name-based normalizations from the LLM into rows referencing the
+// stored component records. The target must resolve to a component; a named
+// source that doesn't resolve is kept as a label so the connection isn't
+// lost. kind reflects where the signal comes from: another input jack, an
+// output jack, or an internal signal with no panel component.
+export function resolveNormalizations(normalizations, components) {
+  const byName = new Map();
+  for (const c of components) {
+    const key = c.name.trim().toLowerCase();
+    if (!byName.has(key)) byName.set(key, c);
+  }
+  const rows = [];
+  const seen = new Set();
+  for (const n of normalizations) {
+    const target = byName.get(n.target.toLowerCase());
+    if (!target) continue;
+    const source = n.source ? byName.get(n.source.toLowerCase()) : undefined;
+    if (source && source.id === target.id) continue;
+    const key = `${target.id}|${source ? source.id : (n.source_label || n.source).toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({
+      target_component_id: target.id,
+      source_component_id: source ? source.id : null,
+      source_label: source ? null : n.source_label || n.source,
+      kind: normalizationKind(source),
+      description: n.description,
+    });
+  }
+  return rows;
+}
+
+// Analyze one module's manual and persist summary + components +
+// normalizations.
 export async function analyzeManualForModule(db, backend, module, manualPath) {
   const response = await backend.analyzeDocument(
     ANALYSIS_TEMPLATE(module.manufacturer, module.name),
@@ -84,24 +167,41 @@ export async function analyzeManualForModule(db, backend, module, manualPath) {
   const parsed = extractJsonObject(response);
   const summary = String(parsed.summary || '').trim();
   const components = normalizeComponents(parsed.components);
+  const normalizations = normalizeNormalizations(parsed.normalizations);
   if (!summary && components.length === 0) {
     throw new Error('LLM analysis returned neither a summary nor components');
   }
 
-  const { Module, ModuleComponent } = db.models;
+  const { Module, ModuleComponent, ComponentNormalization } = db.models;
   // Replacing the component inventory and marking the analysis complete is
   // one atomic step — a failure mid-way must not leave the module stripped of
   // its previous components.
+  let resolved = [];
   await db.sequelize.transaction(async (transaction) => {
+    await ComponentNormalization.destroy({ where: { module_id: module.id }, transaction });
     await ModuleComponent.destroy({ where: { module_id: module.id }, transaction });
     await ModuleComponent.bulkCreate(
       components.map((c) => ({ ...c, module_id: module.id })),
       { transaction }
     );
+    // Re-read the freshly created components to resolve normalization names
+    // to component ids.
+    const created = await ModuleComponent.findAll({
+      where: { module_id: module.id },
+      order: [['id', 'ASC']],
+      transaction,
+    });
+    resolved = resolveNormalizations(normalizations, created);
+    if (resolved.length > 0) {
+      await ComponentNormalization.bulkCreate(
+        resolved.map((n) => ({ ...n, module_id: module.id })),
+        { transaction }
+      );
+    }
     await Module.update(
       { summary, analysis_status: 'complete' },
       { where: { id: module.id }, transaction }
     );
   });
-  return { summary, components };
+  return { summary, components, normalizations: resolved };
 }

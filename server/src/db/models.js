@@ -108,6 +108,25 @@ export function defineModels(sequelize) {
     { tableName: 'module_components', createdAt: 'created_at', updatedAt: false }
   );
 
+  // A normalled connection extracted from the manual: the target component
+  // (an input jack) receives the source's signal while nothing is patched
+  // into it. kind 'input' = normalled to another input jack, 'output' = to an
+  // output jack's signal, 'internal' = to an internal signal with no panel
+  // component (named by source_label).
+  const ComponentNormalization = define(
+    'ComponentNormalization',
+    {
+      id,
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      target_component_id: { type: DataTypes.INTEGER, allowNull: false },
+      source_component_id: { type: DataTypes.INTEGER },
+      source_label: { type: DataTypes.TEXT },
+      kind: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'internal' },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'component_normalizations', createdAt: 'created_at', updatedAt: false }
+  );
+
   const Note = define(
     'Note',
     {
@@ -232,6 +251,17 @@ export function defineModels(sequelize) {
   Module.hasMany(ModuleComponent, { foreignKey: 'module_id' });
   ModuleComponent.belongsTo(Module, { foreignKey: 'module_id' });
 
+  Module.hasMany(ComponentNormalization, { foreignKey: 'module_id' });
+  ComponentNormalization.belongsTo(Module, { foreignKey: 'module_id' });
+  ComponentNormalization.belongsTo(ModuleComponent, {
+    foreignKey: 'target_component_id',
+    as: 'Target',
+  });
+  ComponentNormalization.belongsTo(ModuleComponent, {
+    foreignKey: 'source_component_id',
+    as: 'Source',
+  });
+
   Note.hasMany(NoteModule, { foreignKey: 'note_id' });
   NoteModule.belongsTo(Note, { foreignKey: 'note_id' });
   NoteModule.belongsTo(Module, { foreignKey: 'module_id' });
@@ -273,6 +303,7 @@ export function defineModels(sequelize) {
     Rack,
     RackModule,
     ModuleComponent,
+    ComponentNormalization,
     Note,
     NoteModule,
     NoteComponent,

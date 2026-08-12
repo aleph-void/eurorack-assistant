@@ -181,6 +181,34 @@ export async function scopeQuestion(db, backend, question, { log = () => {} } = 
   return scoped;
 }
 
+// One line per normalled connection on the given modules, so the answer
+// prompt can describe the default signal routing that exists without any
+// patch cables (essential for tracing a patch's actual signal path).
+export async function normalizationSummary({ ModuleComponent, ComponentNormalization }, modules) {
+  if (modules.length === 0) return [];
+  const normalizations = await ComponentNormalization.findAll({
+    where: { module_id: modules.map((m) => m.id) },
+    order: [['id', 'ASC']],
+  });
+  if (normalizations.length === 0) return [];
+  const components = await ModuleComponent.findAll({
+    where: { module_id: modules.map((m) => m.id) },
+    attributes: ['id', 'name'],
+  });
+  const componentName = new Map(components.map((c) => [c.id, c.name]));
+  const moduleLabel = new Map(
+    modules.map((m) => [m.id, `${m.manufacturer} ${m.name}`.trim()])
+  );
+  return normalizations.map((n) => {
+    const source = n.source_component_id
+      ? `the "${componentName.get(n.source_component_id)}" ${n.kind === 'input' ? 'input (its patched signal)' : 'output'}`
+      : `the internal signal "${n.source_label}"`;
+    const target = `"${componentName.get(n.target_component_id)}"`;
+    const detail = n.description ? ` — ${n.description}` : '';
+    return `- ${moduleLabel.get(n.module_id)}: input ${target} is normalled to ${source}${detail}`;
+  });
+}
+
 // Phase two, after the user confirmed the review step: submit the question
 // with exactly the linked modules and explicitly attached documents (manual
 // PDFs, previous answers, notes) and store the answer.
@@ -188,6 +216,7 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
   const {
     Module,
     ModuleComponent,
+    ComponentNormalization,
     Manual,
     Note,
     Question,
@@ -281,6 +310,15 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
       .map((c) => `${c.Module.manufacturer} ${c.Module.name} — ${c.name} (${c.type})`.trim())
       .join('; ');
     answerPrompt += `The question specifically concerns these components: ${componentNames}. `;
+  }
+  const normalizationLines = await normalizationSummary(
+    { ModuleComponent, ComponentNormalization },
+    scoped
+  );
+  if (normalizationLines.length > 0) {
+    answerPrompt +=
+      `\n\nThe modules in scope have these normalled (default, unpatched) connections; ` +
+      `account for them when tracing the signal path:\n${normalizationLines.join('\n')}\n\n`;
   }
   answerPrompt += `Format your answer as markdown.\n\nQuestion: ${question.prompt}`;
 

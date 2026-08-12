@@ -256,6 +256,106 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="group-knob"]').text()).toContain('Rise');
   });
 
+  it('shows normalled connections with resolved component names', async () => {
+    api.get.mockResolvedValue({
+      ...moduleResponse,
+      normalizations: [
+        {
+          id: 1,
+          target_component_id: 1,
+          source_component_id: 2,
+          source_label: null,
+          kind: 'output',
+          description: 'EOR feeds the input by default.',
+        },
+        {
+          id: 2,
+          target_component_id: 1,
+          source_component_id: null,
+          source_label: 'internal oscillator',
+          kind: 'internal',
+          description: null,
+        },
+      ],
+    });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    const first = wrapper.find('[data-test="normalization-1"]');
+    expect(first.text()).toContain('Signal In');
+    expect(first.text()).toContain('EOR');
+    expect(first.text()).toContain('from output');
+    expect(first.text()).toContain('EOR feeds the input by default.');
+    const second = wrapper.find('[data-test="normalization-2"]');
+    expect(second.text()).toContain('internal oscillator');
+    expect(second.text()).toContain('internal signal');
+  });
+
+  it('still offers the add form when no normalizations are recorded', async () => {
+    api.get.mockResolvedValue({ ...moduleResponse, normalizations: [] });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    const panel = wrapper.find('[data-test="normalizations"]');
+    expect(panel.text()).toContain('No normalled connections recorded');
+    expect(panel.find('table').exists()).toBe(false);
+    expect(panel.find('[data-test="norm-create"]').exists()).toBe(true);
+  });
+
+  it('manually adds a normalization from a jack and from an internal signal', async () => {
+    api.get.mockResolvedValue({ ...moduleResponse, normalizations: [] });
+    api.post.mockResolvedValue({ id: 9 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    // Targets are the module's input jacks; sources are all jacks plus the
+    // internal option. The button stays disabled until the form is complete.
+    expect(wrapper.find('[data-test="norm-create"]').attributes('disabled')).toBeDefined();
+    await wrapper.find('[data-test="norm-target"]').setValue('1');
+    await wrapper.find('[data-test="norm-source"]').setValue('2');
+    expect(wrapper.find('[data-test="norm-create"]').attributes('disabled')).toBeUndefined();
+    await wrapper.find('[data-test="norm-description"]').setValue('EOR feeds the input');
+    await wrapper.find('[data-test="normalizations"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/normalizations', {
+      target_component_id: 1,
+      source_component_id: 2,
+      description: 'EOR feeds the input',
+    });
+
+    // Choosing the internal option reveals a label field and posts the label.
+    await wrapper.find('[data-test="norm-target"]').setValue('1');
+    await wrapper.find('[data-test="norm-source"]').setValue('internal');
+    expect(wrapper.find('[data-test="norm-create"]').attributes('disabled')).toBeDefined();
+    await wrapper.find('[data-test="norm-source-label"]').setValue('internal oscillator');
+    await wrapper.find('[data-test="normalizations"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/normalizations', {
+      target_component_id: 1,
+      source_label: 'internal oscillator',
+    });
+  });
+
+  it('deletes a normalization', async () => {
+    api.get.mockResolvedValue({
+      ...moduleResponse,
+      normalizations: [
+        {
+          id: 7,
+          target_component_id: 1,
+          source_component_id: 2,
+          source_label: null,
+          kind: 'output',
+          description: null,
+        },
+      ],
+    });
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="delete-normalization-7"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/normalizations/7');
+  });
+
   it('lists documents; only own uploads are removable', async () => {
     api.get.mockResolvedValue(moduleResponse);
     api.delete.mockResolvedValue({ ok: true });

@@ -3,13 +3,23 @@ import { Router } from 'express';
 import { Op } from 'sequelize';
 import { requireAuth } from '../auth.js';
 import { isProbablyPdfBuffer, manualPath, sha256Buffer } from '../services/pdf.js';
+import { normalizationKind } from '../services/manualAnalyzer.js';
 import { deleteModulesDeep } from '../services/moduleDeletion.js';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/data/manuals' } = {}) {
-  const { Module, Rack, RackModule, ModuleComponent, Manual, Note, NoteModule, NoteComponent } =
-    db.models;
+  const {
+    Module,
+    Rack,
+    RackModule,
+    ModuleComponent,
+    ComponentNormalization,
+    Manual,
+    Note,
+    NoteModule,
+    NoteComponent,
+  } = db.models;
   const router = Router();
   router.use(requireAuth(db));
 
@@ -94,6 +104,20 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
           ['id', 'ASC'],
         ],
       });
+      // Normalled connections between the module's components (from the
+      // manual analysis); target/source ids reference the components above.
+      const normalizations = await ComponentNormalization.findAll({
+        where: { module_id: module.id },
+        attributes: [
+          'id',
+          'target_component_id',
+          'source_component_id',
+          'source_label',
+          'kind',
+          'description',
+        ],
+        order: [['id', 'ASC']],
+      });
       // Documents: the shared auto-found manual plus this user's own uploads.
       const manuals = await Manual.findAll({
         where: {
@@ -127,6 +151,7 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
       res.json({
         ...module,
         components,
+        normalizations,
         manuals,
         notes: [
           ...moduleNotes.map((nm) => noteJson(nm.Note, null)),
@@ -159,6 +184,99 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
       if ((await RackModule.count({ where: { module_id: moduleId } })) === 0) {
         await deleteModulesDeep(db, req.user.id, [moduleId], { manualsDir });
       }
+      res.json({ ok: true });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Manually record a normalled connection the analysis missed. Body:
+  // { target_component_id, source_component_id | source_label, description }.
+  // Like components, normalizations are shared hardware facts: any user who
+  // has the module racked may correct them, and a re-analysis replaces manual
+  // rows along with the analyzed ones. kind is derived from the source.
+  router.post('/:id/normalizations', async (req, res, next) => {
+    try {
+      const module = await userModule(req.user.id, req.params.id);
+      if (!module) return res.status(404).json({ error: 'Module not found' });
+      const {
+        target_component_id: targetId,
+        source_component_id: sourceId,
+        source_label: rawLabel,
+        description: rawDescription,
+      } = req.body || {};
+
+      const target = await ModuleComponent.findOne({
+        where: { id: Number(targetId) || 0, module_id: module.id },
+      });
+      if (!target) {
+        return res
+          .status(400)
+          .json({ error: 'target_component_id must be a component of this module' });
+      }
+      const label = String(rawLabel || '').trim();
+      let source = null;
+      if (sourceId) {
+        source = await ModuleComponent.findOne({
+          where: { id: Number(sourceId) || 0, module_id: module.id },
+        });
+        if (!source) {
+          return res
+            .status(400)
+            .json({ error: 'source_component_id must be a component of this module' });
+        }
+        if (source.id === target.id) {
+          return res.status(400).json({ error: 'a component cannot be normalled to itself' });
+        }
+      } else if (!label) {
+        return res
+          .status(400)
+          .json({ error: 'either source_component_id or source_label is required' });
+      }
+
+      const existing = await ComponentNormalization.findAll({
+        where: { module_id: module.id, target_component_id: target.id },
+      });
+      const duplicate = existing.some((n) =>
+        source
+          ? n.source_component_id === source.id
+          : (n.source_label || '').toLowerCase() === label.toLowerCase()
+      );
+      if (duplicate) {
+        return res.status(409).json({ error: 'this normalled connection is already recorded' });
+      }
+
+      const description = String(rawDescription || '').trim();
+      const row = await ComponentNormalization.create({
+        module_id: module.id,
+        target_component_id: target.id,
+        source_component_id: source ? source.id : null,
+        source_label: source ? null : label,
+        kind: normalizationKind(source),
+        description: description || null,
+      });
+      res.status(201).json({
+        id: row.id,
+        target_component_id: row.target_component_id,
+        source_component_id: row.source_component_id,
+        source_label: row.source_label,
+        kind: row.kind,
+        description: row.description,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Remove a normalled connection (analyzed or manually added).
+  router.delete('/:id/normalizations/:normalizationId', async (req, res, next) => {
+    try {
+      const module = await userModule(req.user.id, req.params.id);
+      if (!module) return res.status(404).json({ error: 'Module not found' });
+      const deleted = await ComponentNormalization.destroy({
+        where: { id: Number(req.params.normalizationId), module_id: module.id },
+      });
+      if (deleted === 0) return res.status(404).json({ error: 'Normalization not found' });
       res.json({ ok: true });
     } catch (e) {
       next(e);
