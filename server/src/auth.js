@@ -4,6 +4,26 @@ import { Op } from 'sequelize';
 export const SESSION_COOKIE = 'session';
 export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 
+// The session cookie only gets the Secure attribute when the deployment
+// actually serves HTTPS — setup.sh sets SECURE_COOKIES=1 alongside the TLS
+// compose override. Defaulting it on would silently break the plain-HTTP
+// setup (browsers drop Secure cookies over http://, so login would appear to
+// succeed and every following request would be a 401).
+export function secureCookies(env = process.env) {
+  return /^(1|true|yes|on)$/i.test(String(env.SECURE_COOKIES ?? '').trim());
+}
+
+// Shared by res.cookie and res.clearCookie: a cookie is only cleared when the
+// attributes match the ones it was set with, so both must come from here.
+export function sessionCookieOptions(env = process.env) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: secureCookies(env),
+    path: '/',
+  };
+}
+
 // Passwords are stored as PBKDF2-HMAC-SHA512 hashes in a self-describing
 // format: pbkdf2$<digest>$<iterations>$<salt hex>$<derived key hex>.
 // Verification reads the parameters from the stored hash, so these constants

@@ -6,6 +6,7 @@ import {
   deleteUserSessions,
   hashPassword,
   requireAuth,
+  sessionCookieOptions,
   verifyPassword,
 } from '../auth.js';
 
@@ -23,11 +24,7 @@ export function authRoutes(db) {
         return res.status(401).json({ error: 'Invalid username or password' });
       }
       const { token, expiresAt } = await createSession(db, user.id);
-      res.cookie(SESSION_COOKIE, token, {
-        httpOnly: true,
-        sameSite: 'lax',
-        expires: expiresAt,
-      });
+      res.cookie(SESSION_COOKIE, token, { ...sessionCookieOptions(), expires: expiresAt });
       res.json({
         id: user.id,
         username: user.username,
@@ -43,7 +40,7 @@ export function authRoutes(db) {
     try {
       const token = req.cookies?.[SESSION_COOKIE];
       if (token) await deleteSession(db, token);
-      res.clearCookie(SESSION_COOKIE);
+      res.clearCookie(SESSION_COOKIE, sessionCookieOptions());
       res.json({ ok: true });
     } catch (e) {
       next(e);

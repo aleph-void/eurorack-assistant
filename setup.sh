@@ -235,6 +235,10 @@ ensure_port_bind_cap() {
 }
 
 setup_tls() {
+  # Falling back to plain HTTP must also drop Secure from the session cookie —
+  # a leftover SECURE_COOKIES=1 from an earlier TLS run would make every login
+  # over http:// silently fail (the browser refuses to store the cookie).
+  set_env SECURE_COOKIES 0
   # Remember the FQDN from a previous run so plain "./setup.sh" keeps TLS.
   if [ -z "$FQDN" ]; then
     FQDN=$(get_env FQDN)
@@ -248,6 +252,7 @@ setup_tls() {
     set_env FQDN "$FQDN"
     set_env APP_PORT 80
     set_env COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
+    set_env SECURE_COOKIES 1
     ensure_port_bind_cap
   else
     warn "no TLS certs in /etc/letsencrypt/live/$FQDN (need fullchain.pem + privkey.pem);"

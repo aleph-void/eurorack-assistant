@@ -64,6 +64,32 @@ describe('auth', () => {
     expect(res.headers['set-cookie'][0]).toMatch(/HttpOnly/i);
   });
 
+  it('omits Secure from the session cookie on a plain-HTTP deployment', async () => {
+    const { app } = await createTestApp();
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'alice', password: 'password123' });
+    expect(res.headers['set-cookie'][0]).not.toMatch(/Secure/i);
+  });
+
+  it('marks the session cookie Secure when SECURE_COOKIES is set', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    const previous = process.env.SECURE_COOKIES;
+    process.env.SECURE_COOKIES = '1';
+    try {
+      const login = await request(app)
+        .post('/api/auth/login')
+        .send({ username: 'alice', password: 'password123' });
+      expect(login.headers['set-cookie'][0]).toMatch(/Secure/i);
+      // clearCookie must repeat the attributes or the browser keeps the cookie.
+      const logout = await request(app).post('/api/auth/logout').set('Cookie', aliceCookie);
+      expect(logout.headers['set-cookie'][0]).toMatch(/Secure/i);
+    } finally {
+      if (previous === undefined) delete process.env.SECURE_COOKIES;
+      else process.env.SECURE_COOKIES = previous;
+    }
+  });
+
   it('rejects a wrong password', async () => {
     const { app } = await createTestApp();
     const res = await request(app)

@@ -19,6 +19,9 @@ services:
       DATABASE_URL: postgres://eurorack:${POSTGRES_PASSWORD}@db:5432/eurorack
       MANUALS_DIR: /data/manuals
       EXPORTS_DIR: /data/exports
+      # Set to 1 by setup.sh when the TLS override is active, so the session
+      # cookie gets the Secure attribute only where HTTPS is actually served.
+      SECURE_COOKIES: ${SECURE_COOKIES:-0}
     volumes:
       - manuals:/data/manuals
       # Finished rack-export zips; each is deleted after its one download.
