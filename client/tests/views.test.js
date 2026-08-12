@@ -330,14 +330,131 @@ describe('QuestionDetailView', () => {
       components: [
         { id: 9, name: 'EOR', type: 'output_jack', module_manufacturer: 'Make Noise', module_name: 'Maths' },
       ],
+      manuals: [
+        { id: 11, module_id: 3, name: 'manual', module_manufacturer: 'Make Noise', module_name: 'Maths' },
+      ],
+      answers: [{ id: 7, prompt: 'Earlier question?', answered_at: null }],
+      notes: [{ id: 5, title: 'Krell note' }],
     });
     const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
     expect(wrapper.find('[data-test="modules"]').text()).toContain('Make Noise Maths');
     expect(wrapper.find('[data-test="components"]').text()).toContain('EOR');
+    const attachments = wrapper.find('[data-test="attachments"]').text();
+    expect(attachments).toContain('manual');
+    expect(attachments).toContain('Earlier question?');
+    expect(attachments).toContain('Krell note');
     const html = wrapper.find('[data-test="answer"]').html();
     expect(html).toContain('<strong>Maths</strong>');
     expect(html).not.toContain('<script>');
+  });
+
+  it('shows a scoping indicator while modules are being determined', async () => {
+    api.get.mockResolvedValue({ id: 1, prompt: 'How?', status: 'scoping', modules: [], components: [] });
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="scoping"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('presents the review step for a scoped question and submits the selection', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path === '/api/questions/1')
+        return { id: 1, prompt: 'How?', status: 'scoped', modules: [], components: [] };
+      if (path === '/api/questions/1/options')
+        return {
+          modules: [
+            { id: 3, manufacturer: 'Make Noise', name: 'Maths', in_scope: true },
+            { id: 4, manufacturer: '2hp', name: 'Pluck', in_scope: false },
+          ],
+          components: [{ id: 9, module_id: 3, name: 'EOR', type: 'output_jack', in_scope: true }],
+          manuals: [
+            { id: 11, module_id: 3, name: 'manual', original_name: null, source: 'found' },
+            { id: 12, module_id: 3, name: 'my notes', original_name: 'n.pdf', source: 'upload' },
+            { id: 13, module_id: 4, name: 'manual', original_name: null, source: 'found' },
+          ],
+          answers: [
+            { id: 7, prompt: 'Earlier?', answered_at: null, module_ids: [3], component_ids: [] },
+          ],
+          notes: [{ id: 5, title: 'Krell', body: 'x', module_ids: [], component_ids: [9] }],
+        };
+      throw new Error(`unexpected ${path}`);
+    });
+    api.post.mockResolvedValue({ id: 1, prompt: 'How?', status: 'pending', modules: [], components: [] });
+
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="review"]').exists()).toBe(true);
+    // The LLM-scoped module and component start checked; the other module not.
+    const moduleBoxes = wrapper.findAll('[data-test="module-option"]');
+    expect(moduleBoxes).toHaveLength(2);
+    expect(moduleBoxes[0].element.checked).toBe(true);
+    expect(moduleBoxes[1].element.checked).toBe(false);
+    const componentBoxes = wrapper.findAll('[data-test="component-option"]');
+    expect(componentBoxes).toHaveLength(1);
+    expect(componentBoxes[0].element.checked).toBe(true);
+    // Only the selected module's documents show; its primary manual starts
+    // checked, the upload does not. The unselected module's manual is hidden.
+    const manualBoxes = wrapper.findAll('[data-test="manual-option"]');
+    expect(manualBoxes).toHaveLength(2);
+    expect(manualBoxes[0].element.checked).toBe(true);
+    expect(manualBoxes[1].element.checked).toBe(false);
+    // The note is offered because it is linked to the selected component.
+    expect(wrapper.findAll('[data-test="note-option"]')).toHaveLength(1);
+
+    await wrapper.find('[data-test="answer-option"]').setValue(true);
+    await wrapper.find('[data-test="note-option"]').setValue(true);
+    await wrapper.find('[data-test="request-answer"]').trigger('click');
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith('/api/questions/1/answer', {
+      module_ids: [3],
+      component_ids: [9],
+      manual_ids: [11],
+      answer_ids: [7],
+      note_ids: [5],
+    });
+    expect(wrapper.find('[data-test="answer-pending"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('deselecting the primary manual is allowed and unchecking a module hides its attachments', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path === '/api/questions/1')
+        return { id: 1, prompt: 'How?', status: 'scoped', modules: [], components: [] };
+      if (path === '/api/questions/1/options')
+        return {
+          modules: [
+            { id: 3, manufacturer: 'Make Noise', name: 'Maths', in_scope: true },
+            { id: 4, manufacturer: '2hp', name: 'Pluck', in_scope: true },
+          ],
+          components: [],
+          manuals: [
+            { id: 11, module_id: 3, name: 'manual', original_name: null, source: 'found' },
+            { id: 13, module_id: 4, name: 'manual', original_name: null, source: 'found' },
+          ],
+          answers: [],
+          notes: [],
+        };
+      throw new Error(`unexpected ${path}`);
+    });
+    api.post.mockResolvedValue({ id: 1, prompt: 'How?', status: 'pending', modules: [], components: [] });
+
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    // Drop the second module — its manual disappears from the list — and
+    // untick the first module's primary manual: no attachments remain, so
+    // the submit button disables.
+    const moduleBoxes = wrapper.findAll('[data-test="module-option"]');
+    await moduleBoxes[1].setValue(false);
+    expect(wrapper.findAll('[data-test="manual-option"]')).toHaveLength(1);
+    await wrapper.find('[data-test="manual-option"]').setValue(false);
+    expect(
+      wrapper.find('[data-test="request-answer"]').attributes('disabled')
+    ).toBeDefined();
+    wrapper.unmount();
   });
 
   it('shows a pending indicator while the answer is being generated', async () => {

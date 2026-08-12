@@ -452,18 +452,235 @@ describe('questions API', () => {
     return fixture;
   }
 
-  it('creates a pending question and queues an answer job', async () => {
+  it('creates a scoping question and queues a scope job', async () => {
     const { app, db, aliceCookie } = await withModules();
     const res = await request(app)
       .post('/api/questions')
       .set('Cookie', aliceCookie)
       .send({ prompt: 'How do I patch a krell?' });
     expect(res.status).toBe(201);
+    expect(res.body.status).toBe('scoping');
+
+    const { rows: jobs } = await db.query("SELECT * FROM jobs WHERE type = 'scope_question'");
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].question_id).toBe(res.body.id);
+  });
+
+  // A question awaiting review, with the fixture module linked as its scope.
+  async function withScopedQuestion() {
+    const fixture = await withModules();
+    const { rows: modules } = await fixture.db.query(
+      'SELECT module_id AS id FROM user_modules WHERE user_id = $1',
+      [fixture.alice.id]
+    );
+    const { rows: q } = await fixture.db.query(
+      `INSERT INTO questions (user_id, prompt, status) VALUES ($1, 'How?', 'scoped') RETURNING *`,
+      [fixture.alice.id]
+    );
+    await fixture.db.query(
+      'INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)',
+      [q[0].id, modules[0].id]
+    );
+    return { ...fixture, moduleId: modules[0].id, question: q[0] };
+  }
+
+  it('offers review options: rack, components, documents, answers, notes', async () => {
+    const { app, db, aliceCookie, alice, moduleId, question } = await withScopedQuestion();
+    const other = await insertModule(db, alice.id, { manufacturer: '2hp', name: 'Pluck' });
+    const { rows: jack } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'output_jack', 'EOR')
+       RETURNING id`,
+      [moduleId]
+    );
+    await db.query(
+      'INSERT INTO question_components (question_id, component_id) VALUES ($1, $2)',
+      [question.id, jack[0].id]
+    );
+    const { rows: upload } = await db.query(
+      `INSERT INTO manuals (module_id, user_id, hash, name, source)
+       VALUES ($1, $2, 'ffff', 'my notes', 'upload') RETURNING id`,
+      [moduleId, alice.id]
+    );
+    const { rows: prev } = await db.query(
+      `INSERT INTO questions (user_id, prompt, answer, status, answered_at)
+       VALUES ($1, 'Earlier', 'A', 'answered', now()) RETURNING id`,
+      [alice.id]
+    );
+    await db.query('INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)', [
+      prev[0].id,
+      moduleId,
+    ]);
+    // One note on the module, one only on the jack component.
+    const { rows: moduleNote } = await db.query(
+      `INSERT INTO notes (user_id, title, body) VALUES ($1, 'On module', 'x') RETURNING id`,
+      [alice.id]
+    );
+    await db.query('INSERT INTO note_modules (note_id, module_id) VALUES ($1, $2)', [
+      moduleNote[0].id,
+      moduleId,
+    ]);
+    const { rows: jackNote } = await db.query(
+      `INSERT INTO notes (user_id, title, body) VALUES ($1, 'On jack', 'y') RETURNING id`,
+      [alice.id]
+    );
+    await db.query('INSERT INTO note_components (note_id, component_id) VALUES ($1, $2)', [
+      jackNote[0].id,
+      jack[0].id,
+    ]);
+
+    // Another user's upload must stay invisible.
+    const { rows: admin } = await db.query("SELECT id FROM users WHERE username = 'admin'");
+    await db.query(
+      `INSERT INTO manuals (module_id, user_id, hash, name, source)
+       VALUES ($1, $2, 'eeee', 'theirs', 'upload')`,
+      [moduleId, admin[0].id]
+    );
+
+    const res = await request(app)
+      .get(`/api/questions/${question.id}/options`)
+      .set('Cookie', aliceCookie);
+    expect(res.status).toBe(200);
+
+    expect(res.body.modules).toHaveLength(2);
+    const maths = res.body.modules.find((m) => m.name === 'Maths');
+    expect(maths.in_scope).toBe(true);
+    expect(res.body.modules.find((m) => m.name === 'Pluck').in_scope).toBe(false);
+
+    expect(res.body.components).toHaveLength(1);
+    expect(res.body.components[0]).toMatchObject({
+      id: jack[0].id,
+      module_id: moduleId,
+      name: 'EOR',
+      in_scope: true,
+    });
+
+    // The shared manual plus alice's upload; the admin's upload is hidden.
+    expect(res.body.manuals).toHaveLength(2);
+    expect(res.body.manuals.map((m) => m.name).sort()).toEqual(['manual', 'my notes']);
+    expect(res.body.manuals.find((m) => m.id === upload[0].id).source).toBe('upload');
+
+    expect(res.body.answers).toHaveLength(1);
+    expect(res.body.answers[0]).toMatchObject({ id: prev[0].id, module_ids: [moduleId] });
+
+    expect(res.body.notes).toHaveLength(2);
+    const byTitle = Object.fromEntries(res.body.notes.map((n) => [n.title, n]));
+    expect(byTitle['On module'].module_ids).toEqual([moduleId]);
+    expect(byTitle['On jack'].component_ids).toEqual([jack[0].id]);
+  });
+
+  it('saves the reviewed selection and queues the answer job', async () => {
+    const { app, db, aliceCookie, alice, moduleId, question } = await withScopedQuestion();
+    const { rows: manual } = await db.query('SELECT id FROM manuals WHERE module_id = $1', [
+      moduleId,
+    ]);
+    const { rows: jack } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'output_jack', 'EOR')
+       RETURNING id`,
+      [moduleId]
+    );
+    const { rows: note } = await db.query(
+      `INSERT INTO notes (user_id, body) VALUES ($1, 'n') RETURNING id`,
+      [alice.id]
+    );
+    await db.query('INSERT INTO note_components (note_id, component_id) VALUES ($1, $2)', [
+      note[0].id,
+      jack[0].id,
+    ]);
+
+    const res = await request(app)
+      .post(`/api/questions/${question.id}/answer`)
+      .set('Cookie', aliceCookie)
+      .send({
+        module_ids: [moduleId],
+        component_ids: [jack[0].id],
+        manual_ids: [manual[0].id],
+        note_ids: [note[0].id],
+      });
+    expect(res.status).toBe(200);
     expect(res.body.status).toBe('pending');
 
     const { rows: jobs } = await db.query("SELECT * FROM jobs WHERE type = 'answer_question'");
     expect(jobs).toHaveLength(1);
-    expect(jobs[0].question_id).toBe(res.body.id);
+    expect(jobs[0].question_id).toBe(question.id);
+    const { rows: links } = await db.query(
+      'SELECT * FROM question_manuals WHERE question_id = $1',
+      [question.id]
+    );
+    expect(links.map((l) => l.manual_id)).toEqual([manual[0].id]);
+    const { rows: componentLinks } = await db.query(
+      'SELECT * FROM question_components WHERE question_id = $1',
+      [question.id]
+    );
+    expect(componentLinks.map((l) => l.component_id)).toEqual([jack[0].id]);
+    const { rows: noteLinks } = await db.query(
+      'SELECT * FROM question_notes WHERE question_id = $1',
+      [question.id]
+    );
+    expect(noteLinks.map((l) => l.note_id)).toEqual([note[0].id]);
+  });
+
+  it('rejects review submissions that fail validation', async () => {
+    const { app, db, aliceCookie, alice, moduleId, question } = await withScopedQuestion();
+    const { rows: manual } = await db.query('SELECT id FROM manuals WHERE module_id = $1', [
+      moduleId,
+    ]);
+    const post = (body) =>
+      request(app).post(`/api/questions/${question.id}/answer`).set('Cookie', aliceCookie).send(body);
+
+    // No modules selected.
+    expect((await post({ module_ids: [], manual_ids: [manual[0].id] })).status).toBe(400);
+    // No attachments selected at all.
+    expect((await post({ module_ids: [moduleId] })).status).toBe(400);
+    // A module that is not in alice's rack.
+    const stranger = await insertModule(db, null, { manufacturer: 'X', name: 'Y' });
+    expect(
+      (await post({ module_ids: [stranger.id], manual_ids: [manual[0].id] })).status
+    ).toBe(400);
+    // Another user's uploaded document.
+    const { rows: admin } = await db.query("SELECT id FROM users WHERE username = 'admin'");
+    const { rows: foreign } = await db.query(
+      `INSERT INTO manuals (module_id, user_id, hash, name, source)
+       VALUES ($1, $2, 'eeee', 'theirs', 'upload') RETURNING id`,
+      [moduleId, admin[0].id]
+    );
+    expect(
+      (await post({ module_ids: [moduleId], manual_ids: [foreign[0].id] })).status
+    ).toBe(400);
+    // A note not attached to any selected module or component.
+    const { rows: looseNote } = await db.query(
+      `INSERT INTO notes (user_id, body) VALUES ($1, 'loose') RETURNING id`,
+      [alice.id]
+    );
+    expect(
+      (
+        await post({
+          module_ids: [moduleId],
+          manual_ids: [manual[0].id],
+          note_ids: [looseNote[0].id],
+        })
+      ).status
+    ).toBe(400);
+
+    // Nothing was linked or queued by the failed attempts.
+    const { rows: jobs } = await db.query("SELECT * FROM jobs WHERE type = 'answer_question'");
+    expect(jobs).toHaveLength(0);
+    const { rows: q } = await db.query('SELECT status FROM questions WHERE id = $1', [
+      question.id,
+    ]);
+    expect(q[0].status).toBe('scoped');
+  });
+
+  it('only accepts review submissions for scoped questions', async () => {
+    const { app, db, aliceCookie, moduleId, question } = await withScopedQuestion();
+    await db.query(`UPDATE questions SET status = 'answered' WHERE id = $1`, [question.id]);
+    const { rows: manual } = await db.query('SELECT id FROM manuals WHERE module_id = $1', [
+      moduleId,
+    ]);
+    const res = await request(app)
+      .post(`/api/questions/${question.id}/answer`)
+      .set('Cookie', aliceCookie)
+      .send({ module_ids: [moduleId], manual_ids: [manual[0].id] });
+    expect(res.status).toBe(409);
   });
 
   it('refuses questions when no modules are imported', async () => {
@@ -626,7 +843,7 @@ describe('jobs API', () => {
     ).toBe(400);
   });
 
-  it('stamps answer_question jobs with the asking user', async () => {
+  it('stamps scope_question jobs with the asking user', async () => {
     const { app, db, aliceCookie } = await createTestApp();
     const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
     await insertModule(db, rows[0].id, { manual_hash: PDF_HASH });
@@ -634,7 +851,7 @@ describe('jobs API', () => {
       .post('/api/questions')
       .set('Cookie', aliceCookie)
       .send({ prompt: 'How?' });
-    const { rows: jobs } = await db.query("SELECT * FROM jobs WHERE type = 'answer_question'");
+    const { rows: jobs } = await db.query("SELECT * FROM jobs WHERE type = 'scope_question'");
     expect(jobs[0].user_id).toBe(rows[0].id);
   });
 });

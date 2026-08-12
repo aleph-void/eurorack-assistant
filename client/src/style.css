@@ -175,12 +175,14 @@ button.danger {
 .badge.searching,
 .badge.analyzing,
 .badge.answering,
+.badge.scoping,
 .badge.running {
   color: var(--accent);
   border-color: var(--accent);
 }
 .badge.found,
 .badge.complete,
+.badge.scoped,
 .badge.answered {
   color: var(--ok);
   border-color: var(--ok);
@@ -188,6 +190,24 @@ button.danger {
 .badge.failed {
   color: var(--danger);
   border-color: var(--danger);
+}
+
+.check-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.4rem 0 0.9rem;
+}
+.check-list li {
+  padding: 0.15rem 0;
+}
+.check-list label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+.check-list input[type='checkbox'] {
+  transform: translateY(1px);
 }
 
 .feed {

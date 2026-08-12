@@ -23,7 +23,7 @@ import {
   determineComponentScope,
   jackComponentsForModules,
   answerQuestion,
-  findPreviousAnswers,
+  scopeQuestion,
 } from '../src/services/ask.js';
 import { getConfig, setConfig, getLlmSettings } from '../src/services/config.js';
 
@@ -454,33 +454,31 @@ describe('jackComponentsForModules', () => {
   });
 });
 
-describe('answerQuestion', () => {
+
+describe('scopeQuestion', () => {
   async function fixture() {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
-    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
     const module = await insertModule(db, user.id, {
       manual_hash: PDF_HASH,
       manual_status: 'found',
     });
     const { rows } = await db.query(
-      `INSERT INTO questions (user_id, prompt) VALUES ($1, 'How do I patch a krell?') RETURNING *`,
+      `INSERT INTO questions (user_id, prompt, status)
+       VALUES ($1, 'How do I patch a krell?', 'scoping') RETURNING *`,
       [user.id]
     );
     return { db, user, module, question: rows[0] };
   }
 
-  it('scopes, links modules, answers with manuals, and saves', async () => {
+  it('links the scoped modules and marks the question scoped', async () => {
     const { db, module, question } = await fixture();
     const backend = fakeBackend({
       completeText: '[{"manufacturer": "Make Noise", "module": "Maths"}]',
-      answerWithDocuments: 'Patch it like this...',
     });
 
-    const updated = await answerQuestion(db, backend, question, manualsDir);
-    expect(updated.status).toBe('answered');
-    expect(updated.answer).toBe('Patch it like this...');
-    expect(updated.answered_at).toBeTruthy();
+    const scoped = await scopeQuestion(db, backend, question);
+    expect(scoped.map((m) => m.id)).toEqual([module.id]);
 
     const { rows: links } = await db.query(
       'SELECT * FROM question_modules WHERE question_id = $1',
@@ -488,11 +486,10 @@ describe('answerQuestion', () => {
     );
     expect(links).toHaveLength(1);
     expect(links[0].module_id).toBe(module.id);
-
-    const [prompt, pdfs] = backend.calls.answerWithDocuments[0];
-    expect(prompt).toContain('How do I patch a krell?');
-    expect(prompt).toContain('Make Noise Maths');
-    expect(pdfs).toEqual([path.join(manualsDir, `${PDF_HASH}.pdf`)]);
+    const { rows: q } = await db.query('SELECT status FROM questions WHERE id = $1', [
+      question.id,
+    ]);
+    expect(q[0].status).toBe('scoped');
   });
 
   it('links the specific jacks a question pertains to', async () => {
@@ -512,10 +509,9 @@ describe('answerQuestion', () => {
           ? '[{"manufacturer": "Make Noise", "module": "Maths"}]'
           : `[${jacks[1].id}]`;
       },
-      answerWithDocuments: 'Use the EOR output.',
     });
 
-    await answerQuestion(db, backend, question, manualsDir);
+    await scopeQuestion(db, backend, question);
     const { rows: links } = await db.query(
       'SELECT component_id FROM question_components WHERE question_id = $1',
       [question.id]
@@ -523,7 +519,22 @@ describe('answerQuestion', () => {
     expect(links.map((l) => l.component_id)).toEqual([jacks[1].id]);
   });
 
-  it('still answers when component scoping fails', async () => {
+  it('leaves the scope empty when no modules match', async () => {
+    const { db, question } = await fixture();
+    const backend = fakeBackend({ completeText: '[]' });
+
+    const scoped = await scopeQuestion(db, backend, question);
+    expect(scoped).toEqual([]);
+
+    const { rows: links } = await db.query('SELECT * FROM question_modules');
+    expect(links).toHaveLength(0);
+    const { rows: q } = await db.query('SELECT status FROM questions WHERE id = $1', [
+      question.id,
+    ]);
+    expect(q[0].status).toBe('scoped');
+  });
+
+  it('still scopes when component scoping fails', async () => {
     const { db, module, question } = await fixture();
     await db.query(
       `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'input_jack', 'In')`,
@@ -536,80 +547,143 @@ describe('answerQuestion', () => {
         if (call === 1) return '[{"manufacturer": "Make Noise", "module": "Maths"}]';
         throw new Error('component scoping exploded');
       },
-      answerWithDocuments: 'Answer anyway.',
     });
-    const updated = await answerQuestion(db, backend, question, manualsDir);
-    expect(updated.status).toBe('answered');
-    const { rows: links } = await db.query('SELECT * FROM question_components');
-    expect(links).toHaveLength(0);
+    await scopeQuestion(db, backend, question);
+    const { rows: links } = await db.query('SELECT * FROM question_modules');
+    expect(links.map((l) => l.module_id)).toEqual([module.id]);
+    const { rows: components } = await db.query('SELECT * FROM question_components');
+    expect(components).toHaveLength(0);
+    const { rows: q } = await db.query('SELECT status FROM questions WHERE id = $1', [
+      question.id,
+    ]);
+    expect(q[0].status).toBe('scoped');
   });
 
-  it('feeds previous answers about in-scope modules as context', async () => {
-    const { db, user, module, question } = await fixture();
+  it('fails when the user has no modules', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'empty' });
+    const { rows } = await db.query(
+      `INSERT INTO questions (user_id, prompt, status) VALUES ($1, 'Q', 'scoping') RETURNING *`,
+      [user.id]
+    );
+    const backend = fakeBackend();
+    await expect(scopeQuestion(db, backend, rows[0])).rejects.toThrow(/No modules imported/);
+    expect(backend.calls.completeText).toHaveLength(0);
+  });
+});
+
+describe('answerQuestion', () => {
+  // A reviewed question: module linked, shared manual attached.
+  async function fixture() {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, {
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+    });
+    const { rows: manuals } = await db.query('SELECT id FROM manuals WHERE module_id = $1', [
+      module.id,
+    ]);
+    const { rows } = await db.query(
+      `INSERT INTO questions (user_id, prompt, status)
+       VALUES ($1, 'How do I patch a krell?', 'pending') RETURNING *`,
+      [user.id]
+    );
+    const question = rows[0];
+    await db.query('INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)', [
+      question.id,
+      module.id,
+    ]);
+    await db.query('INSERT INTO question_manuals (question_id, manual_id) VALUES ($1, $2)', [
+      question.id,
+      manuals[0].id,
+    ]);
+    return { db, user, module, manualId: manuals[0].id, question };
+  }
+
+  it('answers with the linked modules and attached manuals, and saves', async () => {
+    const { db, question } = await fixture();
+    const backend = fakeBackend({ answerWithDocuments: 'Patch it like this...' });
+
+    const updated = await answerQuestion(db, backend, question, manualsDir);
+    expect(updated.status).toBe('answered');
+    expect(updated.answer).toBe('Patch it like this...');
+    expect(updated.answered_at).toBeTruthy();
+
+    // The reviewed scope is used as-is: no LLM scoping at answer time.
+    expect(backend.calls.completeText).toHaveLength(0);
+
+    const [prompt, pdfs] = backend.calls.answerWithDocuments[0];
+    expect(prompt).toContain('How do I patch a krell?');
+    expect(prompt).toContain('Make Noise Maths');
+    expect(pdfs).toEqual([path.join(manualsDir, `${PDF_HASH}.pdf`)]);
+  });
+
+  it('feeds attached previous answers and notes as text documents', async () => {
+    const { db, user, question } = await fixture();
     const { rows: prev } = await db.query(
       `INSERT INTO questions (user_id, prompt, answer, status, answered_at)
        VALUES ($1, 'Earlier question', 'Earlier answer', 'answered', now()) RETURNING *`,
       [user.id]
     );
-    await db.query('INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)', [
-      prev[0].id,
-      module.id,
+    await db.query(
+      'INSERT INTO question_answers (question_id, source_question_id) VALUES ($1, $2)',
+      [question.id, prev[0].id]
+    );
+    const { rows: note } = await db.query(
+      `INSERT INTO notes (user_id, title, body) VALUES ($1, 'Patch idea', 'Krell into VCA') RETURNING *`,
+      [user.id]
+    );
+    await db.query('INSERT INTO question_notes (question_id, note_id) VALUES ($1, $2)', [
+      question.id,
+      note[0].id,
     ]);
 
-    const docs = await findPreviousAnswers(db, user.id, [module.id]);
-    expect(docs).toHaveLength(1);
-    expect(docs[0].text).toContain('Earlier answer');
-
-    const backend = fakeBackend({
-      completeText: '[{"manufacturer": "Make Noise", "module": "Maths"}]',
-      answerWithDocuments: 'ok',
-    });
+    const backend = fakeBackend({ answerWithDocuments: 'ok' });
     await answerQuestion(db, backend, question, manualsDir);
-    const [, , textDocs] = backend.calls.answerWithDocuments[0];
-    expect(textDocs).toHaveLength(1);
-    expect(textDocs[0].text).toContain('Earlier question');
+    const [prompt, , textDocs] = backend.calls.answerWithDocuments[0];
+    expect(textDocs).toHaveLength(2);
+    expect(textDocs[0].text).toContain('Earlier answer');
+    expect(textDocs[1].text).toContain('Patch idea');
+    expect(textDocs[1].text).toContain('Krell into VCA');
+    expect(prompt).toContain('previous question-and-answer documents');
+    expect(prompt).toContain("the user's own notes");
   });
 
-  it('fails when nothing is in scope', async () => {
+  it('answers from notes alone when the attached manual file is invalid', async () => {
+    const { db, user, question } = await fixture();
+    fs.rmSync(path.join(manualsDir, `${PDF_HASH}.pdf`));
+    const { rows: note } = await db.query(
+      `INSERT INTO notes (user_id, body) VALUES ($1, 'Only a note') RETURNING *`,
+      [user.id]
+    );
+    await db.query('INSERT INTO question_notes (question_id, note_id) VALUES ($1, $2)', [
+      question.id,
+      note[0].id,
+    ]);
+
+    const backend = fakeBackend({ answerWithDocuments: 'ok' });
+    const updated = await answerQuestion(db, backend, question, manualsDir);
+    expect(updated.status).toBe('answered');
+    const [, pdfs, textDocs] = backend.calls.answerWithDocuments[0];
+    expect(pdfs).toEqual([]);
+    expect(textDocs).toHaveLength(1);
+  });
+
+  it('fails when no modules are linked to the question', async () => {
     const { db, question } = await fixture();
-    const backend = fakeBackend({ completeText: '[]' });
+    await db.query('DELETE FROM question_modules');
+    const backend = fakeBackend();
     await expect(answerQuestion(db, backend, question, manualsDir)).rejects.toThrow(/in scope/);
   });
 
-  it('fails when no manuals or previous answers exist', async () => {
+  it('fails when nothing valid is attached', async () => {
     const { db, question } = await fixture();
-    await db.query('DELETE FROM manuals');
-    const backend = fakeBackend({
-      completeText: '[{"manufacturer": "Make Noise", "module": "Maths"}]',
-    });
+    await db.query('DELETE FROM question_manuals');
+    const backend = fakeBackend();
     await expect(answerQuestion(db, backend, question, manualsDir)).rejects.toThrow(
       /No valid manual PDFs/
     );
-  });
-
-  it("attaches the user's own uploaded documents but not other users'", async () => {
-    const { db, user, module, question } = await fixture();
-    const other = await createUser(db, { username: 'other' });
-    const sha = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
-    const myHash = sha(Buffer.concat([PDF_BYTES, Buffer.from('mine')]));
-    const theirHash = sha(Buffer.concat([PDF_BYTES, Buffer.from('theirs')]));
-    fs.writeFileSync(path.join(manualsDir, `${myHash}.pdf`), PDF_BYTES);
-    fs.writeFileSync(path.join(manualsDir, `${theirHash}.pdf`), PDF_BYTES);
-    await db.query(
-      `INSERT INTO manuals (module_id, user_id, hash, name, source) VALUES
-       ($1, $2, '${myHash}', 'my notes', 'upload'), ($1, $3, '${theirHash}', 'their notes', 'upload')`,
-      [module.id, user.id, other.id]
-    );
-
-    const backend = fakeBackend({
-      completeText: '[{"manufacturer": "Make Noise", "module": "Maths"}]',
-      answerWithDocuments: 'ok',
-    });
-    await answerQuestion(db, backend, question, manualsDir);
-    const [, pdfs] = backend.calls.answerWithDocuments[0];
-    const names = pdfs.map((p) => path.basename(p));
-    expect(names).toContain(`${PDF_HASH}.pdf`);
-    expect(names).toContain(`${myHash}.pdf`);
-    expect(names).not.toContain(`${theirHash}.pdf`);
   });
 });

@@ -145,6 +145,36 @@ describe('worker', () => {
     );
   });
 
+  it('labels published job events with their module/question target', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id);
+    const { rows: q } = await db.query(
+      `INSERT INTO questions (user_id, prompt, status) VALUES ($1, 'How?', 'scoping') RETURNING *`,
+      [user.id]
+    );
+    await enqueue(db, 'scope_question', { question_id: q[0].id, user_id: user.id });
+    await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
+
+    const bus = createBus();
+    const events = [];
+    bus.subscribe((e) => events.push(e));
+    const worker = makeWorker(db, fakeBackend({ completeText: '[]' }), undefined, bus);
+    await worker.tick(); // scope_question
+    await worker.tick(); // analyze_manual (fails: no manual — labels still set)
+
+    const questionEvents = events.filter((e) => e.job.question_id === q[0].id);
+    expect(questionEvents.length).toBeGreaterThan(0);
+    expect(questionEvents.every((e) => e.job.question_prompt === 'How?')).toBe(true);
+    const moduleEvents = events.filter((e) => e.job.module_id === module.id);
+    expect(moduleEvents.length).toBeGreaterThan(0);
+    expect(
+      moduleEvents.every(
+        (e) => e.job.module_name === 'Maths' && e.job.module_manufacturer === 'Make Noise'
+      )
+    ).toBe(true);
+  });
+
   it('re-searches on import even when the manual was already found', async () => {
     const db = await createTestDb();
     const u1 = await createUser(db, { username: 'u1' });
@@ -272,21 +302,59 @@ describe('worker', () => {
     expect(rows).toHaveLength(1);
   });
 
+  it('processes a scope_question job and leaves the question awaiting review', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id, { manual_hash: PDF_HASH, manual_status: 'found' });
+    const { rows: q } = await db.query(
+      `INSERT INTO questions (user_id, prompt, status) VALUES ($1, 'How?', 'scoping') RETURNING *`,
+      [user.id]
+    );
+    await enqueue(db, 'scope_question', { question_id: q[0].id, user_id: user.id });
+
+    const backend = fakeBackend({
+      completeText: '[{"manufacturer": "Make Noise", "module": "Maths"}]',
+    });
+    const worker = makeWorker(db, backend);
+
+    const done = await worker.tick();
+    expect(done.status).toBe('complete');
+    const { rows } = await db.query('SELECT * FROM questions WHERE id = $1', [q[0].id]);
+    expect(rows[0].status).toBe('scoped');
+    const { rows: links } = await db.query(
+      'SELECT * FROM question_modules WHERE question_id = $1',
+      [q[0].id]
+    );
+    expect(links.map((l) => l.module_id)).toEqual([module.id]);
+    expect(backend.calls.answerWithDocuments).toHaveLength(0);
+  });
+
   it('processes an answer_question job end to end', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
-    await insertModule(db, user.id, { manual_hash: PDF_HASH, manual_status: 'found' });
+    const module = await insertModule(db, user.id, {
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+    });
     const { rows: q } = await db.query(
-      `INSERT INTO questions (user_id, prompt) VALUES ($1, 'How?') RETURNING *`,
+      `INSERT INTO questions (user_id, prompt, status) VALUES ($1, 'How?', 'pending') RETURNING *`,
       [user.id]
     );
+    await db.query('INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)', [
+      q[0].id,
+      module.id,
+    ]);
+    const { rows: manual } = await db.query('SELECT id FROM manuals WHERE module_id = $1', [
+      module.id,
+    ]);
+    await db.query('INSERT INTO question_manuals (question_id, manual_id) VALUES ($1, $2)', [
+      q[0].id,
+      manual[0].id,
+    ]);
     await enqueue(db, 'answer_question', { question_id: q[0].id });
 
-    const backend = fakeBackend({
-      completeText: '[{"manufacturer": "Make Noise", "module": "Maths"}]',
-      answerWithDocuments: 'Like this.',
-    });
+    const backend = fakeBackend({ answerWithDocuments: 'Like this.' });
     const worker = makeWorker(db, backend);
 
     const done = await worker.tick();

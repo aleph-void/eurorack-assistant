@@ -1,8 +1,10 @@
-// Question answering, ported from eurorack-processor's ask.py: determine which
-// of the user's modules are in scope, gather their manual PDFs and previous
-// answers, submit everything to the LLM backend, and store the linked answer.
+// Question answering, ported from eurorack-processor's ask.py and split into
+// two phases. scopeQuestion determines which of the user's modules (and
+// jacks) the question applies to and leaves the question 'scoped'; the user
+// then reviews the scope in the GUI — adjusting modules and attaching manual
+// documents, previous answers, and notes — before answerQuestion submits the
+// question with exactly those attachments to the LLM backend.
 
-import { Op } from 'sequelize';
 import { extractJsonArray } from './json.js';
 import { isProbablyPdf, manualPath } from './pdf.js';
 
@@ -113,28 +115,12 @@ export async function jackComponentsForModules(db, moduleIds) {
   }));
 }
 
-// Previous answered questions of this user that involve any in-scope module,
-// passed along as extra context documents (ask.py's find_markdown_docs).
-export async function findPreviousAnswers(db, userId, scopedModuleIds) {
-  if (scopedModuleIds.length === 0) return [];
-  const { Question, QuestionModule } = db.models;
-  // Eager loading dedupes questions linked to several in-scope modules.
-  const questions = await Question.findAll({
-    where: { user_id: userId, status: 'answered', answer: { [Op.not]: null } },
-    include: [
-      { model: QuestionModule, attributes: ['module_id'], where: { module_id: scopedModuleIds } },
-    ],
-    order: [['created_at', 'ASC']],
-  });
-  return questions.map((q) => ({
-    name: `previous-answer-${q.id}.md`,
-    text: `# Question\n\n${q.prompt}\n\n# Answer\n\n${q.answer}`,
-  }));
-}
-
-// Full pipeline for one question. Returns the updated question row.
-export async function answerQuestion(db, backend, question, manualsDir, { log = () => {} } = {}) {
-  const { Module, UserModule, Manual, Question, QuestionModule, QuestionComponent } = db.models;
+// Phase one: figure out which of the user's modules (and which jacks) the
+// question applies to, persist the links, and mark the question 'scoped' so
+// the user can review the scope and pick attachments before it is answered.
+// An empty scope is not an error — the user adds modules during review.
+export async function scopeQuestion(db, backend, question, { log = () => {} } = {}) {
+  const { Module, UserModule, Question, QuestionModule, QuestionComponent } = db.models;
   const mappings = await UserModule.findAll({
     where: { user_id: question.user_id },
     include: Module,
@@ -147,53 +133,100 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
   if (modules.length === 0) throw new Error('No modules imported yet');
 
   const scoped = await determineScope(backend, question.prompt, modules);
+  log(
+    scoped.length > 0
+      ? `in scope: ${scoped.map((m) => `${m.manufacturer} ${m.name}`).join(', ')}`
+      : 'no modules auto-detected; select modules in the review step'
+  );
+
+  // The specific input/output jacks the question pertains to. Component
+  // scoping is best-effort: a failure here must not block the review step.
+  let scopedJacks = [];
+  if (scoped.length > 0) {
+    try {
+      const jacks = await jackComponentsForModules(db, scoped.map((m) => m.id));
+      scopedJacks = await determineComponentScope(backend, question.prompt, jacks);
+      if (scopedJacks.length > 0) {
+        log(
+          `jacks in scope: ${scopedJacks.map((c) => `${c.module_label} ${c.name}`).join(', ')}`
+        );
+      }
+    } catch (e) {
+      log(`component scoping failed (continuing): ${e.message}`);
+    }
+  }
+
+  await db.sequelize.transaction(async (transaction) => {
+    await QuestionModule.destroy({ where: { question_id: question.id }, transaction });
+    if (scoped.length > 0) {
+      await QuestionModule.bulkCreate(
+        scoped.map((m) => ({ question_id: question.id, module_id: m.id })),
+        { transaction }
+      );
+    }
+    await QuestionComponent.destroy({ where: { question_id: question.id }, transaction });
+    if (scopedJacks.length > 0) {
+      await QuestionComponent.bulkCreate(
+        scopedJacks.map((c) => ({ question_id: question.id, component_id: c.id })),
+        { transaction }
+      );
+    }
+    await Question.update(
+      { status: 'scoped', error: null },
+      { where: { id: question.id }, transaction }
+    );
+  });
+  return scoped;
+}
+
+// Phase two, after the user confirmed the review step: submit the question
+// with exactly the linked modules and explicitly attached documents (manual
+// PDFs, previous answers, notes) and store the answer.
+export async function answerQuestion(db, backend, question, manualsDir, { log = () => {} } = {}) {
+  const {
+    Module,
+    ModuleComponent,
+    Manual,
+    Note,
+    Question,
+    QuestionModule,
+    QuestionComponent,
+    QuestionManual,
+    QuestionAnswer,
+    QuestionNote,
+  } = db.models;
+
+  const links = await QuestionModule.findAll({
+    where: { question_id: question.id },
+    include: Module,
+    order: [
+      [Module, 'manufacturer', 'ASC'],
+      [Module, 'name', 'ASC'],
+    ],
+  });
+  const scoped = links.map((l) => l.Module.get({ plain: true }));
   if (scoped.length === 0) {
-    throw new Error('No modules were determined to be in scope for this question.');
+    throw new Error('No modules are in scope for this question.');
   }
   log(`in scope: ${scoped.map((m) => `${m.manufacturer} ${m.name}`).join(', ')}`);
 
-  for (const m of scoped) {
-    const linked = await QuestionModule.findOne({
-      where: { question_id: question.id, module_id: m.id },
-    });
-    if (!linked) {
-      await QuestionModule.create({ question_id: question.id, module_id: m.id });
-    }
-  }
-
-  // Link the specific input/output jacks the question pertains to. Component
-  // scoping is best-effort: a failure here must not block the answer.
-  try {
-    const jacks = await jackComponentsForModules(db, scoped.map((m) => m.id));
-    const scopedJacks = await determineComponentScope(backend, question.prompt, jacks);
-    if (scopedJacks.length > 0) {
-      log(
-        `jacks in scope: ${scopedJacks.map((c) => `${c.module_label} ${c.name}`).join(', ')}`
-      );
-    }
-    for (const jack of scopedJacks) {
-      const linked = await QuestionComponent.findOne({
-        where: { question_id: question.id, component_id: jack.id },
-      });
-      if (!linked) {
-        await QuestionComponent.create({ question_id: question.id, component_id: jack.id });
-      }
-    }
-  } catch (e) {
-    log(`component scoping failed (continuing): ${e.message}`);
-  }
-
-  // Collect manual PDFs for the in-scope modules: the shared auto-found
-  // manuals plus documents this user attached to their own module instances.
-  // Deduped by content hash (some modules share a manual file).
-  const manualRows = await Manual.findAll({
-    where: {
-      module_id: scoped.map((m) => m.id),
-      [Op.or]: [{ user_id: null }, { user_id: question.user_id }],
-    },
-    attributes: ['hash'],
+  // The specific components the question is tied to get called out in the
+  // answer prompt.
+  const componentLinks = await QuestionComponent.findAll({
+    where: { question_id: question.id },
+    include: [{ model: ModuleComponent, include: [Module] }],
+    order: [['component_id', 'ASC']],
   });
-  const hashes = [...new Set(manualRows.map((r) => r.hash))].sort();
+  const components = componentLinks.map((l) => l.ModuleComponent).filter(Boolean);
+
+  // The manual PDFs the user attached, deduped by content hash (some modules
+  // share a manual file).
+  const manualLinks = await QuestionManual.findAll({
+    where: { question_id: question.id },
+    include: Manual,
+    order: [['manual_id', 'ASC']],
+  });
+  const hashes = [...new Set(manualLinks.map((l) => l.Manual.hash))].sort();
   const pdfPaths = [];
   for (const hash of hashes) {
     const pdf = manualPath(manualsDir, hash);
@@ -202,23 +235,54 @@ export async function answerQuestion(db, backend, question, manualsDir, { log = 
     else log(`skipping ${pdf}: ${reason}`);
   }
 
-  const previous = await findPreviousAnswers(db, question.user_id, scoped.map((m) => m.id));
-  if (pdfPaths.length === 0 && previous.length === 0) {
-    throw new Error('No valid manual PDFs or previous answers found for the in-scope modules.');
+  // Attached previous answers and notes ride along as text documents.
+  const answerLinks = await QuestionAnswer.findAll({
+    where: { question_id: question.id },
+    include: [{ model: Question, as: 'SourceQuestion' }],
+    order: [['source_question_id', 'ASC']],
+  });
+  const previous = answerLinks
+    .filter((l) => l.SourceQuestion?.answer)
+    .map((l) => ({
+      name: `previous-answer-${l.source_question_id}.md`,
+      text: `# Question\n\n${l.SourceQuestion.prompt}\n\n# Answer\n\n${l.SourceQuestion.answer}`,
+    }));
+
+  const noteLinks = await QuestionNote.findAll({
+    where: { question_id: question.id },
+    include: Note,
+    order: [['note_id', 'ASC']],
+  });
+  const notes = noteLinks
+    .filter((l) => l.Note)
+    .map((l) => ({
+      name: `note-${l.note_id}.md`,
+      text: l.Note.title ? `# ${l.Note.title}\n\n${l.Note.body}` : l.Note.body,
+    }));
+
+  const textDocs = [...previous, ...notes];
+  if (pdfPaths.length === 0 && textDocs.length === 0) {
+    throw new Error('No valid manual PDFs, previous answers, or notes are attached to this question.');
   }
   const manuals = pdfPaths.slice(0, MAX_MANUALS);
 
+  const kinds = [];
+  if (manuals.length > 0) kinds.push('module manuals');
+  if (previous.length > 0) kinds.push('previous question-and-answer documents');
+  if (notes.length > 0) kinds.push("the user's own notes");
   const moduleNames = scoped.map((m) => `${m.manufacturer} ${m.name}`).join(', ');
-  const attachments =
-    previous.length === 0
-      ? 'module manuals'
-      : 'module manuals and previous question-and-answer documents';
-  const answerPrompt =
-    `You are a eurorack modular synthesizer expert. Using the attached ${attachments} ` +
-    `(for: ${moduleNames}), answer the following question. ` +
-    `Format your answer as markdown.\n\nQuestion: ${question.prompt}`;
+  let answerPrompt =
+    `You are a eurorack modular synthesizer expert. Using the attached ${kinds.join(', ')} ` +
+    `(for: ${moduleNames}), answer the following question. `;
+  if (components.length > 0) {
+    const componentNames = components
+      .map((c) => `${c.Module.manufacturer} ${c.Module.name} — ${c.name} (${c.type})`.trim())
+      .join('; ');
+    answerPrompt += `The question specifically concerns these components: ${componentNames}. `;
+  }
+  answerPrompt += `Format your answer as markdown.\n\nQuestion: ${question.prompt}`;
 
-  const answer = await backend.answerWithDocuments(answerPrompt, manuals, previous);
+  const answer = await backend.answerWithDocuments(answerPrompt, manuals, textDocs);
 
   const [, updated] = await Question.update(
     { answer, status: 'answered', error: null, answered_at: new Date() },

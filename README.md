@@ -29,11 +29,13 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
      structured summary plus every component (input/output jacks with voltage
      ranges and unipolar/bipolar polarity, knobs, buttons, toggles, switches, …)
      stored with a `type` field
-- **Ask questions**: the LLM first decides which of your modules are in scope,
-  then answers using their downloaded manuals plus your previous related
-  answers as context. Questions, answers, the in-scope modules, and the
-  specific input/output jacks the question pertains to are all stored and
-  linked in the database.
+- **Ask questions**: the LLM first decides which of your modules — and which
+  specific components — the question applies to, then you review that scope
+  before the answer is generated: add or remove modules and components, and
+  choose what to attach (each module's manual is preselected but can be
+  deselected, plus your uploaded documents, previous answers, and notes tied
+  to the selected modules/components). Questions, answers, the reviewed scope,
+  and the attachments are all stored and linked in the database.
 - **LLM provider is admin-configurable** in the web UI: Claude Code CLI
   (`claude -p`) or Codex CLI (`codex exec`), with an optional model override —
   both use your existing subscription login, no API key needed.
@@ -85,7 +87,8 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
                                         ├── PostgreSQL (modules, components,
                                         │   questions, answers, jobs, users)
                                         ├── job worker (import / find_manual /
-                                        │   analyze_manual / answer_question)
+                                        │   analyze_manual / scope_question /
+                                        │   answer_question)
                                         ├── /api/ws WebSocket (live job progress)
                                         └── claude -p / codex exec (LLM calls)
 ```
@@ -110,9 +113,10 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `notes` | per-user private notes |
 | `note_modules` / `note_components` | attach one note to any number of modules / components |
 | `questions` | prompt, answer, status, error |
-| `question_modules` | links a question to the modules in scope |
-| `question_components` | links a question to the specific jacks it pertains to |
-| `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `answer_question`) with attempts + errors |
+| `question_modules` | links a question to the modules in scope (LLM-suggested, then user-reviewed) |
+| `question_components` | links a question to the specific components it pertains to (LLM-suggested, then user-reviewed) |
+| `question_manuals` / `question_answers` / `question_notes` | the documents the user attached during review: manual PDFs, previous answers, notes |
+| `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `scope_question`, `answer_question`) with attempts + errors |
 | `app_config` | admin-set LLM provider/model |
 
 ## Development

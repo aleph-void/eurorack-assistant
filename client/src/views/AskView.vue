@@ -34,8 +34,9 @@ async function submit() {
         placeholder="e.g. How do I patch a krell using Maths and my filters?"
       ></textarea>
       <p class="muted">
-        The assistant figures out which of your modules are relevant, reads their manuals, and
-        answers with your previous related questions as extra context.
+        The assistant first figures out which of your modules the question applies to. You then
+        review that selection — adding modules, uploaded documents, previous answers, and notes —
+        before the answer is generated.
       </p>
       <p v-if="error" class="error" data-test="error">{{ error }}</p>
       <button type="submit" :disabled="busy || !prompt.trim()" data-test="submit">Ask</button>

@@ -4,7 +4,9 @@
 //   find_manual     — research + download the module's manual PDF, then queue
 //                     an analyze_manual job for it
 //   analyze_manual  — LLM analysis of the manual into a summary + components
-//   answer_question — scope the question, attach manuals, ask the LLM
+//   scope_question  — determine which modules/jacks a question applies to,
+//                     then leave the question 'scoped' for the user to review
+//   answer_question — ask the LLM with the reviewed scope and attachments
 //
 // Progress is published per-user on the event bus, which the WebSocket server
 // forwards to the browser.
@@ -20,7 +22,7 @@ import {
 } from '../services/importer.js';
 import { findManualForModule } from '../services/manualFinder.js';
 import { analyzeManualForModule } from '../services/manualAnalyzer.js';
-import { answerQuestion } from '../services/ask.js';
+import { answerQuestion, scopeQuestion } from '../services/ask.js';
 
 export const MAX_ATTEMPTS = 3;
 
@@ -70,9 +72,50 @@ export function createWorker(db, options = {}) {
     return [];
   }
 
+  // What the job is about, in the same shape the jobs API returns — the
+  // client renders WebSocket job events directly, so without these fields a
+  // job that first appears over the socket would have no target label.
+  async function jobLabels(job) {
+    const labels = { module_manufacturer: null, module_name: null, question_prompt: null };
+    if (job.module_id) {
+      const module = await db.models.Module.findByPk(job.module_id);
+      if (module) {
+        labels.module_manufacturer = module.manufacturer;
+        labels.module_name = module.name;
+      }
+    }
+    if (job.question_id) {
+      const question = await db.models.Question.findByPk(job.question_id);
+      if (question) labels.question_prompt = question.prompt;
+    }
+    return labels;
+  }
+
   function jobSummary(job) {
-    const { id, type, module_id, question_id, status, attempts, error } = job;
-    return { id, type, module_id, question_id, status, attempts, error };
+    const {
+      id,
+      type,
+      module_id,
+      question_id,
+      status,
+      attempts,
+      error,
+      module_manufacturer = null,
+      module_name = null,
+      question_prompt = null,
+    } = job;
+    return {
+      id,
+      type,
+      module_id,
+      question_id,
+      status,
+      attempts,
+      error,
+      module_manufacturer,
+      module_name,
+      question_prompt,
+    };
   }
 
   function publish(userIds, event, job, message) {
@@ -177,6 +220,22 @@ export function createWorker(db, options = {}) {
     }
   }
 
+  async function handleScopeQuestion(job, backend, progress) {
+    const { Question } = db.models;
+    const record = await Question.findByPk(job.question_id);
+    if (!record) throw new Error(`Question ${job.question_id} no longer exists`);
+    const question = record.get({ plain: true });
+    await Question.update({ status: 'scoping' }, { where: { id: question.id } });
+    try {
+      // scopeQuestion marks the question 'scoped' once the links are saved.
+      await scopeQuestion(db, backend, question, { log: progress });
+      progress('scope saved, ready for review');
+    } catch (e) {
+      await Question.update({ status: 'failed', error: e.message }, { where: { id: question.id } });
+      throw e;
+    }
+  }
+
   async function handleAnswerQuestion(job, backend, progress) {
     const { Question } = db.models;
     const record = await Question.findByPk(job.question_id);
@@ -196,6 +255,7 @@ export function createWorker(db, options = {}) {
     import: handleImport,
     find_manual: handleFindManual,
     analyze_manual: handleAnalyzeManual,
+    scope_question: handleScopeQuestion,
     answer_question: handleAnswerQuestion,
   };
 
@@ -205,6 +265,8 @@ export function createWorker(db, options = {}) {
     const job = await claimNextJob();
     if (!job) return null;
     const owners = await jobOwners(job);
+    const labels = await jobLabels(job);
+    Object.assign(job, labels);
     const progress = (message) => publish(owners, 'progress', job, message);
 
     publish(owners, 'started', job, `attempt ${job.attempts}`);
@@ -217,7 +279,7 @@ export function createWorker(db, options = {}) {
         { status: 'complete', error: null },
         { where: { id: job.id }, returning: true }
       );
-      const done = doneRows[0].get({ plain: true });
+      const done = { ...doneRows[0].get({ plain: true }), ...labels };
       publish(owners, 'completed', done);
       return done;
     } catch (e) {
@@ -226,7 +288,7 @@ export function createWorker(db, options = {}) {
         { status, error: e.message },
         { where: { id: job.id }, returning: true }
       );
-      const failed = failedRows[0].get({ plain: true });
+      const failed = { ...failedRows[0].get({ plain: true }), ...labels };
       publish(owners, status === 'failed' ? 'failed' : 'progress', failed,
         status === 'failed' ? e.message : `attempt failed, will retry: ${e.message}`);
       return failed;

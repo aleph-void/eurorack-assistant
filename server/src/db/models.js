@@ -158,6 +158,33 @@ export function defineModels(sequelize) {
     { tableName: 'question_components', timestamps: false }
   );
 
+  const QuestionManual = define(
+    'QuestionManual',
+    {
+      question_id: { type: DataTypes.INTEGER, primaryKey: true },
+      manual_id: { type: DataTypes.INTEGER, primaryKey: true },
+    },
+    { tableName: 'question_manuals', timestamps: false }
+  );
+
+  const QuestionAnswer = define(
+    'QuestionAnswer',
+    {
+      question_id: { type: DataTypes.INTEGER, primaryKey: true },
+      source_question_id: { type: DataTypes.INTEGER, primaryKey: true },
+    },
+    { tableName: 'question_answers', timestamps: false }
+  );
+
+  const QuestionNote = define(
+    'QuestionNote',
+    {
+      question_id: { type: DataTypes.INTEGER, primaryKey: true },
+      note_id: { type: DataTypes.INTEGER, primaryKey: true },
+    },
+    { tableName: 'question_notes', timestamps: false }
+  );
+
   const Job = define(
     'Job',
     {
@@ -205,6 +232,18 @@ export function defineModels(sequelize) {
   QuestionComponent.belongsTo(Question, { foreignKey: 'question_id' });
   QuestionComponent.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
 
+  Question.hasMany(QuestionManual, { foreignKey: 'question_id' });
+  QuestionManual.belongsTo(Question, { foreignKey: 'question_id' });
+  QuestionManual.belongsTo(Manual, { foreignKey: 'manual_id' });
+
+  Question.hasMany(QuestionAnswer, { foreignKey: 'question_id' });
+  QuestionAnswer.belongsTo(Question, { foreignKey: 'question_id' });
+  QuestionAnswer.belongsTo(Question, { foreignKey: 'source_question_id', as: 'SourceQuestion' });
+
+  Question.hasMany(QuestionNote, { foreignKey: 'question_id' });
+  QuestionNote.belongsTo(Question, { foreignKey: 'question_id' });
+  QuestionNote.belongsTo(Note, { foreignKey: 'note_id' });
+
   Job.belongsTo(User, { foreignKey: 'user_id' });
   Job.belongsTo(Module, { foreignKey: 'module_id' });
   Job.belongsTo(Question, { foreignKey: 'question_id' });
@@ -223,6 +262,9 @@ export function defineModels(sequelize) {
     Question,
     QuestionModule,
     QuestionComponent,
+    QuestionManual,
+    QuestionAnswer,
+    QuestionNote,
     Job,
   };
 }
