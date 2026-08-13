@@ -18,6 +18,7 @@ vi.mock('vue-router', async (importOriginal) => {
 });
 
 import { api } from '../src/api.js';
+import { dialog } from '../src/dialog.js';
 import LoginView from '../src/views/LoginView.vue';
 import ModulesView from '../src/views/ModulesView.vue';
 import ModuleDetailView from '../src/views/ModuleDetailView.vue';
@@ -176,7 +177,7 @@ describe('ModulesView', () => {
       { id: 1, manufacturer: 'ALM', name: 'Pam', quantity: 1, racks: [], manual_status: 'pending', analysis_status: 'pending' },
     ]);
     api.delete.mockResolvedValue({ ok: true });
-    vi.stubGlobal('confirm', vi.fn(() => true));
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     const wrapper = mount(ModulesView, { global: testGlobal() });
     await flushPromises();
     await wrapper.find('[data-test="module-1"] button').trigger('click');
@@ -189,7 +190,7 @@ describe('ModulesView', () => {
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/modules/1?rack_id=1');
     expect(wrapper.find('[data-test="module-1"]').exists()).toBe(false);
-    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 });
 
@@ -245,7 +246,7 @@ describe('RacksView', () => {
   it('deletes a rack after confirmation and surfaces errors', async () => {
     api.get.mockResolvedValue(racksResponse);
     api.delete.mockResolvedValue({ ok: true });
-    vi.stubGlobal('confirm', vi.fn(() => true));
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     const wrapper = mount(RacksView, { global: testGlobal() });
     await flushPromises();
     await wrapper.find('[data-test="delete-2"]').trigger('click');
@@ -257,7 +258,7 @@ describe('RacksView', () => {
     await wrapper.find('[data-test="delete-1"]').trigger('click');
     await flushPromises();
     expect(wrapper.find('[data-test="error"]').text()).toContain('nope');
-    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 });
 
@@ -778,7 +779,7 @@ describe('QuestionsView', () => {
       { id: 2, prompt: 'Q2?', status: 'pending', created_at: new Date().toISOString() },
     ]);
     api.delete.mockResolvedValue({ ok: true });
-    vi.stubGlobal('confirm', vi.fn(() => true));
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     const wrapper = mount(QuestionsView, { global: testGlobal() });
     await flushPromises();
 
@@ -788,7 +789,7 @@ describe('QuestionsView', () => {
     expect(wrapper.find('[data-test="question-table"]').text()).not.toContain('Q1?');
 
     // Declining the confirmation leaves the question alone.
-    vi.stubGlobal('confirm', vi.fn(() => false));
+    dialog.confirm.mockResolvedValue(false);
     await wrapper.find('[data-test="delete-question-2"]').trigger('click');
     expect(api.delete).toHaveBeenCalledTimes(1);
   });
@@ -845,7 +846,7 @@ describe('QuestionDetailView', () => {
       notes: [],
     });
     api.delete.mockResolvedValue({ ok: true });
-    vi.stubGlobal('confirm', vi.fn(() => true));
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
 
@@ -1108,7 +1109,7 @@ describe('NotesView', () => {
     mockGets();
     api.post.mockResolvedValue({});
     api.delete.mockResolvedValue({ ok: true });
-    vi.stubGlobal('confirm', vi.fn(() => true));
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     const wrapper = mount(NotesView, { global: testGlobal() });
     await flushPromises();
 
@@ -1118,7 +1119,7 @@ describe('NotesView', () => {
     await wrapper.find('[data-test="note-delete-1"]').trigger('click');
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/notes/1');
-    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 });
 
@@ -1241,14 +1242,14 @@ describe('UsersView', () => {
       { id: 2, username: 'alice', is_admin: false, created_at: new Date().toISOString() },
     ]);
     api.post.mockResolvedValue({ ok: true, username: 'alice', generated_password: 'freshpw123' });
-    vi.stubGlobal('confirm', vi.fn(() => true));
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     const wrapper = mount(UsersView, { global: testGlobal() });
     await flushPromises();
     await wrapper.find('[data-test="reset-2"]').trigger('click');
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith('/api/users/2/password');
     expect(wrapper.find('[data-test="reset-password-value"]').text()).toBe('freshpw123');
-    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('lists users with roles', async () => {
@@ -1440,7 +1441,7 @@ describe('PatchesView', () => {
       { id: 5, name: 'Krell', rack_name: 'main rack', module_count: 3, cable_count: 0, created_at: '2026-08-12T10:00:00Z' },
     ]);
     api.delete.mockResolvedValue({ ok: true });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     const wrapper = mount(PatchesView, { global: testGlobal() });
     await flushPromises();
     await wrapper.find('[data-test="delete-5"]').trigger('click');

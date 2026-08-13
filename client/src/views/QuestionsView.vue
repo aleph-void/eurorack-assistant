@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 
 const questions = ref([]);
 const error = ref('');
@@ -21,7 +22,13 @@ function formatDate(value) {
 }
 
 async function remove(q) {
-  if (!confirm('Delete this question and its answer?')) return;
+  const ok = await dialog.confirm({
+    title: 'Delete question',
+    message: 'Delete this question and its answer?',
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) return;
   error.value = '';
   try {
     await api.delete(`/api/questions/${q.id}`);

@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 
 const racks = ref([]);
 const error = ref('');
@@ -65,14 +66,16 @@ async function exportRack(rack) {
 }
 
 async function remove(rack) {
-  if (
-    !confirm(
+  const ok = await dialog.confirm({
+    title: 'Delete rack',
+    message:
       `Delete rack '${rack.name}' and its ${rack.module_count} module(s)? ` +
-        'Modules not in any other rack are permanently deleted, along with their ' +
-        'manuals, notes and questions.'
-    )
-  )
-    return;
+      'Modules not in any other rack are permanently deleted, along with their ' +
+      'manuals, notes and questions.',
+    confirmLabel: 'Delete rack',
+    danger: true,
+  });
+  if (!ok) return;
   error.value = '';
   try {
     await api.delete(`/api/racks/${rack.id}`);

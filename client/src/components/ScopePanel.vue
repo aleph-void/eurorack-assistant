@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 import { useDevicesStore } from '../stores/devices.js';
 
 // The oscilloscope side of a patch: which pane is watching which jack, and
@@ -153,7 +154,13 @@ async function saveCaption(capture) {
 }
 
 async function removeCapture(capture) {
-  if (!confirm('Delete this capture?')) return;
+  const ok = await dialog.confirm({
+    title: 'Delete capture',
+    message: 'Delete this capture?',
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await api.delete(`/api/captures/${capture.id}`);
     captures.value = captures.value.filter((c) => c.id !== capture.id);

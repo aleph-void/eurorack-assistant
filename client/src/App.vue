@@ -5,6 +5,7 @@ import { useAuthStore } from './stores/auth.js';
 import { useJobsStore } from './stores/jobs.js';
 import { useDevicesStore } from './stores/devices.js';
 import { createProgressSocket } from './progressSocket.js';
+import ConfirmDialog from './components/ConfirmDialog.vue';
 
 const auth = useAuthStore();
 const jobs = useJobsStore();
@@ -129,6 +130,9 @@ async function logout() {
   <main class="container">
     <RouterView />
   </main>
+
+  <!-- Every confirmation in the app is drawn here, whoever asked for it. -->
+  <ConfirmDialog />
 
   <footer class="site-foot">
     <a href="https://github.com/aleph-void/eurorack-assistant" target="_blank" rel="noopener">

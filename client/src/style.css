@@ -427,6 +427,52 @@ details.expander > .expander-body {
   margin-top: 0;
 }
 
+/* ---- modal dialogs -------------------------------------------------- */
+
+/* The app's confirmations (ConfirmDialog): a panel held over a darkened page,
+   above the drawer so a question raised from the menu is still readable. */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(3px);
+}
+
+.modal {
+  width: min(30rem, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 1.1rem 1.3rem 1.2rem;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+  outline: none;
+}
+.modal h2 {
+  margin: 0 0 0.5rem;
+}
+.modal-message {
+  margin: 0;
+  color: var(--muted);
+  /* Messages are written as sentences; a blank line in one stays a break. */
+  white-space: pre-line;
+}
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+.modal-actions button {
+  margin-top: 1.1rem;
+}
+
 /* ---- tables --------------------------------------------------------- */
 
 /* Every table is wrapped in one of these: narrow screens scroll the table

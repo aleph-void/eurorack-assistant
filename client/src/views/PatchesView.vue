@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 
 const patches = ref([]);
 const racks = ref([]);
@@ -57,7 +58,13 @@ async function duplicate(patch) {
 }
 
 async function remove(patch) {
-  if (!confirm(`Delete patch '${patch.name}'? Its cables and settings are lost.`)) return;
+  const ok = await dialog.confirm({
+    title: 'Delete patch',
+    message: `Delete patch '${patch.name}'? Its cables and settings are lost.`,
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) return;
   error.value = '';
   try {
     await api.delete(`/api/patches/${patch.id}`);

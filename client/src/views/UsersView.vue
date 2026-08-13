@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 import { useAuthStore } from '../stores/auth.js';
 
 const auth = useAuthStore();
@@ -39,13 +40,12 @@ async function createUser() {
 }
 
 async function resetPassword(user) {
-  if (
-    !confirm(
-      `Reset the password for ${user.username}? They are logged out everywhere and must set a new password at their next login.`
-    )
-  ) {
-    return;
-  }
+  const ok = await dialog.confirm({
+    title: 'Reset password',
+    message: `Reset the password for ${user.username}? They are logged out everywhere and must set a new password at their next login.`,
+    confirmLabel: 'Reset password',
+  });
+  if (!ok) return;
   error.value = '';
   resetResult.value = null;
   try {
@@ -56,9 +56,13 @@ async function resetPassword(user) {
 }
 
 async function removeUser(user) {
-  if (!confirm(`Delete user ${user.username}? Their modules and questions are removed too.`)) {
-    return;
-  }
+  const ok = await dialog.confirm({
+    title: 'Delete user',
+    message: `Delete user ${user.username}? Their modules and questions are removed too.`,
+    confirmLabel: 'Delete user',
+    danger: true,
+  });
+  if (!ok) return;
   error.value = '';
   try {
     await api.delete(`/api/users/${user.id}`);

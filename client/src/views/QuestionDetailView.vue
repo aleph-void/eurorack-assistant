@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -169,7 +170,13 @@ async function requestAnswer() {
 }
 
 async function removeQuestion() {
-  if (!confirm('Delete this question and its answer?')) return;
+  const ok = await dialog.confirm({
+    title: 'Delete question',
+    message: 'Delete this question and its answer?',
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) return;
   error.value = '';
   try {
     await api.delete(`/api/questions/${props.id}`);

@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted, ref } from 'vue';
+import { dialog } from '../dialog.js';
 import { useDevicesStore } from '../stores/devices.js';
 
 // Linked oscilloscope applications: what is connected right now, what each
@@ -17,7 +18,13 @@ async function load() {
 }
 
 async function revoke(device) {
-  if (!confirm(`Revoke ${device.name}? It will have to be linked again.`)) return;
+  const ok = await dialog.confirm({
+    title: 'Revoke device',
+    message: `Revoke ${device.name}? It will have to be linked again.`,
+    confirmLabel: 'Revoke',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await devices.revoke(device.id);
   } catch (e) {

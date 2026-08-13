@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 import { useJobsStore } from '../stores/jobs.js';
 
 const route = useRoute();
@@ -48,14 +49,16 @@ function rackNames(module) {
 
 async function remove(module) {
   const where = currentRack.value ? `from rack '${currentRack.value.name}'` : 'from all your racks';
-  if (
-    !confirm(
+  const ok = await dialog.confirm({
+    title: 'Delete module',
+    message:
       `Delete ${module.manufacturer} ${module.name} ${where}? ` +
-        'If it ends up in no rack at all, the module and its manuals, notes and ' +
-        'questions are permanently deleted.'
-    )
-  )
-    return;
+      'If it ends up in no rack at all, the module and its manuals, notes and ' +
+      'questions are permanently deleted.',
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     const query = selectedRack.value ? `?rack_id=${selectedRack.value}` : '';
     await api.delete(`/api/modules/${module.id}${query}`);
@@ -96,7 +99,12 @@ async function reanalyzeAll() {
   const extra = rediscoverManuals.value
     ? ' Their manuals will be searched for again first.'
     : '';
-  if (!confirm(`Re-analyze every module ${where}?${extra}`)) return;
+  const ok = await dialog.confirm({
+    title: 'Re-analyze modules',
+    message: `Re-analyze every module ${where}?${extra}`,
+    confirmLabel: 'Re-analyze',
+  });
+  if (!ok) return;
   error.value = '';
   reanalyzed.value = '';
   reanalyzing.value = true;

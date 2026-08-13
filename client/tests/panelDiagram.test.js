@@ -20,6 +20,7 @@ vi.mock('vue-router', async (importOriginal) => {
 });
 
 import { api } from '../src/api.js';
+import { dialog } from '../src/dialog.js';
 import {
   PANEL_HEIGHT,
   cableColor,
@@ -317,7 +318,7 @@ describe('ModulesView re-analyze all', () => {
     vi.clearAllMocks();
     currentRouteQuery = {};
     api.get.mockImplementation((path) => Promise.resolve(path === '/api/racks' ? racks : [module]));
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
   });
 
   it('re-analyzes without re-discovering the manuals by default', async () => {
@@ -358,7 +359,7 @@ describe('ModulesView re-analyze all', () => {
   });
 
   it('does nothing when the confirmation is declined', async () => {
-    window.confirm.mockReturnValue(false);
+    dialog.confirm.mockResolvedValue(false);
     const wrapper = mount(ModulesView, { global: testGlobal() });
     await flushPromises();
     await wrapper.find('[data-test="reanalyze-all"]').trigger('click');

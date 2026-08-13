@@ -13,6 +13,7 @@ vi.mock('vue-router', async (importOriginal) => {
 });
 
 import { api } from '../src/api.js';
+import { dialog } from '../src/dialog.js';
 import LinkDeviceView from '../src/views/LinkDeviceView.vue';
 import DevicesView from '../src/views/DevicesView.vue';
 import ScopePanel from '../src/components/ScopePanel.vue';
@@ -116,7 +117,7 @@ describe('DevicesView', () => {
       },
     ]);
     api.delete.mockResolvedValue({ ok: true });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
 
     const wrapper = mount(DevicesView, { global: testGlobal() });
     await flushPromises();

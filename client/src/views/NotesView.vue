@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 
 const notes = ref([]);
 const modules = ref([]);
@@ -87,7 +88,13 @@ async function detachComponent(note, component) {
 }
 
 async function removeNote(note) {
-  if (!confirm('Delete this note everywhere it is attached?')) return;
+  const ok = await dialog.confirm({
+    title: 'Delete note',
+    message: 'Delete this note everywhere it is attached?',
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) return;
   await api.delete(`/api/notes/${note.id}`);
   await load();
 }
