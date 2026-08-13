@@ -11,6 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "dompurify": "^3.1.6",
     "marked": "^14.1.0",
     "pinia": "^2.2.2",

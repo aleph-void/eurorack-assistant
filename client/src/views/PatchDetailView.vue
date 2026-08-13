@@ -8,6 +8,7 @@ import ScopePanel from '../components/ScopePanel.vue';
 import PatchNotesPanel from '../components/PatchNotesPanel.vue';
 import PatchDiagram from '../components/PatchDiagram.vue';
 import ShareButton from '../components/ShareButton.vue';
+import VoicePatchPanel from '../components/VoicePatchPanel.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -238,18 +239,27 @@ const pairable = computed(() => {
 const quickLine = ref('');
 const quickError = ref('');
 
+// jack_index is where this jack sits among the module's jacks of the same
+// kind, counting from one. Typing never needs it, but "out one" said out loud
+// on a module whose outputs are unnamed has to land somewhere.
 const jackCandidates = (types, forDestination) =>
-  modules.value.flatMap((pm) =>
-    pm.components
-      .filter((c) => types.includes(c.type))
-      .map((c) => ({
+  modules.value.flatMap((pm) => {
+    const wanted = pm.components.filter((c) => types.includes(c.type));
+    const seen = new Map();
+    return wanted.map((c) => {
+      const index = (seen.get(c.type) || 0) + 1;
+      seen.set(c.type, index);
+      return {
         patch_module_id: pm.id,
         component_id: c.id,
         module_label: moduleLabel(pm),
         jack_name: c.name,
+        jack_type: c.type,
+        jack_index: index,
         disabled: forDestination ? Boolean(cableInto(pm.id, c.id)) : false,
-      }))
-  );
+      };
+    });
+  });
 const quickParsed = computed(() =>
   parseQuickCable(quickLine.value, {
     from: jackCandidates(FROM_TYPES, false),
@@ -260,6 +270,31 @@ const quickReady = computed(
   () => Boolean(quickParsed.value.from && quickParsed.value.to && !quickParsed.value.error)
 );
 const endpointText = (end) => `${end.module_label} — ${end.jack_name}`;
+
+// ---- the same two lists, said out loud ----
+// Voice needs the ends kept whole rather than parsed from one line, the
+// cables already plugged (so they can be pulled out by name), and the words
+// this rack uses — a recogniser has never heard of Mimeophon and does better
+// when it is told the names it should expect.
+const voiceFrom = computed(() => jackCandidates(FROM_TYPES, false));
+const voiceTo = computed(() => jackCandidates(TO_TYPES, true));
+const cableCandidates = computed(() =>
+  cables.value.map((c) => ({
+    cable_id: c.id,
+    module_label: `${moduleLabel(modulesById.value.get(c.from_patch_module_id))} ${c.from_component_name}`,
+    jack_name: `${moduleLabel(modulesById.value.get(c.to_patch_module_id))} ${c.to_component_name}`,
+  }))
+);
+const vocabulary = computed(() => {
+  const words = new Set();
+  for (const pm of modules.value) {
+    words.add(pm.manufacturer);
+    words.add(pm.module_name);
+    if (pm.label) words.add(pm.label);
+    for (const c of pm.components) words.add(c.name);
+  }
+  return [...words].filter(Boolean);
+});
 
 async function addQuickCable() {
   quickError.value = '';
@@ -810,6 +845,15 @@ onMounted(async () => {
     <p v-if="patch.description" style="white-space: pre-wrap">{{ patch.description }}</p>
 
     <PatchDiagram :modules="modules" :cables="patch.cables" :label-for="moduleLabel" />
+
+    <VoicePatchPanel
+      :patch-id="props.id"
+      :from-candidates="voiceFrom"
+      :to-candidates="voiceTo"
+      :cable-candidates="cableCandidates"
+      :vocabulary="vocabulary"
+      @changed="load"
+    />
 
     <details open class="panel" data-test="cables">
       <summary>

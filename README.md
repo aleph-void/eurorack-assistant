@@ -200,6 +200,15 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   turned around where both jacks allow it; "chain" mode starts the next cable
   where the last one landed; and a whole patch can be duplicated as the
   starting point for its next version.
+- **Patch by voice**: say the cable instead of typing it — "connect make noise
+  maths out one to 2hp div clock in" — and a tone tells you whether it went in,
+  so your hands and your eyes stay on the case. Recognition runs either through
+  the browser or through Whisper on your own machine; the microphone opens on a
+  held key, a patch-mode session, a wake word or a MIDI footswitch. Both ends
+  are matched against this patch's jacks with the names speech reliably gets
+  wrong already accounted for ("mats" → Maths, "two h p" → 2hp), and anything
+  it is not sure of is asked about rather than guessed. See
+  [docs/voice-patching.md](docs/voice-patching.md).
 - **Patches as files**: a patch exports as a `.patch.json` file and imports
   back — into this account, or into somebody else's install. The file is
   written in names rather than ids (manufacturer and model for an instance,
