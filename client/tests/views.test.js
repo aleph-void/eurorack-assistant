@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import { testGlobal } from './setup.js';
 
 vi.mock('../src/api.js', () => ({
-  api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
+  api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
 const routerPush = vi.fn();
@@ -612,6 +612,70 @@ describe('ModuleDetailView', () => {
     await flushPromises();
     expect(dialog.confirm).toHaveBeenCalled();
     expect(api.delete).toHaveBeenCalledWith('/api/modules/1/panel');
+  });
+
+  // The panel's markers are worked out from a photograph and are right most of
+  // the time. This is the rest of the time.
+  it('saves a marker dragged onto the hardware it names', async () => {
+    const panel = {
+      source: 'image',
+      url: '/api/panels/abc.png',
+      width: 400,
+      height: 1200,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      hp: 8,
+      components: [
+        { id: 5, component_id: 1, name: 'Signal In', shape: 'jack', description: 'The input.', x: 0.5, y: 0.9 },
+      ],
+    };
+    api.get.mockResolvedValue({ ...moduleResponse, panel });
+    const moved = { ...panel, components: [{ ...panel.components[0], y: 0.4 }] };
+    api.patch.mockResolvedValue({ panel: moved });
+
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const svg = wrapper.find('[data-test="module-panel-svg"]');
+    svg.element.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 500 });
+    await wrapper.find('.marker').trigger('pointerdown', { clientX: 50, clientY: 450 });
+    await svg.trigger('pointermove', { clientX: 40, clientY: 200 });
+    await svg.trigger('pointerup');
+    await flushPromises();
+
+    expect(api.patch).toHaveBeenCalledWith('/api/modules/1/panel/components/5', {
+      x: 0.4,
+      y: 0.4,
+    });
+    // The panel that comes back is what the marker settles on.
+    expect(wrapper.find('[data-test="panel-status"]').text()).toContain('Signal In');
+    expect(wrapper.find('.marker').attributes('cy')).toBe(String(0.4 * 560));
+  });
+
+  it('puts a marker back where it was when the save fails', async () => {
+    const panel = {
+      source: 'image',
+      url: '/api/panels/abc.png',
+      width: 400,
+      height: 1200,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      hp: 8,
+      components: [{ id: 5, component_id: 1, name: 'Signal In', shape: 'jack', x: 0.5, y: 0.9 }],
+    };
+    api.get.mockResolvedValue({ ...moduleResponse, panel });
+    api.patch.mockRejectedValue(new Error('nope'));
+
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const svg = wrapper.find('[data-test="module-panel-svg"]');
+    svg.element.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 500 });
+    await wrapper.find('.marker').trigger('pointerdown', { clientX: 50, clientY: 450 });
+    await svg.trigger('pointermove', { clientX: 40, clientY: 200 });
+    await svg.trigger('pointerup');
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="panel-error"]').text()).toContain('nope');
+    expect(wrapper.find('.marker').attributes('cy')).toBe(String(0.9 * 560));
   });
 
   it('leaves the picture alone when the removal is declined', async () => {

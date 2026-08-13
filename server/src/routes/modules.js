@@ -1258,6 +1258,55 @@ export function moduleRoutes(
     }
   });
 
+  // Move one marker on the panel. Body: { x, y } as fractions of the whole
+  // image, the same numbers the panel job stores.
+  //
+  // Everything upstream of this is an estimate — a model reading a photograph,
+  // corrected against the pixels (services/panelPixels.js) — and estimates are
+  // right most of the time. This is for the rest of the time: the person
+  // looking at the picture can see where the jack is, and dragging the circle
+  // onto it is both the fastest way to say so and the only one that needs no
+  // judgement from us about whether they are right.
+  //
+  // A hand-placed marker is not defended against the panel job, which rebuilds
+  // every marker from scratch when it next runs — the job is also what puts
+  // markers back after a re-analysis renumbers every component, and a position
+  // pinned to a component id that no longer exists would be worse than one
+  // worked out again. Rebuilds are rare and deliberate (rebuild_panels, a new
+  // upload, a re-analysis); a correction lasts until one.
+  router.patch('/:id/panel/components/:placementId', async (req, res, next) => {
+    try {
+      const module = await userModule(req.user.id, req.params.id);
+      if (!module) return res.status(404).json({ error: 'Module not found' });
+
+      const panel = await ModulePanel.findOne({ where: { module_id: module.id } });
+      if (!panel) return res.status(404).json({ error: 'Module has no panel' });
+      const placement = await ModulePanelComponent.findOne({
+        where: { id: req.params.placementId, panel_id: panel.id },
+      });
+      if (!placement) return res.status(404).json({ error: 'Marker not found on this panel' });
+
+      // A position off the image is not a position. Rejected rather than
+      // clamped: a marker that lands somewhere other than where it was
+      // dropped is a bug report waiting to happen.
+      const coord = (value) => {
+        const n = Number(value);
+        return Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
+      };
+      const x = coord(req.body?.x);
+      const y = coord(req.body?.y);
+      if (x === null || y === null) {
+        return res.status(400).json({ error: 'x and y must be fractions of the image between 0 and 1' });
+      }
+
+      await placement.update({ x, y });
+      const panels = await loadPanels(db, [module.id]);
+      res.json({ panel: panels.get(module.id) ?? null });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // Discard an uploaded panel picture and let the module go back to a
   // researched or drawn one. Only an upload can be removed this way: there is
   // no value in deleting a generated panel, since the same job would draw the

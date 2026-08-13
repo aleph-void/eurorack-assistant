@@ -14,6 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   MIN_CONTRAST,
   backgroundLevel,
+  discScore,
   findDisc,
   growBox,
   loadSharp,
@@ -51,8 +52,19 @@ const RADIUS_MM = { jack: 2.4, knob: 4.5 };
 // The silkscreen sits under the control, which is what pulls a model's answer
 // down and what the snap has to be able to climb back out of.
 const LABEL_OFFSET_MM = 6;
+// The maker's name down at the bottom of the plate: a compact blob of ink
+// about the size and darkness of a jack, sitting in clean plate the way a jack
+// sits in its nut. The one thing on a panel that can out-argue a jack for a
+// marker that has been dropped past it, and the reason the real 2hp 3:1 had
+// its OUT marker printed on the logo instead of the socket.
+const LOGO_MM = 110;
 
-function drawFixture() {
+// The mounting slots, ~3mm in from each end of the plate: real holes in real
+// metal, which is why they have to be ruled out by where they are rather than
+// by how they look.
+const SLOT_MM = 3;
+
+function drawFixture({ controls = CONTROLS, logo = true, slots = false } = {}) {
   const gray = Buffer.alloc(IMAGE_W * IMAGE_H, BACKDROP);
   const set = (x, y, value) => {
     if (x < 0 || y < 0 || x >= IMAGE_W || y >= IMAGE_H) return;
@@ -62,7 +74,7 @@ function drawFixture() {
     for (let x = PAD_X; x < PAD_X + PLATE_W; x++) set(x, y, PLATE);
   }
   const centreX = PAD_X + PLATE_W / 2;
-  for (const control of CONTROLS) {
+  for (const control of controls) {
     const cy = PAD_Y + control.mm * PX_PER_MM;
     const r = RADIUS_MM[control.shape] * PX_PER_MM;
     for (let dy = -r; dy <= r; dy++) {
@@ -79,10 +91,43 @@ function drawFixture() {
       }
     }
   }
+  if (logo) {
+    const logoY = PAD_Y + LOGO_MM * PX_PER_MM;
+    for (let dy = -11; dy <= 11; dy++) {
+      for (let dx = -11; dx <= 11; dx++) {
+        if ((dx + 11) % 5 < 3) set(Math.round(centreX + dx), Math.round(logoY + dy), HARDWARE);
+      }
+    }
+  }
+  if (slots) {
+    // An M3 slot: 3.2mm across the short way, elongated sideways so the panel
+    // can slide on the rail. Big enough that a disc laid over it sees one
+    // uniform dark thing, which is exactly why it scores like a jack.
+    const halfHeight = Math.round(1.6 * PX_PER_MM);
+    for (const mm of [SLOT_MM, PANEL_MM_HEIGHT - SLOT_MM]) {
+      const cy = PAD_Y + mm * PX_PER_MM;
+      for (let dy = -halfHeight; dy <= halfHeight; dy++) {
+        for (let dx = -28; dx <= 28; dx++) {
+          if (dy * dy + Math.max(0, Math.abs(dx) - 12) ** 2 <= halfHeight ** 2) {
+            set(Math.round(centreX + dx), Math.round(cy + dy), HARDWARE);
+          }
+        }
+      }
+    }
+  }
   return gray;
 }
 
 const FIXTURE = { width: IMAGE_W, height: IMAGE_H, gray: drawFixture() };
+
+// The same plate bolted into a rack: mounting slots at both ends, and the
+// output jack down near the bottom one where a lost marker can see both.
+const SLOT_CONTROLS = [...CONTROLS.slice(0, -1), { name: 'OUT', shape: 'jack', mm: 115 }];
+const SLOTTED = {
+  width: IMAGE_W,
+  height: IMAGE_H,
+  gray: drawFixture({ controls: SLOT_CONTROLS, logo: false, slots: true }),
+};
 
 // Where a control really is, as a fraction of the whole image.
 const truth = (control) => ({
@@ -146,21 +191,21 @@ describe('finding the front plate in a photograph', () => {
 
 describe('snapping a marker onto the hardware it names', () => {
   const crop = panelCrop(FIXTURE, { hp: 2 });
+  const PLATE_BOUNDS = {
+    x0: Math.round(crop.x * IMAGE_W),
+    y0: Math.round(crop.y * IMAGE_H),
+    x1: Math.round((crop.x + crop.w) * IMAGE_W) - 1,
+    y1: Math.round((crop.y + crop.h) * IMAGE_H) - 1,
+  };
 
   it('scores the hardware itself above anything else nearby', () => {
     const control = CONTROLS[0];
-    const bounds = {
-      x0: Math.round(crop.x * IMAGE_W),
-      y0: Math.round(crop.y * IMAGE_H),
-      x1: Math.round((crop.x + crop.w) * IMAGE_W) - 1,
-      y1: Math.round((crop.y + crop.h) * IMAGE_H) - 1,
-    };
     const cx = Math.round(truth(control).x * IMAGE_W);
     const cy = Math.round(truth(control).y * IMAGE_H);
     const r = Math.round(RADIUS_MM.jack * PX_PER_MM);
-    const found = findDisc(FIXTURE, bounds, cx, cy + 27, r, 35);
+    const found = findDisc(FIXTURE, PLATE_BOUNDS, cx, cy + 27, r, 35);
     expect(found.score).toBeGreaterThan(MIN_CONTRAST);
-    expect(found.y).toBe(cy);
+    expect(found.y).toBeCloseTo(cy, 6);
   });
 
   it('pulls every marker back off the silkscreen and onto its control', () => {
@@ -173,6 +218,90 @@ describe('snapping a marker onto the hardware it names', () => {
     for (const [i, placement] of snap.placements.entries()) {
       expect(mmOff(placement, CONTROLS[i], crop)).toBeLessThan(0.2);
     }
+  });
+
+  it('does not mistake a blob of silkscreen for a piece of hardware', () => {
+    // Ink and bare plate alternating averages out darker than the plate, so a
+    // logo reads as a dark round thing on the contrast alone. What it cannot
+    // fake is a middle made of one thing, and that is what is being asked.
+    const r = Math.round(RADIUS_MM.jack * PX_PER_MM);
+    const cx = Math.round((PAD_X + PLATE_W / 2));
+    const onHardware = discScore(FIXTURE, PLATE_BOUNDS, cx, Math.round(PAD_Y + CONTROLS[0].mm * PX_PER_MM), r);
+    const onLogo = discScore(FIXTURE, PLATE_BOUNDS, cx, Math.round(PAD_Y + LOGO_MM * PX_PER_MM), r);
+    expect(onHardware).toBeGreaterThan(MIN_CONTRAST);
+    expect(onLogo).toBeLessThan(MIN_CONTRAST);
+  });
+
+  it('brings back a marker the model dropped a whole component low', () => {
+    // The 2hp 3:1 failure exactly: OUT placed 8mm below its socket, which puts
+    // it between the OUT lettering and the maker's logo and well past the
+    // half-HP the snap used to reach. Both of the things it is now sitting
+    // between are printing, and the socket above it is not.
+    const out = CONTROLS.at(-1);
+    const placements = [
+      ...CONTROLS.slice(0, -1).map((c) => asModelWouldSay(c)),
+      asModelWouldSay(out, 8),
+    ];
+    expect(mmOff(placements.at(-1), out, crop)).toBeGreaterThan(7);
+    const snap = snapPlacements(FIXTURE, placements, crop);
+    expect(snap.snapped).toBe(CONTROLS.length);
+    expect(mmOff(snap.placements.at(-1), out, crop)).toBeLessThan(0.2);
+  });
+
+  it('will not let two markers claim the same piece of hardware', () => {
+    // A socket with two markers reaching for it: one sitting on it, one 5mm
+    // below. Without the rule, a search wide enough to rescue a lost marker is
+    // also wide enough to pile the panel's markers onto whichever hole they
+    // can all see.
+    const socket = CONTROLS[2];
+    const placements = [
+      ...CONTROLS.slice(0, 2).map((c) => asModelWouldSay(c)),
+      { name: socket.name, shape: 'jack', ...truth(socket) },
+      { name: 'STRAY', shape: 'jack', ...asModelWouldSay(socket, 5) },
+    ];
+    const snap = snapPlacements(FIXTURE, placements, crop);
+    expect(snap.snapped).toBe(3);
+    expect(mmOff(snap.placements[2], socket, crop)).toBeLessThan(0.2);
+    // The nearer marker keeps the socket; the other stays where it was rather
+    // than being planted on top of it.
+    expect(mmOff(snap.placements[3], socket, crop)).toBeGreaterThan(3);
+  });
+
+  it('will not snap a marker into the mounting slot at the end of the plate', () => {
+    // The slot is a real hole in real metal and scores like one, and to a
+    // marker the model dropped past the last jack it is the nearer of the two.
+    // Nothing can be bolted through the rail, so it is ruled out on geometry.
+    const out = SLOT_CONTROLS.at(-1);
+    const placements = [
+      ...SLOT_CONTROLS.slice(0, -1).map((c) => asModelWouldSay(c)),
+      // 8mm low: 2.5mm from the mounting slot, and past where the old
+      // half-HP window could have reached its own jack from.
+      asModelWouldSay(out, 8),
+    ];
+    const snap = snapPlacements(SLOTTED, placements, crop);
+    expect(mmOff(snap.placements.at(-1), out, crop)).toBeLessThan(0.2);
+  });
+
+  it('follows a drift that grows down the panel rather than averaging it away', () => {
+    // The model read the top of the panel well and lost its place towards the
+    // bottom, which is how the errors on a real panel actually arrive. An LED
+    // between a control that did not move and one that moved 8mm should come
+    // back by the share of 8mm that its own position asks for — a single
+    // panel-wide median would give it the whole panel's answer, which is
+    // roughly nothing.
+    const [cv, out] = [CONTROLS[2], CONTROLS[3]];
+    const ledMm = (cv.mm + out.mm) / 2;
+    const placements = [
+      ...CONTROLS.slice(0, 3).map((c) => asModelWouldSay(c, 0)),
+      asModelWouldSay(out, 8),
+      // Sits midway between CV and OUT, and the model dropped it by half of
+      // what it dropped OUT by.
+      { name: 'LED', shape: 'display', x: truth(cv).x, y: (PAD_Y + (ledMm + 4) * PX_PER_MM) / IMAGE_H },
+    ];
+    const snap = snapPlacements(FIXTURE, placements, crop);
+    expect(snap.snapped).toBe(4);
+    expect(snap.shifted).toBe(1);
+    expect(mmOff(snap.placements.at(-1), { mm: ledMm }, crop)).toBeLessThan(0.5);
   });
 
   it('moves what it could not snap by however far the rest agreed to move', () => {

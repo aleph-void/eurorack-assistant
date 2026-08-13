@@ -893,10 +893,11 @@ describe('panel image route', () => {
       module_id: module.id,
       type: 'output_jack',
       name: 'OUT',
+      description: 'The main output.',
     });
     const hash = await storePanel(module.id);
     const panel = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
-    await ctx.db.models.ModulePanelComponent.create({
+    const marker = await ctx.db.models.ModulePanelComponent.create({
       panel_id: panel.id,
       component_id: component.id,
       name: 'OUT',
@@ -916,8 +917,20 @@ describe('panel image route', () => {
       width: 400,
       height: 1200,
     });
+    // The marker carries its own id, so it can be corrected by hand, and what
+    // the manual says the component does, so resting on it says something.
     expect(detail.body.panel.components).toEqual([
-      { component_id: component.id, name: 'OUT', shape: 'jack', x: 0.5, y: 0.9, w: 0.06, h: 0.06 },
+      {
+        id: marker.id,
+        component_id: component.id,
+        name: 'OUT',
+        shape: 'jack',
+        description: 'The main output.',
+        x: 0.5,
+        y: 0.9,
+        w: 0.06,
+        h: 0.06,
+      },
     ]);
 
     const rack = await ctx.db.models.Rack.findOne({ where: { user_id: alice.id } });
@@ -1314,6 +1327,86 @@ describe('uploading your own panel image', () => {
     expect(fs.existsSync(panelPath(ctx.panelsDir, panel.image_hash, 'png'))).toBe(false);
     const after = await ctx.db.models.Module.findByPk(module.id);
     expect(after.panel_status).toBe('pending');
+  });
+
+  // Dragging a marker onto the hardware it names. Everything that put it
+  // where it was is an estimate; this is the person looking at the picture
+  // saying where it really is.
+  describe('correcting a marker by hand', () => {
+    async function panelWithMarker() {
+      const module = await moduleWithComponents();
+      const panel = await ctx.db.models.ModulePanel.create({
+        module_id: module.id,
+        source: 'image',
+        image_hash: 'c'.repeat(64),
+        image_ext: 'png',
+        width: 400,
+        height: 1200,
+        crop_x: 0.1,
+        crop_y: 0,
+        crop_w: 0.8,
+        crop_h: 1,
+      });
+      const component = await ctx.db.models.ModuleComponent.findOne({
+        where: { module_id: module.id, name: '1V/OCT' },
+      });
+      const marker = await ctx.db.models.ModulePanelComponent.create({
+        panel_id: panel.id,
+        component_id: component.id,
+        name: '1V/OCT',
+        shape: 'jack',
+        x: 0.5,
+        y: 0.9,
+      });
+      return { module, marker };
+    }
+
+    const move = (moduleId, markerId, body, cookie = ctx.aliceCookie) =>
+      request(ctx.app)
+        .patch(`/api/modules/${moduleId}/panel/components/${markerId}`)
+        .set('Cookie', cookie)
+        .send(body);
+
+    it('saves the marker where it was dropped and returns the panel', async () => {
+      const { module, marker } = await panelWithMarker();
+      const res = await move(module.id, marker.id, { x: 0.42, y: 0.63 });
+
+      expect(res.status).toBe(200);
+      const placed = res.body.panel.components.find((c) => c.id === marker.id);
+      expect(placed.x).toBeCloseTo(0.42);
+      expect(placed.y).toBeCloseTo(0.63);
+      await marker.reload();
+      expect(marker.x).toBeCloseTo(0.42);
+      expect(marker.y).toBeCloseTo(0.63);
+    });
+
+    it('refuses a position that is not on the image', async () => {
+      const { module, marker } = await panelWithMarker();
+      for (const body of [{ x: 1.4, y: 0.5 }, { x: 0.5, y: -0.2 }, { x: 'left', y: 0.5 }, {}]) {
+        expect((await move(module.id, marker.id, body)).status).toBe(400);
+      }
+      await marker.reload();
+      expect(marker.y).toBeCloseTo(0.9);
+    });
+
+    it('will not move a marker on a module that is not in your racks', async () => {
+      const { module, marker } = await panelWithMarker();
+      await createUser(ctx.db, { username: 'bob' });
+      const bob = await login(ctx.app, 'bob');
+      const res = await move(module.id, marker.id, { x: 0.4, y: 0.4 }, bob);
+      expect(res.status).toBe(404);
+      await marker.reload();
+      expect(marker.y).toBeCloseTo(0.9);
+    });
+
+    it('will not move a marker that belongs to another module\'s panel', async () => {
+      const { marker } = await panelWithMarker();
+      const other = await insertModule(ctx.db, alice.id, { manufacturer: 'Doepfer', name: 'A-118' });
+      const res = await move(other.id, marker.id, { x: 0.4, y: 0.4 });
+      expect(res.status).toBe(404);
+      await marker.reload();
+      expect(marker.y).toBeCloseTo(0.9);
+    });
   });
 
   it('will not delete a panel the app built itself', async () => {

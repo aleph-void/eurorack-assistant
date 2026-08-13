@@ -83,11 +83,41 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   silkscreened name printed under its control. So: the front plate is found by
   trimming the photograph's backdrop rather than by asking; the model is shown
   that crop rather than a module 4% of the way across a press shot; and every
-  round component it places is finally snapped onto the strongest circular
-  feature within a few millimetres of it, with whatever the group moved by
-  applied to the LEDs and toggles too flat to snap. That took the error on
-  those panels from 2.8–3.1mm RMS to 0.35–0.75mm. All of it degrades quietly:
-  an image that cannot be decoded just keeps what the model said.
+  round component it places is finally snapped onto the most convincing
+  circular feature near it, with whatever the snapped markers moved by carried
+  into the LEDs and toggles too flat to snap. That took the error on those
+  panels from 2.8–3.1mm RMS to 0.35–0.75mm. All of it degrades quietly: an
+  image that cannot be decoded just keeps what the model said.
+
+  Three rules keep "the most convincing feature near it" from being a licence
+  to grab the wrong thing, each of them there because it was needed:
+
+  - **A piece of hardware has one thing in its middle.** A jack's hole is
+    black, a knob's cap dark; lettering and a maker's logo are ink and bare
+    plate alternating, which averages out darker than the plate and reads as a
+    dark round thing on contrast alone. Scoring the *unevenness* of the middle
+    as well as the surround separates the two completely — on the 2hp 3:1 every
+    jack scores 106 or better and the knob 87, while the "OUT" silkscreen, the
+    "2hp" logo and both mounting slots fall under the floor entirely.
+  - **The search reaches past the neighbouring control, and travel costs
+    score.** A model that has lost count rather than drifted puts a marker a
+    whole component away, further than any window tight enough to exclude the
+    neighbour. So the window is wide and the nearest plausible hardware wins
+    unless something further off is markedly more convincing.
+  - **No two markers may claim the same hole**, since a panel has one marker
+    per hole. The weaker claim is made to look again at what is left.
+
+  What could not be snapped is corrected by **interpolating between the
+  hardware above and below it** rather than by one median shift for the whole
+  panel, so an error that grows as the model works down the panel is followed
+  instead of averaged away.
+
+  When it still lands wrong, **drag the marker onto the hardware it names** on
+  the module page; it saves where you drop it. Resting on a marker says which
+  control it is and what the manual says it does. A hand-placed marker lasts
+  until the panel is rebuilt (a new upload, a re-analysis, "rebuild every
+  panel"), which is also what puts markers back when re-analysis renumbers
+  every component.
 
   One thing the panel job deliberately does **not** treat as an answer: a
   provider that is not answering. Plenty of modules genuinely have no findable

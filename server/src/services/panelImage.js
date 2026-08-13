@@ -493,7 +493,14 @@ export const panelImageUrl = (panel) => `/api/panels/${panel.image_hash}.${panel
 
 // One panel in the shape the client draws from: the image, the box of it that
 // is the panel, and where each component sits as a fraction of the image.
-export const panelJson = (panel, placements = []) => ({
+//
+// `blurbs` maps component id to what the manual says that component does. A
+// marker on a picture is a circle with a name on it, which tells you which
+// jack it is but not what it is for — and the panel is exactly where that
+// question gets asked, since it is the thing you look at with a cable in your
+// hand. Carried on the placement rather than fetched by the client so the
+// patch diagram gets it too, for the price of one query.
+export const panelJson = (panel, placements = [], blurbs = new Map()) => ({
   source: panel.source,
   source_url: panel.source_url ?? null,
   url: panelImageUrl(panel),
@@ -503,9 +510,11 @@ export const panelJson = (panel, placements = []) => ({
   hp: panel.hp ?? null,
   description: panel.description ?? null,
   components: placements.map((p) => ({
+    id: p.id,
     component_id: p.component_id ?? null,
     name: p.name,
     shape: p.shape,
+    description: (p.component_id != null ? blurbs.get(p.component_id) : null) ?? null,
     x: p.x,
     y: p.y,
     w: p.w,
@@ -513,12 +522,12 @@ export const panelJson = (panel, placements = []) => ({
   })),
 });
 
-// The panels of a set of modules, keyed by module id. Two flat queries, so
-// pg-mem (the test database) can run it as well as postgres.
+// The panels of a set of modules, keyed by module id. Flat queries, so pg-mem
+// (the test database) can run them as well as postgres.
 export async function loadPanels(db, moduleIds) {
   const ids = [...new Set(moduleIds.filter(Boolean))];
   if (ids.length === 0) return new Map();
-  const { ModulePanel, ModulePanelComponent } = db.models;
+  const { ModuleComponent, ModulePanel, ModulePanelComponent } = db.models;
   const panels = await ModulePanel.findAll({ where: { module_id: ids } });
   if (panels.length === 0) return new Map();
   const placements = await ModulePanelComponent.findAll({
@@ -530,7 +539,16 @@ export async function loadPanels(db, moduleIds) {
     if (!byPanel.has(p.panel_id)) byPanel.set(p.panel_id, []);
     byPanel.get(p.panel_id).push(p);
   }
-  return new Map(panels.map((panel) => [panel.module_id, panelJson(panel, byPanel.get(panel.id) ?? [])]));
+  const componentIds = [...new Set(placements.map((p) => p.component_id).filter((id) => id != null))];
+  const blurbs = new Map();
+  if (componentIds.length > 0) {
+    for (const c of await ModuleComponent.findAll({ where: { id: componentIds } })) {
+      if (c.description) blurbs.set(c.id, c.description);
+    }
+  }
+  return new Map(
+    panels.map((panel) => [panel.module_id, panelJson(panel, byPanel.get(panel.id) ?? [], blurbs)])
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -705,8 +723,8 @@ export async function mapPanelImage(backend, module, components, file, deps = {}
         log(
           `snapped ${snap.snapped} of ${placements.length} marker(s) onto the hardware` +
             (snap.shifted
-              ? `, and moved the other ${snap.shifted} ${snap.shift.y < 0 ? 'up' : 'down'} ` +
-                `the ${mm.toFixed(1)}mm they agreed on`
+              ? `, and carried the other ${snap.shifted} ${snap.shift.y < 0 ? 'up' : 'down'} ` +
+                `with them (${mm.toFixed(1)}mm at the middle of the panel)`
               : '')
         );
       }

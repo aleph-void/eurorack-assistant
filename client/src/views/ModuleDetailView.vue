@@ -569,6 +569,28 @@ async function onPanelChosen(event) {
   event.target.value = '';
 }
 
+// A marker dragged onto the hardware it names. Saved where it was dropped:
+// the position is only ever an estimate, and someone looking at the picture
+// has better evidence than the estimate did. The panel comes back from the
+// save so the marker settles on exactly what was stored rather than on where
+// the pointer happened to be.
+const panelStatus = ref('');
+
+async function movePanelMarker({ id, name, x, y }) {
+  panelError.value = '';
+  panelStatus.value = '';
+  try {
+    const { panel } = await api.patch(`/api/modules/${props.id}/panel/components/${id}`, { x, y });
+    if (panel && module.value) module.value = { ...module.value, panel };
+    panelStatus.value = `Moved ${name}.`;
+  } catch (e) {
+    panelError.value = e.message;
+    // The save failed, so the marker must go back to where it really is
+    // rather than sit where it was dropped.
+    await load();
+  }
+}
+
 async function removePanel() {
   const ok = await dialog.confirm({
     title: 'Remove panel image',
@@ -701,7 +723,8 @@ onMounted(load);
         </span>
       </summary>
       <div class="panel-body">
-        <ModulePanel v-if="module.panel" :panel="module.panel" />
+        <ModulePanel v-if="module.panel" :panel="module.panel" editable @move="movePanelMarker" />
+        <p v-if="panelStatus" class="muted" data-test="panel-status">{{ panelStatus }}</p>
         <p v-else class="muted" data-test="no-panel">
           No panel picture yet — the app builds one once the manual has been analyzed, or you can
           supply your own below.

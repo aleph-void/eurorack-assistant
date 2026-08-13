@@ -299,6 +299,104 @@ describe('ModulePanel', () => {
     });
     expect(wrapper.findAll('.marker.on')).toHaveLength(1);
   });
+
+  it('says what a component does when you rest on its marker', () => {
+    const wrapper = mount(ModulePanel, {
+      props: {
+        panel: panelFor([
+          {
+            id: 7,
+            component_id: 1,
+            name: 'EOR',
+            shape: 'jack',
+            description: 'End of rise gate.',
+            x: 0.3,
+            y: 0.8,
+          },
+          { id: 8, component_id: 2, name: 'IN', shape: 'jack', x: 0.6, y: 0.8 },
+        ]),
+      },
+      global: testGlobal(),
+    });
+    const titles = wrapper.findAll('title').map((t) => t.text());
+    expect(titles).toContain('EOR — End of rise gate.');
+    // Nothing to say about it is not a reason to say nothing at all.
+    expect(titles).toContain('IN');
+  });
+
+  // The marker positions are estimates all the way down; this is how someone
+  // looking at the picture overrules them.
+  describe('dragging a marker onto the hardware it names', () => {
+    const draggable = () =>
+      mount(ModulePanel, {
+        props: {
+          panel: panelFor([{ id: 7, component_id: 1, name: 'EOR', shape: 'jack', x: 0.3, y: 0.8 }], {
+            crop: { x: 0.2, y: 0.1, w: 0.5, h: 0.8 },
+          }),
+          editable: true,
+        },
+        global: testGlobal(),
+      });
+
+    // The SVG scales to its container, so the drag arithmetic has to use the
+    // box it really occupies. jsdom measures everything as zero.
+    const withBox = (wrapper, box = { left: 0, top: 0, width: 100, height: 500 }) => {
+      const svg = wrapper.find('[data-test="module-panel-svg"]');
+      svg.element.getBoundingClientRect = () => box;
+      return svg;
+    };
+
+    it('reports where it was dropped, as a fraction of the whole image', async () => {
+      const wrapper = draggable();
+      const svg = withBox(wrapper);
+      // Picked up where it sits, dropped in the middle of the panel.
+      await wrapper.find('.marker').trigger('pointerdown', { clientX: 20, clientY: 437 });
+      await svg.trigger('pointermove', { clientX: 50, clientY: 250 });
+      await svg.trigger('pointerup');
+
+      // Halfway across and halfway down the CROP, turned back into the whole
+      // image the position is stored against.
+      expect(wrapper.emitted('move')).toHaveLength(1);
+      const [move] = wrapper.emitted('move')[0];
+      expect(move).toMatchObject({ id: 7, name: 'EOR' });
+      expect(move.x).toBeCloseTo(0.45);
+      expect(move.y).toBeCloseTo(0.5);
+    });
+
+    it('follows the pointer before it is let go, and saves nothing until then', async () => {
+      const wrapper = draggable();
+      const svg = withBox(wrapper);
+      const before = wrapper.find('.marker').attributes('cy');
+      await wrapper.find('.marker').trigger('pointerdown', { clientX: 50, clientY: 250 });
+      await svg.trigger('pointermove', { clientX: 50, clientY: 100 });
+      expect(wrapper.find('.marker').attributes('cy')).not.toBe(before);
+      expect(wrapper.emitted('move')).toBeUndefined();
+      await svg.trigger('pointerup');
+      expect(wrapper.emitted('move')).toHaveLength(1);
+    });
+
+    it('saves nothing for a click that never moved', async () => {
+      const wrapper = draggable();
+      const svg = withBox(wrapper);
+      await wrapper.find('.marker').trigger('pointerdown');
+      await svg.trigger('pointerup');
+      expect(wrapper.emitted('move')).toBeUndefined();
+    });
+
+    it('leaves the markers alone when the panel is not editable', async () => {
+      const wrapper = mount(ModulePanel, {
+        props: {
+          panel: panelFor([{ id: 7, component_id: 1, name: 'EOR', shape: 'jack', x: 0.3, y: 0.8 }]),
+        },
+        global: testGlobal(),
+      });
+      const svg = withBox(wrapper);
+      await wrapper.find('.marker').trigger('pointerdown', { clientX: 50, clientY: 250 });
+      await svg.trigger('pointermove', { clientX: 50, clientY: 100 });
+      await svg.trigger('pointerup');
+      expect(wrapper.emitted('move')).toBeUndefined();
+    });
+  });
 });
 
 describe('ModulesView fill in missing details', () => {
