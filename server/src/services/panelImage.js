@@ -226,6 +226,37 @@ Rules:
   are not in the list — leave them out.
 `;
 
+// How many of this job's LLM calls came back with something readable.
+//
+// Every step below treats an unreadable answer as "nothing found", because
+// usually that is what it is: a model that could not find a panel image says
+// so, and the drawn panel exists for exactly that case. But a provider that
+// is not answering at all fails every call identically — an expired
+// subscription, an exhausted quota, a CLI that prints an apology and exits 0 —
+// and then "nothing found" is a lie that costs the rack every photographed
+// panel it had, replaced by drawings and its images deleted as orphans.
+//
+// So the two are counted apart. A job where nothing answered is a failed job,
+// which leaves the panel the module already has exactly where it is.
+export function answerTally() {
+  return {
+    asked: 0,
+    answered: 0,
+    // One call: counted, and counted again if it produced a JSON object.
+    // Throws what extractJsonObject throws, which every caller already
+    // handles as "this step found nothing".
+    read(text) {
+      this.asked += 1;
+      const value = extractJsonObject(text);
+      this.answered += 1;
+      return value;
+    },
+    silent() {
+      return this.asked > 0 && this.answered === 0;
+    },
+  };
+}
+
 const clamp01 = (value) => Math.min(1, Math.max(0, value));
 
 const finite = (value, fallback = null) => {
@@ -565,11 +596,11 @@ export async function locateComponentsOnImage(
   components,
   imagePath,
   log,
-  { cropped = false } = {}
+  { cropped = false, tally = answerTally() } = {}
 ) {
   let parsed;
   try {
-    parsed = extractJsonObject(
+    parsed = tally.read(
       await backend.analyzeImage(
         PANEL_MAP_TEMPLATE(module.manufacturer, module.name, components, { cropped }),
         imagePath
@@ -612,7 +643,7 @@ const WORTH_CROPPING = 0.8;
 // image cannot be decoded, leaving exactly the single unrefined LLM pass this
 // used to be.
 export async function mapPanelImage(backend, module, components, file, deps = {}) {
-  const { hp = null, log = () => {}, tmpdir = os.tmpdir } = deps;
+  const { hp = null, log = () => {}, tmpdir = os.tmpdir, tally = answerTally() } = deps;
   const pixels = await readPixels(file);
   const plate = pixels ? panelCrop(pixels, { hp }) : null;
 
@@ -638,6 +669,7 @@ export async function mapPanelImage(backend, module, components, file, deps = {}
 
     const located = await locateComponentsOnImage(backend, module, components, analysisFile, log, {
       cropped: analysisBox !== null,
+      tally,
     });
     if (!located) return null;
 
@@ -684,11 +716,18 @@ export async function mapPanelImage(backend, module, components, file, deps = {}
 
 // Ask the LLM to read the panel layout out of the manual, for the case where
 // no usable photograph exists.
-export async function layoutFromManual(backend, module, components, manualFile, log) {
+export async function layoutFromManual(
+  backend,
+  module,
+  components,
+  manualFile,
+  log,
+  { tally = answerTally() } = {}
+) {
   if (!manualFile || !fs.existsSync(manualFile)) return null;
   let parsed;
   try {
-    parsed = extractJsonObject(
+    parsed = tally.read(
       await backend.analyzeDocument(
         PANEL_LAYOUT_TEMPLATE(module.manufacturer, module.name, components),
         manualFile
@@ -706,10 +745,16 @@ export async function layoutFromManual(backend, module, components, manualFile, 
 // One research prompt: ask, then download the first candidate that turns out
 // to be an image we serve. Returns { image, hp, page_url }, image null when
 // the search found nothing or none of what it found could be fetched.
-async function researchPanelImage(backend, template, module, panelsDir, { fetchImpl, log }) {
+async function researchPanelImage(
+  backend,
+  template,
+  module,
+  panelsDir,
+  { fetchImpl, log, tally = answerTally() }
+) {
   let info;
   try {
-    info = extractJsonObject(
+    info = tally.read(
       await backend.completeTextWithSearch(template(module.manufacturer, module.name))
     );
   } catch (e) {
@@ -743,8 +788,8 @@ async function researchPanelImage(backend, template, module, panelsDir, { fetchI
 // width learnt from either search is kept even when neither yields a picture,
 // because a module with no recorded HP still wants one.
 export async function findPanelImage(backend, module, panelsDir, deps = {}) {
-  const { fetchImpl = fetch, log = () => {} } = deps;
-  const options = { fetchImpl, log };
+  const { fetchImpl = fetch, log = () => {}, tally = answerTally() } = deps;
+  const options = { fetchImpl, log, tally };
   const first = await researchPanelImage(backend, PANEL_RESEARCH_TEMPLATE, module, panelsDir, options);
   if (first.image) return first;
 
@@ -821,14 +866,18 @@ export async function deletePanelImageIfOrphaned(db, panelsDir, hash, ext) {
 // Returns null when the file has gone missing, so the caller can fall back to
 // building a panel from scratch.
 export async function locateOnUploadedPanel(db, backend, module, panel, components, panelsDir, deps = {}) {
-  const { log = () => {} } = deps;
+  const { log = () => {}, tally = answerTally() } = deps;
   const file = panelPath(panelsDir, panel.image_hash, panel.image_ext);
   if (!fs.existsSync(file)) return null;
   log(`locating components on the uploaded ${panel.width}x${panel.height} image`);
   const located = await mapPanelImage(backend, module, components, file, {
     hp: module.hp ?? panel.hp ?? null,
     log,
+    tally,
   });
+  // Stripping the markers off a picture the user chose, because the provider
+  // is not answering, would be worse than doing nothing at all.
+  if (tally.silent()) throw silentModel(module, tally);
   if (!located) {
     log('no component could be located on the uploaded image; keeping it unmarked');
   }
@@ -852,12 +901,27 @@ export async function locateOnUploadedPanel(db, backend, module, panel, componen
   );
 }
 
+const silentModel = (module, tally) =>
+  new Error(
+    `${module.manufacturer} ${module.name}: none of the ${tally.asked} model request(s) this ` +
+      'panel needed came back readable, so there is nothing to tell a panel from. Check the ' +
+      'provider CLI is logged in and has quota; the panel this module already had is untouched'
+  );
+
 // The whole pipeline for one module: an uploaded picture if there is one,
 // then a researched image, then a drawn panel, then columns by type. Always
 // produces a panel — a module with an analysis but no picture is exactly the
-// case this exists to remove.
+// case this exists to remove — unless the model answered nothing at all, in
+// which case it produces nothing rather than a drawing standing in for a
+// photograph that is still perfectly findable.
 export async function buildPanelForModule(db, backend, module, panelsDir, deps = {}) {
-  const { fetchImpl = fetch, log = () => {}, manualFile = null, findImages = true } = deps;
+  const {
+    fetchImpl = fetch,
+    log = () => {},
+    manualFile = null,
+    findImages = true,
+    tally = answerTally(),
+  } = deps;
   const components = (
     await db.models.ModuleComponent.findAll({
       where: { module_id: module.id },
@@ -885,6 +949,7 @@ export async function buildPanelForModule(db, backend, module, panelsDir, deps =
     if (current?.source !== 'upload') return null;
     return locateOnUploadedPanel(db, backend, module, current.get({ plain: true }), components, panelsDir, {
       log,
+      tally,
     });
   };
 
@@ -897,7 +962,7 @@ export async function buildPanelForModule(db, backend, module, panelsDir, deps =
   let researched = { image: null, hp: null, page_url: null };
   if (findImages) {
     log('researching a front panel image');
-    researched = await findPanelImage(backend, module, panelsDir, { fetchImpl, log });
+    researched = await findPanelImage(backend, module, panelsDir, { fetchImpl, log, tally });
   }
 
   if (researched.image) {
@@ -905,6 +970,7 @@ export async function buildPanelForModule(db, backend, module, panelsDir, deps =
     const located = await mapPanelImage(backend, module, components, researched.image.path, {
       hp: module.hp ?? researched.hp ?? null,
       log,
+      tally,
     });
     if (located) {
       log(`panel image mapped: ${located.matched} of ${components.length} component(s) located`);
@@ -945,7 +1011,12 @@ export async function buildPanelForModule(db, backend, module, panelsDir, deps =
   }
 
   log('drawing a logical panel from the manual');
-  const layout = await layoutFromManual(backend, module, components, manualFile, log);
+  const layout = await layoutFromManual(backend, module, components, manualFile, log, { tally });
+  // Everything above came up empty. That is a real answer when the model gave
+  // one — plenty of modules have no findable photograph — and no answer at all
+  // when it did not, and a drawing saved on the strength of no answer would
+  // replace this module's picture with a column of circles and delete it.
+  if (tally.silent()) throw silentModel(module, tally);
   const placements = fillMissingPlacements(
     layout?.placements ?? fallbackLayout(components),
     components

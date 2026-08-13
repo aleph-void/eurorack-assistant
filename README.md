@@ -88,6 +88,15 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   those panels from 2.8–3.1mm RMS to 0.35–0.75mm. All of it degrades quietly:
   an image that cannot be decoded just keeps what the model said.
 
+  One thing the panel job deliberately does **not** treat as an answer: a
+  provider that is not answering. Plenty of modules genuinely have no findable
+  photograph, and the drawn panel is the right result for those — but an
+  expired login or an exhausted quota fails every call in the job identically,
+  and read as "found nothing" it would replace every photographed panel in a
+  rack with a column of circles and delete the photographs as orphans. So the
+  job counts how many of its model calls came back readable, and if none did it
+  fails instead, leaving the panel the module already has exactly where it is.
+
   You can also **upload your own panel picture** from the module page (PNG,
   JPEG, GIF or WebP). An uploaded panel replaces whatever the module had and is
   never replaced by research afterwards: the `panel_image` job is queued to

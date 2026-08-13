@@ -458,6 +458,98 @@ describe('building a module panel', () => {
     expect(panel.hp).toBe(14);
   });
 
+  // The failure that matters: a provider that is not answering fails every
+  // call the same way a fruitless search does. Read as "found nothing", it
+  // replaces every photographed panel in a rack with a drawing and deletes
+  // the photographs — which is what a rebuild across a whole system did the
+  // first time the subscription ran out of credits mid-run.
+  describe('when the model is not answering at all', () => {
+    // What `claude -p` actually prints, and then exits 0 on.
+    const OUT_OF_CREDITS =
+      "You're out of usage credits. Run /usage-credits to keep using Fable 5 or /model to switch models.";
+    const silentBackend = () =>
+      fakeBackend({
+        completeTextWithSearch: OUT_OF_CREDITS,
+        analyzeImage: OUT_OF_CREDITS,
+        analyzeDocument: OUT_OF_CREDITS,
+      });
+
+    it('fails the panel instead of drawing one over the photograph it had', async () => {
+      const { module } = await analyzedModule(db, manualsDir);
+      // A module that already has a researched photograph, as a rebuild finds it.
+      await db.models.ModulePanel.create({
+        module_id: module.id,
+        source: 'image',
+        source_url: 'https://doepfer.de/a110.png',
+        image_hash: 'a'.repeat(64),
+        image_ext: 'png',
+        width: 400,
+        height: 1200,
+        hp: 8,
+      });
+      fs.writeFileSync(panelPath(panelsDir, 'a'.repeat(64), 'png'), PANEL_PNG);
+
+      await expect(
+        buildPanelForModule(db, silentBackend(), module, panelsDir, {
+          fetchImpl: fakeFetch({}),
+          manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`),
+        })
+      ).rejects.toThrow(/came back readable/);
+
+      // The panel it had is exactly where it was, image and all.
+      const kept = await db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+      expect(kept.source).toBe('image');
+      expect(fs.existsSync(panelPath(panelsDir, 'a'.repeat(64), 'png'))).toBe(true);
+    });
+
+    it('leaves the markers on an uploaded picture alone', async () => {
+      const { module } = await analyzedModule(db, manualsDir);
+      const hash = saveImage(panelsDir, PANEL_PNG, 'png');
+      const panel = await db.models.ModulePanel.create({
+        module_id: module.id,
+        source: 'upload',
+        image_hash: hash,
+        image_ext: 'png',
+        width: 400,
+        height: 1200,
+      });
+      await db.models.ModulePanelComponent.create({
+        panel_id: panel.id,
+        name: 'FREQ',
+        shape: 'knob',
+        x: 0.5,
+        y: 0.5,
+        w: 0.06,
+        h: 0.06,
+      });
+
+      await expect(
+        buildPanelForModule(db, silentBackend(), module, panelsDir, {
+          fetchImpl: fakeFetch({}),
+          manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`),
+        })
+      ).rejects.toThrow(/came back readable/);
+
+      expect(await db.models.ModulePanelComponent.count({ where: { panel_id: panel.id } })).toBe(1);
+      expect(fs.existsSync(panelPath(panelsDir, hash, 'png'))).toBe(true);
+    });
+
+    // The point is to tell an outage from an answer, not to stop drawing
+    // panels: a model that answers and simply has no picture still gets one.
+    it('still draws a panel when the model answers and has nothing to offer', async () => {
+      const { module } = await analyzedModule(db, manualsDir);
+      const backend = fakeBackend({
+        completeTextWithSearch: JSON.stringify({ image_urls: [], page_url: null, hp: null }),
+        analyzeDocument: JSON.stringify({ hp: 6, components: [] }),
+      });
+      const { panel } = await buildPanelForModule(db, backend, module, panelsDir, {
+        fetchImpl: fakeFetch({}),
+        manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`),
+      });
+      expect(panel.source).toBe('generated');
+    });
+  });
+
   it('draws the panel from the component list when there is no image and no layout', async () => {
     const { module } = await analyzedModule(db, manualsDir);
     const backend = fakeBackend({
