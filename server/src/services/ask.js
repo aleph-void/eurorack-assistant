@@ -6,12 +6,15 @@
 // question with exactly those attachments to the LLM backend.
 
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { extractJsonArray } from './json.js';
 import { capturePath, captureTextDocument } from './captures.js';
 import { loadPatchDetail } from './patchDetail.js';
 import { patchTextDocument } from './patchDocument.js';
 import { engagedPatchModuleIds } from './patchTopology.js';
-import { isProbablyPdf, manualPath } from './pdf.js';
+import { isProbablyPdf, manualPath, safeManualName } from './pdf.js';
+import { MIN_DOCUMENT_CHARS } from './manualText.js';
 import { userModuleIds } from './racks.js';
 
 export const MAX_MANUALS = 10;
@@ -264,8 +267,66 @@ export async function normalizationSummary({ ModuleComponent, ComponentNormaliza
 }
 
 // Phase two, after the user confirmed the review step: submit the question
+// Each attached manual as the cheapest thing that says the same: the markdown
+// the extract_manual job pulled out of the PDF, written to a scratch file for
+// the backend to read, and the PDF itself only where no extraction exists.
+//
+// This is a token-cost decision. Handing an agent a PDF makes it read a
+// document that is glyphs at coordinates — the CLIs render pages to work out
+// what is on them, which is the most expensive way there is to learn what a
+// manual says. The same manual as markdown is a fraction of that, and it is
+// already sitting in manual_documents for every document the app holds.
+//
+// Returns the paths to read, and the scratch directory to remove afterwards
+// (null when nothing was written).
+async function manualDocumentPaths(db, manualLinks, manualsDir, log) {
+  const { ManualDocument } = db.models;
+  // Deduped by content hash: some modules share a manual file, and reading it
+  // twice costs twice.
+  const byHash = new Map();
+  for (const link of manualLinks) {
+    if (link.Manual && !byHash.has(link.Manual.hash)) byHash.set(link.Manual.hash, link.Manual);
+  }
+  const manuals = [...byHash.values()].sort((a, b) => a.id - b.id);
+  const texts = manuals.length
+    ? await ManualDocument.findAll({ where: { manual_id: manuals.map((m) => m.id) } })
+    : [];
+  const textByManual = new Map(texts.map((d) => [d.manual_id, d]));
+
+  const paths = [];
+  let dir = null;
+  for (const manual of manuals) {
+    const document = textByManual.get(manual.id);
+    // A manual that extracted to nothing (a scan poppler and the model both
+    // got nowhere with) is still worth sending as the PDF.
+    if (document && String(document.content || '').trim().length >= MIN_DOCUMENT_CHARS) {
+      if (!dir) dir = fs.mkdtempSync(path.join(os.tmpdir(), 'answer-manuals-'));
+      const file = path.join(
+        dir,
+        safeManualName(
+          manual.Module?.manufacturer ?? '',
+          manual.Module?.name ?? `module-${manual.module_id}`,
+          manual.name
+        ).replace(/\.pdf$/, '.md')
+      );
+      fs.writeFileSync(file, document.content);
+      paths.push(file);
+      continue;
+    }
+    const pdf = manualPath(manualsDir, manual.hash);
+    const { ok, reason } = isProbablyPdf(pdf);
+    if (ok) {
+      log(`no extracted text for ${manual.name}; sending the PDF`);
+      paths.push(pdf);
+    } else {
+      log(`skipping ${pdf}: ${reason}`);
+    }
+  }
+  return { paths, dir };
+}
+
 // with exactly the linked modules and explicitly attached documents (manual
-// PDFs, previous answers, notes) and store the answer.
+// text, previous answers, notes) and store the answer.
 export async function answerQuestion(
   db,
   backend,
@@ -315,21 +376,18 @@ export async function answerQuestion(
   });
   const components = componentLinks.map((l) => l.ModuleComponent).filter(Boolean);
 
-  // The manual PDFs the user attached, deduped by content hash (some modules
-  // share a manual file).
+  // The manuals the user attached, each as text where the extraction ran.
   const manualLinks = await QuestionManual.findAll({
     where: { question_id: question.id },
-    include: Manual,
+    include: [{ model: Manual, include: [Module] }],
     order: [['manual_id', 'ASC']],
   });
-  const hashes = [...new Set(manualLinks.map((l) => l.Manual.hash))].sort();
-  const pdfPaths = [];
-  for (const hash of hashes) {
-    const pdf = manualPath(manualsDir, hash);
-    const { ok, reason } = isProbablyPdf(pdf);
-    if (ok) pdfPaths.push(pdf);
-    else log(`skipping ${pdf}: ${reason}`);
-  }
+  const { paths: manualPaths, dir: scratchDir } = await manualDocumentPaths(
+    db,
+    manualLinks,
+    manualsDir,
+    log
+  );
 
   // Attached previous answers and notes ride along as text documents.
   const answerLinks = await QuestionAnswer.findAll({
@@ -410,12 +468,13 @@ export async function answerQuestion(
   }
 
   const textDocs = [...previous, ...notes, ...captures, ...patches];
-  if (pdfPaths.length === 0 && textDocs.length === 0) {
+  if (manualPaths.length === 0 && textDocs.length === 0) {
+    if (scratchDir) fs.rmSync(scratchDir, { recursive: true, force: true });
     throw new Error(
-      'No valid manual PDFs, previous answers, notes, captures, or patches are attached to this question.'
+      'No readable manuals, previous answers, notes, captures, or patches are attached to this question.'
     );
   }
-  const manuals = pdfPaths.slice(0, MAX_MANUALS);
+  const manuals = manualPaths.slice(0, MAX_MANUALS);
 
   const kinds = [];
   if (manuals.length > 0) kinds.push('module manuals');
@@ -452,7 +511,13 @@ export async function answerQuestion(
   }
   answerPrompt += `Format your answer as markdown.\n\nQuestion: ${question.prompt}`;
 
-  const answer = await backend.answerWithDocuments(answerPrompt, manuals, textDocs, imagePaths);
+  let answer;
+  try {
+    answer = await backend.answerWithDocuments(answerPrompt, manuals, textDocs, imagePaths);
+  } finally {
+    // The extracted manuals were written for this one call to read.
+    if (scratchDir) fs.rmSync(scratchDir, { recursive: true, force: true });
+  }
 
   const [, updated] = await Question.update(
     { answer, status: 'answered', error: null, answered_at: new Date() },

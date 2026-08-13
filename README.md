@@ -178,6 +178,12 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   to the selected modules/components, oscilloscope captures, and your patches).
   Questions, answers, the reviewed scope, and the attachments are all stored
   and linked in the database.
+- **Manuals go to the model as text, not as PDFs**: an attached manual is sent
+  as the markdown the extraction already produced from it, which costs a
+  fraction of what reading the PDF does — a model reading a PDF renders its
+  pages to find out what is on them. Only a manual with no extracted text (a
+  scan nothing could read) is still sent as the PDF, and the answer says so in
+  the job log.
 - **LLM provider is admin-configurable** in the web UI: Claude Code CLI
   (`claude -p`) or Codex CLI (`codex exec`), with an optional model override —
   both use your existing subscription login, no API key needed.

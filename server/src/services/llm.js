@@ -202,12 +202,23 @@ export class ClaudeBackend {
     return this._exec(prompt, ['--allowedTools', 'WebSearch,WebFetch']);
   }
 
-  // Answer a question given local manual PDFs, extra text documents, and
+  // Answer a question given local manual documents, extra text documents, and
   // images (captured oscilloscope waveforms). The Read tool handles PNGs as
   // well as PDFs, so images need nothing beyond their directory being allowed.
-  async answerWithDocuments(prompt, pdfPaths, textDocs = [], imagePaths = []) {
-    const pdfList = pdfPaths.map((p) => `- ${path.resolve(p)}`).join('\n');
-    let fullPrompt = `${prompt}\n\nRead the following manual PDFs before answering:\n${pdfList}\n`;
+  //
+  // A manual arrives as the markdown extracted from it wherever that
+  // extraction exists, and as the PDF only where it does not — reading a PDF
+  // means rendering its pages, which is the expensive way to learn the same
+  // thing. Both are files to read, so the caller hands over a mixed list.
+  async answerWithDocuments(prompt, manualPaths, textDocs = [], imagePaths = []) {
+    const manualList = manualPaths.map((p) => `- ${path.resolve(p)}`).join('\n');
+    let fullPrompt = prompt;
+    if (manualPaths.length > 0) {
+      fullPrompt +=
+        `\n\nRead the following module manuals before answering. Most are the ` +
+        `manual's text extracted to markdown; any .pdf in the list is one whose ` +
+        `text could not be extracted:\n${manualList}\n`;
+    }
     if (imagePaths.length > 0) {
       const imageList = imagePaths.map((p) => `- ${path.resolve(p)}`).join('\n');
       fullPrompt +=
@@ -218,7 +229,7 @@ export class ClaudeBackend {
       fullPrompt += `\n--- Previous answer document: ${doc.name} ---\n\n${doc.text}\n`;
     }
     const dirs = [
-      ...new Set([...pdfPaths, ...imagePaths].map((p) => path.dirname(path.resolve(p)))),
+      ...new Set([...manualPaths, ...imagePaths].map((p) => path.dirname(path.resolve(p)))),
     ];
     const addDirs = dirs.flatMap((d) => ['--add-dir', d]);
     return this._exec(fullPrompt, ['--allowedTools', 'Read', ...addDirs]);
@@ -281,11 +292,15 @@ export class CodexBackend {
     return this._exec(prompt, ['--search']);
   }
 
-  async answerWithDocuments(prompt, pdfPaths, textDocs = [], imagePaths = []) {
-    const pdfList = pdfPaths.map((p) => `- ${path.resolve(p)}`).join('\n');
-    let fullPrompt =
-      `${prompt}\n\nRead the following manual PDFs before answering ` +
-      `(extract their text with a tool such as pdftotext if needed):\n${pdfList}\n`;
+  async answerWithDocuments(prompt, manualPaths, textDocs = [], imagePaths = []) {
+    const manualList = manualPaths.map((p) => `- ${path.resolve(p)}`).join('\n');
+    let fullPrompt = prompt;
+    if (manualPaths.length > 0) {
+      fullPrompt +=
+        `\n\nRead the following module manuals before answering. Most are the ` +
+        `manual's text extracted to markdown; any .pdf in the list is one whose ` +
+        `text could not be extracted (use a tool such as pdftotext on those):\n${manualList}\n`;
+    }
     if (imagePaths.length > 0) {
       // Passed as paths rather than through an image flag: the flag's name
       // has moved between codex releases, and a wrong one fails the whole

@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   createTestDb,
   createUser,
+  insertManualText,
   insertModule,
   fakeBackend,
   fakeFetch,
@@ -13,6 +14,9 @@ import {
   PDF_HASH,
   TRUNCATED_PDF_BYTES,
 } from './helpers.js';
+
+// A second content hash, for the module whose manual has not been extracted.
+const OTHER_HASH = crypto.createHash('sha256').update('another manual').digest('hex');
 import { findManualForModule, researchModule } from '../src/services/manualFinder.js';
 import {
   analyzeManualForModule,
@@ -1126,6 +1130,106 @@ describe('answerQuestion', () => {
     return { db, user, module, manualId: manuals[0].id, question };
   }
 
+  // Reading a PDF costs the model a rendered page at a time; the same manual
+  // as extracted markdown is a fraction of that, and it is already stored.
+  describe('sending the manual as text rather than as a PDF', () => {
+    // Give the fixture's manual its extracted text.
+    const withText = async (db, manualId, content) => {
+      const { rows } = await db.query('SELECT * FROM manuals WHERE id = $1', [manualId]);
+      return insertManualText(db, rows[0], { title: 'Maths', content });
+    };
+
+    it('sends the extracted text, and never the PDF, when there is text', async () => {
+      const { db, question, manualId } = await fixture();
+      await withText(db, manualId, '# Maths\n\nEOR goes high at the end of the rise.');
+      const backend = fakeBackend({ answerWithDocuments: 'ok' });
+
+      await answerQuestion(db, backend, question, manualsDir);
+      const [, manuals] = backend.calls.answerWithDocuments[0];
+      expect(manuals).toHaveLength(1);
+      expect(manuals[0]).toMatch(/\.md$/);
+      expect(manuals[0]).not.toContain(manualsDir);
+      // Named after the module, so an answer can say which manual it read.
+      expect(path.basename(manuals[0])).toBe('Make_Noise_Maths_manual.md');
+    });
+
+    // The file only has to exist for the one call that reads it.
+    it('writes the text where the backend can read it, and clears up after', async () => {
+      const { db, question, manualId } = await fixture();
+      await withText(db, manualId, '# Maths\n\nEOR goes high at the end of the rise.');
+      let seen = null;
+      const backend = fakeBackend({
+        answerWithDocuments: (prompt, manuals) => {
+          seen = { path: manuals[0], content: fs.readFileSync(manuals[0], 'utf-8') };
+          return 'ok';
+        },
+      });
+
+      await answerQuestion(db, backend, question, manualsDir);
+      expect(seen.content).toContain('EOR goes high');
+      expect(fs.existsSync(seen.path)).toBe(false);
+      expect(fs.existsSync(path.dirname(seen.path))).toBe(false);
+    });
+
+    it('clears up even when the answer fails', async () => {
+      const { db, question, manualId } = await fixture();
+      await withText(db, manualId, '# Maths\n\nEOR goes high at the end of the rise.');
+      let dir = null;
+      const backend = fakeBackend({
+        answerWithDocuments: (prompt, manuals) => {
+          dir = path.dirname(manuals[0]);
+          throw new Error('out of tokens');
+        },
+      });
+
+      await expect(answerQuestion(db, backend, question, manualsDir)).rejects.toThrow(/out of/);
+      expect(fs.existsSync(dir)).toBe(false);
+    });
+
+    // A manual that is a scan extracts to nothing; the PDF is all there is.
+    it('falls back to the PDF for a manual with no text worth sending', async () => {
+      const { db, question, manualId } = await fixture();
+      await withText(db, manualId, 'x');
+      const backend = fakeBackend({ answerWithDocuments: 'ok' });
+
+      await answerQuestion(db, backend, question, manualsDir);
+      const [, manuals] = backend.calls.answerWithDocuments[0];
+      expect(manuals).toEqual([path.join(manualsDir, `${PDF_HASH}.pdf`)]);
+    });
+
+    it('mixes the two when only some manuals have been extracted', async () => {
+      const { db, user, question } = await fixture();
+      // A second module, with its own manual and no extracted text.
+      const other = await insertModule(db, user.id, {
+        manufacturer: 'ALM',
+        name: 'Pam',
+        manual_hash: OTHER_HASH,
+      });
+      fs.writeFileSync(path.join(manualsDir, `${OTHER_HASH}.pdf`), PDF_BYTES);
+      const { rows } = await db.query('SELECT id FROM manuals WHERE module_id = $1', [other.id]);
+      await db.query('INSERT INTO question_manuals (question_id, manual_id) VALUES ($1, $2)', [
+        question.id,
+        rows[0].id,
+      ]);
+      await db.query('INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)', [
+        question.id,
+        other.id,
+      ]);
+      const { rows: mine } = await db.query('SELECT id FROM manuals WHERE module_id != $1', [
+        other.id,
+      ]);
+      await withText(db, mine[0].id, '# Maths\n\nEOR goes high at the end of the rise.');
+
+      const backend = fakeBackend({ answerWithDocuments: 'ok' });
+      await answerQuestion(db, backend, question, manualsDir);
+      const [, manuals] = backend.calls.answerWithDocuments[0];
+      expect(manuals.filter((p) => p.endsWith('.md'))).toHaveLength(1);
+      expect(manuals.filter((p) => p.endsWith('.pdf'))).toEqual([
+        path.join(manualsDir, `${OTHER_HASH}.pdf`),
+      ]);
+    });
+  });
+
   it('answers with the linked modules and attached manuals, and saves', async () => {
     const { db, question } = await fixture();
     const backend = fakeBackend({ answerWithDocuments: 'Patch it like this...' });
@@ -1300,7 +1404,7 @@ describe('answerQuestion', () => {
     await db.query('DELETE FROM question_manuals');
     const backend = fakeBackend();
     await expect(answerQuestion(db, backend, question, manualsDir)).rejects.toThrow(
-      /No valid manual PDFs/
+      /No readable manuals/
     );
   });
 });
