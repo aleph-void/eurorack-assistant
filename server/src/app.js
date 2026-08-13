@@ -17,8 +17,12 @@ import { oauthRoutes } from './routes/oauth.js';
 import { deviceRoutes } from './routes/devices.js';
 import { scopeRoutes } from './routes/scope.js';
 import { captureRoutes } from './routes/captures.js';
+import { panelRoutes } from './routes/panels.js';
 
-export function createApp(db, { manualsDir, exportsDir, capturesDir, rateLimit, hub } = {}) {
+export function createApp(
+  db,
+  { manualsDir, exportsDir, capturesDir, panelsDir, rateLimit, hub } = {}
+) {
   const app = express();
   // nginx is the only hop in front of the server and it sets X-Forwarded-For.
   // Without this the rate limiters would see every request as coming from the
@@ -38,9 +42,10 @@ export function createApp(db, { manualsDir, exportsDir, capturesDir, rateLimit, 
 
   app.use('/api/auth', authRoutes(db));
   app.use('/api/users', userRoutes(db));
-  app.use('/api/modules', moduleRoutes(db, { manualsDir }));
-  app.use('/api/racks', rackRoutes(db, { manualsDir }));
+  app.use('/api/modules', moduleRoutes(db, { manualsDir, panelsDir }));
+  app.use('/api/racks', rackRoutes(db, { manualsDir, panelsDir }));
   app.use('/api/manuals', manualRoutes(db, { manualsDir }));
+  app.use('/api/panels', panelRoutes(db, { panelsDir }));
   app.use('/api/imports', importRoutes(db));
   app.use('/api/questions', questionRoutes(db));
   app.use('/api/config', configRoutes(db));

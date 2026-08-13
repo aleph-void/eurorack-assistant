@@ -13,6 +13,7 @@ const PORT = Number(process.env.PORT || 3000);
 const MANUALS_DIR = process.env.MANUALS_DIR || '/data/manuals';
 const EXPORTS_DIR = process.env.EXPORTS_DIR || '/data/exports';
 const CAPTURES_DIR = process.env.CAPTURES_DIR || '/data/captures';
+const PANELS_DIR = process.env.PANELS_DIR || '/data/panels';
 // Lapsed device codes and long-revoked tokens are swept hourly.
 const DEVICE_AUTH_PRUNE_MS = 60 * 60 * 1000;
 
@@ -22,6 +23,7 @@ async function main() {
   fs.mkdirSync(MANUALS_DIR, { recursive: true });
   fs.mkdirSync(EXPORTS_DIR, { recursive: true });
   fs.mkdirSync(CAPTURES_DIR, { recursive: true });
+  fs.mkdirSync(PANELS_DIR, { recursive: true });
 
   const bus = createBus();
   // Connected oscilloscopes. The hub is shared by the HTTP routes (which ask
@@ -31,6 +33,7 @@ async function main() {
     manualsDir: MANUALS_DIR,
     exportsDir: EXPORTS_DIR,
     capturesDir: CAPTURES_DIR,
+    panelsDir: PANELS_DIR,
     hub,
   });
   const server = http.createServer(app);
@@ -40,6 +43,7 @@ async function main() {
     manualsDir: MANUALS_DIR,
     exportsDir: EXPORTS_DIR,
     capturesDir: CAPTURES_DIR,
+    panelsDir: PANELS_DIR,
     bus,
   });
   worker.start();

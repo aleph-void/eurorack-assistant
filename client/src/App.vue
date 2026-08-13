@@ -129,4 +129,12 @@ async function logout() {
   <main class="container">
     <RouterView />
   </main>
+
+  <footer class="site-foot">
+    <a href="https://github.com/aleph-void/eurorack-assistant" target="_blank" rel="noopener">
+      Source on GitHub
+    </a>
+    <span class="sep" aria-hidden="true">·</span>
+    <a href="https://alephvoid.com" target="_blank" rel="noopener">alephvoid.com</a>
+  </footer>
 </template>

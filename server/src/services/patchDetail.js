@@ -8,6 +8,7 @@ import { Op } from 'sequelize';
 import { buildPatchTopology } from './patchTopology.js';
 import { resolveNormalledSignals } from './patchSignals.js';
 import { buildSignalFlow } from './patchFlow.js';
+import { loadPanels } from './panelImage.js';
 
 export const patchJson = (patch, extra = {}) => ({
   id: patch.id,
@@ -62,7 +63,7 @@ export const cableJson = (c) => ({
   alt_group: c.alt_group ?? null,
 });
 
-export const moduleJson = (pm, { live, components }) => ({
+export const moduleJson = (pm, { live, components, panel = null }) => ({
   id: pm.id,
   module_id: pm.module_id,
   manufacturer: pm.manufacturer,
@@ -76,6 +77,10 @@ export const moduleJson = (pm, { live, components }) => ({
   // are whatever the patch declares on it.
   live,
   components,
+  // The module's front plate and where its jacks sit on it, so the patch can
+  // be drawn as panels and cables. null for gear with no analyzed panel; the
+  // diagram falls back to a plain outline for those.
+  panel,
 });
 
 // Everything the patch is made of, resolved: the snapshot instances with
@@ -276,6 +281,8 @@ const {
     cables: cables.map((c) => c.get({ plain: true })),
   });
 
+  const panels = await loadPanels(db, [...liveIds]);
+
   return {
     patchModules,
     liveIds,
@@ -285,6 +292,7 @@ const {
         moduleJson(pm, {
           live: pm.module_id !== null && liveIds.has(pm.module_id),
           components: topology.jacksByPatchModule.get(pm.id) ?? [],
+          panel: panels.get(pm.module_id) ?? null,
         })
       ),
       groups: groups.map((g) => ({

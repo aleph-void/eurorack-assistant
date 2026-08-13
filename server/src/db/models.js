@@ -51,6 +51,9 @@ export function defineModels(sequelize) {
       name: { type: DataTypes.TEXT, allowNull: false },
       manual_status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'pending' },
       analysis_status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'pending' },
+      // Progress of the front-panel picture: found/drawn or not (migration
+      // 016). Independent of the analysis, which it runs after.
+      panel_status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'pending' },
       summary: { type: DataTypes.TEXT },
     },
     { tableName: 'modules', createdAt: 'created_at', updatedAt: 'updated_at' }
@@ -70,6 +73,50 @@ export function defineModels(sequelize) {
       source: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'found' },
     },
     { tableName: 'manuals', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // The module's front plate: either a real image found on the web or the
+  // logical panel the server draws from the layout the LLM read out of the
+  // manual (migration 016). The file itself is content-addressed in
+  // PANELS_DIR, like manuals and captures.
+  const ModulePanel = define(
+    'ModulePanel',
+    {
+      id,
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      source: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'generated' },
+      source_url: { type: DataTypes.TEXT },
+      image_hash: { type: DataTypes.TEXT, allowNull: false },
+      image_ext: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'svg' },
+      width: { type: DataTypes.INTEGER, allowNull: false },
+      height: { type: DataTypes.INTEGER, allowNull: false },
+      // The front plate's box within the image, as fractions of the whole.
+      crop_x: { type: DataTypes.REAL, allowNull: false, defaultValue: 0 },
+      crop_y: { type: DataTypes.REAL, allowNull: false, defaultValue: 0 },
+      crop_w: { type: DataTypes.REAL, allowNull: false, defaultValue: 1 },
+      crop_h: { type: DataTypes.REAL, allowNull: false, defaultValue: 1 },
+      hp: { type: DataTypes.REAL },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'module_panels', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // Where one analyzed component sits on the panel image: x/y/w/h are
+  // fractions of the whole image.
+  const ModulePanelComponent = define(
+    'ModulePanelComponent',
+    {
+      id,
+      panel_id: { type: DataTypes.INTEGER, allowNull: false },
+      component_id: { type: DataTypes.INTEGER },
+      name: { type: DataTypes.TEXT, allowNull: false },
+      shape: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'other' },
+      x: { type: DataTypes.REAL, allowNull: false },
+      y: { type: DataTypes.REAL, allowNull: false },
+      w: { type: DataTypes.REAL, allowNull: false, defaultValue: 0 },
+      h: { type: DataTypes.REAL, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'module_panel_components', timestamps: false }
   );
 
   // A user's racks; modules are mapped into racks, not directly onto users.
@@ -667,6 +714,12 @@ export function defineModels(sequelize) {
   Module.hasMany(ModuleComponent, { foreignKey: 'module_id' });
   ModuleComponent.belongsTo(Module, { foreignKey: 'module_id' });
 
+  Module.hasOne(ModulePanel, { foreignKey: 'module_id' });
+  ModulePanel.belongsTo(Module, { foreignKey: 'module_id' });
+  ModulePanel.hasMany(ModulePanelComponent, { foreignKey: 'panel_id' });
+  ModulePanelComponent.belongsTo(ModulePanel, { foreignKey: 'panel_id' });
+  ModulePanelComponent.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
+
   Module.hasMany(ComponentNormalization, { foreignKey: 'module_id' });
   ComponentNormalization.belongsTo(Module, { foreignKey: 'module_id' });
   ComponentNormalization.belongsTo(ModuleComponent, {
@@ -799,6 +852,8 @@ export function defineModels(sequelize) {
     Rack,
     RackModule,
     ModuleComponent,
+    ModulePanel,
+    ModulePanelComponent,
     ComponentNormalization,
     ComponentRoute,
     ComponentSwitch,

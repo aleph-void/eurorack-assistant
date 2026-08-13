@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { useAuthStore } from '../stores/auth.js';
+import ModulePanel from '../components/ModulePanel.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 
@@ -592,12 +593,26 @@ onMounted(load);
       <span class="badge" :class="module.analysis_status">
         analysis: {{ module.analysis_status }}
       </span>
+      &nbsp;
+      <span class="badge" :class="module.panel_status">panel: {{ module.panel_status }}</span>
     </p>
     <p v-if="module.racks?.length" data-test="racks">
       In {{ module.racks.length === 1 ? 'rack' : 'racks' }}:
       {{ module.racks.map((r) => `${r.name} (×${r.quantity})`).join(', ') }}
       — <RouterLink to="/racks">manage racks</RouterLink>
     </p>
+
+    <details v-if="module.panel" open class="panel" data-test="panel">
+      <summary>
+        <h2>Front panel</h2>
+        <span class="summary-count">
+          {{ module.panel.components.length }} placed
+        </span>
+      </summary>
+      <div class="panel-body">
+        <ModulePanel :panel="module.panel" />
+      </div>
+    </details>
 
     <details v-if="module.summary" open class="panel" data-test="summary">
       <summary>

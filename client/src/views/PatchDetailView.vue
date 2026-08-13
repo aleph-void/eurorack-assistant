@@ -6,6 +6,7 @@ import { parseQuickCable } from '../patchQuickCable.js';
 import AutocompleteSelect from '../components/AutocompleteSelect.vue';
 import ScopePanel from '../components/ScopePanel.vue';
 import PatchNotesPanel from '../components/PatchNotesPanel.vue';
+import PatchDiagram from '../components/PatchDiagram.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -790,6 +791,8 @@ onMounted(async () => {
       this patch.
     </p>
     <p v-if="patch.description" style="white-space: pre-wrap">{{ patch.description }}</p>
+
+    <PatchDiagram :modules="modules" :cables="patch.cables" :label-for="moduleLabel" />
 
     <details open class="panel" data-test="cables">
       <summary>

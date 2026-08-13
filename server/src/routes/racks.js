@@ -6,7 +6,13 @@ import { enqueueJob } from '../jobs/worker.js';
 
 // A user's racks. Every route operates on the requesting user's racks only —
 // racks (and their module lists) are never visible to other users.
-export function rackRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/data/manuals' } = {}) {
+export function rackRoutes(
+  db,
+  {
+    manualsDir = process.env.MANUALS_DIR || '/data/manuals',
+    panelsDir = process.env.PANELS_DIR || '/data/panels',
+  } = {}
+) {
   const { Rack, RackModule, Job } = db.models;
   const router = Router();
   router.use(requireAuth(db));
@@ -96,7 +102,7 @@ export function rackRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/data/
           orphaned.push(moduleId);
         }
       }
-      await deleteModulesDeep(db, req.user.id, orphaned, { manualsDir });
+      await deleteModulesDeep(db, req.user.id, orphaned, { manualsDir, panelsDir });
       res.json({ ok: true, deleted_modules: orphaned.length });
     } catch (e) {
       next(e);

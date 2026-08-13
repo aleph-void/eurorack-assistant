@@ -58,12 +58,30 @@ export async function createTestApp({ hub = createDeviceHub() } = {}) {
   const manualsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-manuals-'));
   const exportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-exports-'));
   const capturesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-captures-'));
-  const app = createApp(db, { manualsDir, exportsDir, capturesDir, hub, rateLimit: false });
+  const panelsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-panels-'));
+  const app = createApp(db, {
+    manualsDir,
+    exportsDir,
+    capturesDir,
+    panelsDir,
+    hub,
+    rateLimit: false,
+  });
   await createUser(db, { username: 'admin', isAdmin: true });
   await createUser(db, { username: 'alice' });
   const adminCookie = await login(app, 'admin');
   const aliceCookie = await login(app, 'alice');
-  return { db, app, hub, manualsDir, exportsDir, capturesDir, adminCookie, aliceCookie };
+  return {
+    db,
+    app,
+    hub,
+    manualsDir,
+    exportsDir,
+    capturesDir,
+    panelsDir,
+    adminCookie,
+    aliceCookie,
+  };
 }
 
 // A fake oscilloscope: registers with the hub, answers requests from a
@@ -185,7 +203,13 @@ export const PNG_BYTES = Buffer.from(PNG_BASE64, 'base64');
 
 // Fake LLM backend whose responses are scripted per method.
 export function fakeBackend(responses = {}) {
-  const calls = { completeText: [], completeTextWithSearch: [], answerWithDocuments: [], analyzeDocument: [] };
+  const calls = {
+    completeText: [],
+    completeTextWithSearch: [],
+    answerWithDocuments: [],
+    analyzeDocument: [],
+    analyzeImage: [],
+  };
   const respond = (value, args) => {
     if (typeof value === 'function') return Promise.resolve(value(...args));
     if (value instanceof Error) return Promise.reject(value);
@@ -208,6 +232,10 @@ export function fakeBackend(responses = {}) {
     analyzeDocument(...args) {
       calls.analyzeDocument.push(args);
       return respond(responses.analyzeDocument, args);
+    },
+    analyzeImage(...args) {
+      calls.analyzeImage.push(args);
+      return respond(responses.analyzeImage, args);
     },
   };
 }

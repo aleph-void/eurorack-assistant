@@ -18,7 +18,13 @@ export const DEFAULT_MODELS = { claude: 'claude-fable-5', codex: 'gpt-5.1-codex'
 
 // Job types that invoke an LLM backend and accept a per-type model override.
 // (import and export_rack never call the LLM.)
-export const LLM_JOB_TYPES = ['find_manual', 'analyze_manual', 'scope_question', 'answer_question'];
+export const LLM_JOB_TYPES = [
+  'find_manual',
+  'analyze_manual',
+  'panel_image',
+  'scope_question',
+  'answer_question',
+];
 
 // Runs `cmd args...`, writing `input` to stdin; resolves with stdout.
 export function runCli(cmd, args, input, { timeoutMs = 600000 } = {}) {
@@ -96,6 +102,15 @@ export class ClaudeBackend {
     const fullPrompt = `${prompt}\n\nRead the following manual PDF and base the output on it:\n- ${resolved}\n`;
     return this._exec(fullPrompt, ['--allowedTools', 'Read', '--add-dir', path.dirname(resolved)]);
   }
+
+  // Look at a single local image (used for locating a module's components on
+  // its front panel photograph). The Read tool renders PNG/JPEG/GIF/WebP, so
+  // this needs nothing beyond the file's directory being allowed.
+  analyzeImage(prompt, imagePath) {
+    const resolved = path.resolve(imagePath);
+    const fullPrompt = `${prompt}\n\nLook at the following image and base the output on it:\n- ${resolved}\n`;
+    return this._exec(fullPrompt, ['--allowedTools', 'Read', '--add-dir', path.dirname(resolved)]);
+  }
 }
 
 export class CodexBackend {
@@ -165,6 +180,15 @@ export class CodexBackend {
     const fullPrompt =
       `${prompt}\n\nRead the following manual PDF and base the output on it ` +
       `(extract its text with a tool such as pdftotext if needed):\n- ${resolved}\n`;
+    return this._exec(fullPrompt);
+  }
+
+  analyzeImage(prompt, imagePath) {
+    const resolved = path.resolve(imagePath);
+    const fullPrompt =
+      `${prompt}\n\nThe image to look at is at:\n- ${resolved}\n\n` +
+      `If you cannot view the image, say so by answering with ` +
+      `{"is_panel": false, "components": []} rather than guessing at positions.\n`;
     return this._exec(fullPrompt);
   }
 }

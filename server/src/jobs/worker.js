@@ -4,7 +4,10 @@
 //                     records, and queue a find_manual job per new module
 //   find_manual     — research + download the module's manual PDF, then queue
 //                     an analyze_manual job for it
-//   analyze_manual  — LLM analysis of the manual into a summary + components
+//   analyze_manual  — LLM analysis of the manual into a summary + components,
+//                     then queue a panel_image job for it
+//   panel_image     — find (or draw) the module's front panel and place every
+//                     analyzed component on it
 //   scope_question  — determine which modules/jacks a question applies to,
 //                     then leave the question 'scoped' for the user to review
 //   answer_question — ask the LLM with the reviewed scope and attachments
@@ -26,6 +29,7 @@ import {
 } from '../services/importer.js';
 import { findManualForModule } from '../services/manualFinder.js';
 import { analyzeManualForModule } from '../services/manualAnalyzer.js';
+import { buildPanelForModule } from '../services/panelImage.js';
 import { answerQuestion, scopeQuestion } from '../services/ask.js';
 import { safeSegment, writeRackExport } from '../services/rackExport.js';
 
@@ -80,23 +84,29 @@ export async function enqueueJob(db, type, { userId = null, moduleId = null, que
   return job.get({ plain: true });
 }
 
-// Queue a find_manual job unless one is already live. Imports always re-try
-// retrieval from the internet — an unchanged manual dedupes by content hash
-// against the existing document record. The job is owned by (and visible to)
-// the user whose import queued it.
-export async function enqueueFindManual(db, module, userId) {
+// Queue a per-module job unless one of the same type is already live for that
+// module — the chained pipeline (find_manual → analyze_manual → panel_image)
+// and the "re-analyze everything" action both have to be safe to trigger
+// twice. The job is owned by (and visible to) the user who caused it.
+export async function enqueueModuleJob(db, type, module, userId) {
   const pending = await db.models.Job.findOne({
-    where: { module_id: module.id, type: 'find_manual', status: ['pending', 'running'] },
+    where: { module_id: module.id, type, status: ['pending', 'running'] },
   });
   if (pending) return null;
-  return enqueueJob(db, 'find_manual', { moduleId: module.id, userId });
+  return enqueueJob(db, type, { moduleId: module.id, userId });
 }
+
+// Imports always re-try retrieval from the internet — an unchanged manual
+// dedupes by content hash against the existing document record.
+export const enqueueFindManual = (db, module, userId) =>
+  enqueueModuleJob(db, 'find_manual', module, userId);
 
 export function createWorker(db, options = {}) {
   const {
     manualsDir = process.env.MANUALS_DIR || '/data/manuals',
     exportsDir = process.env.EXPORTS_DIR || '/data/exports',
     capturesDir = process.env.CAPTURES_DIR || '/data/captures',
+    panelsDir = process.env.PANELS_DIR || '/data/panels',
     pollIntervalMs = 5000,
     heartbeatMs = HEARTBEAT_MS,
     staleJobMs = STALE_JOB_MS,
@@ -244,6 +254,11 @@ export function createWorker(db, options = {}) {
         { analysis_status: failed ? 'failed' : 'pending' },
         { where: { id: job.module_id } }
       );
+    } else if (job.type === 'panel_image' && job.module_id) {
+      await Module.update(
+        { panel_status: failed ? 'failed' : 'pending' },
+        { where: { id: job.module_id } }
+      );
     } else if (failed && job.question_id) {
       await Question.update(
         { status: 'failed', error: message },
@@ -380,6 +395,7 @@ export function createWorker(db, options = {}) {
     }
     await Module.update({ analysis_status: 'analyzing' }, { where: { id: module.id } });
     progress(`analyzing manual: ${manual.original_name || `${manual.hash}.pdf`}`);
+    let analyzed = 0;
     try {
       const { components } = await analyzeManualForModule(
         db,
@@ -387,9 +403,45 @@ export function createWorker(db, options = {}) {
         module,
         manualPath(manualsDir, manual.hash)
       );
+      analyzed = components.length;
       progress(`analysis complete: ${components.length} component(s) found`);
     } catch (e) {
       await Module.update({ analysis_status: 'failed' }, { where: { id: module.id } });
+      throw e;
+    }
+    // The panel needs the component list the analysis just wrote, so it is
+    // chained rather than run alongside. A module whose panel job fails still
+    // has a complete analysis. An analysis that found no components at all
+    // has nothing to place on a panel, so there is nothing to queue.
+    if (analyzed > 0 && (await enqueueModuleJob(db, 'panel_image', module, job.user_id))) {
+      progress('queued front panel image');
+    }
+  }
+
+  async function handlePanelImage(job, backend, progress) {
+    const { Module, Manual } = db.models;
+    const record = await Module.findByPk(job.module_id);
+    if (!record) throw new Error(`Module ${job.module_id} no longer exists`);
+    const module = record.get({ plain: true });
+    // The shared auto-found manual is what the drawn-panel fallback reads.
+    const manual = await Manual.findOne({
+      where: { module_id: module.id, user_id: null },
+      order: [['id', 'ASC']],
+    });
+    await Module.update({ panel_status: 'searching' }, { where: { id: module.id } });
+    progress(`building front panel: ${module.manufacturer} ${module.name}`.trim());
+    try {
+      const { panel, placements } = await buildPanelForModule(db, backend, module, panelsDir, {
+        fetchImpl,
+        log: progress,
+        manualFile: manual ? manualPath(manualsDir, manual.hash) : null,
+      });
+      progress(
+        `panel ready (${panel.source}): ${placements.filter((p) => p.component_id).length} ` +
+          'component(s) placed'
+      );
+    } catch (e) {
+      await Module.update({ panel_status: 'failed' }, { where: { id: module.id } });
       throw e;
     }
   }
@@ -459,6 +511,7 @@ export function createWorker(db, options = {}) {
     import: handleImport,
     find_manual: handleFindManual,
     analyze_manual: handleAnalyzeManual,
+    panel_image: handlePanelImage,
     scope_question: handleScopeQuestion,
     answer_question: handleAnswerQuestion,
     export_rack: handleExportRack,

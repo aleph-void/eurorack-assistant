@@ -82,6 +82,43 @@ async function move(module, event) {
   }
 }
 
+// Re-run the analysis over the whole system (or the selected rack). The
+// analysis learns to record more about a module over time — signal paths,
+// switch sections, the panel layout — and everything analyzed before that is
+// missing it. Re-discovering the manuals is a separate, heavier step: it
+// costs a web search per module, so it is off unless asked for.
+const rediscoverManuals = ref(false);
+const reanalyzing = ref(false);
+const reanalyzed = ref('');
+
+async function reanalyzeAll() {
+  const where = currentRack.value ? `in '${currentRack.value.name}'` : 'in all your racks';
+  const extra = rediscoverManuals.value
+    ? ' Their manuals will be searched for again first.'
+    : '';
+  if (!confirm(`Re-analyze every module ${where}?${extra}`)) return;
+  error.value = '';
+  reanalyzed.value = '';
+  reanalyzing.value = true;
+  try {
+    const res = await api.post('/api/modules/reanalyze', {
+      rack_id: selectedRack.value || undefined,
+      rediscover_manuals: rediscoverManuals.value,
+    });
+    const queued = res.queued.find_manual + res.queued.analyze_manual;
+    reanalyzed.value =
+      queued === 0
+        ? `Nothing queued — the ${res.modules} module(s) already have jobs waiting.`
+        : `Queued ${queued} job(s) across ${res.modules} module(s)` +
+          (res.skipped ? `; ${res.skipped} already had one waiting.` : '.');
+    await load();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    reanalyzing.value = false;
+  }
+}
+
 watch(selectedRack, load);
 
 // Live-refresh when background jobs finish (manual found, analysis complete).
@@ -115,6 +152,22 @@ onUnmounted(() => clearTimeout(refreshTimer));
       <RouterLink to="/racks">Manage racks</RouterLink>
     </div>
   </div>
+  <div v-if="modules.length" class="row reanalyze-row">
+    <button
+      class="secondary"
+      style="margin: 0"
+      :disabled="reanalyzing"
+      data-test="reanalyze-all"
+      @click="reanalyzeAll"
+    >
+      {{ reanalyzing ? 'Queueing…' : 'Re-analyze all' }}
+    </button>
+    <label class="inline-check">
+      <input v-model="rediscoverManuals" type="checkbox" data-test="rediscover-manuals" />
+      Re-discover manuals too
+    </label>
+  </div>
+  <p v-if="reanalyzed" class="muted" data-test="reanalyze-result">{{ reanalyzed }}</p>
   <p v-if="error" class="error">{{ error }}</p>
   <p v-if="loading" class="muted">Loading…</p>
   <div v-else-if="modules.length === 0" class="panel">
@@ -149,6 +202,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
                 <th v-if="!currentRack">Rack(s)</th>
                 <th>Manual</th>
                 <th>Analysis</th>
+                <th>Panel</th>
                 <th></th>
               </tr>
             </thead>
@@ -167,6 +221,9 @@ onUnmounted(() => clearTimeout(refreshTimer));
                 <td><span class="badge" :class="module.manual_status">{{ module.manual_status }}</span></td>
                 <td>
                   <span class="badge" :class="module.analysis_status">{{ module.analysis_status }}</span>
+                </td>
+                <td>
+                  <span class="badge" :class="module.panel_status">{{ module.panel_status }}</span>
                 </td>
                 <td>
                   <select

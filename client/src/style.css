@@ -261,6 +261,29 @@ pre {
   border-top: 1px solid var(--border);
 }
 
+/* ---- site footer ---------------------------------------------------- */
+
+.site-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  border-top: 1px solid var(--border);
+  color: var(--faint);
+  font-size: 0.85rem;
+}
+.site-foot a {
+  color: var(--muted);
+}
+.site-foot a:hover {
+  color: var(--accent-2);
+  text-decoration: none;
+}
+
 /* ---- panels and expanders ------------------------------------------ */
 
 .panel {
@@ -640,6 +663,30 @@ button.danger:hover {
 .row > .shrink {
   flex: 0;
   min-width: auto;
+}
+
+/* An action and the option that modifies it, on one line: "Re-analyze all"
+   with its "re-discover manuals too" checkbox beside it. */
+.reanalyze-row {
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.6rem 0 0.2rem;
+}
+.reanalyze-row > * {
+  flex: 0;
+  min-width: auto;
+}
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.inline-check input {
+  width: auto;
+  margin: 0;
 }
 
 /* Type-to-find picker (AutocompleteSelect): a text box with the matching

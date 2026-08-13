@@ -12,11 +12,18 @@
 
 import fs from 'node:fs';
 import { manualPath } from './pdf.js';
+import { panelPath } from './image.js';
 
-export async function deleteModulesDeep(db, userId, moduleIds, { manualsDir }) {
+export async function deleteModulesDeep(
+  db,
+  userId,
+  moduleIds,
+  { manualsDir, panelsDir = process.env.PANELS_DIR || '/data/panels' }
+) {
   const {
     Module,
     ModuleComponent,
+    ModulePanel,
     Manual,
     Question,
     QuestionModule,
@@ -68,6 +75,10 @@ export async function deleteModulesDeep(db, userId, moduleIds, { manualsDir }) {
 
   const manuals = await Manual.findAll({ where: { module_id: moduleIds }, attributes: ['hash'] });
   const hashes = [...new Set(manuals.map((m) => m.hash))];
+  const panels = await ModulePanel.findAll({
+    where: { module_id: moduleIds },
+    attributes: ['image_hash', 'image_ext'],
+  });
 
   await db.sequelize.transaction(async (transaction) => {
     if (questionIds.size > 0) {
@@ -85,6 +96,13 @@ export async function deleteModulesDeep(db, userId, moduleIds, { manualsDir }) {
   for (const hash of hashes) {
     if ((await Manual.count({ where: { hash } })) === 0) {
       fs.rmSync(manualPath(manualsDir, hash), { force: true });
+    }
+  }
+  // Panel images follow the same rule: the row cascaded away with the module,
+  // the file goes once nothing else points at those bytes.
+  for (const panel of panels) {
+    if ((await ModulePanel.count({ where: { image_hash: panel.image_hash } })) === 0) {
+      fs.rmSync(panelPath(panelsDir, panel.image_hash, panel.image_ext), { force: true });
     }
   }
   return { modules: moduleIds.length, questions: questionIds.size, notes: noteIds.size };

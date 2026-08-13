@@ -1,0 +1,739 @@
+// The module's front plate, and where its analyzed components sit on it.
+//
+// The analysis (services/manualAnalyzer.js) turns a manual into a list of
+// jacks and controls. That is enough to trace signal, but a patch is a
+// physical thing: what you actually do with it is look at the panels and plug
+// cables between holes. This service gives the component list a picture to
+// hang on, in the order a person would try:
+//
+//   1. Research the web for the module's real front-panel image (the
+//      manufacturer's product page, or ModularGrid), download it, and ask the
+//      LLM to locate every analyzed component on it.
+//   2. Failing that — no image found, or none of the components could be
+//      located on it — ask the LLM to read the module's LAYOUT out of the
+//      manual (how many HP wide, and where each control and jack sits) and
+//      draw that layout here as an SVG. A logical stand-in rather than a
+//      likeness, but positioned from the same manual, so the diagram still
+//      reads as the module.
+//   3. Failing even that (no manual, or an answer with nothing usable in it),
+//      lay the components out in columns by type, so every jack still has a
+//      place a cable can be drawn to.
+//
+// Positions are stored as fractions of the image, so the client can render
+// them at any size (see migration 016).
+
+import fs from 'node:fs';
+import { extractJsonObject } from './json.js';
+import { downloadImage, panelPath, saveImage } from './image.js';
+
+// How a marker is drawn. Derived from the component's analyzed type, or
+// stated by the LLM when it places something the analysis did not list.
+export const PANEL_SHAPES = [
+  'jack',
+  'knob',
+  'slider',
+  'button',
+  'toggle',
+  'switch',
+  'display',
+  'other',
+];
+
+const SHAPE_FOR_TYPE = {
+  input_jack: 'jack',
+  output_jack: 'jack',
+  bidirectional_jack: 'jack',
+  knob: 'knob',
+  slider: 'slider',
+  button: 'button',
+  toggle: 'toggle',
+  switch: 'switch',
+  display: 'display',
+};
+
+export const shapeForComponent = (component) => SHAPE_FOR_TYPE[component?.type] || 'other';
+
+// Eurorack panel geometry: 1HP is 5.08mm and a 3U panel is 128.5mm tall.
+// Generated panels are drawn at PX_PER_MM units per millimetre, so every
+// glyph below can be sized in real millimetres.
+export const HP_MM = 5.08;
+export const PANEL_MM_HEIGHT = 128.5;
+export const PX_PER_MM = 8;
+export const DEFAULT_HP = 8;
+const MIN_HP = 2;
+const MAX_HP = 84;
+
+// A component list this long stops fitting a single narrow column, so an
+// unstated width is guessed from it rather than left at DEFAULT_HP.
+const HP_PER_COMPONENT = 1.2;
+
+export const PANEL_RESEARCH_TEMPLATE = (manufacturer, name) =>
+  `You are researching the eurorack modular synthesizer module: "${manufacturer} ${name}"
+
+Task: find a picture of this module's FRONT PANEL — the flat face of the
+module as it appears in a rack, photographed or rendered straight on.
+
+1. Search the manufacturer's official product page for this module, then
+   ModularGrid, then retailers.
+2. Collect direct links to the image FILES (URLs ending in .jpg, .jpeg, .png
+   or .webp), not the pages holding them.
+3. Also note how wide the module is in HP, if the page states it.
+
+Respond with ONLY a JSON object, no prose and no code fences, shaped exactly like:
+
+{"image_urls": ["https://..."], "page_url": "https://...", "hp": 8}
+
+Rules:
+- "image_urls": up to 4 candidate direct image URLs, best first. Prefer a
+  straight-on shot of the panel alone, on a plain background, at the largest
+  resolution offered. Avoid photographs of the module in a rack among others,
+  angled "hero" shots, rear/PCB shots, and lifestyle photos. Use [] if you
+  cannot find a usable image.
+- "page_url": the page the image was found on, or null.
+- "hp": the panel width in HP as a number, or null if it is not stated.
+`;
+
+const componentList = (components) =>
+  components.map((c) => `- ${c.name} (${c.type})`).join('\n');
+
+export const PANEL_MAP_TEMPLATE = (manufacturer, name, components) =>
+  `You are looking at a photograph of the front panel of the eurorack module
+"${manufacturer} ${name}". Locate each of its components on the image.
+
+These are the components the manual describes:
+
+${componentList(components)}
+
+Respond with ONLY a JSON object, no prose and no code fences, shaped exactly like:
+
+{
+  "is_panel": true,
+  "panel": { "x": 0.12, "y": 0.02, "w": 0.5, "h": 0.96 },
+  "components": [
+    { "name": "1V/OCT", "x": 0.3, "y": 0.82, "w": 0.14, "h": 0.05 }
+  ]
+}
+
+Rules:
+- ALL coordinates are fractions of the WHOLE image, with 0,0 at the top left
+  and 1,1 at the bottom right. "x"/"y" are the CENTRE of the thing, "w"/"h"
+  its size.
+- "is_panel" is false if the image does not actually show this module's front
+  panel straight on — a different module, a rear/PCB shot, a rack full of
+  modules, a heavily angled photo, a logo or a placeholder. Say so honestly
+  and return [] for "components": a wrong picture is worse than none, and
+  there is a fallback that does not need one.
+- "panel" is the bounding box of this module's front plate within the image,
+  excluding background, packaging, other modules and rack rails. Use
+  {"x": 0.5, "y": 0.5, "w": 1, "h": 1} if the panel fills the image.
+- List one entry per component you can actually see, using the component's
+  EXACT name from the list above. Omit the ones you cannot find rather than
+  guessing at a position — an unplaced jack is fine, a jack placed on top of
+  the wrong hole is not.
+- Jacks are the round sockets a patch cable plugs into; knobs are the larger
+  round controls with a pointer or indent; sliders are the long slots; the
+  small rectangles are buttons and toggles. Place each name on the control it
+  labels, not on the label text.
+`;
+
+export const PANEL_LAYOUT_TEMPLATE = (manufacturer, name, components) =>
+  `You are a eurorack modular synthesizer expert. Using the attached user
+manual for "${manufacturer} ${name}", describe the LAYOUT of the module's
+front panel, so it can be drawn as a diagram.
+
+These are the components the manual describes:
+
+${componentList(components)}
+
+Respond with ONLY a JSON object, no prose and no code fences, shaped exactly like:
+
+{
+  "hp": 8,
+  "components": [
+    { "name": "1V/OCT", "shape": "jack", "x": 0.3, "y": 0.82 },
+    { "name": "FREQ", "shape": "knob", "x": 0.5, "y": 0.18 }
+  ]
+}
+
+Rules:
+- "hp" is the panel width in HP (1HP = 5.08mm) as a number. Give the width the
+  manual states; if it states none, estimate it from the panel drawing or the
+  number of controls.
+- "x" and "y" place the CENTRE of each component on the panel as fractions of
+  the panel's own width and height, with 0,0 at the top left of the panel and
+  1,1 at the bottom right.
+- Follow the panel drawing in the manual: the real positions, in the real
+  order, with jacks generally along the bottom and the controls they belong to
+  above them. Keep 0.04 clear of every edge, and do not stack two components
+  on the same spot.
+- "shape" is one of: ${PANEL_SHAPES.join(', ')}. It says how the component is
+  drawn, and should follow the component's type from the list above.
+- Include EVERY component in the list, using its exact name. Components the
+  manual shows on a different panel (an expander) are not part of this one and
+  are not in the list — leave them out.
+`;
+
+const clamp01 = (value) => Math.min(1, Math.max(0, value));
+
+const finite = (value, fallback = null) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+// The LLM is asked for a centre plus a size; either may be missing, and a few
+// answers give a top-left corner box instead. Accept both readings: a box
+// whose x/y sit at its own corner is treated as a corner box.
+function readBox(raw, defaultSize) {
+  const w = clamp01(finite(raw.w ?? raw.width, defaultSize) ?? defaultSize);
+  const h = clamp01(finite(raw.h ?? raw.height, defaultSize) ?? defaultSize);
+  let x = finite(raw.x ?? raw.cx ?? raw.left);
+  let y = finite(raw.y ?? raw.cy ?? raw.top);
+  if (x === null || y === null) return null;
+  if (raw.left !== undefined && raw.x === undefined) x += w / 2;
+  if (raw.top !== undefined && raw.y === undefined) y += h / 2;
+  return { x: clamp01(x), y: clamp01(y), w, h };
+}
+
+// Default marker size on a real photograph, as a fraction of the panel: a
+// 3.5mm jack is roughly 8mm across on a 128.5mm-tall panel.
+const DEFAULT_MARKER = 0.06;
+
+export function normalizeHp(value) {
+  const hp = finite(value);
+  if (hp === null || hp <= 0) return null;
+  return Math.min(MAX_HP, Math.max(MIN_HP, Math.round(hp * 2) / 2));
+}
+
+// Match a placement's name to one of the module's components. Compared
+// loosely: a panel silkscreens "1V/OCT" where the manual writes "1V/Oct in".
+const matchKey = (value) =>
+  String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+export function componentIndex(components) {
+  const byKey = new Map();
+  for (const c of components) {
+    const key = matchKey(c.name);
+    if (key && !byKey.has(key)) byKey.set(key, c);
+  }
+  return byKey;
+}
+
+// Turn the LLM's list of placements into rows against the stored components.
+// A placement whose name matches no component is kept with a null
+// component_id: on a generated panel it is still worth drawing (it is
+// something the manual shows), it simply cannot anchor a cable.
+export function normalizePlacements(raw, components, { defaultSize = DEFAULT_MARKER } = {}) {
+  if (!Array.isArray(raw)) return [];
+  const byKey = componentIndex(components);
+  const placements = [];
+  const usedComponents = new Set();
+  const usedNames = new Set();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const name = String(entry.name ?? entry.component ?? entry.label ?? '').trim();
+    if (!name) continue;
+    const box = readBox(entry, defaultSize);
+    if (!box) continue;
+    const component = byKey.get(matchKey(name)) ?? null;
+    // One position per component, and one per unmatched label: a repeated
+    // name is the LLM listing the same control twice, not two controls.
+    if (component) {
+      if (usedComponents.has(component.id)) continue;
+      usedComponents.add(component.id);
+    } else {
+      const key = matchKey(name);
+      if (usedNames.has(key)) continue;
+      usedNames.add(key);
+    }
+    let shape = String(entry.shape ?? '').trim().toLowerCase();
+    if (!PANEL_SHAPES.includes(shape)) shape = component ? shapeForComponent(component) : 'other';
+    placements.push({
+      component_id: component?.id ?? null,
+      name: component?.name ?? name,
+      shape,
+      ...box,
+    });
+  }
+  return placements;
+}
+
+// Components the LLM did not place, dropped into the free space below the
+// ones it did. A jack with no position cannot be patched in the diagram, so
+// an approximate place beats none — they are laid out in reading order in a
+// grid of their own so they never land on top of each other.
+export function fillMissingPlacements(placements, components) {
+  const placed = new Set(placements.map((p) => p.component_id).filter(Boolean));
+  const missing = components.filter((c) => !placed.has(c.id));
+  if (missing.length === 0) return placements;
+  // Below everything already placed, or over the whole panel when nothing is.
+  const top = placements.length === 0 ? 0.06 : Math.min(0.94, Math.max(...placements.map((p) => p.y + p.h / 2)) + 0.05);
+  const columns = missing.length > 8 ? 3 : missing.length > 3 ? 2 : 1;
+  const rows = Math.ceil(missing.length / columns);
+  const rowStep = rows > 0 ? Math.min(0.1, (0.96 - top) / rows) : 0.1;
+  return [
+    ...placements,
+    ...missing.map((c, i) => ({
+      component_id: c.id,
+      name: c.name,
+      shape: shapeForComponent(c),
+      x: (Math.floor(i % columns) + 0.5) / columns,
+      y: clamp01(top + (Math.floor(i / columns) + 0.5) * rowStep),
+      w: DEFAULT_MARKER,
+      h: DEFAULT_MARKER,
+    })),
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Drawing the logical panel
+// ---------------------------------------------------------------------------
+
+const xmlEscape = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+// Glyph geometry in millimetres, so a drawn panel is to scale with the real
+// thing: a 3.5mm jack sits in an 8mm nut, a standard knob is about 12mm.
+const GLYPH_MM = {
+  jack: { r: 4 },
+  knob: { r: 6 },
+  slider: { w: 5, h: 26 },
+  button: { w: 6, h: 6 },
+  toggle: { w: 4, h: 8 },
+  switch: { w: 5, h: 9 },
+  display: { w: 22, h: 11 },
+  other: { r: 4 },
+};
+
+const round = (n) => Math.round(n * 10) / 10;
+
+function glyph(shape, cx, cy, mm) {
+  const g = GLYPH_MM[shape] || GLYPH_MM.other;
+  if (g.r) {
+    const r = g.r * mm;
+    if (shape === 'knob') {
+      // A knob reads as a knob because of its pointer.
+      return (
+        `<circle cx="${round(cx)}" cy="${round(cy)}" r="${round(r)}" class="knob"/>` +
+        `<line x1="${round(cx)}" y1="${round(cy)}" x2="${round(cx)}" y2="${round(cy - r * 0.8)}" class="pointer"/>`
+      );
+    }
+    const cls = shape === 'jack' ? 'jack' : 'other';
+    return (
+      `<circle cx="${round(cx)}" cy="${round(cy)}" r="${round(r)}" class="${cls}"/>` +
+      (shape === 'jack'
+        ? `<circle cx="${round(cx)}" cy="${round(cy)}" r="${round(r * 0.42)}" class="jack-hole"/>`
+        : '')
+    );
+  }
+  const w = g.w * mm;
+  const h = g.h * mm;
+  const cls = shape === 'display' ? 'display' : 'control';
+  return (
+    `<rect x="${round(cx - w / 2)}" y="${round(cy - h / 2)}" width="${round(w)}" ` +
+    `height="${round(h)}" rx="${round(mm)}" class="${cls}"/>`
+  );
+}
+
+// Draw the panel: an SVG the client renders exactly like a photograph, with
+// the same fractional positions overlaid on it. Deliberately built here
+// rather than asked of the LLM — the drawing and the stored positions must
+// agree, and markup from a model is not something to serve from our origin.
+export function renderPanelSvg({ manufacturer, name, hp, placements }) {
+  const mm = PX_PER_MM;
+  const width = Math.round((hp || DEFAULT_HP) * HP_MM * mm);
+  const height = Math.round(PANEL_MM_HEIGHT * mm);
+  const label = `${manufacturer} ${name}`.trim();
+  const font = round(2.6 * mm);
+  const titleFont = round(3.4 * mm);
+
+  const parts = [];
+  for (const p of placements) {
+    const cx = p.x * width;
+    const cy = p.y * height;
+    parts.push(`<g><title>${xmlEscape(p.name)}</title>${glyph(p.shape, cx, cy, mm)}</g>`);
+    const g = GLYPH_MM[p.shape] || GLYPH_MM.other;
+    const below = (g.r ? g.r : g.h / 2) * mm + font;
+    parts.push(
+      `<text x="${round(cx)}" y="${round(cy + below)}" class="label" font-size="${font}">` +
+        `${xmlEscape(p.name)}</text>`
+    );
+  }
+
+  return {
+    width,
+    height,
+    svg: `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="${xmlEscape(label)} front panel">
+  <title>${xmlEscape(label)}</title>
+  <style>
+    .plate { fill: #1c1c28; stroke: #3a3a52; stroke-width: ${round(0.4 * mm)}; }
+    .rail { fill: #2a2a3c; }
+    .jack { fill: #0d0d14; stroke: #6d6d8a; stroke-width: ${round(0.35 * mm)}; }
+    .jack-hole { fill: #05050a; }
+    .knob { fill: #2f2f42; stroke: #8b5cf6; stroke-width: ${round(0.35 * mm)}; }
+    .pointer { stroke: #e4e4e7; stroke-width: ${round(0.4 * mm)}; stroke-linecap: round; }
+    .control { fill: #2f2f42; stroke: #8b5cf6; stroke-width: ${round(0.3 * mm)}; }
+    .display { fill: #0d0d14; stroke: #4ade80; stroke-width: ${round(0.3 * mm)}; }
+    .other { fill: #23233a; stroke: #6d6d8a; stroke-width: ${round(0.3 * mm)}; }
+    .label { fill: #c8c8d4; font-family: 'Inter', system-ui, sans-serif; text-anchor: middle; }
+    .title { fill: #a78bfa; font-family: 'Inter', system-ui, sans-serif; text-anchor: middle; font-weight: 600; }
+  </style>
+  <rect x="0" y="0" width="${width}" height="${height}" class="plate"/>
+  <rect x="0" y="0" width="${width}" height="${round(3 * mm)}" class="rail"/>
+  <rect x="0" y="${round(height - 3 * mm)}" width="${width}" height="${round(3 * mm)}" class="rail"/>
+  <text x="${round(width / 2)}" y="${round(8 * mm)}" class="title" font-size="${titleFont}">${xmlEscape(
+    name
+  )}</text>
+  ${parts.join('\n  ')}
+</svg>
+`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Reading panels back out
+// ---------------------------------------------------------------------------
+
+export const panelImageUrl = (panel) => `/api/panels/${panel.image_hash}.${panel.image_ext}`;
+
+// One panel in the shape the client draws from: the image, the box of it that
+// is the panel, and where each component sits as a fraction of the image.
+export const panelJson = (panel, placements = []) => ({
+  source: panel.source,
+  source_url: panel.source_url ?? null,
+  url: panelImageUrl(panel),
+  width: panel.width,
+  height: panel.height,
+  crop: { x: panel.crop_x, y: panel.crop_y, w: panel.crop_w, h: panel.crop_h },
+  hp: panel.hp ?? null,
+  description: panel.description ?? null,
+  components: placements.map((p) => ({
+    component_id: p.component_id ?? null,
+    name: p.name,
+    shape: p.shape,
+    x: p.x,
+    y: p.y,
+    w: p.w,
+    h: p.h,
+  })),
+});
+
+// The panels of a set of modules, keyed by module id. Two flat queries, so
+// pg-mem (the test database) can run it as well as postgres.
+export async function loadPanels(db, moduleIds) {
+  const ids = [...new Set(moduleIds.filter(Boolean))];
+  if (ids.length === 0) return new Map();
+  const { ModulePanel, ModulePanelComponent } = db.models;
+  const panels = await ModulePanel.findAll({ where: { module_id: ids } });
+  if (panels.length === 0) return new Map();
+  const placements = await ModulePanelComponent.findAll({
+    where: { panel_id: panels.map((p) => p.id) },
+    order: [['id', 'ASC']],
+  });
+  const byPanel = new Map();
+  for (const p of placements) {
+    if (!byPanel.has(p.panel_id)) byPanel.set(p.panel_id, []);
+    byPanel.get(p.panel_id).push(p);
+  }
+  return new Map(panels.map((panel) => [panel.module_id, panelJson(panel, byPanel.get(panel.id) ?? [])]));
+}
+
+// ---------------------------------------------------------------------------
+// Building a module's panel
+// ---------------------------------------------------------------------------
+
+// Last resort: no image, no manual layout. Components go into columns by kind
+// — controls up top, jacks along the bottom, the way nearly every module is
+// actually arranged — so the diagram is at least honest about what is where.
+export function fallbackLayout(components) {
+  const jacks = components.filter((c) => c.type.endsWith('_jack'));
+  const controls = components.filter((c) => !c.type.endsWith('_jack'));
+  const place = (list, top, bottom) => {
+    if (list.length === 0) return [];
+    const columns = list.length > 10 ? 3 : list.length > 4 ? 2 : 1;
+    const rows = Math.ceil(list.length / columns);
+    return list.map((c, i) => ({
+      component_id: c.id,
+      name: c.name,
+      shape: shapeForComponent(c),
+      x: (Math.floor(i % columns) + 0.5) / columns,
+      y: top + ((Math.floor(i / columns) + 0.5) / rows) * (bottom - top),
+      w: DEFAULT_MARKER,
+      h: DEFAULT_MARKER,
+    }));
+  };
+  const split = controls.length === 0 ? 0.08 : jacks.length === 0 ? 0.92 : 0.52;
+  return [...place(controls, 0.1, split), ...place(jacks, split, 0.94)];
+}
+
+// How wide to draw a module nobody told us the width of.
+export function estimateHp(components) {
+  return normalizeHp(Math.max(4, Math.min(28, Math.round(components.length * HP_PER_COMPONENT))));
+}
+
+// The front plate's box within the image, as a stored origin + size. A box
+// too small to be a panel, or one the model did not give at all, becomes the
+// whole image — showing all of a photograph is a mild waste of space, showing
+// a sliver of one is a broken diagram.
+export const FULL_CROP = { crop_x: 0, crop_y: 0, crop_w: 1, crop_h: 1 };
+const MIN_CROP = 0.1;
+
+export function normalizeCrop(raw) {
+  const box = readBox(raw ?? {}, 1);
+  if (!box || box.w < MIN_CROP || box.h < MIN_CROP) return { ...FULL_CROP };
+  const x = clamp01(box.x - box.w / 2);
+  const y = clamp01(box.y - box.h / 2);
+  return {
+    crop_x: x,
+    crop_y: y,
+    // Never let the box run off the edge of the image it is a box within.
+    crop_w: Math.min(box.w, 1 - x),
+    crop_h: Math.min(box.h, 1 - y),
+  };
+}
+
+// Ask the LLM where the components are on the image we just downloaded.
+// Returns null when the image turns out not to show this module's panel, or
+// when nothing on it could be identified.
+export async function locateComponentsOnImage(backend, module, components, imagePath, log) {
+  let parsed;
+  try {
+    parsed = extractJsonObject(
+      await backend.analyzeImage(
+        PANEL_MAP_TEMPLATE(module.manufacturer, module.name, components),
+        imagePath
+      )
+    );
+  } catch (e) {
+    log(`could not map components onto the panel image: ${e.message}`);
+    return null;
+  }
+  if (parsed.is_panel === false) {
+    log('the image found is not a straight-on shot of this module\'s panel');
+    return null;
+  }
+  const placements = normalizePlacements(parsed.components, components);
+  // A picture with one lucky hit on it is not a mapped panel; the drawn
+  // fallback is more useful than a photo with three markers on it.
+  const matched = placements.filter((p) => p.component_id).length;
+  if (matched < Math.min(3, components.length)) {
+    log(`only ${matched} of ${components.length} component(s) could be located on the image`);
+    return null;
+  }
+  return { placements, crop: normalizeCrop(parsed.panel), matched };
+}
+
+// Ask the LLM to read the panel layout out of the manual, for the case where
+// no usable photograph exists.
+export async function layoutFromManual(backend, module, components, manualFile, log) {
+  if (!manualFile || !fs.existsSync(manualFile)) return null;
+  let parsed;
+  try {
+    parsed = extractJsonObject(
+      await backend.analyzeDocument(
+        PANEL_LAYOUT_TEMPLATE(module.manufacturer, module.name, components),
+        manualFile
+      )
+    );
+  } catch (e) {
+    log(`could not read a panel layout out of the manual: ${e.message}`);
+    return null;
+  }
+  const placements = normalizePlacements(parsed.components, components);
+  if (placements.length === 0) return null;
+  return { placements, hp: normalizeHp(parsed.hp) };
+}
+
+// Research and download a front-panel photograph. Returns the saved image
+// (already content-addressed in panelsDir) or null.
+export async function findPanelImage(backend, module, panelsDir, deps = {}) {
+  const { fetchImpl = fetch, log = () => {} } = deps;
+  let info;
+  try {
+    info = extractJsonObject(
+      await backend.completeTextWithSearch(
+        PANEL_RESEARCH_TEMPLATE(module.manufacturer, module.name)
+      )
+    );
+  } catch (e) {
+    log(`panel image research failed: ${e.message}`);
+    return { image: null, hp: null };
+  }
+  const hp = normalizeHp(info.hp);
+  const urls = (Array.isArray(info.image_urls) ? info.image_urls : [info.image_urls])
+    .filter(Boolean)
+    .map((u) => String(u).trim())
+    .filter((u) => /^https?:\/\//i.test(u))
+    .slice(0, 4);
+  for (const url of urls) {
+    log(`trying panel image: ${url}`);
+    const image = await downloadImage(url, { fetchImpl, log });
+    if (!image) continue;
+    const hash = saveImage(panelsDir, image.buffer, image.ext);
+    return {
+      image: { ...image, hash, path: panelPath(panelsDir, hash, image.ext) },
+      hp,
+      page_url: info.page_url ? String(info.page_url).trim() : null,
+    };
+  }
+  return { image: null, hp, page_url: info.page_url ? String(info.page_url).trim() : null };
+}
+
+// Replace the module's panel record and its component positions, and mark the
+// module's panel status complete. One transaction: a half-written panel whose
+// markers point at the previous image would be worse than none.
+export async function savePanel(db, module, panel, placements) {
+  const { Module, ModulePanel, ModulePanelComponent } = db.models;
+  await db.sequelize.transaction(async (transaction) => {
+    const previous = await ModulePanel.findAll({
+      where: { module_id: module.id },
+      transaction,
+    });
+    if (previous.length > 0) {
+      await ModulePanelComponent.destroy({
+        where: { panel_id: previous.map((p) => p.id) },
+        transaction,
+      });
+      await ModulePanel.destroy({ where: { module_id: module.id }, transaction });
+    }
+    const row = await ModulePanel.create({ ...panel, module_id: module.id }, { transaction });
+    if (placements.length > 0) {
+      await ModulePanelComponent.bulkCreate(
+        placements.map((p) => ({ ...p, panel_id: row.id })),
+        { transaction }
+      );
+    }
+    await Module.update(
+      { panel_status: 'complete' },
+      { where: { id: module.id }, transaction }
+    );
+  });
+  // The previous image's file goes only once nothing points at those bytes.
+  return { panel, placements };
+}
+
+// Remove a panel image file that no panel row references any more.
+export async function deletePanelImageIfOrphaned(db, panelsDir, hash, ext) {
+  if (!hash) return;
+  if ((await db.models.ModulePanel.count({ where: { image_hash: hash } })) > 0) return;
+  fs.rmSync(panelPath(panelsDir, hash, ext), { force: true });
+}
+
+// The whole pipeline for one module: image first, drawn panel second, columns
+// by type last. Always produces a panel — a module with an analysis but no
+// picture is exactly the case this exists to remove.
+export async function buildPanelForModule(db, backend, module, panelsDir, deps = {}) {
+  const { fetchImpl = fetch, log = () => {}, manualFile = null, findImages = true } = deps;
+  const components = (
+    await db.models.ModuleComponent.findAll({
+      where: { module_id: module.id },
+      order: [['id', 'ASC']],
+    })
+  ).map((c) => c.get({ plain: true }));
+  if (components.length === 0) {
+    throw new Error(
+      `${module.manufacturer} ${module.name} has no analyzed components to place on a panel`
+    );
+  }
+
+  const previous = await db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+
+  let researched = { image: null, hp: null, page_url: null };
+  if (findImages) {
+    log('researching a front panel image');
+    researched = await findPanelImage(backend, module, panelsDir, { fetchImpl, log });
+  }
+
+  if (researched.image) {
+    log(`locating components on ${researched.image.width}x${researched.image.height} image`);
+    const located = await locateComponentsOnImage(
+      backend,
+      module,
+      components,
+      researched.image.path,
+      log
+    );
+    if (located) {
+      log(`panel image mapped: ${located.matched} of ${components.length} component(s) located`);
+      const saved = await savePanel(
+        db,
+        module,
+        {
+          source: 'image',
+          source_url: researched.image.url,
+          image_hash: researched.image.hash,
+          image_ext: researched.image.ext,
+          width: researched.image.width,
+          height: researched.image.height,
+          ...located.crop,
+          hp: researched.hp,
+          description: researched.page_url ? `Found on ${researched.page_url}` : null,
+        },
+        located.placements
+      );
+      if (previous) {
+        await deletePanelImageIfOrphaned(db, panelsDir, previous.image_hash, previous.image_ext);
+      }
+      return saved;
+    }
+    // The image is of no use to us; do not leave its bytes on disk.
+    await deletePanelImageIfOrphaned(
+      db,
+      panelsDir,
+      researched.image.hash,
+      researched.image.ext
+    );
+  }
+
+  log('drawing a logical panel from the manual');
+  const layout = await layoutFromManual(backend, module, components, manualFile, log);
+  const placements = fillMissingPlacements(
+    layout?.placements ?? fallbackLayout(components),
+    components
+  );
+  const hp = layout?.hp ?? researched.hp ?? estimateHp(components);
+  const { svg, width, height } = renderPanelSvg({
+    manufacturer: module.manufacturer,
+    name: module.name,
+    hp,
+    placements,
+  });
+  const hash = saveImage(panelsDir, Buffer.from(svg, 'utf-8'), 'svg');
+  log(
+    layout
+      ? `logical panel drawn from the manual: ${hp}HP, ${placements.length} component(s)`
+      : `logical panel drawn from the component list: ${hp}HP, ${placements.length} component(s)`
+  );
+  const saved = await savePanel(
+    db,
+    module,
+    {
+      source: 'generated',
+      source_url: null,
+      image_hash: hash,
+      image_ext: 'svg',
+      width,
+      height,
+      crop_x: 0,
+      crop_y: 0,
+      crop_w: 1,
+      crop_h: 1,
+      hp,
+      description: layout
+        ? 'Drawn from the panel layout described in the manual.'
+        : 'Drawn from the analyzed component list; no panel layout was available.',
+    },
+    placements
+  );
+  if (previous) {
+    await deletePanelImageIfOrphaned(db, panelsDir, previous.image_hash, previous.image_ext);
+  }
+  return saved;
+}

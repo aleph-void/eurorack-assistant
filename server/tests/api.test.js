@@ -548,6 +548,7 @@ describe('config API', () => {
     expect(res.body.llm_job_types).toEqual([
       'find_manual',
       'analyze_manual',
+      'panel_image',
       'scope_question',
       'answer_question',
     ]);

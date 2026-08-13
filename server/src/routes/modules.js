@@ -12,10 +12,18 @@ import {
 } from '../services/manualAnalyzer.js';
 import { deleteModulesDeep } from '../services/moduleDeletion.js';
 import { refreshModuleLinks, unlinkedExpanderHints } from '../services/moduleLinks.js';
+import { loadPanels } from '../services/panelImage.js';
+import { enqueueModuleJob } from '../jobs/worker.js';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
-export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/data/manuals' } = {}) {
+export function moduleRoutes(
+  db,
+  {
+    manualsDir = process.env.MANUALS_DIR || '/data/manuals',
+    panelsDir = process.env.PANELS_DIR || '/data/panels',
+  } = {}
+) {
   const {
     Module,
     Rack,
@@ -140,6 +148,7 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
             racks: [],
             manual_status: m.manual_status,
             analysis_status: m.analysis_status,
+            panel_status: m.panel_status,
             summary: m.summary,
             created_at: m.created_at,
             updated_at: m.updated_at,
@@ -150,6 +159,67 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
         entry.racks.push({ id: rm.Rack.id, name: rm.Rack.name, quantity: rm.quantity });
       }
       res.json([...byModule.values()]);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Re-run the manual analysis across a whole system. The analysis prompt
+  // gains fields as the app learns to record more about a module (signal
+  // paths, switch sections, panel layout), and every module analyzed before
+  // that is missing them — so "analyze everything again" is a maintenance
+  // action rather than a per-module chore.
+  //
+  // Body: { rack_id?, rediscover_manuals?: boolean }. Re-discovery is off by
+  // default: the manuals are already on disk, finding them again costs a web
+  // search per module, and an unchanged manual dedupes to the same file
+  // anyway. A module with no manual at all is sent to find one regardless —
+  // there is nothing else for it to be analyzed from.
+  router.post('/reanalyze', async (req, res, next) => {
+    try {
+      const rackWhere = { user_id: req.user.id };
+      if (req.body?.rack_id) {
+        const rack = await Rack.findOne({
+          where: { id: Number(req.body.rack_id), user_id: req.user.id },
+        });
+        if (!rack) return res.status(404).json({ error: 'Rack not found' });
+        rackWhere.id = rack.id;
+      }
+      const mappings = await RackModule.findAll({
+        include: [{ model: Rack, where: rackWhere }, Module],
+        order: [[Module, 'id', 'ASC']],
+      });
+      const modules = [...new Map(mappings.map((rm) => [rm.Module.id, rm.Module])).values()];
+      const rediscover = Boolean(req.body?.rediscover_manuals);
+
+      const manuals =
+        modules.length === 0
+          ? []
+          : await Manual.findAll({
+              where: { module_id: modules.map((m) => m.id), user_id: null },
+              attributes: ['module_id'],
+            });
+      const hasManual = new Set(manuals.map((m) => m.module_id));
+
+      const queued = { find_manual: 0, analyze_manual: 0 };
+      let skipped = 0;
+      for (const module of modules) {
+        const type = rediscover || !hasManual.has(module.id) ? 'find_manual' : 'analyze_manual';
+        // A module already queued for (or in the middle of) that job is left
+        // alone rather than made to do the work twice.
+        if (!(await enqueueModuleJob(db, type, module, req.user.id))) {
+          skipped += 1;
+          continue;
+        }
+        queued[type] += 1;
+        await Module.update(
+          type === 'find_manual'
+            ? { manual_status: 'pending', analysis_status: 'pending' }
+            : { analysis_status: 'pending' },
+          { where: { id: module.id } }
+        );
+      }
+      res.json({ modules: modules.length, queued, skipped });
     } catch (e) {
       next(e);
     }
@@ -334,8 +404,12 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
         updated_at: note.updated_at,
         component_id: componentId,
       });
+      // The front plate and where each component sits on it, so the module
+      // page can show the picture the patch diagram draws from.
+      const panels = await loadPanels(db, [module.id]);
       res.json({
         ...module,
+        panel: panels.get(module.id) ?? null,
         components: componentsJson,
         normalizations,
         routes,
@@ -376,7 +450,7 @@ export function moduleRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
             });
       if (deleted === 0) return res.status(404).json({ error: 'Module not found' });
       if ((await RackModule.count({ where: { module_id: moduleId } })) === 0) {
-        await deleteModulesDeep(db, req.user.id, [moduleId], { manualsDir });
+        await deleteModulesDeep(db, req.user.id, [moduleId], { manualsDir, panelsDir });
       }
       res.json({ ok: true });
     } catch (e) {

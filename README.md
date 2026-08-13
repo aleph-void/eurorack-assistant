@@ -31,6 +31,27 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
      structured summary plus every component (input/output jacks with voltage
      ranges and unipolar/bipolar polarity, knobs, buttons, toggles, switches, …)
      stored with a `type` field
+  4. `panel_image` job (per module) — finds the module's front plate and puts
+     every analyzed component on it (see below)
+
+  The whole system can be put through the analysis again from the modules page
+  ("Re-analyze all", with an off-by-default option to re-discover the manuals
+  first) — the analysis learns to record more about a module over time, and
+  everything analyzed before that is missing it.
+- **Front panels**: each module gets a picture of its front plate with its
+  jacks and controls located on it. The panel image is researched on the web
+  (manufacturer product page, ModularGrid) and the LLM marks where each
+  analyzed component sits on it; when no usable photograph exists — or the one
+  found turns out not to show this module straight on — the LLM reads the panel
+  LAYOUT out of the manual instead (how many HP wide, where each control sits)
+  and the server draws that as an SVG. Either way every jack ends up with a
+  position, which is what makes the patch diagram possible.
+- **Patch diagram**: a patch is drawn as the modules it uses, panel beside
+  panel, with a coloured cable curving between the jacks each patch cable
+  joins. Only the modules the patch actually touches are drawn (a patch
+  snapshots the whole rack), optional cables are dashed, and a jack the panel
+  could not place is shown in a strip under it rather than guessed onto the
+  picture.
 - **Ask questions**: the LLM first decides which of your modules — and which
   specific components — the question applies to, then you review that scope
   before the answer is generated: add or remove modules and components, and
@@ -161,8 +182,8 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
                                         ├── PostgreSQL (modules, components,
                                         │   questions, answers, jobs, users)
                                         ├── job worker (import / find_manual /
-                                        │   analyze_manual / scope_question /
-                                        │   answer_question)
+                                        │   analyze_manual / panel_image /
+                                        │   scope_question / answer_question)
                                         ├── /api/ws WebSocket (live job progress
                                         │   and oscilloscope presence)
                                         ├── /api/devices/ws WebSocket (connected
@@ -186,11 +207,13 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | table | purpose |
 | --- | --- |
 | `users` | accounts; `is_admin` flag |
-| `modules` | **shared** module records with `manual_status` / `analysis_status` — the manual is found and analyzed once, for everyone |
+| `modules` | **shared** module records with `manual_status` / `analysis_status` / `panel_status` — the manual is found, analyzed and drawn once, for everyone |
 | `racks` | a user's named racks (unique name per user, `main rack` by default); strictly private to their owner |
 | `rack_modules` | maps racks to the modules in them (per-rack quantity); "deleting" a module only unlinks it, and the same module can sit in many racks |
 | `manuals` | PDF documents mapped to modules — `user_id NULL` is the shared auto-found manual; rows with a `user_id` are private documents that user attached to their own module instance |
 | `module_components` | typed components (`input_jack`, `output_jack`, `bidirectional_jack`, `knob`, `slider`, `button`, `toggle`, `switch`, `display`, `other`) with `voltage_min`/`voltage_max`/`polarity`, a mult `group_label`, and `port_kind` for connections that are not 3.5mm patch points (`midi_din`, `usb`, `microphone`, …) |
+| `module_panels` | the module's front plate: a photograph found on the web (`source` `image`) or the logical panel drawn from its manual (`generated`), stored content-addressed under `PANELS_DIR`, with the box of the image the panel occupies |
+| `module_panel_components` | where each analyzed component sits on that panel, as fractions of the image — what the patch diagram draws cables between |
 | `component_values` | the valid settings of a control: a `min`/`max` pair, or one `enum` row per discrete position |
 | `component_routes` | module-internal signal paths (input jack → output jack) — what carries flow across a module; an output no route feeds is a signal generator |
 | `component_normalizations` | default connections that hold until something overrides them, with what breaks them (`break_component_id` + `break_on`, for outputs normalled to outputs) |
@@ -217,7 +240,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `question_components` | links a question to the specific components it pertains to (LLM-suggested, then user-reviewed) |
 | `question_manuals` / `question_answers` / `question_notes` / `question_captures` | the documents the user attached during review: manual PDFs, previous answers, notes, oscilloscope captures |
 | `question_patches` | the patches a question is about — the patch rides along as a document of its cables, settings, normalled connections and signal flow, and the modules it uses go into scope |
-| `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `scope_question`, `answer_question`) with attempts + errors |
+| `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `panel_image`, `scope_question`, `answer_question`) with attempts + errors |
 | `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`) and job worker count (`import_workers`, default 4) |
 
 ## Development

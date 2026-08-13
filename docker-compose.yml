@@ -20,6 +20,7 @@ services:
       MANUALS_DIR: /data/manuals
       EXPORTS_DIR: /data/exports
       CAPTURES_DIR: /data/captures
+      PANELS_DIR: /data/panels
       # Set to 1 by setup.sh when the TLS override is active, so the session
       # cookie gets the Secure attribute only where HTTPS is actually served.
       SECURE_COOKIES: ${SECURE_COOKIES:-0}
@@ -29,6 +30,9 @@ services:
       - exports:/data/exports
       # Waveform images captured from a connected oscilloscope.
       - captures:/data/captures
+      # Module front-panel images: the ones found on the web, and the logical
+      # panels the server draws when no usable picture exists.
+      - panels:/data/panels
       # Subscription logins for the LLM provider CLIs, from the host.
       # Log in on the host first: `claude` + /login, and/or `codex login`.
       - ${CLAUDE_CONFIG_DIR:-~/.claude}:/home/node/.claude
@@ -53,3 +57,4 @@ volumes:
   manuals:
   exports:
   captures:
+  panels:
