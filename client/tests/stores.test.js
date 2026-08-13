@@ -245,4 +245,51 @@ describe('jobs store', () => {
     expect(api.delete).toHaveBeenCalledWith('/api/jobs');
     expect(jobs.jobs.map((j) => j.id)).toEqual([3]);
   });
+
+  it('removeCancelled clears the caller\'s stopped jobs and nothing else', async () => {
+    api.delete.mockResolvedValue({ deleted: 2 });
+    const jobs = useJobsStore();
+    jobs.jobs = [
+      { id: 1, status: 'cancelled', own: true },
+      { id: 2, status: 'cancelled' }, // unmarked — ours
+      { id: 3, status: 'failed', own: true },
+      { id: 4, status: 'cancelled', own: false }, // another user's, admin view
+    ];
+    expect(jobs.cancelledJobs.map((j) => j.id)).toEqual([1, 2]);
+    expect(await jobs.removeCancelled()).toEqual({ deleted: 2 });
+    expect(api.delete).toHaveBeenCalledWith('/api/jobs/cancelled');
+    expect(jobs.jobs.map((j) => j.id)).toEqual([3, 4]);
+  });
+
+  it('follows the queue being paused and started again', async () => {
+    const jobs = useJobsStore();
+    expect(jobs.queue.paused).toBe(false);
+
+    api.get.mockResolvedValue({ paused: true, until: '2026-08-13T12:00:00.000Z', reason: 'limit' });
+    await jobs.fetchQueue();
+    expect(jobs.queue).toEqual({ paused: true, until: '2026-08-13T12:00:00.000Z', reason: 'limit' });
+
+    // Queue events carry no job, and belong in no job's feed.
+    jobs.applyEvent({ kind: 'queue', event: 'resumed', paused: false, until: null, reason: '' });
+    expect(jobs.queue.paused).toBe(false);
+    expect(jobs.feed).toHaveLength(0);
+
+    jobs.applyEvent({
+      kind: 'queue',
+      event: 'paused',
+      paused: true,
+      until: '2026-08-13T13:00:00.000Z',
+      reason: 'usage limit reached',
+    });
+    expect(jobs.queue).toEqual({
+      paused: true,
+      until: '2026-08-13T13:00:00.000Z',
+      reason: 'usage limit reached',
+    });
+
+    api.post.mockResolvedValue({ paused: false, until: null, reason: '' });
+    await jobs.resumeQueue();
+    expect(api.post).toHaveBeenCalledWith('/api/jobs/queue/resume');
+    expect(jobs.queue.paused).toBe(false);
+  });
 });

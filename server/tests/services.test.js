@@ -49,11 +49,14 @@ describe('config service', () => {
       llm_model_scope_question: '',
       llm_model_answer_question: '',
     };
+    // The queue pause lives in app_config too; blank means the queue runs.
+    const queueDefaults = { queue_paused_until: '', queue_paused_reason: '' };
     expect(await getConfig(db)).toEqual({
       llm_provider: 'claude',
       llm_model: '',
       import_workers: '4',
       ...perTypeDefaults,
+      ...queueDefaults,
     });
     await setConfig(db, { llm_provider: 'codex', llm_model: 'gpt-5.1' });
     expect(await getConfig(db)).toEqual({
@@ -61,6 +64,7 @@ describe('config service', () => {
       llm_model: 'gpt-5.1',
       import_workers: '4',
       ...perTypeDefaults,
+      ...queueDefaults,
     });
     await setConfig(db, { llm_model: '' });
     expect((await getLlmSettings(db)).model).toBe('gpt-5.1-codex');

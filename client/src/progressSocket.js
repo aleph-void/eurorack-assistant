@@ -24,7 +24,9 @@ export function createProgressSocket({
       try {
         const event = JSON.parse(msg.data);
         // 'hello' is the server greeting the socket; it carries no state.
-        if (event.kind === 'job' || event.kind === 'device') onEvent(event);
+        if (event.kind === 'job' || event.kind === 'device' || event.kind === 'queue') {
+          onEvent(event);
+        }
       } catch {
         /* ignore malformed frames */
       }

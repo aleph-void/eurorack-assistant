@@ -11,6 +11,7 @@
 // path" from "nobody's path".
 
 import { WebSocketServer } from 'ws';
+import { ALL_USERS } from './events.js';
 import { getSessionUser, SESSION_COOKIE } from './auth.js';
 import { getDeviceTokenUser, hasScope, touchDeviceToken } from './services/deviceAuth.js';
 
@@ -155,11 +156,16 @@ export function attachWebSocketServer(
   }
 
   const unsubscribe = bus.subscribe((event) => {
-    const set = socketsByUser.get(event.userId);
-    if (!set) return;
+    // Queue-wide events (the job queue stopping and starting) are addressed
+    // to everyone; everything else goes to the one user it is about.
+    const sets =
+      event.userId === ALL_USERS ? [...socketsByUser.values()] : [socketsByUser.get(event.userId)];
     const data = JSON.stringify(event);
-    for (const ws of set) {
-      if (ws.readyState === ws.OPEN) ws.send(data);
+    for (const set of sets) {
+      if (!set) continue;
+      for (const ws of set) {
+        if (ws.readyState === ws.OPEN) ws.send(data);
+      }
     }
   });
 

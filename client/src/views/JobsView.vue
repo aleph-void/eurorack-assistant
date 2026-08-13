@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useJobsStore } from '../stores/jobs.js';
 import { dialog } from '../dialog.js';
 
@@ -8,6 +8,14 @@ const error = ref('');
 const retryingAll = ref(false);
 const stoppingAll = ref(false);
 const deletingAll = ref(false);
+const removingCancelled = ref(false);
+const resuming = ref(false);
+
+// When the paused queue starts again by itself, in the reader's own clock.
+const resumesAt = computed(() => {
+  const at = jobs.queue.until ? new Date(jobs.queue.until) : null;
+  return at && !Number.isNaN(at.getTime()) ? at.toLocaleString() : null;
+});
 
 function describe(job) {
   if (job.module_name) return `${job.module_manufacturer || ''} ${job.module_name}`.trim();
@@ -102,9 +110,43 @@ async function deleteAll() {
   }
 }
 
+async function removeCancelled() {
+  const ok = await dialog.confirm({
+    title: 'Remove cancelled jobs',
+    message: `Delete all ${jobs.cancelledJobs.length} cancelled job(s)? Their history and any error are lost.`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
+  error.value = '';
+  removingCancelled.value = true;
+  try {
+    await jobs.removeCancelled();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    removingCancelled.value = false;
+  }
+}
+
+// Start the queue again before its limit is due to lift — for a subscription
+// that was topped up, or a pause the user disagrees with.
+async function resumeQueue() {
+  error.value = '';
+  resuming.value = true;
+  try {
+    await jobs.resumeQueue();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    resuming.value = false;
+  }
+}
+
 onMounted(async () => {
   try {
     await jobs.fetchJobs();
+    await jobs.fetchQueue();
   } catch (e) {
     error.value = e.message;
   }
@@ -114,6 +156,33 @@ onMounted(async () => {
 <template>
   <h1>Background jobs</h1>
   <p v-if="error" class="error">{{ error }}</p>
+
+  <!-- The queue stopped itself: the provider says there are no tokens left,
+       and everything queued would fail the same way. It starts again on its
+       own at the reset time; Resume overrides that. -->
+  <div v-if="jobs.queue.paused" class="panel paused" data-test="queue-paused">
+    <p>
+      <strong>The job queue is paused</strong> — the LLM provider reported that it is out of
+      tokens. Queued jobs stay where they are and run when it resumes.
+    </p>
+    <p v-if="jobs.queue.reason" class="muted">{{ jobs.queue.reason }}</p>
+    <div class="row" style="align-items: baseline">
+      <p class="muted" style="margin: 0">
+        <template v-if="resumesAt">Resumes on its own at {{ resumesAt }}.</template>
+      </p>
+      <div class="shrink">
+        <button
+          class="secondary"
+          style="margin: 0"
+          :disabled="resuming"
+          data-test="resume-queue"
+          @click="resumeQueue"
+        >
+          {{ resuming ? 'Resuming…' : 'Resume Now' }}
+        </button>
+      </div>
+    </div>
+  </div>
 
   <details open class="panel">
     <summary>
@@ -166,6 +235,18 @@ onMounted(async () => {
           @click="stopAll"
         >
           {{ stoppingAll ? 'Stopping…' : `Stop All (${jobs.stoppableJobs.length})` }}
+        </button>
+      </div>
+      <div class="shrink">
+        <button
+          v-if="jobs.cancelledJobs.length > 0"
+          class="secondary"
+          style="margin: 0"
+          :disabled="removingCancelled"
+          data-test="remove-cancelled"
+          @click="removeCancelled"
+        >
+          {{ removingCancelled ? 'Removing…' : `Remove Cancelled (${jobs.cancelledJobs.length})` }}
         </button>
       </div>
       <div class="shrink">
@@ -257,6 +338,13 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+/* A paused queue is not an error, but it explains everything else on the
+   page, so it reads as the first thing rather than as another panel. */
+.paused {
+  border-color: var(--danger);
+  background: rgba(248, 113, 113, 0.08);
+}
+
 /* Up to four controls share this cell (Download, Retry, Stop, Delete); they
    wrap onto a second line rather than stretching the column on narrow
    screens. */

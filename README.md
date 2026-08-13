@@ -241,6 +241,12 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
 - **Job privacy**: background jobs (and their live progress) are visible only
   to the user who triggered them (admins see all jobs). Shared module state
   still benefits everyone.
+- **Out of tokens stops the queue**: when the provider CLI reports that the
+  subscription is exhausted, the whole queue is paused rather than every job
+  behind it burning three attempts on the same wall. The job that hit it goes
+  back on the queue with its attempt refunded, the jobs screen says so, and
+  the queue starts again by itself at the reset time the provider named (an
+  hour, if it named none) or when anyone presses Resume Now.
 
 ## Quick start
 
@@ -361,7 +367,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `question_manuals` / `question_answers` / `question_notes` / `question_captures` | the documents the user attached during review: manual PDFs, previous answers, notes, oscilloscope captures |
 | `question_patches` | the patches a question is about — the patch rides along as a document of its cables, settings, normalled connections and signal flow, and the modules it uses go into scope |
 | `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `panel_image`, `extract_manual`, `scope_question`, `answer_question`) with attempts + errors |
-| `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`) and job worker count (`import_workers`, default 4) |
+| `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`), job worker count (`import_workers`, default 4), and the queue pause the worker sets when the provider runs out of tokens (`queue_paused_until`, `queue_paused_reason`) |
 
 ## Development
 

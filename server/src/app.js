@@ -21,7 +21,7 @@ import { panelRoutes } from './routes/panels.js';
 
 export function createApp(
   db,
-  { manualsDir, exportsDir, capturesDir, panelsDir, rateLimit, hub } = {}
+  { manualsDir, exportsDir, capturesDir, panelsDir, rateLimit, hub, bus = null } = {}
 ) {
   const app = express();
   // nginx is the only hop in front of the server and it sets X-Forwarded-For.
@@ -49,7 +49,9 @@ export function createApp(
   app.use('/api/imports', importRoutes(db));
   app.use('/api/questions', questionRoutes(db));
   app.use('/api/config', configRoutes(db));
-  app.use('/api/jobs', jobRoutes(db));
+  // The bus lets the route tell every connected user the queue is running
+  // again; without one, resuming is simply not announced.
+  app.use('/api/jobs', jobRoutes(db, { bus }));
   app.use('/api/notes', noteRoutes(db));
   app.use('/api/exports', exportRoutes(db, { exportsDir }));
   app.use('/api/patches', patchRoutes(db));

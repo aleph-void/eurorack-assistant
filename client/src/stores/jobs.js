@@ -1,12 +1,22 @@
 import { defineStore } from 'pinia';
 import { api } from '../api.js';
 
+// Queue state as the store keeps it, from an API response or a socket event.
+const asQueue = (queue) => ({
+  paused: Boolean(queue?.paused),
+  until: queue?.until ?? null,
+  reason: queue?.reason || '',
+});
+
 // Job list + live progress feed. WebSocket events land here via applyEvent().
 export const useJobsStore = defineStore('jobs', {
   state: () => ({
     jobs: [],
     feed: [], // recent progress lines, newest first
     feedLimit: 200,
+    // The queue stops itself when the LLM provider reports the subscription
+    // is out of tokens; `until` is when it will start again on its own.
+    queue: { paused: false, until: null, reason: '' },
   }),
   getters: {
     activeCount: (state) =>
@@ -23,11 +33,23 @@ export const useJobsStore = defineStore('jobs', {
     // Own jobs the queue still has designs on — what Stop All applies to.
     stoppableJobs: (state) =>
       state.jobs.filter((j) => j.own !== false && (j.status === 'pending' || j.status === 'running')),
+    // Own jobs the user stopped — what Remove Cancelled clears out.
+    cancelledJobs: (state) => state.jobs.filter((j) => j.own !== false && j.status === 'cancelled'),
   },
   actions: {
     async fetchJobs() {
       this.jobs = await api.get('/api/jobs');
       return this.jobs;
+    },
+    // Whether the queue is running. Live updates arrive over the socket; this
+    // is for a page that was opened after it stopped.
+    async fetchQueue() {
+      this.queue = asQueue(await api.get('/api/jobs/queue'));
+      return this.queue;
+    },
+    async resumeQueue() {
+      this.queue = asQueue(await api.post('/api/jobs/queue/resume'));
+      return this.queue;
     },
     async retry(jobId) {
       const updated = await api.post(`/api/jobs/${jobId}/retry`);
@@ -78,7 +100,21 @@ export const useJobsStore = defineStore('jobs', {
       this.jobs = this.jobs.filter((j) => j.own === false);
       return result;
     },
+    // Throw away the jobs the user stopped. Cancelled jobs of other users
+    // (an admin's list holds them) are the server's to leave alone, so the
+    // local list is filtered the same way the request is scoped.
+    async removeCancelled() {
+      const result = await api.delete('/api/jobs/cancelled');
+      this.jobs = this.jobs.filter((j) => j.own === false || j.status !== 'cancelled');
+      return result;
+    },
     applyEvent(event) {
+      // The queue stopping or starting is about the whole queue rather than
+      // about one job, and carries no job to fold into the list.
+      if (event.kind === 'queue') {
+        this.queue = asQueue(event);
+        return;
+      }
       if (event.kind !== 'job' || !event.job) return;
       const idx = this.jobs.findIndex((j) => j.id === event.job.id);
       if (idx !== -1) {

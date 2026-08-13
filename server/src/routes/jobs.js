@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { isStalled, resetJobTarget } from '../jobs/worker.js';
+import { getQueuePause, resumeQueue } from '../services/config.js';
 
 // Statuses a job can be stopped or deleted out of while the queue still has
 // designs on it. Anything else is already finished.
 const ACTIVE = ['pending', 'running'];
 
-export function jobRoutes(db) {
+export function jobRoutes(db, { bus = null } = {}) {
   const { Job, Module, Question } = db.models;
   const router = Router();
   router.use(requireAuth(db));
@@ -97,6 +98,34 @@ export function jobRoutes(db) {
     }
   });
 
+  // Is the queue running? It stops itself when the LLM provider reports the
+  // subscription is out of tokens, and starts again of its own accord when
+  // the limit is due to lift. Registered before the per-job routes so
+  // 'queue' is never read as an id.
+  router.get('/queue', async (req, res, next) => {
+    try {
+      const pause = await getQueuePause(db);
+      res.json({ paused: pause.paused, until: pause.paused ? pause.until : null, reason: pause.paused ? pause.reason : '' });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Start the queue again by hand, for a limit that lifted early or a pause
+  // the user disagrees with. Not admin-only: the pause blocks everyone's
+  // work, and anyone who can queue a job can find out the same way whether
+  // there are tokens left.
+  router.post('/queue/resume', async (req, res, next) => {
+    try {
+      await resumeQueue(db);
+      // Everyone is looking at the same paused queue, so everyone is told.
+      bus?.publishAll?.({ kind: 'queue', event: 'resumed', paused: false, until: null, reason: '' });
+      res.json({ paused: false, until: null, reason: '' });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   router.post('/:id/retry', async (req, res, next) => {
     try {
       const job = await Job.findByPk(Number(req.params.id));
@@ -159,6 +188,18 @@ export function jobRoutes(db) {
         if (ACTIVE.includes(job.status)) await stopJob(job, 'stopped by user');
       }
       const deleted = await Job.destroy({ where: owned(req) });
+      res.json({ deleted });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Clear out the jobs the user stopped. Nothing here is live — a cancelled
+  // job is finished with — so there is nothing to stop on the way out.
+  // Registered before the per-job route so 'cancelled' is never read as an id.
+  router.delete('/cancelled', async (req, res, next) => {
+    try {
+      const deleted = await Job.destroy({ where: owned(req, { status: 'cancelled' }) });
       res.json({ deleted });
     } catch (e) {
       next(e);

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { createTestApp, insertModule, mapModule, PDF_BYTES, PDF_HASH } from './helpers.js';
+import { getQueuePause, pauseQueue } from '../src/services/config.js';
 
 describe('modules API', () => {
   it('lists only the current user’s modules', async () => {
@@ -1316,6 +1317,70 @@ describe('jobs API', () => {
     expect(
       (await request(app).delete(`/api/jobs/${jobs[0].id}`).set('Cookie', aliceCookie)).status
     ).toBe(200);
+  });
+
+  it('clears out the jobs the caller stopped, and only those', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows: alice } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const { rows: admin } = await db.query('SELECT id FROM users WHERE is_admin = true');
+    const module = await insertModule(db, alice[0].id);
+    await db.query(
+      `INSERT INTO jobs (type, user_id, module_id, status) VALUES
+         ('find_manual', $1, $3, 'cancelled'),
+         ('analyze_manual', $1, $3, 'cancelled'),
+         ('find_manual', $1, $3, 'failed'),
+         ('find_manual', $1, $3, 'pending'),
+         ('find_manual', $2, $3, 'cancelled')`,
+      [alice[0].id, admin[0].id, module.id]
+    );
+
+    const removed = await request(app).delete('/api/jobs/cancelled').set('Cookie', aliceCookie);
+    expect(removed.status).toBe(200);
+    expect(removed.body.deleted).toBe(2);
+    // Alice's unfinished and failed jobs stay, and so does the admin's own
+    // cancelled one — cancelled or not, it is not hers to bin.
+    const { rows: left } = await db.query('SELECT user_id, status FROM jobs ORDER BY id');
+    expect(left.map((r) => r.status)).toEqual(['failed', 'pending', 'cancelled']);
+    expect(Number(left[2].user_id)).toBe(admin[0].id);
+  });
+
+  it('reports a queue paused because the provider is out of tokens', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const until = new Date(Date.now() + 60 * 60 * 1000);
+
+    const running = await request(app).get('/api/jobs/queue').set('Cookie', aliceCookie);
+    expect(running.body).toEqual({ paused: false, until: null, reason: '' });
+
+    await pauseQueue(db, { until, reason: 'usage limit reached' });
+    const paused = await request(app).get('/api/jobs/queue').set('Cookie', aliceCookie);
+    expect(paused.body).toEqual({
+      paused: true,
+      until: until.toISOString(),
+      reason: 'usage limit reached',
+    });
+  });
+
+  it('reports a pause whose time has passed as a running queue', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    await pauseQueue(db, { until: Date.now() - 1000, reason: 'usage limit reached' });
+    const res = await request(app).get('/api/jobs/queue').set('Cookie', aliceCookie);
+    expect(res.body.paused).toBe(false);
+  });
+
+  it('lets any user start the paused queue again, and tells everyone', async () => {
+    const published = [];
+    const bus = { publish: () => {}, publishAll: (e) => published.push(e) };
+    const { app, db, aliceCookie } = await createTestApp({ bus });
+    await pauseQueue(db, { until: Date.now() + 60 * 60 * 1000, reason: 'usage limit reached' });
+
+    // Alice is not an admin: the pause blocks her work, so it is hers to lift.
+    const res = await request(app).post('/api/jobs/queue/resume').set('Cookie', aliceCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.paused).toBe(false);
+    expect((await getQueuePause(db)).paused).toBe(false);
+    expect(published).toEqual([
+      { kind: 'queue', event: 'resumed', paused: false, until: null, reason: '' },
+    ]);
   });
 
   it('stamps scope_question jobs with the asking user', async () => {

@@ -22,9 +22,16 @@
 // forwards to the browser.
 
 import os from 'node:os';
-import { createBackend } from '../services/llm.js';
+import { createBackend, detectQuotaExhaustion, takeQuotaExhaustion } from '../services/llm.js';
 import { manualPath, renderPageToPdf } from '../services/pdf.js';
-import { getLlmSettings, getImportWorkerCount, DEFAULT_IMPORT_WORKERS } from '../services/config.js';
+import {
+  getLlmSettings,
+  getImportWorkerCount,
+  getQueuePause,
+  pauseQueue,
+  resumeQueue,
+  DEFAULT_IMPORT_WORKERS,
+} from '../services/config.js';
 import {
   parseModuleCsv,
   parseModuleLines,
@@ -60,6 +67,13 @@ export const STALE_JOB_MS = 5 * 60 * 1000;
 export const JOB_TIMEOUT_MS = 45 * 60 * 1000;
 
 export const attemptTimeoutMs = (baseMs, attempts) => baseMs * Math.max(1, attempts || 1);
+
+// How long the queue sleeps after the provider says the subscription is out
+// of tokens but does not say when that changes. Claude's message carries the
+// reset time and is used instead when it is there; this is the guess for when
+// it is not — long enough not to spend the queue re-discovering the limit,
+// short enough that the queue comes back on its own.
+export const QUOTA_PAUSE_MS = 60 * 60 * 1000;
 
 // Timestamp of the last sign of life from whoever holds a running job. Rows
 // claimed before leases existed have no heartbeat, so fall back to updated_at.
@@ -177,6 +191,7 @@ export function createWorker(db, options = {}) {
     heartbeatMs = HEARTBEAT_MS,
     staleJobMs = STALE_JOB_MS,
     jobTimeoutMs = JOB_TIMEOUT_MS,
+    quotaPauseMs = QUOTA_PAUSE_MS,
     workerId = `${os.hostname()}#${process.pid}`,
     backendFactory = createBackend,
     fetchImpl = fetch,
@@ -270,6 +285,76 @@ export function createWorker(db, options = {}) {
     for (const userId of userIds) {
       bus.publish(userId, { kind: 'job', event, job: jobSummary(job), message });
     }
+  }
+
+  // The queue is a shared resource — one exhausted subscription stops it for
+  // everyone — so its state goes to every connected user rather than to the
+  // owner of whichever job happened to hit the wall.
+  function publishQueue(event, pause) {
+    if (!bus?.publishAll) return;
+    bus.publishAll({
+      kind: 'queue',
+      event,
+      paused: Boolean(pause.paused),
+      until: pause.until ?? null,
+      reason: pause.reason ?? '',
+    });
+  }
+
+  // Set while this process knows the queue is paused, so the runners mid-drain
+  // stop claiming without going back to the database for every job.
+  let quotaPaused = false;
+
+  // Is the queue asleep? A pause whose time has come is cleared here, on
+  // whichever worker notices first, and the queue announces itself back.
+  async function queuePaused() {
+    let pause;
+    try {
+      pause = await getQueuePause(db);
+    } catch (e) {
+      // The pause is a safeguard; failing to read it must not stop the queue.
+      log(`could not read the queue pause state: ${e.message}`);
+      return false;
+    }
+    if (pause.paused) {
+      quotaPaused = true;
+      return true;
+    }
+    if (pause.expired) {
+      await resumeQueue(db);
+      log('queue pause expired; resuming');
+      publishQueue('resumed', { paused: false, until: null, reason: '' });
+    }
+    quotaPaused = false;
+    return false;
+  }
+
+  // An LLM CLI reported the subscription is out of tokens, either by failing
+  // this job or somewhere a caller swallowed (see takeQuotaExhaustion). Stop
+  // the whole queue until the limit lifts: every job left in it runs the same
+  // provider and would fail the same way, three attempts at a time.
+  async function pauseForQuota(quota) {
+    const resetAt =
+      quota.resetAt && quota.resetAt > Date.now() ? quota.resetAt : Date.now() + quotaPauseMs;
+    const until = new Date(resetAt);
+    const reason = quota.message || 'the LLM provider reported the subscription is out of tokens';
+    quotaPaused = true;
+    await pauseQueue(db, { until, reason });
+    log(`queue paused until ${until.toISOString()}: ${reason}`);
+    publishQueue('paused', { paused: true, until: until.toISOString(), reason });
+    return until;
+  }
+
+  // The quota exhaustion behind a finished job, if there was one: what the
+  // job threw, or what any CLI run recorded on the way through.
+  function quotaBehind(error = null) {
+    const recorded = takeQuotaExhaustion();
+    if (error?.quotaExhausted) {
+      return { message: error.message, resetAt: error.quotaResetAt ?? recorded?.resetAt ?? null };
+    }
+    const detected = error ? detectQuotaExhaustion(error.message) : null;
+    if (detected) return { ...detected, resetAt: detected.resetAt ?? recorded?.resetAt ?? null };
+    return recorded;
   }
 
   async function claimNextJob() {
@@ -603,6 +688,7 @@ export function createWorker(db, options = {}) {
   // Process a single pending job if there is one. Returns the finished job row
   // or null. Exposed for tests and for the poll loop.
   async function tick() {
+    if (await queuePaused()) return null;
     const job = await claimNextJob();
     if (!job) return null;
     return runJob(job);
@@ -651,8 +737,26 @@ export function createWorker(db, options = {}) {
       if (!doneRows || !doneRows[0]) return abandoned(job, owners, 'completed');
       const done = { ...doneRows[0].get({ plain: true }), ...labels };
       publish(owners, 'completed', done);
+      // A job can spend the last of the subscription and still finish — the
+      // manual search falls back to archive.org when the model will not run —
+      // so the queue is stopped on the way out of a success too.
+      const spent = quotaBehind();
+      if (spent) await pauseForQuota(spent);
       return done;
     } catch (e) {
+      // Out of tokens is not this job's fault: every job behind it runs the
+      // same provider and would fail the same way, three attempts each. Stop
+      // the queue and put this one back on it with its attempt refunded.
+      const quota = quotaBehind(e);
+      if (quota) {
+        const until = await pauseForQuota(quota);
+        const requeued = await requeue(
+          job,
+          `out of tokens; queued again for when the queue resumes at ${until.toISOString()}: ${e.message}`,
+          { refundAttempt: true }
+        );
+        return requeued || abandoned(job, owners, 'failed');
+      }
       const status = job.attempts >= MAX_ATTEMPTS ? 'failed' : 'pending';
       const [, failedRows] = await db.models.Job.update(
         { status, error: e.message },
@@ -685,6 +789,10 @@ export function createWorker(db, options = {}) {
       } catch (e) {
         log(`could not reclaim stalled jobs: ${e.message}`);
       }
+      // Nothing is claimed while the queue is paused (the provider is out of
+      // tokens). The pause clears itself here once its time has passed, so
+      // the next wake-up drains the queue that has been piling up.
+      if (await queuePaused()) return;
       // The worker count is admin-configurable (app_config.import_workers)
       // and re-read on every wake-up, so changes apply without a restart.
       let workers = DEFAULT_IMPORT_WORKERS;
@@ -701,7 +809,10 @@ export function createWorker(db, options = {}) {
       let working = 0;
       const idleDelayMs = Math.min(pollIntervalMs, 200);
       const runner = async () => {
-        while (!stopped) {
+        // quotaPaused is set the moment any runner in this process hits the
+        // limit, so its siblings stop claiming immediately rather than each
+        // spending a job of their own to find the same wall.
+        while (!stopped && !quotaPaused) {
           const job = await claimNextJob();
           if (job) {
             working += 1;

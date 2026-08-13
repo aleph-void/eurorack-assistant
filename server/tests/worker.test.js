@@ -20,7 +20,13 @@ import {
   enqueueFindManual,
   MAX_ATTEMPTS,
 } from '../src/jobs/worker.js';
-import { getImportWorkerCount, DEFAULT_IMPORT_WORKERS } from '../src/services/config.js';
+import {
+  getImportWorkerCount,
+  getQueuePause,
+  pauseQueue,
+  DEFAULT_IMPORT_WORKERS,
+} from '../src/services/config.js';
+import { noteQuotaExhaustion, takeQuotaExhaustion } from '../src/services/llm.js';
 import { createBus } from '../src/events.js';
 
 let manualsDir;
@@ -1040,6 +1046,133 @@ describe('worker', () => {
 
       expect(result).toBeNull();
       expect((await db.query('SELECT id FROM jobs')).rows).toHaveLength(0);
+    });
+  });
+
+  // One exhausted subscription would otherwise take the whole queue down with
+  // it three attempts at a time, and leave every module it touched 'failed'.
+  describe('the provider running out of tokens', () => {
+    // Enough of a module, manual and job for an analyze_manual run.
+    async function analyzeJob(db, { username = 'u' } = {}) {
+      const user = await createUser(db, { username });
+      const module = await insertModule(db, user.id);
+      await db.query(
+        `INSERT INTO manuals (module_id, hash, source, original_name)
+         VALUES ($1, $2, 'found', 'm.pdf')`,
+        [module.id, PDF_HASH]
+      );
+      fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+      const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
+      return { user, module, job };
+    }
+
+    const outOfTokens = () =>
+      new Error('claude failed (exit 1):\nClaude AI usage limit reached|1893456000');
+
+    beforeEach(() => {
+      takeQuotaExhaustion(); // no leftovers from another test
+    });
+
+    it('pauses the queue until the limit lifts', async () => {
+      const db = await createTestDb();
+      await analyzeJob(db);
+      const worker = makeWorker(db, fakeBackend({ analyzeDocument: outOfTokens() }));
+
+      await worker.tick();
+
+      const pause = await getQueuePause(db);
+      expect(pause.paused).toBe(true);
+      expect(pause.until).toBe(new Date(1893456000 * 1000).toISOString());
+      expect(pause.reason).toMatch(/usage limit reached/);
+    });
+
+    it('puts the job back on the queue without spending an attempt on it', async () => {
+      const db = await createTestDb();
+      const { job } = await analyzeJob(db);
+      const worker = makeWorker(db, fakeBackend({ analyzeDocument: outOfTokens() }));
+
+      const result = await worker.tick();
+
+      expect(result.status).toBe('pending');
+      // Claiming it counted an attempt; running out of tokens is not one of
+      // the three tries the work itself gets.
+      expect(result.attempts).toBe(0);
+      expect(result.error).toMatch(/out of tokens/);
+      const { rows } = await db.query('SELECT status, attempts FROM jobs WHERE id = $1', [job.id]);
+      expect(rows[0].status).toBe('pending');
+      expect(Number(rows[0].attempts)).toBe(0);
+    });
+
+    it('claims nothing while the queue is paused', async () => {
+      const db = await createTestDb();
+      await analyzeJob(db);
+      await pauseQueue(db, { until: Date.now() + 60 * 60 * 1000, reason: 'out of tokens' });
+
+      const backend = fakeBackend({ analyzeDocument: '{"summary": "S", "components": []}' });
+      expect(await makeWorker(db, backend).tick()).toBeNull();
+      expect(backend.calls.analyzeDocument).toHaveLength(0);
+      const { rows } = await db.query('SELECT status FROM jobs');
+      expect(rows[0].status).toBe('pending');
+    });
+
+    it('starts again by itself once the pause has run its course', async () => {
+      const db = await createTestDb();
+      await analyzeJob(db);
+      await pauseQueue(db, { until: Date.now() - 1000, reason: 'out of tokens' });
+
+      const backend = fakeBackend({ analyzeDocument: '{"summary": "S", "components": []}' });
+      const done = await makeWorker(db, backend).tick();
+
+      expect(done.status).toBe('complete');
+      // And the spent pause is cleared out rather than left to be re-read.
+      expect((await getQueuePause(db)).paused).toBe(false);
+    });
+
+    it('pauses even when the job that spent the tokens got away with it', async () => {
+      const db = await createTestDb();
+      await analyzeJob(db);
+      // find_manual swallows a failed research call and falls back to
+      // archive.org, so a job can finish with the subscription exhausted:
+      // the CLI records it (services/llm.js) and the worker collects it.
+      const analyzeDocument = async () => {
+        noteQuotaExhaustion({ message: 'out of usage credits', resetAt: null });
+        return '{"summary": "S", "components": []}';
+      };
+      const worker = makeWorker(db, fakeBackend({ analyzeDocument }), null, null, {
+        quotaPauseMs: 30 * 60 * 1000,
+      });
+
+      const done = await worker.tick();
+
+      expect(done.status).toBe('complete');
+      const pause = await getQueuePause(db);
+      expect(pause.paused).toBe(true);
+      expect(pause.reason).toBe('out of usage credits');
+      // Nothing said when the limit lifts, so the queue takes the fallback.
+      expect(new Date(pause.until).getTime()).toBeGreaterThan(Date.now() + 25 * 60 * 1000);
+    });
+
+    it('tells every connected user, not just the owner of the job', async () => {
+      const db = await createTestDb();
+      await analyzeJob(db);
+      const events = [];
+      const bus = { publish: () => {}, publishAll: (e) => events.push(e) };
+      await makeWorker(db, fakeBackend({ analyzeDocument: outOfTokens() }), null, bus).tick();
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ kind: 'queue', event: 'paused', paused: true });
+    });
+
+    it('leaves an ordinary failure to the usual retries', async () => {
+      const db = await createTestDb();
+      await analyzeJob(db);
+      const worker = makeWorker(db, fakeBackend({ analyzeDocument: new Error('LLM down') }));
+
+      const result = await worker.tick();
+
+      expect(result.status).toBe('pending');
+      expect(result.attempts).toBe(1);
+      expect((await getQueuePause(db)).paused).toBe(false);
     });
   });
 

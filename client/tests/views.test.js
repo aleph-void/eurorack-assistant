@@ -1451,6 +1451,66 @@ describe('JobsView', () => {
     // Retry is still theirs to press — it costs nobody their work.
     expect(wrapper.find('[data-test="retry-2"]').exists()).toBe(true);
   });
+
+  it('clears out the stopped jobs on their own', async () => {
+    api.get.mockImplementation(async (url) =>
+      url === '/api/jobs/queue'
+        ? { paused: false, until: null, reason: '' }
+        : [
+            { id: 1, type: 'find_manual', status: 'cancelled', attempts: 0, own: true },
+            { id: 2, type: 'analyze_manual', status: 'cancelled', attempts: 1, own: true },
+            { id: 3, type: 'export_rack', status: 'complete', attempts: 1, own: true },
+            // Another user's, from an admin's view of the list.
+            { id: 4, type: 'find_manual', status: 'cancelled', attempts: 0, own: false },
+          ]
+    );
+    api.delete.mockResolvedValue({ deleted: 2 });
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+
+    // Counted over the caller's own cancelled jobs only.
+    expect(wrapper.find('[data-test="remove-cancelled"]').text()).toContain('(2)');
+    await wrapper.find('[data-test="remove-cancelled"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/jobs/cancelled');
+    // Gone from the list, along with the button; the admin's view of someone
+    // else's cancelled job stays.
+    expect(wrapper.find('[data-test="remove-cancelled"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="job-table"]').text()).not.toContain('analyze_manual');
+    expect(wrapper.find('[data-test="delete-4"]').exists()).toBe(false);
+    vi.restoreAllMocks();
+  });
+
+  it('says when the queue is paused for want of tokens, and starts it again', async () => {
+    const until = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    api.get.mockImplementation(async (url) =>
+      url === '/api/jobs/queue'
+        ? { paused: true, until, reason: 'Claude AI usage limit reached' }
+        : [{ id: 1, type: 'find_manual', status: 'pending', attempts: 0, own: true }]
+    );
+    api.post.mockResolvedValue({ paused: false, until: null, reason: '' });
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+
+    const banner = wrapper.find('[data-test="queue-paused"]');
+    expect(banner.text()).toContain('Claude AI usage limit reached');
+    expect(banner.text()).toContain(new Date(until).toLocaleString());
+
+    await wrapper.find('[data-test="resume-queue"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/jobs/queue/resume');
+    expect(wrapper.find('[data-test="queue-paused"]').exists()).toBe(false);
+  });
+
+  it('says nothing about the queue while it is running', async () => {
+    api.get.mockImplementation(async (url) =>
+      url === '/api/jobs/queue' ? { paused: false, until: null, reason: '' } : []
+    );
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="queue-paused"]').exists()).toBe(false);
+  });
 });
 
 describe('UsersView', () => {

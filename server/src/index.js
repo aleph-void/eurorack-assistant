@@ -35,6 +35,7 @@ async function main() {
     capturesDir: CAPTURES_DIR,
     panelsDir: PANELS_DIR,
     hub,
+    bus,
   });
   const server = http.createServer(app);
   const ws = attachWebSocketServer(server, db, bus, { hub });
