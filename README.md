@@ -10,6 +10,8 @@ It is the web version of the [eurorack-processor](https://github.com/nstarke/eur
 scripts: manual research, download, analysis, and question answering are ports
 of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
 
+![The modules page, listing an imported rack with each module's manual and analysis status](images/modules.png)
+
 ## Features
 
 - **Multi-user**: an admin account (created at setup with a one-time random

@@ -110,6 +110,42 @@ describe('ModulesView', () => {
     expect(wrapper.text()).toContain('No modules yet');
   });
 
+  // Each rack is its own collapsible section, so a system of several racks
+  // reads as the racks it is made of.
+  it('files the modules under a collapsible section per rack', async () => {
+    mockLists([
+      {
+        id: 1,
+        manufacturer: 'Make Noise',
+        name: 'Maths',
+        quantity: 1,
+        racks: [{ id: 1, name: 'main rack', quantity: 1 }],
+        manual_status: 'found',
+        analysis_status: 'complete',
+      },
+      {
+        id: 2,
+        manufacturer: 'ALM',
+        name: 'Pam',
+        quantity: 1,
+        racks: [{ id: 2, name: 'travel case', quantity: 1 }],
+        manual_status: 'pending',
+        analysis_status: 'pending',
+      },
+    ]);
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    const main = wrapper.find('[data-test="rack-group-1"]');
+    const travel = wrapper.find('[data-test="rack-group-2"]');
+    expect(main.text()).toContain('main rack');
+    expect(main.find('[data-test="module-1"]').exists()).toBe(true);
+    expect(main.find('[data-test="module-2"]').exists()).toBe(false);
+    expect(travel.find('[data-test="module-2"]').exists()).toBe(true);
+    // The first rack starts open; the rest are one click away.
+    expect(main.attributes('open')).toBeDefined();
+    expect(travel.attributes('open')).toBeUndefined();
+  });
+
   it('narrows the list to the selected rack', async () => {
     mockLists([
       { id: 1, manufacturer: 'ALM', name: 'Pam', quantity: 1, racks: [], manual_status: 'pending', analysis_status: 'pending' },

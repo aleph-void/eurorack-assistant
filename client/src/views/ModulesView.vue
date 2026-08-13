@@ -16,6 +16,20 @@ const jobs = useJobsStore();
 const currentRack = computed(() => racks.value.find((r) => r.id === selectedRack.value) || null);
 const otherRacks = computed(() => racks.value.filter((r) => r.id !== selectedRack.value));
 
+// One collapsible section per rack, so a system of several racks reads as
+// the racks it is made of instead of one long list. A module in two racks is
+// listed under both; one in none (its rack was deleted out from under it)
+// still has somewhere to appear.
+const rackGroups = computed(() => {
+  if (currentRack.value) return [{ rack: currentRack.value, modules: modules.value }];
+  const groups = racks.value.map((rack) => ({
+    rack,
+    modules: modules.value.filter((m) => (m.racks || []).some((r) => r.id === rack.id)),
+  }));
+  const loose = modules.value.filter((m) => !(m.racks || []).length);
+  return loose.length ? [...groups, { rack: null, modules: loose }] : groups;
+});
+
 async function load() {
   try {
     racks.value = await api.get('/api/racks');
@@ -97,7 +111,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
         <option v-for="rack in racks" :key="rack.id" :value="rack.id">{{ rack.name }}</option>
       </select>
     </div>
-    <div class="shrink" style="align-self: end">
+    <div class="shrink" style="align-self: end; white-space: nowrap">
       <RouterLink to="/racks">Manage racks</RouterLink>
     </div>
   </div>
@@ -109,49 +123,74 @@ onUnmounted(() => clearTimeout(refreshTimer));
       <RouterLink to="/import">Import your module list</RouterLink> to get started.
     </p>
   </div>
-  <div v-else class="panel">
-    <div class="table-wrap">
-      <table data-test="module-table">
-        <thead>
-          <tr>
-            <th>Manufacturer</th>
-            <th>Module</th>
-            <th>Qty</th>
-            <th v-if="!currentRack">Rack(s)</th>
-            <th>Manual</th>
-            <th>Analysis</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="module in modules" :key="module.id" :data-test="`module-${module.id}`">
-            <td>{{ module.manufacturer }}</td>
-            <td>
-              <RouterLink :to="`/modules/${module.id}`">{{ module.name }}</RouterLink>
-            </td>
-            <td>{{ module.quantity }}</td>
-            <td v-if="!currentRack">{{ rackNames(module) }}</td>
-            <td><span class="badge" :class="module.manual_status">{{ module.manual_status }}</span></td>
-            <td>
-              <span class="badge" :class="module.analysis_status">{{ module.analysis_status }}</span>
-            </td>
-            <td>
-              <select
-                v-if="currentRack && otherRacks.length > 0"
-                style="width: auto; margin: 0 0.4rem 0 0"
-                :data-test="`move-${module.id}`"
-                @change="move(module, $event)"
+  <template v-else>
+    <!-- Each rack folds away behind its name; the first one starts open. -->
+    <details
+      v-for="(group, i) in rackGroups"
+      :key="group.rack?.id ?? 'unracked'"
+      class="panel"
+      :open="i === 0"
+      :data-test="`rack-group-${group.rack?.id ?? 'unracked'}`"
+    >
+      <summary>
+        <h2>{{ group.rack ? group.rack.name : 'Not in a rack' }}</h2>
+        <span class="summary-count">
+          {{ group.modules.length }} {{ group.modules.length === 1 ? 'module' : 'modules' }}
+        </span>
+      </summary>
+      <div class="panel-body">
+        <div v-if="group.modules.length" class="table-wrap">
+          <table data-test="module-table">
+            <thead>
+              <tr>
+                <th>Manufacturer</th>
+                <th>Module</th>
+                <th>Qty</th>
+                <th v-if="!currentRack">Rack(s)</th>
+                <th>Manual</th>
+                <th>Analysis</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="module in group.modules"
+                :key="module.id"
+                :data-test="`module-${module.id}`"
               >
-                <option value="">Move to…</option>
-                <option v-for="rack in otherRacks" :key="rack.id" :value="rack.id">
-                  {{ rack.name }}
-                </option>
-              </select>
-              <button class="danger" style="margin: 0" @click="remove(module)">Delete</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+                <td>{{ module.manufacturer }}</td>
+                <td>
+                  <RouterLink :to="`/modules/${module.id}`">{{ module.name }}</RouterLink>
+                </td>
+                <td>{{ module.quantity }}</td>
+                <td v-if="!currentRack">{{ rackNames(module) }}</td>
+                <td><span class="badge" :class="module.manual_status">{{ module.manual_status }}</span></td>
+                <td>
+                  <span class="badge" :class="module.analysis_status">{{ module.analysis_status }}</span>
+                </td>
+                <td>
+                  <select
+                    v-if="currentRack && otherRacks.length > 0"
+                    style="width: auto; margin: 0 0.4rem 0 0"
+                    :data-test="`move-${module.id}`"
+                    @change="move(module, $event)"
+                  >
+                    <option value="">Move to…</option>
+                    <option v-for="rack in otherRacks" :key="rack.id" :value="rack.id">
+                      {{ rack.name }}
+                    </option>
+                  </select>
+                  <button class="danger" style="margin: 0" @click="remove(module)">Delete</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="muted">
+          No modules in this rack.
+          <RouterLink to="/import">Import a module list</RouterLink> to fill it.
+        </p>
+      </div>
+    </details>
+  </template>
 </template>
