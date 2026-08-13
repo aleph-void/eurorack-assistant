@@ -11,6 +11,13 @@ import {
 } from '../services/patchDetail.js';
 import { PORT_KINDS } from '../services/manualAnalyzer.js';
 import { readableResource, removeShares } from '../services/sharing.js';
+import {
+  DocumentError,
+  exportPatchDocument,
+  importPatchDocument,
+  parsePatchDocument,
+  patchFileName,
+} from '../services/patchIO.js';
 
 // A user's patches. A patch is created FROM a rack but owns a snapshot of the
 // rack's contents (patch_modules, one row per module instance): modules can
@@ -93,6 +100,79 @@ export function patchRoutes(db) {
           })
         )
       );
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // ---- patches as files ----
+
+  // Read a patch back in from a file written by the export below — from this
+  // install or another one. Body: the document, or { document, name?,
+  // rack_id? }.
+  //
+  // Names are resolved against the modules the importing user has; the rest
+  // come in by name and are listed in the response. Nothing is created for
+  // them, and nothing is imported halfway: the whole patch is one transaction.
+  router.post('/import', async (req, res, next) => {
+    try {
+      const body = req.body || {};
+      const raw = body.document ?? body.patch_document ?? body;
+      let document;
+      try {
+        document = parsePatchDocument(raw);
+      } catch (e) {
+        if (e instanceof DocumentError) return res.status(400).json({ error: e.message });
+        throw e;
+      }
+      if (document.modules.length === 0) {
+        return res.status(400).json({ error: 'this file has no modules in it' });
+      }
+
+      // Filing it against one of your racks is optional: a patch from
+      // somebody else's rack still reads, it just belongs to no rack of yours.
+      let rack = null;
+      if (body.rack_id !== undefined && body.rack_id !== null && body.rack_id !== '') {
+        rack = await Rack.findOne({
+          where: { id: Number(body.rack_id) || 0, user_id: req.user.id },
+        });
+        if (!rack) return res.status(404).json({ error: 'Rack not found' });
+      }
+
+      const name = String(body.name || '').trim() || null;
+      const { patch, counts, unresolved_modules: unresolved } = await importPatchDocument(db, {
+        userId: req.user.id,
+        document,
+        rack,
+        name,
+      });
+      res.status(201).json(
+        patchJson(patch, {
+          module_count: counts.modules,
+          cable_count: counts.cables,
+          imported: counts,
+          unresolved_modules: unresolved,
+        })
+      );
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // The patch as a JSON file: every instance, cable, setting, bus and link,
+  // written in names rather than ids so it can be read anywhere. Yours only —
+  // a patch shared with you is yours to read, not to take a copy of.
+  router.get('/:id/export', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const document = await exportPatchDocument(db, patch);
+      res.set('Content-Type', 'application/json; charset=utf-8');
+      res.set(
+        'Content-Disposition',
+        `attachment; filename="${patchFileName(patch).replace(/["\\\r\n]/g, '_')}"`
+      );
+      res.send(JSON.stringify(document, null, 2));
     } catch (e) {
       next(e);
     }

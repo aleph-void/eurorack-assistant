@@ -786,6 +786,14 @@ onMounted(async () => {
         Duplicate
       </button>
       <ShareButton type="patch" :id="props.id" :label="patch.name" small />
+      <a
+        :href="`/api/patches/${props.id}/export`"
+        style="margin-left: 0.6rem; font-size: 0.8rem"
+        data-test="export-patch"
+        title="Download this patch as a JSON file"
+      >
+        Export JSON
+      </a>
       <RouterLink
         :to="`/ask?patch=${props.id}`"
         style="margin-left: 0.6rem; font-size: 0.8rem"

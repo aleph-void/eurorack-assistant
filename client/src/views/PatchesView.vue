@@ -46,6 +46,48 @@ async function create() {
   }
 }
 
+// ---- reading a patch back in from a file ----
+// A patch exported here or on somebody else's install. Modules are matched by
+// name against what you have; whatever does not match comes in by name, which
+// the import reports rather than silently dropping.
+const importRackId = ref('');
+const importing = ref(false);
+const importNotice = ref('');
+
+async function importPatch(event) {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file) return;
+  error.value = '';
+  importNotice.value = '';
+  importing.value = true;
+  try {
+    let document;
+    try {
+      document = JSON.parse(await file.text());
+    } catch {
+      throw new Error(`${file.name} is not a JSON file the app can read.`);
+    }
+    const created = await api.post('/api/patches/import', {
+      document,
+      rack_id: importRackId.value || undefined,
+    });
+    const missing = created.unresolved_modules ?? [];
+    importNotice.value =
+      `Imported '${created.name}' — ${created.module_count} module(s), ` +
+      `${created.cable_count} cable(s).` +
+      (missing.length
+        ? ` ${missing.length} module(s) are not in your racks and came in by name only: ` +
+          `${missing.join(', ')}.`
+        : '');
+    await load();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    importing.value = false;
+  }
+}
+
 // A patch is often the starting point for the next one: the same voice with
 // one thing moved. Copying keeps the original intact.
 async function duplicate(patch) {
@@ -111,6 +153,14 @@ onMounted(load);
             <td>{{ patch.cable_count }}</td>
             <td>{{ new Date(patch.created_at).toLocaleString() }}</td>
             <td>
+              <a
+                class="export-link"
+                :href="`/api/patches/${patch.id}/export`"
+                :data-test="`export-${patch.id}`"
+                title="Download this patch as a JSON file"
+              >
+                Export
+              </a>
               <ShareButton type="patch" :id="patch.id" :label="patch.name" small />
               <button
                 class="secondary"
@@ -170,5 +220,36 @@ onMounted(load);
         </div>
       </div>
     </form>
+
+    <label for="import-patch">Or import a patch file</label>
+    <p class="muted" style="margin-top: 0">
+      A <code>.patch.json</code> file exported from here or from somebody else's install. Modules
+      are matched to yours by name; anything you do not have comes in by name, so the patch still
+      reads.
+    </p>
+    <p v-if="importNotice" class="success" data-test="import-notice">{{ importNotice }}</p>
+    <div class="row">
+      <div>
+        <select v-model="importRackId" data-test="import-rack" aria-label="File it under a rack">
+          <option value="">No rack of mine</option>
+          <option v-for="rack in racks" :key="rack.id" :value="rack.id">{{ rack.name }}</option>
+        </select>
+      </div>
+      <input
+        id="import-patch"
+        type="file"
+        accept="application/json,.json"
+        data-test="import-patch"
+        :disabled="importing"
+        @change="importPatch"
+      />
+    </div>
   </div>
 </template>
+
+<style scoped>
+.export-link {
+  font-size: 0.85rem;
+  margin-right: 0.4rem;
+}
+</style>

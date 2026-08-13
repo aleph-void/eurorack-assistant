@@ -194,6 +194,14 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   turned around where both jacks allow it; "chain" mode starts the next cable
   where the last one landed; and a whole patch can be duplicated as the
   starting point for its next version.
+- **Patches as files**: a patch exports as a `.patch.json` file and imports
+  back — into this account, or into somebody else's install. The file is
+  written in names rather than ids (manufacturer and model for an instance,
+  the jack's label for a cable end), so importing resolves it against the
+  modules the importing user actually has; anything they do not have arrives
+  by name and the import says which, rather than dropping it. Buses, labels,
+  off-rack gear with its declared connection points, and expander/bridge links
+  all survive the round trip.
 - **What to patch next**: every cable in your other patches is reduced to
   (module, jack) → (module, jack), counted, and offered here when both ends
   are free — a rack is patched in habits. Modules that receive signal and send
