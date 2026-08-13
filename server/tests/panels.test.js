@@ -19,7 +19,7 @@ import {
   PDF_BYTES,
   PDF_HASH,
 } from './helpers.js';
-import { sniffImage, panelPath } from '../src/services/image.js';
+import { sniffImage, panelPath, saveImage } from '../src/services/image.js';
 import {
   buildPanelForModule,
   fallbackLayout,
@@ -368,6 +368,135 @@ describe('building a module panel', () => {
     expect(fs.existsSync(panelPath(panelsDir, first.panel.image_hash, 'png'))).toBe(false);
   });
 
+  // A picture someone uploaded is a deliberate choice; research is a guess.
+  it('keeps an uploaded panel and re-locates the components on it', async () => {
+    const { module } = await analyzedModule(db, manualsDir);
+    const hash = saveImage(panelsDir, PANEL_PNG, 'png');
+    await db.models.ModulePanel.create({
+      module_id: module.id,
+      source: 'upload',
+      image_hash: hash,
+      image_ext: 'png',
+      width: 400,
+      height: 1200,
+    });
+
+    const backend = fakeBackend({
+      completeTextWithSearch: research,
+      analyzeImage: JSON.stringify({
+        is_panel: true,
+        components: COMPONENTS.map((c, i) => ({ name: c.name, x: 0.5, y: 0.15 * (i + 1) })),
+      }),
+      analyzeDocument: JSON.stringify({ hp: 12, components: [] }),
+    });
+    const { panel, placements } = await buildPanelForModule(db, backend, module, panelsDir, {
+      fetchImpl: fakeFetch({ 'doepfer.de/a110.png': { body: PANEL_PNG } }),
+      manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`),
+    });
+
+    expect(panel.source).toBe('upload');
+    expect(panel.image_hash).toBe(hash);
+    expect(placements).toHaveLength(5);
+    // No research was done at all: the panel was never in question.
+    expect(backend.calls.completeTextWithSearch ?? []).toHaveLength(0);
+    expect(fs.existsSync(panelPath(panelsDir, hash, 'png'))).toBe(true);
+  });
+
+  it('keeps an uploaded panel even when nothing can be located on it', async () => {
+    const { module } = await analyzedModule(db, manualsDir);
+    const hash = saveImage(panelsDir, PANEL_PNG, 'png');
+    await db.models.ModulePanel.create({
+      module_id: module.id,
+      source: 'upload',
+      image_hash: hash,
+      image_ext: 'png',
+      width: 400,
+      height: 1200,
+    });
+
+    const { panel, placements } = await buildPanelForModule(
+      db,
+      fakeBackend({ analyzeImage: JSON.stringify({ is_panel: false, components: [] }) }),
+      module,
+      panelsDir,
+      { fetchImpl: fakeFetch({}) }
+    );
+    expect(panel.source).toBe('upload');
+    expect(panel.image_hash).toBe(hash);
+    expect(placements).toEqual([]);
+    expect(panel.description).toMatch(/could not be located/);
+  });
+
+  // The module's own width beats anything the drawing step works out.
+  it('draws a generated panel at the width recorded on the module', async () => {
+    const { module } = await analyzedModule(db, manualsDir, { hp: 16 });
+    const { panel } = await buildPanelForModule(
+      db,
+      fakeBackend({
+        completeTextWithSearch: JSON.stringify({ image_urls: [], hp: 4 }),
+        analyzeDocument: JSON.stringify({ hp: 6, components: [{ name: 'FREQ', x: 0.5, y: 0.2 }] }),
+      }),
+      module,
+      panelsDir,
+      { fetchImpl: fakeFetch({}), manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`) }
+    );
+    expect(panel.hp).toBe(16);
+  });
+
+  // ...and where the module has no width, the one the panel step found fills
+  // the column in (migration 017).
+  it('records a width on the module when it had none', async () => {
+    const { module } = await analyzedModule(db, manualsDir);
+    await buildPanelForModule(
+      db,
+      fakeBackend({
+        completeTextWithSearch: JSON.stringify({ image_urls: [] }),
+        analyzeDocument: JSON.stringify({ hp: 6, components: [{ name: 'FREQ', x: 0.5, y: 0.2 }] }),
+      }),
+      module,
+      panelsDir,
+      { fetchImpl: fakeFetch({}), manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`) }
+    );
+    const after = await db.models.Module.findByPk(module.id);
+    expect(after.hp).toBe(6);
+  });
+
+  // The job spends minutes in LLM calls; an upload arriving in the middle of
+  // one must not be thrown away by the answer that comes back afterwards.
+  it('keeps a panel uploaded while the job was running', async () => {
+    const { module } = await analyzedModule(db, manualsDir);
+    const hash = saveImage(panelsDir, PANEL_PNG, 'png');
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({ image_urls: [] }),
+      analyzeImage: JSON.stringify({
+        is_panel: true,
+        components: COMPONENTS.map((c) => ({ name: c.name, x: 0.5, y: 0.5 })),
+      }),
+      // The upload lands while the manual is being read for a layout.
+      analyzeDocument: async () => {
+        await db.models.ModulePanel.create({
+          module_id: module.id,
+          source: 'upload',
+          image_hash: hash,
+          image_ext: 'png',
+          width: 400,
+          height: 1200,
+        });
+        return JSON.stringify({ hp: 8, components: [{ name: 'FREQ', x: 0.5, y: 0.2 }] });
+      },
+    });
+    const { panel } = await buildPanelForModule(db, backend, module, panelsDir, {
+      fetchImpl: fakeFetch({}),
+      manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`),
+    });
+
+    expect(panel.source).toBe('upload');
+    expect(panel.image_hash).toBe(hash);
+    expect(await db.models.ModulePanel.count({ where: { module_id: module.id } })).toBe(1);
+    // The drawing that lost the race was never written to disk.
+    expect(fs.readdirSync(panelsDir).filter((f) => f.endsWith('.svg'))).toEqual([]);
+  });
+
   it('refuses to build a panel for a module with no analyzed components', async () => {
     const user = await createUser(db, { username: 'nobody' });
     const module = await insertModule(db, user.id, { name: 'Unanalyzed' });
@@ -553,7 +682,7 @@ describe('panel image route', () => {
   });
 });
 
-describe('re-analyzing every module', () => {
+describe('filling in what modules are missing', () => {
   let ctx;
   let alice;
   beforeEach(async () => {
@@ -564,44 +693,116 @@ describe('re-analyzing every module', () => {
   const reanalyze = (body = {}) =>
     request(ctx.app).post('/api/modules/reanalyze').set('Cookie', ctx.aliceCookie).send(body);
 
-  it('queues an analysis for every module that has a manual', async () => {
-    const withManual = await insertModule(ctx.db, alice.id, {
-      name: 'Maths',
+  // A module the pipeline finished with: manual, analysis (components and a
+  // summary), a panel picture and a width.
+  async function completeModule(fields = {}) {
+    const module = await insertModule(ctx.db, alice.id, {
       manual_hash: PDF_HASH,
+      // A finished module has had its manual extracted to markdown too.
+      manual_text: '# Manual\n\nA function generator with four channels.\n',
       analysis_status: 'complete',
+      panel_status: 'complete',
+      summary: 'A function generator.',
+      hp: 20,
+      ...fields,
     });
-    const withoutManual = await insertModule(ctx.db, alice.id, { name: 'Rene' });
+    await ctx.db.models.ModuleComponent.create({
+      module_id: module.id,
+      name: 'OUT',
+      type: 'output_jack',
+    });
+    await ctx.db.models.ModulePanel.create({
+      module_id: module.id,
+      source: 'generated',
+      image_hash: `panel-${module.id}`,
+      image_ext: 'svg',
+      width: 400,
+      height: 1200,
+      hp: 20,
+    });
+    return module;
+  }
+
+  it('queues the earliest missing step for each module, and nothing for the complete ones', async () => {
+    const done = await completeModule({ name: 'Maths' });
+    const noManual = await insertModule(ctx.db, alice.id, { name: 'Rene' });
+    const noAnalysis = await insertModule(ctx.db, alice.id, {
+      name: 'Wogglebug',
+      manual_hash: PDF_HASH,
+    });
+    const noPanel = await completeModule({ name: 'Optomix' });
+    await ctx.db.models.ModulePanel.destroy({ where: { module_id: noPanel.id } });
 
     const res = await reanalyze();
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      modules: 2,
-      queued: { find_manual: 1, analyze_manual: 1 },
+      modules: 4,
+      queued: { find_manual: 1, analyze_manual: 1, panel_image: 1, extract_manual: 1 },
       skipped: 0,
+      complete: 1,
     });
 
     const jobs = await ctx.db.models.Job.findAll({ order: [['id', 'ASC']] });
     expect(jobs.map((j) => [j.type, j.module_id, j.user_id])).toEqual([
-      ['analyze_manual', withManual.id, alice.id],
-      // Nothing to re-analyze without a manual, so it goes to find one.
-      ['find_manual', withoutManual.id, alice.id],
+      // A manual nobody has extracted text from yet, which is its own gap
+      // rather than a step of the pipeline.
+      ['extract_manual', noAnalysis.id, alice.id],
+      // Nothing to analyze without a manual, so it goes to find one.
+      ['find_manual', noManual.id, alice.id],
+      ['analyze_manual', noAnalysis.id, alice.id],
+      ['panel_image', noPanel.id, alice.id],
     ]);
-    const after = await ctx.db.models.Module.findByPk(withManual.id);
-    expect(after.analysis_status).toBe('pending');
-    // Re-discovery is off by default: the manual it already has stands.
-    expect(after.manual_status).toBe('found');
+    // The finished module was not touched at all.
+    const after = await ctx.db.models.Module.findByPk(done.id);
+    expect(after.analysis_status).toBe('complete');
+    expect(after.panel_status).toBe('complete');
+    expect((await ctx.db.models.Module.findByPk(noAnalysis.id)).analysis_status).toBe('pending');
+    expect((await ctx.db.models.Module.findByPk(noPanel.id)).panel_status).toBe('pending');
   });
 
-  it('re-discovers the manuals when asked to', async () => {
-    const module = await insertModule(ctx.db, alice.id, {
-      manual_hash: PDF_HASH,
-      analysis_status: 'complete',
+  it('counts an analysis that produced no components as missing', async () => {
+    const module = await completeModule();
+    await ctx.db.models.ModuleComponent.destroy({ where: { module_id: module.id } });
+    const res = await reanalyze();
+    expect(res.body.queued.analyze_manual).toBe(1);
+    // Re-discovery is off by default: the manual it already has stands.
+    const after = await ctx.db.models.Module.findByPk(module.id);
+    expect(after.manual_status).toBe('found');
+    expect(after.analysis_status).toBe('pending');
+  });
+
+  it('sends a module with a panel but no HP back to the panel step', async () => {
+    const module = await completeModule();
+    await ctx.db.models.Module.update({ hp: null }, { where: { id: module.id } });
+    const res = await reanalyze();
+    expect(res.body.queued).toEqual({
+      find_manual: 0,
+      analyze_manual: 0,
+      panel_image: 1,
+      extract_manual: 0,
     });
+  });
+
+  it('re-discovers the manual of an unanalyzed module when asked to', async () => {
+    const module = await completeModule();
+    await ctx.db.models.ModuleComponent.destroy({ where: { module_id: module.id } });
     const res = await reanalyze({ rediscover_manuals: true });
-    expect(res.body.queued).toEqual({ find_manual: 1, analyze_manual: 0 });
+    expect(res.body.queued).toEqual({
+      find_manual: 1,
+      analyze_manual: 0,
+      panel_image: 0,
+      extract_manual: 0,
+    });
     const after = await ctx.db.models.Module.findByPk(module.id);
     expect(after.manual_status).toBe('pending');
     expect(after.analysis_status).toBe('pending');
+  });
+
+  it('leaves a complete module alone even with re-discovery on', async () => {
+    await completeModule();
+    const res = await reanalyze({ rediscover_manuals: true });
+    expect(res.body).toMatchObject({ modules: 1, complete: 1, skipped: 0 });
+    expect(await ctx.db.models.Job.count()).toBe(0);
   });
 
   it('does not queue the same work twice', async () => {
@@ -610,10 +811,12 @@ describe('re-analyzing every module', () => {
     const second = await reanalyze();
     expect(second.body).toEqual({
       modules: 1,
-      queued: { find_manual: 0, analyze_manual: 0 },
+      queued: { find_manual: 0, analyze_manual: 0, panel_image: 0, extract_manual: 0 },
       skipped: 1,
+      complete: 0,
     });
-    expect(await ctx.db.models.Job.count()).toBe(1);
+    // The analysis and the text extraction of the one manual, queued once.
+    expect(await ctx.db.models.Job.count()).toBe(2);
   });
 
   it('narrows to one rack, and only ever to your own', async () => {
@@ -645,5 +848,211 @@ describe('re-analyzing every module', () => {
 
   it('requires a session', async () => {
     expect((await request(ctx.app).post('/api/modules/reanalyze').send({})).status).toBe(401);
+  });
+});
+
+describe('uploading your own panel image', () => {
+  let ctx;
+  let alice;
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    alice = await ctx.db.models.User.findOne({ where: { username: 'alice' } });
+  });
+
+  const upload = (moduleId, body, cookie = ctx.aliceCookie) =>
+    request(ctx.app).post(`/api/modules/${moduleId}/panel`).set('Cookie', cookie).send(body);
+
+  // A module in alice's rack with components to place, which is what the
+  // queued job needs to have anything to do.
+  async function moduleWithComponents() {
+    const module = await insertModule(ctx.db, alice.id, {
+      manufacturer: 'Doepfer',
+      name: 'A-110',
+      analysis_status: 'complete',
+    });
+    await ctx.db.models.ModuleComponent.bulkCreate(
+      COMPONENTS.map((c) => ({ ...c, module_id: module.id }))
+    );
+    return module;
+  }
+
+  it('stores the image, records the width, and queues the job that maps it', async () => {
+    const module = await moduleWithComponents();
+    const res = await upload(module.id, {
+      filename: 'a110-front.png',
+      data_base64: PANEL_PNG.toString('base64'),
+      hp: 8,
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.panel.source).toBe('upload');
+    expect(res.body.panel.width).toBe(400);
+    expect(res.body.panel.height).toBe(1200);
+    expect(res.body.panel.hp).toBe(8);
+    // Nothing is placed yet: where a component sits on a picture the server
+    // has never seen is the queued job's work.
+    expect(res.body.panel.components).toEqual([]);
+    expect(res.body.job_id).toBeGreaterThan(0);
+
+    const panel = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    expect(fs.existsSync(panelPath(ctx.panelsDir, panel.image_hash, 'png'))).toBe(true);
+    const after = await ctx.db.models.Module.findByPk(module.id);
+    expect(after.hp).toBe(8);
+
+    const job = await ctx.db.models.Job.findByPk(res.body.job_id);
+    expect(job.type).toBe('panel_image');
+    expect(job.module_id).toBe(module.id);
+    expect(job.user_id).toBe(alice.id);
+  });
+
+  // The whole point of the upload: the components end up on the user's own
+  // picture, at the positions the LLM reads off it.
+  it('maps the components onto the uploaded image when the job runs', async () => {
+    const module = await moduleWithComponents();
+    await upload(module.id, {
+      filename: 'a110.png',
+      data_base64: PANEL_PNG.toString('base64'),
+    });
+    const uploaded = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({ image_urls: ['https://example.com/other.png'] }),
+      analyzeImage: JSON.stringify({
+        is_panel: true,
+        panel: { x: 0.5, y: 0.5, w: 0.8, h: 1 },
+        components: COMPONENTS.map((c, i) => ({ name: c.name, x: 0.5, y: 0.15 * (i + 1) })),
+      }),
+    });
+    const worker = createWorker(ctx.db, {
+      manualsDir: ctx.manualsDir,
+      panelsDir: ctx.panelsDir,
+      backendFactory: () => backend,
+      fetchImpl: fakeFetch({}),
+      log: () => {},
+    });
+    const done = await worker.tick();
+    expect(done.status).toBe('complete');
+
+    const panel = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    // Same picture, now with markers on it.
+    expect(panel.source).toBe('upload');
+    expect(panel.image_hash).toBe(uploaded.image_hash);
+    expect(panel.crop_w).toBeCloseTo(0.8);
+    expect(await ctx.db.models.ModulePanelComponent.count({ where: { panel_id: panel.id } })).toBe(5);
+    const after = await ctx.db.models.Module.findByPk(module.id);
+    expect(after.panel_status).toBe('complete');
+  });
+
+  it('replaces the panel that was there and drops its orphaned image', async () => {
+    const module = await moduleWithComponents();
+    const stale = saveImage(ctx.panelsDir, pngBytes(300, 900), 'png');
+    await ctx.db.models.ModulePanel.create({
+      module_id: module.id,
+      source: 'image',
+      image_hash: stale,
+      image_ext: 'png',
+      width: 300,
+      height: 900,
+    });
+
+    await upload(module.id, { filename: 'mine.png', data_base64: PANEL_PNG.toString('base64') });
+
+    expect(await ctx.db.models.ModulePanel.count({ where: { module_id: module.id } })).toBe(1);
+    expect(fs.existsSync(panelPath(ctx.panelsDir, stale, 'png'))).toBe(false);
+  });
+
+  it('refuses anything that is not an image it serves', async () => {
+    const module = await moduleWithComponents();
+    const pdf = await upload(module.id, {
+      filename: 'panel.png',
+      data_base64: PDF_BYTES.toString('base64'),
+    });
+    expect(pdf.status).toBe(400);
+    expect(pdf.body.error).toMatch(/PNG, JPEG, GIF or WebP/);
+
+    // An SVG is a document that can carry script; it is not hosted here even
+    // when a user hands it over deliberately.
+    const svg = await upload(module.id, {
+      filename: 'panel.svg',
+      data_base64: Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="300"></svg>'
+      ).toString('base64'),
+    });
+    expect(svg.status).toBe(400);
+
+    const tiny = await upload(module.id, {
+      filename: 'tiny.png',
+      data_base64: pngBytes(16, 16).toString('base64'),
+    });
+    expect(tiny.status).toBe(400);
+    expect(tiny.body.error).toMatch(/too small/);
+
+    expect((await upload(module.id, { filename: 'p.png' })).status).toBe(400);
+    expect(
+      (await upload(module.id, {
+        filename: 'p.png',
+        data_base64: PANEL_PNG.toString('base64'),
+        hp: 'wide',
+      })).status
+    ).toBe(400);
+    expect(await ctx.db.models.ModulePanel.count()).toBe(0);
+  });
+
+  it('only accepts an upload for a module in your own racks', async () => {
+    const admin = await ctx.db.models.User.findOne({ where: { username: 'admin' } });
+    const theirs = await insertModule(ctx.db, admin.id, { name: 'Wogglebug' });
+    const res = await upload(theirs.id, {
+      filename: 'p.png',
+      data_base64: PANEL_PNG.toString('base64'),
+    });
+    expect(res.status).toBe(404);
+    expect(
+      (await request(ctx.app).post(`/api/modules/${theirs.id}/panel`).send({})).status
+    ).toBe(401);
+  });
+
+  it('queues nothing for a module with no components to place', async () => {
+    const module = await insertModule(ctx.db, alice.id, { name: 'Unanalyzed' });
+    const res = await upload(module.id, {
+      filename: 'p.png',
+      data_base64: PANEL_PNG.toString('base64'),
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.job_id).toBe(null);
+    expect(await ctx.db.models.Job.count()).toBe(0);
+  });
+
+  it('removes an uploaded panel and queues a replacement', async () => {
+    const module = await moduleWithComponents();
+    await upload(module.id, { filename: 'p.png', data_base64: PANEL_PNG.toString('base64') });
+    const panel = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    await ctx.db.models.Job.destroy({ where: {} });
+
+    const res = await request(ctx.app)
+      .delete(`/api/modules/${module.id}/panel`)
+      .set('Cookie', ctx.aliceCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.job_id).toBeGreaterThan(0);
+    expect(await ctx.db.models.ModulePanel.count({ where: { module_id: module.id } })).toBe(0);
+    expect(fs.existsSync(panelPath(ctx.panelsDir, panel.image_hash, 'png'))).toBe(false);
+    const after = await ctx.db.models.Module.findByPk(module.id);
+    expect(after.panel_status).toBe('pending');
+  });
+
+  it('will not delete a panel the app built itself', async () => {
+    const module = await moduleWithComponents();
+    await ctx.db.models.ModulePanel.create({
+      module_id: module.id,
+      source: 'generated',
+      image_hash: 'b'.repeat(64),
+      image_ext: 'svg',
+      width: 325,
+      height: 1028,
+    });
+    const res = await request(ctx.app)
+      .delete(`/api/modules/${module.id}/panel`)
+      .set('Cookie', ctx.aliceCookie);
+    expect(res.status).toBe(404);
+    expect(await ctx.db.models.ModulePanel.count({ where: { module_id: module.id } })).toBe(1);
   });
 });

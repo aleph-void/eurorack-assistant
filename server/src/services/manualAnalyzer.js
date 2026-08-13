@@ -6,6 +6,7 @@
 
 import { extractJsonObject } from './json.js';
 import { refreshModuleLinks } from './moduleLinks.js';
+import { normalizeHp } from './panelImage.js';
 
 export const COMPONENT_TYPES = [
   'input_jack',
@@ -58,6 +59,7 @@ Respond with ONLY a JSON object, no prose and no code fences, shaped exactly lik
 
 {
   "summary": "A thorough plain-text summary of what the module does and how it works.",
+  "hp": 8,
   "components": [
     {
       "type": "input_jack",
@@ -158,6 +160,12 @@ Respond with ONLY a JSON object, no prose and no code fences, shaped exactly lik
 }
 
 Rules:
+- "hp" is how wide THIS module's front panel is in HP (1HP = 5.08mm), as a
+  number. Manuals usually print it in the specifications ("Width: 8HP",
+  "20 HP", "Panel width: 101.6mm" = 20HP). Use null if the manual does not
+  state or draw it — a guess is worse than nothing here, and the width of an
+  expander or a sibling module documented in the same manual is not this
+  module's width.
 - "type" must be one of: ${COMPONENT_TYPES.join(', ')}.
 - List EVERY input jack, output jack, knob, slider, button, toggle, and switch
   described in the manual, plus any displays or other controls (type "other").
@@ -708,6 +716,10 @@ export async function analyzeManualForModule(db, backend, module, manualPath) {
   );
   const parsed = extractJsonObject(response);
   const summary = String(parsed.summary || '').trim();
+  // The panel width, where the manual states it. This is the module's own
+  // property rather than the panel drawing's, so it is written to the module
+  // record; a manual that states none leaves whatever is already recorded.
+  const hp = normalizeHp(parsed.hp);
   const parsedComponents = normalizeComponents(parsed.components);
   const switches = normalizeSwitches(parsed.switches);
   const pairs = normalizePairs(parsed.pairs);
@@ -860,7 +872,7 @@ export async function analyzeManualForModule(db, backend, module, manualPath) {
       await ComponentValue.bulkCreate(valueRows, { transaction });
     }
     await Module.update(
-      { summary, analysis_status: 'complete' },
+      { summary, analysis_status: 'complete', ...(hp === null ? {} : { hp }) },
       { where: { id: module.id }, transaction }
     );
   });
@@ -873,6 +885,7 @@ export async function analyzeManualForModule(db, backend, module, manualPath) {
 
   return {
     summary,
+    hp,
     components,
     normalizations: resolved,
     routes: resolvedRoutes,

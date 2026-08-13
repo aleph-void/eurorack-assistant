@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import moment from 'moment';
-import { newDb } from 'pg-mem';
+import { DataType, newDb } from 'pg-mem';
 import request from 'supertest';
 import { createDatabase } from '../src/db/index.js';
 import { migrate } from '../src/db/migrate.js';
@@ -18,6 +18,108 @@ import { textToPdf } from '../src/services/textPdf.js';
 // its js-Date fallback; the resulting deprecation warning would spam the run.
 moment.suppressDeprecationWarnings = true;
 
+// pg-mem has no text-search engine: no tsvector type, no to_tsvector, no @@.
+// The manual search (migration 018 + routes/manuals.js) is written in real
+// postgres text search, so the pieces it uses are shimmed here — the SQL under
+// test stays exactly the SQL that runs in production, and these stand-ins
+// answer it well enough to exercise matching, ranking, snippets and (most
+// importantly) who is allowed to see which document.
+//
+// The shim is a plain token match with a crude plural rule where postgres
+// stems properly, so it is close to but not the same as the real engine.
+const tsWords = (text) =>
+  String(text ?? '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter(Boolean)
+    // Stand-in for the english stemmer: enough that "oscillators" finds
+    // "oscillator", not enough to pretend it is Snowball.
+    .map((word) => (word.length >= 4 && word.endsWith('s') ? word.slice(0, -1) : word));
+
+// websearch_to_tsquery's syntax, reduced to what it means here: bare words are
+// required, "quoted phrases" are their words, and -word excludes.
+const tsQuery = (text) => {
+  const terms = [];
+  for (const raw of String(text ?? '').match(/"[^"]*"|\S+/g) || []) {
+    const negated = raw.startsWith('-');
+    const body = negated ? raw.slice(1) : raw;
+    for (const word of tsWords(body)) terms.push((negated ? '!' : '') + word);
+  }
+  return terms.join(' ');
+};
+
+const tsTerms = (query) =>
+  String(query ?? '')
+    .split(' ')
+    .filter(Boolean);
+
+const tsMatches = (vector, query) => {
+  const words = new Set(String(vector ?? '').split(' ').filter(Boolean));
+  const terms = tsTerms(query);
+  if (terms.length === 0) return false;
+  return terms.every((term) =>
+    term.startsWith('!') ? !words.has(term.slice(1)) : words.has(term)
+  );
+};
+
+function registerTextSearch(mem) {
+  const schema = mem.public;
+  const text = DataType.text;
+  schema.registerFunction({
+    name: 'to_tsvector',
+    args: [text, text],
+    returns: text,
+    implementation: (_config, document) => tsWords(document).join(' '),
+  });
+  schema.registerFunction({
+    name: 'websearch_to_tsquery',
+    args: [text, text],
+    returns: text,
+    implementation: (_config, query) => tsQuery(query),
+  });
+  schema.registerOperator({
+    operator: '@@',
+    left: text,
+    right: text,
+    returns: DataType.bool,
+    implementation: tsMatches,
+  });
+  // Rank on how often the wanted words occur, normalized the way ts_rank's
+  // output is: a small positive number that orders hits sensibly.
+  schema.registerFunction({
+    name: 'ts_rank',
+    args: [text, text],
+    returns: DataType.float,
+    implementation: (vector, query) => {
+      const words = String(vector ?? '').split(' ').filter(Boolean);
+      const wanted = tsTerms(query).filter((term) => !term.startsWith('!'));
+      if (words.length === 0 || wanted.length === 0) return 0;
+      const hits = words.filter((word) => wanted.includes(word)).length;
+      return hits / (hits + 10);
+    },
+  });
+  // A window of words around the first hit, with the matches wrapped in the
+  // StartSel/StopSel the caller asked for.
+  schema.registerFunction({
+    name: 'ts_headline',
+    args: [text, text, text, text],
+    returns: text,
+    implementation: (_config, document, query, options) => {
+      const start = /StartSel=([^,]*)/.exec(options || '')?.[1] ?? '';
+      const stop = /StopSel=([^,]*)/.exec(options || '')?.[1] ?? '';
+      const wanted = new Set(tsTerms(query).filter((term) => !term.startsWith('!')));
+      const words = String(document ?? '').split(/\s+/).filter(Boolean);
+      const isHit = (word) => tsWords(word).some((w) => wanted.has(w));
+      const at = words.findIndex(isHit);
+      const from = Math.max(0, (at === -1 ? 0 : at) - 6);
+      return words
+        .slice(from, from + 18)
+        .map((word) => (isHit(word) ? `${start}${word}${stop}` : word))
+        .join(' ');
+    },
+  });
+}
+
 // In-memory postgres + migrations, wrapped in the app's Sequelize database
 // object. db.query() is a raw-SQL escape hatch for test fixtures/assertions,
 // backed by the same pg-mem instance.
@@ -26,6 +128,7 @@ export async function createTestDb() {
   // Sequelize issues SET statements (timezone, client_min_messages) on
   // connect that pg-mem cannot parse; swallow them.
   mem.public.interceptQueries((sql) => (/^set\s/i.test(sql.trim()) ? [] : null));
+  registerTextSearch(mem);
   const adapter = mem.adapters.createPg();
   const db = createDatabase({ dialectModule: adapter, databaseVersion: '13.4.0' });
   const pool = new adapter.Pool();
@@ -138,7 +241,8 @@ export function fakeDevice(hub, { userId, tokenId = 1, name = 'CVOsc', state = {
 
 // Creates a shared module record, maps it into one of userId's racks (their
 // 'main rack' unless `rack` names another, created on demand), and (when
-// manual_hash is given) records it as the shared auto-found manual.
+// manual_hash is given) records it as the shared auto-found manual. Passing
+// manual_text records that manual as already extracted to markdown.
 export async function insertModule(db, userId, fields = {}) {
   const {
     manufacturer = 'Make Noise',
@@ -146,8 +250,11 @@ export async function insertModule(db, userId, fields = {}) {
     quantity = 1,
     rack = DEFAULT_RACK_NAME,
     manual_hash = null,
+    manual_text = null,
     manual_status = manual_hash ? 'found' : 'pending',
     analysis_status = 'pending',
+    panel_status = 'pending',
+    hp = null,
     summary = null,
   } = fields;
   const module = await db.models.Module.create({
@@ -155,6 +262,8 @@ export async function insertModule(db, userId, fields = {}) {
     name,
     manual_status,
     analysis_status,
+    panel_status,
+    hp,
     summary,
   });
   let rackId = null;
@@ -164,14 +273,38 @@ export async function insertModule(db, userId, fields = {}) {
     await db.models.RackModule.create({ rack_id: rackId, module_id: module.id, quantity });
   }
   if (manual_hash) {
-    await db.models.Manual.create({
+    const manual = await db.models.Manual.create({
       module_id: module.id,
       user_id: null,
       hash: manual_hash,
       source: 'found',
     });
+    if (manual_text) {
+      await insertManualText(db, manual.get({ plain: true }), {
+        title: `${manufacturer} ${name}`,
+        content: manual_text,
+      });
+    }
   }
   return { ...module.get({ plain: true }), quantity, rack_id: rackId };
+}
+
+// The extracted markdown of a document, as the extract_manual job would have
+// stored it. Visibility rides on the manual: user_id null is the shared
+// manual's text, a user_id is that user's upload.
+export async function insertManualText(db, manual, { title = null, content = '' } = {}) {
+  const row = await db.models.ManualDocument.create({
+    manual_id: manual.id,
+    module_id: manual.module_id,
+    user_id: manual.user_id ?? null,
+    hash: manual.hash,
+    title,
+    content,
+    pages: Math.max(1, content.split('\f').length),
+    chars: content.length,
+    source: 'pdftotext',
+  });
+  return row.get({ plain: true });
 }
 
 // Maps an existing shared module into one of userId's racks (their 'main

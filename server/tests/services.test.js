@@ -771,6 +771,38 @@ describe('analyzeManualForModule', () => {
     expect(mod[0].summary).toContain('dual function generator');
   });
 
+  // The width is a property of the module, and the manual is where it is
+  // printed — so the analysis is the first thing that can record it.
+  it('stores the panel width the manual states', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id, { manual_hash: PDF_HASH });
+    const backend = fakeBackend({
+      analyzeDocument: '{"summary": "A VCO.", "hp": "12.3", "components": [{"type": "knob", "name": "Freq"}]}',
+    });
+
+    const result = await analyzeManualForModule(db, backend, module, '/tmp/vco.pdf');
+    // Rounded to the nearest half HP, like every other width in the app.
+    expect(result.hp).toBe(12.5);
+    const { rows } = await db.query('SELECT hp FROM modules WHERE id = $1', [module.id]);
+    expect(rows[0].hp).toBe(12.5);
+    expect(backend.calls.analyzeDocument[0][0]).toContain('"hp"');
+  });
+
+  it('leaves a recorded width alone when the manual states none', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id, { manual_hash: PDF_HASH, hp: 8 });
+    const backend = fakeBackend({
+      analyzeDocument: '{"summary": "A VCO.", "components": [{"type": "knob", "name": "Freq"}]}',
+    });
+
+    const result = await analyzeManualForModule(db, backend, module, '/tmp/vco.pdf');
+    expect(result.hp).toBe(null);
+    const { rows } = await db.query('SELECT hp FROM modules WHERE id = $1', [module.id]);
+    expect(rows[0].hp).toBe(8);
+  });
+
   it('replaces components and normalizations on re-analysis', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });

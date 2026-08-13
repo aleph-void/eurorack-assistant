@@ -54,6 +54,9 @@ export function defineModels(sequelize) {
       // Progress of the front-panel picture: found/drawn or not (migration
       // 016). Independent of the analysis, which it runs after.
       panel_status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'pending' },
+      // Panel width in HP, where the import stated it or the panel job worked
+      // it out (migration 017). Null until something knows it.
+      hp: { type: DataTypes.REAL },
       summary: { type: DataTypes.TEXT },
     },
     { tableName: 'modules', createdAt: 'created_at', updatedAt: 'updated_at' }
@@ -75,6 +78,27 @@ export function defineModels(sequelize) {
     { tableName: 'manuals', createdAt: 'created_at', updatedAt: false }
   );
 
+  // A manual's text, extracted from the PDF and stored as markdown so it can
+  // be searched and read (migration 018). One row per Manual row, and it
+  // inherits that row's visibility: user_id NULL is the shared manual's text,
+  // seen by everyone; a user_id is an upload's text, seen by its owner alone.
+  const ManualDocument = define(
+    'ManualDocument',
+    {
+      id,
+      manual_id: { type: DataTypes.INTEGER, allowNull: false },
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      user_id: { type: DataTypes.INTEGER },
+      hash: { type: DataTypes.TEXT, allowNull: false },
+      title: { type: DataTypes.TEXT },
+      content: { type: DataTypes.TEXT, allowNull: false },
+      pages: { type: DataTypes.INTEGER },
+      chars: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      source: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'pdftotext' },
+    },
+    { tableName: 'manual_documents', createdAt: 'created_at', updatedAt: 'updated_at' }
+  );
+
   // The module's front plate: either a real image found on the web or the
   // logical panel the server draws from the layout the LLM read out of the
   // manual (migration 016). The file itself is content-addressed in
@@ -84,6 +108,8 @@ export function defineModels(sequelize) {
     {
       id,
       module_id: { type: DataTypes.INTEGER, allowNull: false },
+      // 'image' (found on the web), 'generated' (drawn from the manual), or
+      // 'upload' (a picture a user supplied; migration 017).
       source: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'generated' },
       source_url: { type: DataTypes.TEXT },
       image_hash: { type: DataTypes.TEXT, allowNull: false },
@@ -711,6 +737,11 @@ export function defineModels(sequelize) {
   Module.hasMany(Manual, { foreignKey: 'module_id' });
   Manual.belongsTo(Module, { foreignKey: 'module_id' });
 
+  Manual.hasOne(ManualDocument, { foreignKey: 'manual_id' });
+  ManualDocument.belongsTo(Manual, { foreignKey: 'manual_id' });
+  Module.hasMany(ManualDocument, { foreignKey: 'module_id' });
+  ManualDocument.belongsTo(Module, { foreignKey: 'module_id' });
+
   Module.hasMany(ModuleComponent, { foreignKey: 'module_id' });
   ModuleComponent.belongsTo(Module, { foreignKey: 'module_id' });
 
@@ -849,6 +880,7 @@ export function defineModels(sequelize) {
     AppConfig,
     Module,
     Manual,
+    ManualDocument,
     Rack,
     RackModule,
     ModuleComponent,

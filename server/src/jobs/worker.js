@@ -3,9 +3,11 @@
 //   import          — parse an import (text/csv/modulargrid), create module
 //                     records, and queue a find_manual job per new module
 //   find_manual     — research + download the module's manual PDF, then queue
-//                     an analyze_manual job for it
+//                     analyze_manual and extract_manual jobs for it
 //   analyze_manual  — LLM analysis of the manual into a summary + components,
 //                     then queue a panel_image job for it
+//   extract_manual  — pdftotext + markdown structuring of one document, stored
+//                     for reading and full-text search (no LLM involved)
 //   panel_image     — find (or draw) the module's front panel and place every
 //                     analyzed component on it
 //   scope_question  — determine which modules/jacks a question applies to,
@@ -29,6 +31,7 @@ import {
 } from '../services/importer.js';
 import { findManualForModule } from '../services/manualFinder.js';
 import { analyzeManualForModule } from '../services/manualAnalyzer.js';
+import { extractManualDocument } from '../services/manualText.js';
 import { buildPanelForModule } from '../services/panelImage.js';
 import { answerQuestion, scopeQuestion } from '../services/ask.js';
 import { safeSegment, writeRackExport } from '../services/rackExport.js';
@@ -47,7 +50,14 @@ export const STALE_JOB_MS = 5 * 60 * 1000;
 // Ceiling on a single attempt. The LLM CLI has its own (shorter) timeout, so
 // this only catches a job wedged somewhere else — but a runner stuck forever
 // costs the pool a slot, and six of them cost the whole pool.
+//
+// The ceiling scales with the attempt count: a job that timed out because the
+// work is genuinely long (a 300-page manual, a slow model) fails identically
+// on every retry against a fixed limit, so each attempt gets that much longer
+// again — 45, then 90, then 135 minutes.
 export const JOB_TIMEOUT_MS = 45 * 60 * 1000;
+
+export const attemptTimeoutMs = (baseMs, attempts) => baseMs * Math.max(1, attempts || 1);
 
 // Timestamp of the last sign of life from whoever holds a running job. Rows
 // claimed before leases existed have no heartbeat, so fall back to updated_at.
@@ -101,6 +111,29 @@ export async function enqueueModuleJob(db, type, module, userId) {
 export const enqueueFindManual = (db, module, userId) =>
   enqueueModuleJob(db, 'find_manual', module, userId);
 
+// Queue the text extraction of ONE document. Unlike the other per-module jobs
+// a module may legitimately have several of these in flight at once (its
+// shared manual and two uploads are three different documents), so the dedupe
+// is on the document rather than on the module.
+export async function enqueueExtractManual(db, manual, userId) {
+  const live = await db.models.Job.findAll({
+    where: { module_id: manual.module_id, type: 'extract_manual', status: ['pending', 'running'] },
+  });
+  const queued = live.some((job) => {
+    try {
+      return JSON.parse(job.payload || '{}').manual_id === manual.id;
+    } catch {
+      return false;
+    }
+  });
+  if (queued) return null;
+  return enqueueJob(db, 'extract_manual', {
+    moduleId: manual.module_id,
+    userId,
+    payload: { manual_id: manual.id },
+  });
+}
+
 export function createWorker(db, options = {}) {
   const {
     manualsDir = process.env.MANUALS_DIR || '/data/manuals',
@@ -115,6 +148,7 @@ export function createWorker(db, options = {}) {
     backendFactory = createBackend,
     fetchImpl = fetch,
     renderImpl = renderPageToPdf,
+    extractImpl = extractManualDocument,
     bus = null,
     log = (...args) => console.log('[worker]', ...args),
   } = options;
@@ -378,6 +412,48 @@ export function createWorker(db, options = {}) {
       await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: job.user_id });
       progress('queued manual analysis');
     }
+
+    // The searchable text of the document that was just saved. Independent of
+    // the analysis — it needs no model and reads nothing the analysis writes —
+    // so the two run alongside each other rather than in a chain.
+    const saved = await db.models.Manual.findOne({
+      where: { module_id: module.id, user_id: null, hash },
+      order: [['id', 'ASC']],
+    });
+    if (saved && (await enqueueExtractManual(db, saved, job.user_id))) {
+      progress('queued manual text extraction');
+    }
+  }
+
+  // Turn one document into the markdown that the search index and the reader
+  // are built on. payload.manual_id names the document; without one this is
+  // the module's shared manual.
+  async function handleExtractManual(job, backend, progress) {
+    const { Module, Manual } = db.models;
+    const record = await Module.findByPk(job.module_id);
+    if (!record) throw new Error(`Module ${job.module_id} no longer exists`);
+    const module = record.get({ plain: true });
+    const payload = JSON.parse(job.payload || '{}');
+    const manual = payload.manual_id
+      ? await Manual.findOne({ where: { id: payload.manual_id, module_id: module.id } })
+      : await Manual.findOne({
+          where: { module_id: module.id, user_id: null },
+          order: [['id', 'ASC']],
+        });
+    if (!manual) {
+      throw new Error(
+        `Module ${module.manufacturer} ${module.name} has no document to extract text from`
+      );
+    }
+    progress(`extracting text: ${manual.original_name || `${manual.hash}.pdf`}`);
+    const document = await extractImpl(
+      db,
+      manual.get({ plain: true }),
+      module,
+      manualPath(manualsDir, manual.hash),
+      { log: progress }
+    );
+    progress(`text saved: ${document.pages ?? '?'} page(s), ${document.chars} characters`);
   }
 
   async function handleAnalyzeManual(job, backend, progress) {
@@ -511,6 +587,7 @@ export function createWorker(db, options = {}) {
     import: handleImport,
     find_manual: handleFindManual,
     analyze_manual: handleAnalyzeManual,
+    extract_manual: handleExtractManual,
     panel_image: handlePanelImage,
     scope_question: handleScopeQuestion,
     answer_question: handleAnswerQuestion,
@@ -540,10 +617,11 @@ export function createWorker(db, options = {}) {
       // The handler is raced rather than aborted: it has no cancellation to
       // offer, so the attempt is given up on and the runner freed. Whatever it
       // was waiting for is left to finish and be ignored.
+      const limitMs = attemptTimeoutMs(jobTimeoutMs, job.attempts);
       await withTimeout(
         handler(job, backend, progress),
-        jobTimeoutMs,
-        `job exceeded its ${Math.round(jobTimeoutMs / 60000)} minute time limit`
+        limitMs,
+        `job exceeded its ${Math.round(limitMs / 60000)} minute time limit`
       );
       const [, doneRows] = await db.models.Job.update(
         { status: 'complete', error: null },

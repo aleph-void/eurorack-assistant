@@ -27,26 +27,46 @@ describe('parseCsv', () => {
 describe('parseModuleLines', () => {
   it('parses manufacturer,module lines', () => {
     expect(parseModuleLines('Make Noise,Maths\nMutable Instruments,Beads')).toEqual([
-      { manufacturer: 'Make Noise', name: 'Maths', quantity: 1 },
-      { manufacturer: 'Mutable Instruments', name: 'Beads', quantity: 1 },
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 1, hp: null },
+      { manufacturer: 'Mutable Instruments', name: 'Beads', quantity: 1, hp: null },
     ]);
   });
 
   it('keeps free-text lines with no comma as name-only items', () => {
     expect(parseModuleLines('Make Noise Maths')).toEqual([
-      { manufacturer: '', name: 'Make Noise Maths', quantity: 1 },
+      { manufacturer: '', name: 'Make Noise Maths', quantity: 1, hp: null },
     ]);
   });
 
   it('collapses duplicate lines into a quantity count', () => {
     expect(parseModuleLines('Make Noise,Maths\nmake noise,maths')).toEqual([
-      { manufacturer: 'Make Noise', name: 'Maths', quantity: 2 },
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 2, hp: null },
+    ]);
+  });
+
+  it('takes a width written on the end of a name out of the name', () => {
+    expect(parseModuleLines('Make Noise,Maths 20HP\nMutable Instruments,Beads (16 hp)')).toEqual([
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 1, hp: 20 },
+      { manufacturer: 'Mutable Instruments', name: 'Beads', quantity: 1, hp: 16 },
+    ]);
+  });
+
+  it('keeps a trailing number that is part of the name', () => {
+    expect(parseModuleLines('Doepfer,A-100HP\nIntellijel,Quad VCA 12')).toEqual([
+      { manufacturer: 'Doepfer', name: 'A-100HP', quantity: 1, hp: null },
+      { manufacturer: 'Intellijel', name: 'Quad VCA 12', quantity: 1, hp: null },
+    ]);
+  });
+
+  it('collapses a line with a width and one without into the same module', () => {
+    expect(parseModuleLines('Make Noise,Maths 20HP\nMake Noise,Maths')).toEqual([
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 2, hp: 20 },
     ]);
   });
 
   it('skips blank lines and comments', () => {
     expect(parseModuleLines('# my rack\n\nMake Noise,Maths\n')).toEqual([
-      { manufacturer: 'Make Noise', name: 'Maths', quantity: 1 },
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 1, hp: null },
     ]);
   });
 
@@ -54,7 +74,7 @@ describe('parseModuleLines', () => {
     const text =
       '"manufacturer","module","quantity","manual file name"\n' + 'Make Noise,Maths\n';
     expect(parseModuleLines(text)).toEqual([
-      { manufacturer: 'Make Noise', name: 'Maths', quantity: 1 },
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 1, hp: null },
     ]);
   });
 });
@@ -65,20 +85,34 @@ describe('parseModuleCsv', () => {
       '"manufacturer","module","quantity","manual file name"\n' +
       '"Make Noise","Maths",2,"Make_Noise_Maths_Manual.pdf"\n';
     expect(parseModuleCsv(csv)).toEqual([
-      { manufacturer: 'Make Noise', name: 'Maths', quantity: 2 },
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 2, hp: null },
     ]);
   });
 
   it('parses a headerless CSV and defaults quantity to 1', () => {
     expect(parseModuleCsv('"Make Noise","Maths"\n"ALM","Pamela\'s NEW Workout",abc')).toEqual([
-      { manufacturer: 'Make Noise', name: 'Maths', quantity: 1 },
-      { manufacturer: 'ALM', name: "Pamela's NEW Workout", quantity: 1 },
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 1, hp: null },
+      { manufacturer: 'ALM', name: "Pamela's NEW Workout", quantity: 1, hp: null },
+    ]);
+  });
+
+  it('reads an hp column named in the header, wherever it sits', () => {
+    const csv =
+      '"manufacturer","module","hp","quantity"\n' + '"Make Noise","Maths","20HP",2\n';
+    expect(parseModuleCsv(csv)).toEqual([
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 2, hp: 20 },
+    ]);
+  });
+
+  it('leaves hp null when a headerless CSV has no width column', () => {
+    expect(parseModuleCsv('"Make Noise","Maths",1,"maths.pdf"')).toEqual([
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 1, hp: null },
     ]);
   });
 
   it('skips rows missing manufacturer or module', () => {
     expect(parseModuleCsv('"Make Noise",""\n"","Maths"\n"ALM","Squid Salmple",1')).toEqual([
-      { manufacturer: 'ALM', name: 'Squid Salmple', quantity: 1 },
+      { manufacturer: 'ALM', name: 'Squid Salmple', quantity: 1, hp: null },
     ]);
   });
 });
@@ -88,9 +122,9 @@ describe('fetchModulargridRack', () => {
     rack: {
       Rack: { name: 'My Rack' },
       Module: [
-        { name: 'Maths', Vendor: { name: 'Make Noise' } },
-        { name: 'Maths', Vendor: { name: 'Make Noise' } },
-        { name: 'Beads', Vendor: { name: 'Mutable Instruments' } },
+        { name: 'Maths', Vendor: { name: 'Make Noise' }, hp: 20 },
+        { name: 'Maths', Vendor: { name: 'Make Noise' }, hp: 20 },
+        { name: 'Beads', Vendor: { name: 'Mutable Instruments' }, hp: '16' },
         { name: '', Vendor: { name: 'Ghost' } },
       ],
     },
@@ -104,8 +138,10 @@ describe('fetchModulargridRack', () => {
       { fetchImpl }
     );
     expect(items).toEqual([
-      { manufacturer: 'Make Noise', name: 'Maths', quantity: 2 },
-      { manufacturer: 'Mutable Instruments', name: 'Beads', quantity: 1 },
+      // Only the names come from here: a width stated by the rack planner is
+      // ignored, since module data is taken from manuals and product pages.
+      { manufacturer: 'Make Noise', name: 'Maths', quantity: 2, hp: null },
+      { manufacturer: 'Mutable Instruments', name: 'Beads', quantity: 1, hp: null },
     ]);
   });
 

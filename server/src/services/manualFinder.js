@@ -25,10 +25,11 @@ Task: find the OFFICIAL user manual PDF for this module on the internet.
 1. Determine the manufacturer name and the module name.
 2. Search the web for the manufacturer's official manual PDF for this module.
    Direct links to .pdf files on the manufacturer's own site are strongly
-   preferred. PDFs hosted by reputable sources (ModularGrid, retailers,
-   ModWiggler attachments) are acceptable if no official link exists.
-3. Also find the module's product web page (manufacturer page preferred,
-   otherwise its ModularGrid page).
+   preferred. PDFs hosted by reputable sources (retailers who sell the module,
+   ModWiggler attachments) are acceptable if no official link exists. Do not
+   use rack-planning sites such as ModularGrid as a source.
+3. Also find the module's public product web page: the manufacturer's own page
+   for it, or failing that a retailer's product page.
 
 Respond with ONLY a JSON object, no prose and no code fences, shaped exactly like:
 

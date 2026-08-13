@@ -6,9 +6,12 @@
 // cables between holes. This service gives the component list a picture to
 // hang on, in the order a person would try:
 //
-//   1. Research the web for the module's real front-panel image (the
-//      manufacturer's product page, or ModularGrid), download it, and ask the
-//      LLM to locate every analyzed component on it.
+//   0. Use the picture the user uploaded, if there is one: a panel someone
+//      deliberately supplied outranks anything research can turn up, so it is
+//      kept and only re-located on (routes/modules.js POST /:id/panel).
+//   1. Research the web for the module's real front-panel image on the
+//      manufacturer's own product page (or a retailer's), download it, and ask
+//      the LLM to locate every analyzed component on it.
 //   2. Failing that — no image found, or none of the components could be
 //      located on it — ask the LLM to read the module's LAYOUT out of the
 //      manual (how many HP wide, and where each control and jack sits) and
@@ -74,7 +77,8 @@ Task: find a picture of this module's FRONT PANEL — the flat face of the
 module as it appears in a rack, photographed or rendered straight on.
 
 1. Search the manufacturer's official product page for this module, then
-   ModularGrid, then retailers.
+   retailers who sell it. Use the maker's own page in preference to anyone
+   else's, and do not use rack-planning sites such as ModularGrid.
 2. Collect direct links to the image FILES (URLs ending in .jpg, .jpeg, .png
    or .webp), not the pages holding them.
 3. Also note how wide the module is in HP, if the page states it.
@@ -589,6 +593,11 @@ export async function findPanelImage(backend, module, panelsDir, deps = {}) {
 // Replace the module's panel record and its component positions, and mark the
 // module's panel status complete. One transaction: a half-written panel whose
 // markers point at the previous image would be worse than none.
+//
+// A width the panel step worked out also fills in the module's own hp when
+// nothing has recorded one yet (migration 017) — but never overwrites a width
+// that is already there, which came from the manual or from the import and is
+// the better source.
 export async function savePanel(db, module, panel, placements) {
   const { Module, ModulePanel, ModulePanelComponent } = db.models;
   await db.sequelize.transaction(async (transaction) => {
@@ -611,7 +620,10 @@ export async function savePanel(db, module, panel, placements) {
       );
     }
     await Module.update(
-      { panel_status: 'complete' },
+      {
+        panel_status: 'complete',
+        ...(panel.hp != null && module.hp == null ? { hp: panel.hp } : {}),
+      },
       { where: { id: module.id }, transaction }
     );
   });
@@ -626,9 +638,48 @@ export async function deletePanelImageIfOrphaned(db, panelsDir, hash, ext) {
   fs.rmSync(panelPath(panelsDir, hash, ext), { force: true });
 }
 
-// The whole pipeline for one module: image first, drawn panel second, columns
-// by type last. Always produces a panel — a module with an analysis but no
-// picture is exactly the case this exists to remove.
+// Place this module's components on a panel image that is already stored —
+// the picture a user uploaded (routes/modules.js POST /:id/panel). The image
+// itself is never in question here: it is kept whatever the mapping says,
+// because someone chose it deliberately. Only the markers are (re)derived,
+// which is also what puts them back after a re-analysis has replaced every
+// component row the previous markers pointed at.
+//
+// Returns null when the file has gone missing, so the caller can fall back to
+// building a panel from scratch.
+export async function locateOnUploadedPanel(db, backend, module, panel, components, panelsDir, deps = {}) {
+  const { log = () => {} } = deps;
+  const file = panelPath(panelsDir, panel.image_hash, panel.image_ext);
+  if (!fs.existsSync(file)) return null;
+  log(`locating components on the uploaded ${panel.width}x${panel.height} image`);
+  const located = await locateComponentsOnImage(backend, module, components, file, log);
+  if (!located) {
+    log('no component could be located on the uploaded image; keeping it unmarked');
+  }
+  return savePanel(
+    db,
+    module,
+    {
+      source: 'upload',
+      source_url: panel.source_url ?? null,
+      image_hash: panel.image_hash,
+      image_ext: panel.image_ext,
+      width: panel.width,
+      height: panel.height,
+      ...(located?.crop ?? { ...FULL_CROP }),
+      hp: module.hp ?? panel.hp ?? null,
+      description: located
+        ? `Uploaded panel image — ${located.matched} of ${components.length} component(s) located on it.`
+        : 'Uploaded panel image. The components on it could not be located automatically.',
+    },
+    located?.placements ?? []
+  );
+}
+
+// The whole pipeline for one module: an uploaded picture if there is one,
+// then a researched image, then a drawn panel, then columns by type. Always
+// produces a panel — a module with an analysis but no picture is exactly the
+// case this exists to remove.
 export async function buildPanelForModule(db, backend, module, panelsDir, deps = {}) {
   const { fetchImpl = fetch, log = () => {}, manualFile = null, findImages = true } = deps;
   const components = (
@@ -644,6 +695,28 @@ export async function buildPanelForModule(db, backend, module, panelsDir, deps =
   }
 
   const previous = await db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+
+  // A panel someone uploaded is the panel. Research would only replace a
+  // deliberate choice with a guess, so the picture stays and its markers are
+  // worked out again on it.
+  //
+  // Checked against the stored row rather than once at the top, because this
+  // job spends minutes in LLM calls and an upload can land in the middle of
+  // one: the answer to "is there an uploaded panel" has to be the answer at
+  // the moment of saving, or the upload is silently thrown away.
+  const uploadedPanel = async () => {
+    const current = await db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    if (current?.source !== 'upload') return null;
+    return locateOnUploadedPanel(db, backend, module, current.get({ plain: true }), components, panelsDir, {
+      log,
+    });
+  };
+
+  const uploaded = await uploadedPanel();
+  if (uploaded) return uploaded;
+  if (previous?.source === 'upload') {
+    log('the uploaded panel image is no longer on disk; building one instead');
+  }
 
   let researched = { image: null, hp: null, page_url: null };
   if (findImages) {
@@ -662,6 +735,12 @@ export async function buildPanelForModule(db, backend, module, panelsDir, deps =
     );
     if (located) {
       log(`panel image mapped: ${located.matched} of ${components.length} component(s) located`);
+      const landed = await uploadedPanel();
+      if (landed) {
+        log('a panel picture was uploaded while this ran; keeping that instead');
+        await deletePanelImageIfOrphaned(db, panelsDir, researched.image.hash, researched.image.ext);
+        return landed;
+      }
       const saved = await savePanel(
         db,
         module,
@@ -698,13 +777,20 @@ export async function buildPanelForModule(db, backend, module, panelsDir, deps =
     layout?.placements ?? fallbackLayout(components),
     components
   );
-  const hp = layout?.hp ?? researched.hp ?? estimateHp(components);
+  // The module's own width (from its manual, or from the imported list) beats
+  // anything worked out while drawing.
+  const hp = module.hp ?? layout?.hp ?? researched.hp ?? estimateHp(components);
   const { svg, width, height } = renderPanelSvg({
     manufacturer: module.manufacturer,
     name: module.name,
     hp,
     placements,
   });
+  const landed = await uploadedPanel();
+  if (landed) {
+    log('a panel picture was uploaded while this ran; keeping that instead');
+    return landed;
+  }
   const hash = saveImage(panelsDir, Buffer.from(svg, 'utf-8'), 'svg');
   log(
     layout

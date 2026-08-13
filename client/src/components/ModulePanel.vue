@@ -81,7 +81,12 @@ const markers = computed(() =>
       </g>
     </svg>
     <figcaption class="muted">
-      <template v-if="panel.source === 'image'">
+      <template v-if="panel.source === 'upload'">
+        Panel picture you uploaded — {{ markers.length }} component(s) located on it{{
+          panel.hp ? `, ${panel.hp}HP wide` : ''
+        }}.
+      </template>
+      <template v-else-if="panel.source === 'image'">
         Front panel image
         <a v-if="panel.source_url" :href="panel.source_url" target="_blank" rel="noreferrer">
           (source)

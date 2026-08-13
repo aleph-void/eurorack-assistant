@@ -85,11 +85,13 @@ async function move(module, event) {
   }
 }
 
-// Re-run the analysis over the whole system (or the selected rack). The
-// analysis learns to record more about a module over time — signal paths,
-// switch sections, the panel layout — and everything analyzed before that is
-// missing it. Re-discovering the manuals is a separate, heavier step: it
-// costs a web search per module, so it is off unless asked for.
+// Fill the gaps across the whole system (or the selected rack): a module with
+// no manual, no analyzed components, no front panel picture or no HP width
+// gets the one job that would supply what it is missing, and a module that
+// already has all of it is left alone — re-running a complete analysis costs
+// a model run and overwrites corrections made by hand. Re-discovering the
+// manuals is a separate, heavier step: it costs a web search per module, so
+// it is off unless asked for.
 const rediscoverManuals = ref(false);
 const reanalyzing = ref(false);
 const reanalyzed = ref('');
@@ -97,12 +99,14 @@ const reanalyzed = ref('');
 async function reanalyzeAll() {
   const where = currentRack.value ? `in '${currentRack.value.name}'` : 'in all your racks';
   const extra = rediscoverManuals.value
-    ? ' Their manuals will be searched for again first.'
+    ? ' Modules still missing their analysis will have their manuals searched for again first.'
     : '';
   const ok = await dialog.confirm({
-    title: 'Re-analyze modules',
-    message: `Re-analyze every module ${where}?${extra}`,
-    confirmLabel: 'Re-analyze',
+    title: 'Fill in missing details',
+    message:
+      `Queue work for every module ${where} that is missing a manual, an analysis, ` +
+      `a panel image, an HP width or the searchable text of its manual?${extra}`,
+    confirmLabel: 'Fill in',
   });
   if (!ok) return;
   error.value = '';
@@ -113,11 +117,13 @@ async function reanalyzeAll() {
       rack_id: selectedRack.value || undefined,
       rediscover_manuals: rediscoverManuals.value,
     });
-    const queued = res.queued.find_manual + res.queued.analyze_manual;
+    const queued = Object.values(res.queued).reduce((sum, n) => sum + n, 0);
+    const complete = `${res.complete} of ${res.modules} module(s) already complete`;
     reanalyzed.value =
       queued === 0
-        ? `Nothing queued — the ${res.modules} module(s) already have jobs waiting.`
-        : `Queued ${queued} job(s) across ${res.modules} module(s)` +
+        ? `Nothing to queue — ${complete}` +
+          (res.skipped ? `, and ${res.skipped} already had a job waiting.` : '.')
+        : `Queued ${queued} job(s) — ${complete}` +
           (res.skipped ? `; ${res.skipped} already had one waiting.` : '.');
     await load();
   } catch (e) {
@@ -168,7 +174,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
       data-test="reanalyze-all"
       @click="reanalyzeAll"
     >
-      {{ reanalyzing ? 'Queueing…' : 'Re-analyze all' }}
+      {{ reanalyzing ? 'Queueing…' : 'Fill in missing details' }}
     </button>
     <label class="inline-check">
       <input v-model="rediscoverManuals" type="checkbox" data-test="rediscover-manuals" />
@@ -207,6 +213,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
                 <th>Manufacturer</th>
                 <th>Module</th>
                 <th>Qty</th>
+                <th>HP</th>
                 <th v-if="!currentRack">Rack(s)</th>
                 <th>Manual</th>
                 <th>Analysis</th>
@@ -225,6 +232,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
                   <RouterLink :to="`/modules/${module.id}`">{{ module.name }}</RouterLink>
                 </td>
                 <td>{{ module.quantity }}</td>
+                <td>{{ module.hp ? `${module.hp}HP` : '—' }}</td>
                 <td v-if="!currentRack">{{ rackNames(module) }}</td>
                 <td><span class="badge" :class="module.manual_status">{{ module.manual_status }}</span></td>
                 <td>

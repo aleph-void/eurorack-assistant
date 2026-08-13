@@ -20,7 +20,13 @@ COPY src ./src
 COPY scripts ./scripts
 COPY migrations ./migrations
 
-RUN mkdir -p /data/manuals && chown -R node:node /data /app
+# Every data directory has to exist in the image, not just be a mount point
+# invented at run time: docker copies a named volume's ownership from the
+# directory it is mounted over, so a path that is missing here is created
+# root-owned and nothing the `node` user does can write to it (the panel,
+# export and capture jobs failing with EACCES).
+RUN mkdir -p /data/manuals /data/exports /data/captures /data/panels \
+    && chown -R node:node /data /app
 USER node
 
 ENV NODE_ENV=production

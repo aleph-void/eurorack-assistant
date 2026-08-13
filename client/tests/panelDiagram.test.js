@@ -301,7 +301,7 @@ describe('ModulePanel', () => {
   });
 });
 
-describe('ModulesView re-analyze all', () => {
+describe('ModulesView fill in missing details', () => {
   const racks = [{ id: 1, name: 'main rack' }];
   const module = {
     id: 1,
@@ -321,11 +321,12 @@ describe('ModulesView re-analyze all', () => {
     vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
   });
 
-  it('re-analyzes without re-discovering the manuals by default', async () => {
+  it('queues the missing work without re-discovering the manuals by default', async () => {
     api.post.mockResolvedValue({
-      modules: 1,
-      queued: { find_manual: 0, analyze_manual: 1 },
+      modules: 3,
+      queued: { find_manual: 0, analyze_manual: 1, panel_image: 1 },
       skipped: 0,
+      complete: 1,
     });
     const wrapper = mount(ModulesView, { global: testGlobal() });
     await flushPromises();
@@ -336,15 +337,18 @@ describe('ModulesView re-analyze all', () => {
       rack_id: undefined,
       rediscover_manuals: false,
     });
-    expect(wrapper.find('[data-test="reanalyze-result"]').text()).toContain('Queued 1 job(s)');
+    expect(wrapper.find('[data-test="reanalyze-result"]').text()).toContain(
+      'Queued 2 job(s) — 1 of 3 module(s) already complete.'
+    );
   });
 
   it('re-discovers the manuals when the box is ticked, for the selected rack', async () => {
     currentRouteQuery = { rack: '1' };
     api.post.mockResolvedValue({
       modules: 1,
-      queued: { find_manual: 1, analyze_manual: 0 },
+      queued: { find_manual: 1, analyze_manual: 0, panel_image: 0 },
       skipped: 0,
+      complete: 0,
     });
     const wrapper = mount(ModulesView, { global: testGlobal() });
     await flushPromises();

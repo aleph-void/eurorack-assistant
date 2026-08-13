@@ -106,10 +106,15 @@ async function submit() {
           data-test="content"
           :placeholder="
             mode === 'csv'
-              ? '&quot;manufacturer&quot;,&quot;module&quot;,&quot;quantity&quot;,&quot;manual file name&quot;'
-              : 'Make Noise,Maths\nMutable Instruments Beads'
+              ? '&quot;manufacturer&quot;,&quot;module&quot;,&quot;quantity&quot;,&quot;hp&quot;'
+              : 'Make Noise,Maths 20HP\nMutable Instruments Beads'
           "
         ></textarea>
+        <p class="muted" data-test="hp-hint">
+          Panel widths are optional. A CSV with a header row may carry an <code>hp</code> column,
+          and a width written after a name ("Maths 20HP") is read off it. Anything you leave out is
+          taken from the module's manual when it is analyzed.
+        </p>
       </template>
 
       <p v-if="error" class="error" data-test="error">{{ error }}</p>

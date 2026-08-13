@@ -100,6 +100,12 @@ export function findPdfinfo(env = process.env) {
   return findOnPath(['pdfinfo'], env);
 }
 
+// poppler's pdftotext, which turns an acquired manual into the text the
+// markdown extraction is built from (services/manualText.js).
+export function findPdftotext(env = process.env) {
+  return findOnPath(['pdftotext'], env);
+}
+
 // A complete PDF ends with an %%EOF marker on its last line; a few writers
 // leave trailing whitespace or a stray byte after it, so look at the tail
 // rather than the very end.

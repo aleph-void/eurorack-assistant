@@ -12,7 +12,14 @@ import {
   PDF_BYTES,
   PDF_HASH,
 } from './helpers.js';
-import { createWorker, enqueueJob, enqueueFindManual, MAX_ATTEMPTS } from '../src/jobs/worker.js';
+import {
+  attemptTimeoutMs,
+  createWorker,
+  enqueueJob,
+  enqueueExtractManual,
+  enqueueFindManual,
+  MAX_ATTEMPTS,
+} from '../src/jobs/worker.js';
 import { getImportWorkerCount, DEFAULT_IMPORT_WORKERS } from '../src/services/config.js';
 import { createBus } from '../src/events.js';
 
@@ -24,6 +31,24 @@ afterEach(() => {
   fs.rmSync(manualsDir, { recursive: true, force: true });
 });
 
+// Stands in for pdftotext: the extraction is exercised for real in
+// manualText.test.js, and no test should need poppler installed.
+const fakeExtract = async (db, manual, module) => {
+  const content = `# ${module.manufacturer} ${module.name}\n\nExtracted text.\n`;
+  const row = await db.models.ManualDocument.create({
+    manual_id: manual.id,
+    module_id: module.id,
+    user_id: manual.user_id ?? null,
+    hash: manual.hash,
+    title: `${module.manufacturer} ${module.name}`,
+    content,
+    pages: 1,
+    chars: content.length,
+    source: 'pdftotext',
+  });
+  return row.get({ plain: true });
+};
+
 function makeWorker(db, backend, fetchImpl, bus, options = {}) {
   return createWorker(db, {
     manualsDir,
@@ -31,6 +56,7 @@ function makeWorker(db, backend, fetchImpl, bus, options = {}) {
     fetchImpl: fetchImpl || fakeFetch({}),
     // Tests must never launch a real headless chrome.
     renderImpl: async () => false,
+    extractImpl: fakeExtract,
     bus,
     log: () => {},
     ...options,
@@ -283,6 +309,73 @@ describe('worker', () => {
     );
     expect(chained).toHaveLength(1);
     expect(chained[0].status).toBe('pending');
+  });
+
+  it('chains a text extraction alongside the analysis when a manual is found', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id);
+    await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Make Noise',
+        module: 'Maths',
+        pdf_urls: ['https://makenoise.com/maths.pdf'],
+        product_page_url: null,
+      }),
+      analyzeDocument: '{"summary": "S", "components": []}',
+    });
+    const worker = makeWorker(db, backend, fakeFetch({ 'makenoise.com': { body: PDF_BYTES } }));
+    await worker.tick(); // find_manual
+
+    const { rows: queued } = await db.query(
+      `SELECT * FROM jobs WHERE type = 'extract_manual' AND module_id = $1`,
+      [module.id]
+    );
+    expect(queued).toHaveLength(1);
+    const manual = await db.models.Manual.findOne({ where: { module_id: module.id } });
+    // The job names the document it is to extract, not just the module.
+    expect(JSON.parse(queued[0].payload)).toEqual({ manual_id: manual.id });
+
+    // Running it stores the manual's text against that document.
+    await worker.tick(); // analyze_manual (queued first)
+    await worker.tick(); // extract_manual
+    const document = await db.models.ManualDocument.findOne({ where: { manual_id: manual.id } });
+    expect(document.content).toContain('Make Noise Maths');
+    expect(document.user_id).toBeNull();
+    expect(document.hash).toBe(manual.hash);
+  });
+
+  it('does not queue a second extraction for a document already queued', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id, { manual_hash: PDF_HASH });
+    const manual = await db.models.Manual.findOne({ where: { module_id: module.id } });
+
+    expect(await enqueueExtractManual(db, manual.get({ plain: true }), user.id)).toBeTruthy();
+    expect(await enqueueExtractManual(db, manual.get({ plain: true }), user.id)).toBeNull();
+
+    // A different document of the same module is its own job, though.
+    const upload = await db.models.Manual.create({
+      module_id: module.id,
+      user_id: user.id,
+      hash: 'e'.repeat(64),
+      name: 'cheat sheet',
+      source: 'upload',
+    });
+    expect(await enqueueExtractManual(db, upload.get({ plain: true }), user.id)).toBeTruthy();
+    expect(await db.models.Job.count({ where: { type: 'extract_manual' } })).toBe(2);
+  });
+
+  it('fails an extraction whose document has gone', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id);
+    await enqueue(db, 'extract_manual', { module_id: module.id, user_id: user.id });
+    const worker = makeWorker(db, fakeBackend());
+    const done = await worker.tick();
+    expect(done.error).toMatch(/no document to extract text from/);
   });
 
   it('builds the backend with the job type model override', async () => {
@@ -591,6 +684,7 @@ describe('worker', () => {
       manualsDir,
       backendFactory: () => backend,
       fetchImpl: fakeFetch({ 'makenoise.com': { body: PDF_BYTES } }),
+      extractImpl: fakeExtract,
       pollIntervalMs: 10,
       log: () => {},
     });
@@ -806,6 +900,46 @@ describe('worker', () => {
       expect(result.id).toBe(job.id);
       expect(result.status).toBe('pending'); // attempts left, so it goes back
       expect(result.error).toMatch(/time limit/);
+    });
+
+    it('widens the time limit with every attempt', () => {
+      expect(attemptTimeoutMs(1000, 1)).toBe(1000);
+      expect(attemptTimeoutMs(1000, 2)).toBe(2000);
+      expect(attemptTimeoutMs(1000, 3)).toBe(3000);
+      // A row from before attempts were counted still gets one full limit.
+      expect(attemptTimeoutMs(1000, 0)).toBe(1000);
+    });
+
+    it('lets a retry finish work that was too slow for the first attempt', async () => {
+      const db = await createTestDb();
+      const user = await createUser(db, { username: 'u' });
+      const module = await insertModule(db, user.id);
+      const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
+      await db.query(
+        `INSERT INTO manuals (module_id, hash, source, original_name)
+         VALUES ($1, $2, 'found', 'm.pdf')`,
+        [module.id, PDF_HASH]
+      );
+      fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+
+      // Work that takes longer than one limit but well inside two of them.
+      const slow = () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(JSON.stringify({ summary: 'slow', components: [] })), 450);
+        });
+      const worker = makeWorker(db, fakeBackend({ analyzeDocument: slow }), null, null, {
+        jobTimeoutMs: 300,
+      });
+
+      const first = await worker.tick();
+      expect(first.attempts).toBe(1);
+      expect(first.status).toBe('pending');
+      expect(first.error).toMatch(/time limit/);
+
+      // Second attempt: 600ms of room, so the same work lands.
+      const second = await worker.tick();
+      expect(second.attempts).toBe(2);
+      expect(second.status).toBe('complete');
     });
 
     it('keeps the heartbeat fresh while a long job runs', async () => {

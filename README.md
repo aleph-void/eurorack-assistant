@@ -22,7 +22,12 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   their own module instances.
 - **Import** your modules three ways: newline-delimited free text
   (`Make Noise Maths` or `Make Noise,Maths`), a README.csv-style CSV, or a
-  ModularGrid rack URL.
+  ModularGrid rack URL (module names only — everything the app records about a
+  module is taken from its manual or its manufacturer's product page). A list
+  may state each module's panel width: a CSV with a header row can carry an
+  `hp` column, and a width written after a name (`Maths 20HP`) is read off it.
+  Whatever the list does not say is filled in from the manual when it is
+  analyzed.
 - **Fully asynchronous pipeline** with live progress over a WebSocket:
   1. `import` job — parses the list and creates module records
   2. `find_manual` job (per module) — LLM web research finds the official
@@ -33,19 +38,60 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
      stored with a `type` field
   4. `panel_image` job (per module) — finds the module's front plate and puts
      every analyzed component on it (see below)
+  5. `extract_manual` job (per document) — poppler's `pdftotext` reads the PDF
+     and the structure heuristics in `services/manualText.js` turn it back
+     into markdown (headings, lists, paragraphs; running headers and page
+     numbers dropped), stored for reading and full-text search (see below). No
+     model runs, so it costs nothing to do for every document — it is queued
+     alongside the analysis rather than behind it.
 
-  The whole system can be put through the analysis again from the modules page
-  ("Re-analyze all", with an off-by-default option to re-discover the manuals
-  first) — the analysis learns to record more about a module over time, and
-  everything analyzed before that is missing it.
+  Gaps in all of that can be filled from the modules page ("Fill in missing
+  details"): every module with no manual, no analyzed components, no panel
+  picture, no HP width or no extracted text is queued for the one step that
+  would supply it, and
+  the modules that already have everything are left alone — redoing a complete
+  analysis costs a model run per module and overwrites corrections made by
+  hand. Re-discovering the manuals is an off-by-default option, for a module
+  whose analysis is missing because the document found for it was the wrong
+  one.
+
+  Each attempt of a job gets a time limit of 45 minutes, widened by the
+  attempt count (45, then 90, then 135) — work that timed out because it is
+  genuinely long would otherwise fail identically on every retry.
 - **Front panels**: each module gets a picture of its front plate with its
   jacks and controls located on it. The panel image is researched on the web
-  (manufacturer product page, ModularGrid) and the LLM marks where each
-  analyzed component sits on it; when no usable photograph exists — or the one
-  found turns out not to show this module straight on — the LLM reads the panel
-  LAYOUT out of the manual instead (how many HP wide, where each control sits)
-  and the server draws that as an SVG. Either way every jack ends up with a
-  position, which is what makes the patch diagram possible.
+  (the manufacturer's product page, or a retailer's) and the LLM marks where
+  each analyzed component sits on it; when no usable photograph exists — or the
+  one found turns out not to show this module straight on — the LLM reads the
+  panel LAYOUT out of the manual instead (how many HP wide, where each control
+  sits) and the server draws that as an SVG. Either way every jack ends up with
+  a position, which is what makes the patch diagram possible.
+
+  You can also **upload your own panel picture** from the module page (PNG,
+  JPEG, GIF or WebP). An uploaded panel replaces whatever the module had and is
+  never replaced by research afterwards: the `panel_image` job is queued to
+  locate this module's components on your picture instead, which is also what
+  puts the markers back after a re-analysis. Remove it and the module goes back
+  to a researched or drawn panel. Like the manual, the panel belongs to the
+  shared module record, so everyone with that module racked sees it.
+- **Searchable manuals**: every manual is also kept as text. The
+  `extract_manual` job reads the PDF with `pdftotext` and rebuilds it as a
+  markdown document — headings, lists and paragraphs recovered from line
+  layout, words rejoined across line breaks, the header and page number
+  repeated on every page dropped — stored in `manual_documents` behind a
+  postgres GIN full-text index.
+
+  The **Search manuals** page searches all of it at once: bare words, `"quoted
+  phrases"` and `-exclusions`, ranked, each hit showing the matched words in
+  context and linking to the module it belongs to. What you can search is
+  exactly what you can read: the shared manuals of every module, plus the
+  documents *you* uploaded — an upload is searchable and readable by its owner
+  alone, never by other users.
+
+  Each document can also be **read as a page** rather than opened as a PDF
+  (rendered from the markdown, with the source and a `.md` download a click
+  away) — linked from the module page's Documents table and from every search
+  hit.
 - **Patch diagram**: a patch is drawn as the modules it uses, panel beside
   panel, with a coloured cable curving between the jacks each patch cable
   joins. Only the modules the patch actually touches are drawn (a patch
@@ -183,7 +229,8 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
                                         │   questions, answers, jobs, users)
                                         ├── job worker (import / find_manual /
                                         │   analyze_manual / panel_image /
-                                        │   scope_question / answer_question)
+                                        │   extract_manual / scope_question /
+                                        │   answer_question)
                                         ├── /api/ws WebSocket (live job progress
                                         │   and oscilloscope presence)
                                         ├── /api/devices/ws WebSocket (connected
@@ -211,6 +258,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `racks` | a user's named racks (unique name per user, `main rack` by default); strictly private to their owner |
 | `rack_modules` | maps racks to the modules in them (per-rack quantity); "deleting" a module only unlinks it, and the same module can sit in many racks |
 | `manuals` | PDF documents mapped to modules — `user_id NULL` is the shared auto-found manual; rows with a `user_id` are private documents that user attached to their own module instance |
+| `manual_documents` | each document's text as markdown (`pdftotext` + the structure heuristics in `services/manualText.js`), with a GIN index on `to_tsvector('english', content)` — one row per `manuals` row, inheriting its visibility: `user_id NULL` is a shared manual's text, a `user_id` is that user's upload and is searchable by them alone |
 | `module_components` | typed components (`input_jack`, `output_jack`, `bidirectional_jack`, `knob`, `slider`, `button`, `toggle`, `switch`, `display`, `other`) with `voltage_min`/`voltage_max`/`polarity`, a mult `group_label`, and `port_kind` for connections that are not 3.5mm patch points (`midi_din`, `usb`, `microphone`, …) |
 | `module_panels` | the module's front plate: a photograph found on the web (`source` `image`) or the logical panel drawn from its manual (`generated`), stored content-addressed under `PANELS_DIR`, with the box of the image the panel occupies |
 | `module_panel_components` | where each analyzed component sits on that panel, as fractions of the image — what the patch diagram draws cables between |
@@ -240,7 +288,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `question_components` | links a question to the specific components it pertains to (LLM-suggested, then user-reviewed) |
 | `question_manuals` / `question_answers` / `question_notes` / `question_captures` | the documents the user attached during review: manual PDFs, previous answers, notes, oscilloscope captures |
 | `question_patches` | the patches a question is about — the patch rides along as a document of its cables, settings, normalled connections and signal flow, and the modules it uses go into scope |
-| `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `panel_image`, `scope_question`, `answer_question`) with attempts + errors |
+| `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `panel_image`, `extract_manual`, `scope_question`, `answer_question`) with attempts + errors |
 | `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`) and job worker count (`import_workers`, default 4) |
 
 ## Development

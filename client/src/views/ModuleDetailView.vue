@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 import { useAuthStore } from '../stores/auth.js';
 import ModulePanel from '../components/ModulePanel.vue';
 
@@ -460,10 +461,44 @@ async function createValue() {
   }
 }
 
+// An existing row's label and description are editable in place: the analysis
+// records a switch position's meaning from the manual and often gets the
+// wording thin or wrong, and re-typing the row from scratch to fix a sentence
+// is busywork. The type stays fixed — a min is not turned into an enum.
+const editingValueId = ref(null);
+const editValueValue = ref('');
+const editValueDescription = ref('');
+
+function startEditValue(v) {
+  editingValueId.value = v.id;
+  editValueValue.value = v.value;
+  editValueDescription.value = v.description || '';
+  valueError.value = '';
+}
+
+function cancelEditValue() {
+  editingValueId.value = null;
+}
+
+async function saveValue(v) {
+  valueError.value = '';
+  try {
+    await api.put(`/api/modules/${props.id}/components/${v.component.id}/values/${v.id}`, {
+      value: editValueValue.value.trim(),
+      description: editValueDescription.value.trim(),
+    });
+    editingValueId.value = null;
+    await load();
+  } catch (e) {
+    valueError.value = e.message;
+  }
+}
+
 async function removeValue(v) {
   valueError.value = '';
   try {
     await api.delete(`/api/modules/${props.id}/components/${v.component.id}/values/${v.id}`);
+    if (editingValueId.value === v.id) editingValueId.value = null;
     await load();
   } catch (e) {
     valueError.value = e.message;
@@ -499,6 +534,57 @@ function fileToBase64(file) {
     reader.onerror = () => reject(new Error('Could not read the file'));
     reader.readAsDataURL(file);
   });
+}
+
+// ---- front panel ----
+// The app finds or draws a panel by itself, but the picture it ends up with
+// can be the wrong module, or a diagram where a photograph exists. Uploading
+// one replaces it for good: the panel job stops researching and instead
+// locates this module's components on the picture supplied here.
+const panelHp = ref('');
+const panelError = ref('');
+const panelUploading = ref(false);
+
+async function uploadPanel(file) {
+  panelError.value = '';
+  panelUploading.value = true;
+  try {
+    const data_base64 = await fileToBase64(file);
+    const body = { filename: file.name, data_base64 };
+    const hp = panelHp.value.trim();
+    if (hp) body.hp = hp;
+    await api.post(`/api/modules/${props.id}/panel`, body);
+    panelHp.value = '';
+    await load();
+  } catch (e) {
+    panelError.value = e.message;
+  } finally {
+    panelUploading.value = false;
+  }
+}
+
+async function onPanelChosen(event) {
+  const file = event.target.files?.[0];
+  if (file) await uploadPanel(file);
+  event.target.value = '';
+}
+
+async function removePanel() {
+  const ok = await dialog.confirm({
+    title: 'Remove panel image',
+    message:
+      'Discard the uploaded picture? The app will go back to finding or drawing a panel for this module.',
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
+  panelError.value = '';
+  try {
+    await api.delete(`/api/modules/${props.id}/panel`);
+    await load();
+  } catch (e) {
+    panelError.value = e.message;
+  }
 }
 
 async function uploadDocument(file) {
@@ -595,6 +681,10 @@ onMounted(load);
       </span>
       &nbsp;
       <span class="badge" :class="module.panel_status">panel: {{ module.panel_status }}</span>
+      <template v-if="module.hp">
+        &nbsp;
+        <span class="badge" data-test="module-hp">{{ module.hp }}HP</span>
+      </template>
     </p>
     <p v-if="module.racks?.length" data-test="racks">
       In {{ module.racks.length === 1 ? 'rack' : 'racks' }}:
@@ -602,15 +692,55 @@ onMounted(load);
       — <RouterLink to="/racks">manage racks</RouterLink>
     </p>
 
-    <details v-if="module.panel" open class="panel" data-test="panel">
+    <details open class="panel" data-test="panel">
       <summary>
         <h2>Front panel</h2>
         <span class="summary-count">
-          {{ module.panel.components.length }} placed
+          <template v-if="module.panel">{{ module.panel.components.length }} placed</template>
+          <template v-else>none yet</template>
         </span>
       </summary>
       <div class="panel-body">
-        <ModulePanel :panel="module.panel" />
+        <ModulePanel v-if="module.panel" :panel="module.panel" />
+        <p v-else class="muted" data-test="no-panel">
+          No panel picture yet — the app builds one once the manual has been analyzed, or you can
+          supply your own below.
+        </p>
+
+        <label for="panel-upload">
+          Upload your own panel picture (PNG, JPEG, GIF or WebP, up to 12MB)
+        </label>
+        <p class="muted" style="margin-top: 0">
+          A straight-on shot of the front plate works best. The components are located on it in the
+          background, so the markers appear once that job finishes. Everyone with this module in a
+          rack sees the picture you upload.
+        </p>
+        <div class="row">
+          <input
+            id="panel-hp"
+            v-model="panelHp"
+            style="max-width: 10rem"
+            placeholder="Width in HP (optional)"
+            data-test="panel-hp"
+          />
+          <input
+            id="panel-upload"
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            data-test="panel-upload"
+            :disabled="panelUploading"
+            @change="onPanelChosen"
+          />
+          <button
+            v-if="module.panel?.source === 'upload'"
+            class="danger"
+            data-test="remove-panel"
+            @click="removePanel"
+          >
+            Remove uploaded picture
+          </button>
+        </div>
+        <p v-if="panelError" class="error" data-test="panel-error">{{ panelError }}</p>
       </div>
     </details>
 
@@ -1190,17 +1320,51 @@ onMounted(load);
               <tr v-for="v in allValues" :key="v.id" :data-test="`value-${v.id}`">
                 <td>{{ v.component.name }}</td>
                 <td>{{ v.type }}</td>
-                <td>{{ v.value }}</td>
-                <td>{{ v.description || '—' }}</td>
                 <td>
-                  <button
-                    class="danger"
-                    style="margin: 0"
-                    :data-test="`delete-value-${v.id}`"
-                    @click="removeValue(v)"
-                  >
-                    Remove
-                  </button>
+                  <input
+                    v-if="editingValueId === v.id"
+                    v-model="editValueValue"
+                    :data-test="`edit-value-value-${v.id}`"
+                  />
+                  <template v-else>{{ v.value }}</template>
+                </td>
+                <td>
+                  <input
+                    v-if="editingValueId === v.id"
+                    v-model="editValueDescription"
+                    placeholder="What this setting does"
+                    :data-test="`edit-value-description-${v.id}`"
+                  />
+                  <template v-else>{{ v.description || '—' }}</template>
+                </td>
+                <td style="white-space: nowrap">
+                  <template v-if="editingValueId === v.id">
+                    <button
+                      style="margin: 0"
+                      :data-test="`save-value-${v.id}`"
+                      @click="saveValue(v)"
+                    >
+                      Save
+                    </button>
+                    <button style="margin: 0 0 0 0.4rem" @click="cancelEditValue">Cancel</button>
+                  </template>
+                  <template v-else>
+                    <button
+                      style="margin: 0"
+                      :data-test="`edit-value-${v.id}`"
+                      @click="startEditValue(v)"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      class="danger"
+                      style="margin: 0 0 0 0.4rem"
+                      :data-test="`delete-value-${v.id}`"
+                      @click="removeValue(v)"
+                    >
+                      Remove
+                    </button>
+                  </template>
                 </td>
               </tr>
             </tbody>
@@ -1262,6 +1426,7 @@ onMounted(load);
                 <th>Name</th>
                 <th>File</th>
                 <th>Kind</th>
+                <th>Text</th>
                 <th></th>
               </tr>
             </thead>
@@ -1277,6 +1442,18 @@ onMounted(load);
                   <span class="badge" :class="doc.user_id === null ? 'found' : 'pending'">
                     {{ doc.user_id === null ? 'shared manual' : 'your document' }}
                   </span>
+                </td>
+                <!-- The manual as a readable page, once the extraction job has
+                     turned the PDF into markdown. -->
+                <td>
+                  <RouterLink
+                    v-if="doc.has_text"
+                    :to="`/manuals/${doc.hash}`"
+                    :data-test="`read-doc-${doc.id}`"
+                  >
+                    Read
+                  </RouterLink>
+                  <span v-else class="muted" :data-test="`no-text-doc-${doc.id}`">not yet</span>
                 </td>
                 <td>
                   <a

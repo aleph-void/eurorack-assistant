@@ -276,8 +276,8 @@ describe('ModuleDetailView', () => {
       { id: 2, name: 'travel case', quantity: 1 },
     ],
     manuals: [
-      { id: 1, hash: 'a'.repeat(64), name: 'manual', original_name: 'Make_Noise_Maths_Manual.pdf', source: 'found', user_id: null },
-      { id: 2, hash: 'b'.repeat(64), name: 'my notes', original_name: 'my-notes.pdf', source: 'upload', user_id: 2 },
+      { id: 1, hash: 'a'.repeat(64), name: 'manual', original_name: 'Make_Noise_Maths_Manual.pdf', source: 'found', user_id: null, has_text: true, text_pages: 12 },
+      { id: 2, hash: 'b'.repeat(64), name: 'my notes', original_name: 'my-notes.pdf', source: 'upload', user_id: 2, has_text: false, text_pages: null },
     ],
     components: [
       { id: 1, type: 'input_jack', name: 'Signal In', description: 'In', voltage_min: -10, voltage_max: 10, polarity: 'bipolar' },
@@ -295,6 +295,20 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="group-input_jack"]').text()).toContain('-10V … 10V');
     expect(wrapper.find('[data-test="group-output_jack"]').text()).toContain('unipolar');
     expect(wrapper.find('[data-test="group-knob"]').text()).toContain('Rise');
+  });
+
+  it('links a document with extracted text to the reader, and says so when there is none', async () => {
+    api.get.mockResolvedValue(moduleResponse);
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    // RouterLink is stubbed in view tests, so its destination lands on the
+    // rendered element as a plain attribute.
+    expect(wrapper.find('[data-test="read-doc-1"]').attributes('to')).toBe(
+      `/manuals/${'a'.repeat(64)}`
+    );
+    // The upload has not been through the extraction job yet.
+    expect(wrapper.find('[data-test="read-doc-2"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="no-text-doc-2"]').text()).toBe('not yet');
   });
 
   it('records and removes routing switch sections', async () => {
@@ -548,6 +562,77 @@ describe('ModuleDetailView', () => {
     await flushPromises();
     await wrapper.find('[data-test="detach-note-1-module"]').trigger('click');
     expect(api.post).toHaveBeenCalledWith('/api/notes/1/detach', { module_id: 1 });
+  });
+
+  it('uploads a front-panel picture, with the width when one is given', async () => {
+    api.get.mockResolvedValue(moduleResponse);
+    api.post.mockResolvedValue({ panel: null, job_id: 7 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    // No panel yet, so the section says so and still offers the upload.
+    expect(wrapper.find('[data-test="no-panel"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="panel-upload"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="remove-panel"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="panel-hp"]').setValue('20');
+    const file = new File(['\x89PNG fake'], 'maths-front.png', { type: 'image/png' });
+    await wrapper.vm.uploadPanel(file);
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/panel', {
+      filename: 'maths-front.png',
+      data_base64: expect.any(String),
+      hp: '20',
+    });
+  });
+
+  it('shows the uploaded panel and removes it once confirmed', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.get.mockResolvedValue({
+      ...moduleResponse,
+      hp: 20,
+      panel: {
+        source: 'upload',
+        source_url: null,
+        url: '/api/panels/abc.png',
+        width: 400,
+        height: 1200,
+        crop: { x: 0, y: 0, w: 1, h: 1 },
+        hp: 20,
+        description: 'Uploaded panel image (front.png).',
+        components: [{ component_id: 1, name: 'Signal In', shape: 'jack', x: 0.5, y: 0.9, w: 0.06, h: 0.06 }],
+      },
+    });
+    api.delete.mockResolvedValue({ ok: true, job_id: 9 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="module-hp"]').text()).toBe('20HP');
+    expect(wrapper.find('[data-test="panel"]').text()).toContain('you uploaded');
+    await wrapper.find('[data-test="remove-panel"]').trigger('click');
+    await flushPromises();
+    expect(dialog.confirm).toHaveBeenCalled();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/panel');
+  });
+
+  it('leaves the picture alone when the removal is declined', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    api.get.mockResolvedValue({
+      ...moduleResponse,
+      panel: {
+        source: 'upload',
+        url: '/api/panels/abc.png',
+        width: 400,
+        height: 1200,
+        crop: { x: 0, y: 0, w: 1, h: 1 },
+        hp: null,
+        components: [],
+      },
+    });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="remove-panel"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).not.toHaveBeenCalled();
   });
 
   it('uploads an additional PDF as base64 with a required name', async () => {
@@ -2115,6 +2200,31 @@ describe('ModuleDetailView component values', () => {
     await wrapper.find('[data-test="delete-value-1"]').trigger('click');
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/modules/1/components/3/values/1');
+  });
+
+  it('edits the label and description of a value the analysis wrote', async () => {
+    api.get.mockResolvedValue(moduleResponse);
+    api.put.mockResolvedValue({ id: 3, value: 'Cycle', description: 'repeats the envelope' });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    // The row shows text until it is put into edit mode.
+    expect(wrapper.find('[data-test="edit-value-description-3"]').exists()).toBe(false);
+    await wrapper.find('[data-test="edit-value-3"]').trigger('click');
+    // The existing wording is what you start from.
+    expect(wrapper.find('[data-test="edit-value-description-3"]').element.value).toBe('loops');
+    await wrapper
+      .find('[data-test="edit-value-description-3"]')
+      .setValue('repeats the envelope');
+    await wrapper.find('[data-test="save-value-3"]').trigger('click');
+    await flushPromises();
+
+    expect(api.put).toHaveBeenCalledWith('/api/modules/1/components/4/values/3', {
+      value: 'Cycle',
+      description: 'repeats the envelope',
+    });
+    // Saving closes the editor and the reloaded row takes over.
+    expect(wrapper.find('[data-test="edit-value-description-3"]').exists()).toBe(false);
   });
 });
 

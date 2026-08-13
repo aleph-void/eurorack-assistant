@@ -7,6 +7,8 @@ import RacksView from './views/RacksView.vue';
 import PatchesView from './views/PatchesView.vue';
 import PatchDetailView from './views/PatchDetailView.vue';
 import ImportView from './views/ImportView.vue';
+import SearchView from './views/SearchView.vue';
+import ManualTextView from './views/ManualTextView.vue';
 import AskView from './views/AskView.vue';
 import QuestionsView from './views/QuestionsView.vue';
 import QuestionDetailView from './views/QuestionDetailView.vue';
@@ -28,6 +30,9 @@ export const routes = [
   { path: '/patches', name: 'patches', component: PatchesView },
   { path: '/patches/:id', name: 'patch-detail', component: PatchDetailView, props: true },
   { path: '/import', name: 'import', component: ImportView },
+  { path: '/search', name: 'search', component: SearchView },
+  // A manual read as text, addressed by the document's content hash.
+  { path: '/manuals/:hash', name: 'manual-text', component: ManualTextView, props: true },
   { path: '/ask', name: 'ask', component: AskView },
   { path: '/questions', name: 'questions', component: QuestionsView },
   { path: '/questions/:id', name: 'question-detail', component: QuestionDetailView, props: true },
