@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import { useAuthStore } from '../stores/auth.js';
 import ModulePanel from '../components/ModulePanel.vue';
+import ShareButton from '../components/ShareButton.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 
@@ -1461,9 +1462,13 @@ onMounted(load);
                     {{ doc.original_name || `${doc.hash}.pdf` }}
                   </a>
                 </td>
+                <!-- Three kinds now: the manual every user gets, your own
+                     upload, and an upload another user shared with you. -->
                 <td>
                   <span class="badge" :class="doc.user_id === null ? 'found' : 'pending'">
-                    {{ doc.user_id === null ? 'shared manual' : 'your document' }}
+                    <template v-if="doc.user_id === null">shared manual</template>
+                    <template v-else-if="doc.shared_by">from {{ doc.shared_by }}</template>
+                    <template v-else>your document</template>
                   </span>
                 </td>
                 <!-- The manual as a readable page, once the extraction job has
@@ -1486,15 +1491,20 @@ onMounted(load);
                   >
                     Export
                   </a>
-                  <button
-                    v-if="doc.user_id !== null"
-                    class="danger"
-                    style="margin: 0"
-                    :data-test="`delete-doc-${doc.id}`"
-                    @click="removeDocument(doc)"
-                  >
-                    Remove
-                  </button>
+                  <!-- Your own uploads only: the shared manual is nobody's to
+                       hand out, and a document you were given is not yours to
+                       pass on or remove. -->
+                  <template v-if="doc.user_id !== null && !doc.shared_by">
+                    <ShareButton type="document" :id="doc.id" :label="doc.name" small />
+                    <button
+                      class="danger"
+                      style="margin: 0 0 0 0.4rem"
+                      :data-test="`delete-doc-${doc.id}`"
+                      @click="removeDocument(doc)"
+                    >
+                      Remove
+                    </button>
+                  </template>
                 </td>
               </tr>
             </tbody>

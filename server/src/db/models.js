@@ -698,6 +698,22 @@ export function defineModels(sequelize) {
     { tableName: 'capture_channels', createdAt: 'created_at', updatedAt: false }
   );
 
+  // One record shown to one other user, or to everyone when user_id is NULL
+  // (migration 019). Read access only: an owner shares what they made, and
+  // stays the only one who can change it. resource_id is a soft reference into
+  // whichever table resource_type names.
+  const Share = define(
+    'Share',
+    {
+      id,
+      resource_type: { type: DataTypes.TEXT, allowNull: false },
+      resource_id: { type: DataTypes.INTEGER, allowNull: false },
+      owner_id: { type: DataTypes.INTEGER, allowNull: false },
+      user_id: { type: DataTypes.INTEGER },
+    },
+    { tableName: 'shares', createdAt: 'created_at', updatedAt: false }
+  );
+
   const Job = define(
     'Job',
     {
@@ -870,6 +886,9 @@ export function defineModels(sequelize) {
   Capture.hasMany(CaptureChannel, { foreignKey: 'capture_id' });
   CaptureChannel.belongsTo(Capture, { foreignKey: 'capture_id' });
 
+  Share.belongsTo(User, { foreignKey: 'owner_id', as: 'Owner' });
+  Share.belongsTo(User, { foreignKey: 'user_id', as: 'Recipient' });
+
   Job.belongsTo(User, { foreignKey: 'user_id' });
   Job.belongsTo(Module, { foreignKey: 'module_id' });
   Job.belongsTo(Question, { foreignKey: 'question_id' });
@@ -920,6 +939,7 @@ export function defineModels(sequelize) {
     PatchScopeChannel,
     Capture,
     CaptureChannel,
+    Share,
     Job,
   };
 }

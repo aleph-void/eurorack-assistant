@@ -96,6 +96,7 @@ async function logout() {
     <RouterLink to="/patches">Patches</RouterLink>
     <RouterLink to="/import">Import</RouterLink>
     <RouterLink to="/search" data-test="nav-search">Search manuals</RouterLink>
+    <RouterLink to="/shared" data-test="nav-shared">Shared</RouterLink>
 
     <p class="nav-heading">Assistant</p>
     <RouterLink to="/ask">Ask</RouterLink>

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { findRackByName } from '../services/racks.js';
 import { deleteModulesDeep } from '../services/moduleDeletion.js';
+import { readableResource, removeShares } from '../services/sharing.js';
 import { enqueueJob } from '../jobs/worker.js';
 
 // A user's racks. Every route operates on the requesting user's racks only —
@@ -13,7 +14,7 @@ export function rackRoutes(
     panelsDir = process.env.PANELS_DIR || '/data/panels',
   } = {}
 ) {
-  const { Rack, RackModule, Job } = db.models;
+  const { Rack, RackModule, Module, User, Job } = db.models;
   const router = Router();
   router.use(requireAuth(db));
 
@@ -46,6 +47,43 @@ export function rackRoutes(
       const counts = new Map();
       for (const m of mappings) counts.set(m.rack_id, (counts.get(m.rack_id) ?? 0) + 1);
       res.json(racks.map((r) => rackJson(r, counts.get(r.id) ?? 0)));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // One rack and what is in it: yours, or one somebody shared with you. This
+  // is the whole of a shared rack — the module list, as it stands — and it is
+  // read-only, every other route here being the owner's alone.
+  router.get('/:id', async (req, res, next) => {
+    try {
+      const found = await readableResource(db, req.user.id, 'rack', req.params.id);
+      if (!found) return res.status(404).json({ error: 'Rack not found' });
+      const rack = found.row;
+      const mappings = await RackModule.findAll({
+        where: { rack_id: rack.id },
+        include: Module,
+        order: [
+          [Module, 'manufacturer', 'ASC'],
+          [Module, 'name', 'ASC'],
+        ],
+      });
+      const owner = found.shared ? await User.findByPk(rack.user_id) : null;
+      res.json({
+        ...rackJson(rack, mappings.length),
+        shared: found.shared,
+        owner_username: owner?.username ?? req.user.username,
+        modules: mappings
+          .filter((rm) => rm.Module)
+          .map((rm) => ({
+            id: rm.Module.id,
+            manufacturer: rm.Module.manufacturer,
+            name: rm.Module.name,
+            hp: rm.Module.hp,
+            summary: rm.Module.summary,
+            quantity: rm.quantity,
+          })),
+      });
     } catch (e) {
       next(e);
     }
@@ -96,6 +134,7 @@ export function rackRoutes(
       if (!rack) return res.status(404).json({ error: 'Rack not found' });
       const mappings = await RackModule.findAll({ where: { rack_id: rack.id } });
       await rack.destroy();
+      await removeShares(db, 'rack', rack.id);
       const orphaned = [];
       for (const { module_id: moduleId } of mappings) {
         if ((await RackModule.count({ where: { module_id: moduleId } })) === 0) {

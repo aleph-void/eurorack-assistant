@@ -18,6 +18,7 @@ import { deviceRoutes } from './routes/devices.js';
 import { scopeRoutes } from './routes/scope.js';
 import { captureRoutes } from './routes/captures.js';
 import { panelRoutes } from './routes/panels.js';
+import { shareRoutes } from './routes/shares.js';
 
 export function createApp(
   db,
@@ -53,6 +54,7 @@ export function createApp(
   // again; without one, resuming is simply not announced.
   app.use('/api/jobs', jobRoutes(db, { bus }));
   app.use('/api/notes', noteRoutes(db));
+  app.use('/api/shares', shareRoutes(db));
   app.use('/api/exports', exportRoutes(db, { exportsDir }));
   app.use('/api/patches', patchRoutes(db));
   // Oscilloscope integration: /api/oauth is the device's half of the linking

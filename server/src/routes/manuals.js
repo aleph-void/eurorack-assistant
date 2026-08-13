@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import { Router } from 'express';
-import { Op, QueryTypes } from 'sequelize';
+import { QueryTypes } from 'sequelize';
 import { requireAuth } from '../auth.js';
 import { manualPath, safeManualName } from '../services/pdf.js';
+import { readableIds } from '../services/sharing.js';
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
@@ -33,9 +34,18 @@ export function manualRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
   router.use(requireAuth(db));
 
   // What the requesting user may see, in both tables: everything belonging to
-  // a shared manual, plus their own uploads and nobody else's.
-  const visibleTo = (userId) => ({ [Op.or]: [{ user_id: null }, { user_id: userId }] });
-  const visibleToUser = (row, userId) => row.user_id === null || row.user_id === userId;
+  // a shared manual, plus their own uploads and nobody else's — and, since
+  // migration 019, any upload whose owner shared that document with them.
+  const visibleToUser = (row, userId, sharedManualIds = new Set()) =>
+    row.user_id === null || row.user_id === userId || sharedManualIds.has(row.manual_id ?? row.id);
+
+  // The manual rows other people have shared with this user. Fetched per
+  // request rather than folded into the query: the visibility test spans two
+  // tables and a share list, and a hash is carried by a handful of rows at
+  // most, so the filtering costs nothing in JS and stays correct on pg-mem
+  // (which drops rows when an OR is ANDed with anything else).
+  const sharedManualIds = async (userId) =>
+    new Set(await readableIds(db, userId, 'document'));
 
   // The first document record for the hash the requesting user may see (with
   // its module), plus the file on disk — or null when either is missing.
@@ -45,11 +55,13 @@ export function manualRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
       res.status(404).json({ error: 'Document not found' });
       return null;
     }
-    const manual = await Manual.findOne({
-      where: { hash, ...visibleTo(req.user.id) },
+    const shared = await sharedManualIds(req.user.id);
+    const manuals = await Manual.findAll({
+      where: { hash },
       include: Module,
       order: [['id', 'ASC']],
     });
+    const manual = manuals.find((row) => visibleToUser(row, req.user.id, shared));
     const file = manualPath(manualsDir, hash);
     if (!manual || !fs.existsSync(file)) {
       res.status(404).json({ error: 'Document not found' });
@@ -96,6 +108,13 @@ export function manualRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
         bind.push(Number(req.query.module_id) || 0);
         moduleFilter = `AND d.module_id = $${bind.length}`;
       }
+      // Documents other people shared with this user join the searchable set.
+      // Their ids are written into the SQL rather than bound because they are
+      // a list of unknown length (and they are integers this server read out
+      // of its own database a moment ago). The whole visibility test is one
+      // CASE rather than the OR it reads as, for the pg-mem reason below.
+      const shared = [...(await sharedManualIds(req.user.id))].map(Number).filter(Number.isInteger);
+      const sharedTest = shared.length ? `WHEN d.manual_id IN (${shared.join(',')}) THEN 1` : '';
       const rows = await db.sequelize.query(
         `SELECT d.id, d.manual_id, d.module_id, d.user_id, d.hash, d.title,
                 d.pages, d.chars, d.created_at,
@@ -111,14 +130,15 @@ export function manualRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
            JOIN modules mo ON mo.id = d.module_id
           -- The match comes first and the filters narrow it: the index answers
           -- the match, and the rows it returns are few enough that the rest is
-          -- free. Visibility is written as a COALESCE rather than the more
-          -- obvious "user_id IS NULL OR user_id = $2" — the two say exactly
-          -- the same thing (the document is shared, or it is yours), and
-          -- pg-mem, the test database, drops rows when an OR is ANDed with
-          -- anything else (see tests/helpers.js).
+          -- free. Visibility is written as a CASE rather than the more obvious
+          -- "user_id IS NULL OR user_id = $2 OR manual_id IN (...)" — the two
+          -- say exactly the same thing (the document is the shared manual, or
+          -- yours, or one shared with you), and pg-mem, the test database,
+          -- drops rows when an OR is ANDed with anything else (see
+          -- tests/helpers.js).
           WHERE to_tsvector('${TS_CONFIG}', d.content)
                 @@ websearch_to_tsquery('${TS_CONFIG}', $1)
-            AND COALESCE(d.user_id, $2) = $2
+            AND (CASE WHEN COALESCE(d.user_id, $2) = $2 THEN 1 ${sharedTest} ELSE 0 END) = 1
             ${moduleFilter}
           ORDER BY rank DESC, d.id ASC
           LIMIT $3 OFFSET $4`,
@@ -177,7 +197,8 @@ export function manualRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
       include: Module,
       order: [['id', 'ASC']],
     });
-    const document = documents.find((row) => visibleToUser(row, req.user.id));
+    const shared = await sharedManualIds(req.user.id);
+    const document = documents.find((row) => visibleToUser(row, req.user.id, shared));
     if (!document) {
       res.status(404).json({ error: 'Document text not found' });
       return null;

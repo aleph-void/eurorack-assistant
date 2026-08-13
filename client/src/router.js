@@ -14,6 +14,8 @@ import QuestionsView from './views/QuestionsView.vue';
 import QuestionDetailView from './views/QuestionDetailView.vue';
 import JobsView from './views/JobsView.vue';
 import NotesView from './views/NotesView.vue';
+import SharedView from './views/SharedView.vue';
+import SharedItemView from './views/SharedItemView.vue';
 import DevicesView from './views/DevicesView.vue';
 import LinkDeviceView from './views/LinkDeviceView.vue';
 import UsersView from './views/UsersView.vue';
@@ -38,6 +40,10 @@ export const routes = [
   { path: '/questions/:id', name: 'question-detail', component: QuestionDetailView, props: true },
   { path: '/jobs', name: 'jobs', component: JobsView },
   { path: '/notes', name: 'notes', component: NotesView },
+  // Sharing has both directions on one page, and a read-only page per record
+  // somebody shared with you (documents are read at /manuals/:hash instead).
+  { path: '/shared', name: 'shared', component: SharedView },
+  { path: '/shared/:type/:id', name: 'shared-item', component: SharedItemView, props: true },
   { path: '/devices', name: 'devices', component: DevicesView },
   // Where a device's verification_uri points; the code may ride along as ?code=
   { path: '/link', name: 'link-device', component: LinkDeviceView },
