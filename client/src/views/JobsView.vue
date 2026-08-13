@@ -4,6 +4,7 @@ import { useJobsStore } from '../stores/jobs.js';
 
 const jobs = useJobsStore();
 const error = ref('');
+const retryingAll = ref(false);
 
 function describe(job) {
   if (job.module_name) return `${job.module_manufacturer || ''} ${job.module_name}`.trim();
@@ -18,6 +19,18 @@ async function retry(job) {
     await jobs.retry(job.id);
   } catch (e) {
     error.value = e.message;
+  }
+}
+
+async function retryAll() {
+  error.value = '';
+  retryingAll.value = true;
+  try {
+    await jobs.retryAll();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    retryingAll.value = false;
   }
 }
 
@@ -47,6 +60,21 @@ onMounted(async () => {
   </div>
 
   <div class="panel">
+    <!-- Only worth offering once a single Retry click is not enough. -->
+    <div v-if="jobs.failedJobs.length > 1" class="row" style="align-items: baseline">
+      <p class="muted" style="margin: 0">{{ jobs.failedJobs.length }} failed jobs.</p>
+      <div class="shrink">
+        <button
+          class="secondary"
+          style="margin: 0"
+          :disabled="retryingAll"
+          data-test="retry-all"
+          @click="retryAll"
+        >
+          {{ retryingAll ? 'Retrying…' : 'Retry All' }}
+        </button>
+      </div>
+    </div>
     <table data-test="job-table">
       <thead>
         <tr>

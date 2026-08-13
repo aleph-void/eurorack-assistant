@@ -159,4 +159,38 @@ describe('jobs store', () => {
     expect(api.post).toHaveBeenCalledWith('/api/jobs/4/retry');
     expect(jobs.jobs[0].status).toBe('pending');
   });
+
+  it('retryAll retries every failed job and leaves the others alone', async () => {
+    api.post.mockImplementation(async (url) => ({
+      id: Number(url.split('/')[3]),
+      status: 'pending',
+      error: null,
+    }));
+    const jobs = useJobsStore();
+    jobs.jobs = [
+      { id: 1, status: 'failed', error: 'boom', type: 'find_manual' },
+      { id: 2, status: 'complete', type: 'export_rack' },
+      { id: 3, status: 'failed', error: 'nope', type: 'ask_question' },
+    ];
+    await jobs.retryAll();
+    expect(api.post.mock.calls.map((c) => c[0])).toEqual([
+      '/api/jobs/1/retry',
+      '/api/jobs/3/retry',
+    ]);
+    expect(jobs.jobs.map((j) => j.status)).toEqual(['pending', 'complete', 'pending']);
+  });
+
+  it('retryAll keeps going past a rejected job and reports it', async () => {
+    api.post.mockImplementation(async (url) => {
+      if (url === '/api/jobs/1/retry') throw new Error('Only failed jobs can be retried');
+      return { id: 3, status: 'pending', error: null };
+    });
+    const jobs = useJobsStore();
+    jobs.jobs = [
+      { id: 1, status: 'failed', error: 'boom', type: 'find_manual' },
+      { id: 3, status: 'failed', error: 'nope', type: 'ask_question' },
+    ];
+    await expect(jobs.retryAll()).rejects.toThrow('job 1: Only failed jobs can be retried');
+    expect(jobs.jobs[1].status).toBe('pending');
+  });
 });

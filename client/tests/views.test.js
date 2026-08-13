@@ -1001,6 +1001,31 @@ describe('JobsView', () => {
     await wrapper.find('[data-test="retry-1"]').trigger('click');
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith('/api/jobs/1/retry');
+    // A lone failure does not warrant the bulk button.
+    expect(wrapper.find('[data-test="retry-all"]').exists()).toBe(false);
+  });
+
+  it('offers Retry All once more than one job has failed', async () => {
+    api.get.mockResolvedValue([
+      { id: 1, type: 'find_manual', status: 'failed', attempts: 3, error: 'No manual PDF found' },
+      { id: 2, type: 'export_rack', status: 'complete', attempts: 1, rack_name: 'main rack' },
+      { id: 3, type: 'ask_question', status: 'failed', attempts: 2, error: 'timeout' },
+    ]);
+    api.post.mockImplementation(async (url) => ({
+      id: Number(url.split('/')[3]),
+      status: 'pending',
+      error: null,
+    }));
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="retry-all"]').trigger('click');
+    await flushPromises();
+    expect(api.post.mock.calls.map((c) => c[0])).toEqual([
+      '/api/jobs/1/retry',
+      '/api/jobs/3/retry',
+    ]);
+    // Nothing failed any more, so the button goes away.
+    expect(wrapper.find('[data-test="retry-all"]').exists()).toBe(false);
   });
 
   it('labels rack exports and links the not-yet-taken download', async () => {
