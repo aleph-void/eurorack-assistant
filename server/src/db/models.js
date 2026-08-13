@@ -637,6 +637,12 @@ export function defineModels(sequelize) {
       status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'pending' },
       attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
       error: { type: DataTypes.TEXT },
+      // Lease held by the worker that claimed the job: heartbeat_at is
+      // refreshed while it runs, so a job orphaned by a killed process can be
+      // recognised and requeued (see reclaimStaleJobs in jobs/worker.js).
+      started_at: { type: DataTypes.DATE },
+      heartbeat_at: { type: DataTypes.DATE },
+      worker_id: { type: DataTypes.TEXT },
     },
     { tableName: 'jobs', createdAt: 'created_at', updatedAt: 'updated_at' }
   );

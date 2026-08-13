@@ -110,46 +110,48 @@ onUnmounted(() => clearTimeout(refreshTimer));
     </p>
   </div>
   <div v-else class="panel">
-    <table data-test="module-table">
-      <thead>
-        <tr>
-          <th>Manufacturer</th>
-          <th>Module</th>
-          <th>Qty</th>
-          <th v-if="!currentRack">Rack(s)</th>
-          <th>Manual</th>
-          <th>Analysis</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="module in modules" :key="module.id" :data-test="`module-${module.id}`">
-          <td>{{ module.manufacturer }}</td>
-          <td>
-            <RouterLink :to="`/modules/${module.id}`">{{ module.name }}</RouterLink>
-          </td>
-          <td>{{ module.quantity }}</td>
-          <td v-if="!currentRack">{{ rackNames(module) }}</td>
-          <td><span class="badge" :class="module.manual_status">{{ module.manual_status }}</span></td>
-          <td>
-            <span class="badge" :class="module.analysis_status">{{ module.analysis_status }}</span>
-          </td>
-          <td>
-            <select
-              v-if="currentRack && otherRacks.length > 0"
-              style="width: auto; margin: 0 0.4rem 0 0"
-              :data-test="`move-${module.id}`"
-              @change="move(module, $event)"
-            >
-              <option value="">Move to…</option>
-              <option v-for="rack in otherRacks" :key="rack.id" :value="rack.id">
-                {{ rack.name }}
-              </option>
-            </select>
-            <button class="danger" style="margin: 0" @click="remove(module)">Delete</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table data-test="module-table">
+        <thead>
+          <tr>
+            <th>Manufacturer</th>
+            <th>Module</th>
+            <th>Qty</th>
+            <th v-if="!currentRack">Rack(s)</th>
+            <th>Manual</th>
+            <th>Analysis</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="module in modules" :key="module.id" :data-test="`module-${module.id}`">
+            <td>{{ module.manufacturer }}</td>
+            <td>
+              <RouterLink :to="`/modules/${module.id}`">{{ module.name }}</RouterLink>
+            </td>
+            <td>{{ module.quantity }}</td>
+            <td v-if="!currentRack">{{ rackNames(module) }}</td>
+            <td><span class="badge" :class="module.manual_status">{{ module.manual_status }}</span></td>
+            <td>
+              <span class="badge" :class="module.analysis_status">{{ module.analysis_status }}</span>
+            </td>
+            <td>
+              <select
+                v-if="currentRack && otherRacks.length > 0"
+                style="width: auto; margin: 0 0.4rem 0 0"
+                :data-test="`move-${module.id}`"
+                @change="move(module, $event)"
+              >
+                <option value="">Move to…</option>
+                <option v-for="rack in otherRacks" :key="rack.id" :value="rack.id">
+                  {{ rack.name }}
+                </option>
+              </select>
+              <button class="danger" style="margin: 0" @click="remove(module)">Delete</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>

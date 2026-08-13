@@ -14,6 +14,7 @@
 // Progress is published per-user on the event bus, which the WebSocket server
 // forwards to the browser.
 
+import os from 'node:os';
 import { createBackend } from '../services/llm.js';
 import { manualPath, renderPageToPdf } from '../services/pdf.js';
 import { getLlmSettings, getImportWorkerCount, DEFAULT_IMPORT_WORKERS } from '../services/config.js';
@@ -29,6 +30,43 @@ import { answerQuestion, scopeQuestion } from '../services/ask.js';
 import { safeSegment, writeRackExport } from '../services/rackExport.js';
 
 export const MAX_ATTEMPTS = 3;
+
+// A claimed job carries a lease: the runner refreshes heartbeat_at every
+// HEARTBEAT_MS, and any 'running' row that has gone quiet for STALE_JOB_MS is
+// presumed orphaned — its process was killed mid-job — and goes back on the
+// queue. Without this a redeploy stranded in-flight jobs in 'running' forever
+// (their modules stuck 'analyzing', and the dedupe guards below refusing to
+// queue the work again because a job for it was apparently still live).
+export const HEARTBEAT_MS = 30 * 1000;
+export const STALE_JOB_MS = 5 * 60 * 1000;
+
+// Ceiling on a single attempt. The LLM CLI has its own (shorter) timeout, so
+// this only catches a job wedged somewhere else — but a runner stuck forever
+// costs the pool a slot, and six of them cost the whole pool.
+export const JOB_TIMEOUT_MS = 45 * 60 * 1000;
+
+// Timestamp of the last sign of life from whoever holds a running job. Rows
+// claimed before leases existed have no heartbeat, so fall back to updated_at.
+export function lastSeenAt(job) {
+  const seen = job.heartbeat_at || job.updated_at;
+  return seen ? new Date(seen) : null;
+}
+
+// Resolves with `promise`, or rejects once `ms` have passed.
+export function withTimeout(promise, ms, message) {
+  let timer = null;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+}
+
+export function isStalled(job, staleMs = STALE_JOB_MS, now = Date.now()) {
+  if (job.status !== 'running') return false;
+  const seen = lastSeenAt(job);
+  return !seen || now - seen.getTime() >= staleMs;
+}
 
 export async function enqueueJob(db, type, { userId = null, moduleId = null, questionId = null, payload = null } = {}) {
   const job = await db.models.Job.create({
@@ -60,12 +98,21 @@ export function createWorker(db, options = {}) {
     exportsDir = process.env.EXPORTS_DIR || '/data/exports',
     capturesDir = process.env.CAPTURES_DIR || '/data/captures',
     pollIntervalMs = 5000,
+    heartbeatMs = HEARTBEAT_MS,
+    staleJobMs = STALE_JOB_MS,
+    jobTimeoutMs = JOB_TIMEOUT_MS,
+    workerId = `${os.hostname()}#${process.pid}`,
     backendFactory = createBackend,
     fetchImpl = fetch,
     renderImpl = renderPageToPdf,
     bus = null,
     log = (...args) => console.log('[worker]', ...args),
   } = options;
+
+  // Jobs this process holds a lease on, by id. Their heartbeats are refreshed
+  // while they run, they are never reclaimed from under us, and they are
+  // handed back to the queue if the process is asked to shut down.
+  const held = new Map();
 
   // The user a job belongs to. Every job is stamped with the user who caused
   // it at enqueue time; job status and progress events are visible to that
@@ -155,12 +202,111 @@ export function createWorker(db, options = {}) {
     for (;;) {
       const next = await Job.findOne({ where: { status: 'pending' }, order: [['id', 'ASC']] });
       if (!next) return null;
+      const now = new Date();
       const [, claimed] = await Job.update(
-        { status: 'running', attempts: next.attempts + 1 },
+        {
+          status: 'running',
+          attempts: next.attempts + 1,
+          started_at: now,
+          heartbeat_at: now,
+          worker_id: workerId,
+        },
         { where: { id: next.id, status: 'pending' }, returning: true }
       );
       if (claimed[0]) return claimed[0].get({ plain: true });
     }
+  }
+
+  // Tell the database the jobs this process holds are still being worked on.
+  // `silent` keeps updated_at meaning "last state change" rather than "last
+  // heartbeat", which is what the jobs list shows.
+  async function heartbeat() {
+    if (held.size === 0) return;
+    await db.models.Job.update(
+      { heartbeat_at: new Date() },
+      { where: { id: [...held.keys()], status: 'running' }, silent: true }
+    );
+  }
+
+  // A job's target carries its own status for the UI; when the job goes back
+  // to the queue (or gives up) that has to be walked back too, otherwise a
+  // module sits on 'analyzing' with nothing analyzing it.
+  async function resetJobTarget(job, status, message) {
+    const { Module, Question } = db.models;
+    const failed = status === 'failed';
+    if (job.type === 'find_manual' && job.module_id) {
+      await Module.update(
+        { manual_status: failed ? 'failed' : 'pending' },
+        { where: { id: job.module_id } }
+      );
+    } else if (job.type === 'analyze_manual' && job.module_id) {
+      await Module.update(
+        { analysis_status: failed ? 'failed' : 'pending' },
+        { where: { id: job.module_id } }
+      );
+    } else if (failed && job.question_id) {
+      await Question.update(
+        { status: 'failed', error: message },
+        { where: { id: job.question_id } }
+      );
+    }
+  }
+
+  // Put a running job back: on the queue if it has attempts left, otherwise
+  // failed. Guarded on the row still being 'running' so a job another process
+  // finished in the meantime is left alone.
+  async function requeue(job, message, { refundAttempt = false } = {}) {
+    const { Job } = db.models;
+    const attempts = refundAttempt ? Math.max(0, job.attempts - 1) : job.attempts;
+    const status = attempts >= MAX_ATTEMPTS ? 'failed' : 'pending';
+    const [, rows] = await Job.update(
+      { status, attempts, error: message, worker_id: null, heartbeat_at: null, started_at: null },
+      { where: { id: job.id, status: 'running' }, returning: true }
+    );
+    if (!rows || !rows[0]) return null;
+    await resetJobTarget(job, status, message);
+    const row = { ...rows[0].get({ plain: true }), ...(await jobLabels(job)) };
+    publish(await jobOwners(job), status === 'failed' ? 'failed' : 'progress', row, message);
+    return row;
+  }
+
+  // Requeue jobs whose holder has gone quiet. Runs on every wake-up: a job
+  // orphaned by a killed process is otherwise stuck in 'running' for good.
+  async function reclaimStaleJobs() {
+    const running = await db.models.Job.findAll({ where: { status: 'running' } });
+    const now = Date.now();
+    const reclaimed = [];
+    for (const record of running) {
+      const job = record.get({ plain: true });
+      if (held.has(job.id)) continue; // ours, and being worked on right now
+      if (!isStalled(job, staleJobMs, now)) continue;
+      const seen = lastSeenAt(job);
+      const row = await requeue(
+        job,
+        `worker stopped before the job finished (no progress since ${
+          seen ? seen.toISOString() : 'it was claimed'
+        })`
+      );
+      if (row) reclaimed.push(row);
+    }
+    if (reclaimed.length > 0) {
+      log(`reclaimed ${reclaimed.length} stalled job(s): ${reclaimed.map((j) => j.id).join(', ')}`);
+    }
+    return reclaimed;
+  }
+
+  // Hand every held job straight back on shutdown rather than waiting for its
+  // lease to go stale. A deploy is not the job's fault, so the attempt it was
+  // partway through is refunded.
+  async function releaseHeldJobs() {
+    const jobs = [...held.values()];
+    held.clear();
+    for (const job of jobs) {
+      await requeue(job, 'worker shut down before the job finished; requeued', {
+        refundAttempt: true,
+      });
+    }
+    if (jobs.length > 0) log(`released ${jobs.length} in-flight job(s) back to the queue`);
   }
 
   async function handleImport(job, backend, progress) {
@@ -332,12 +478,20 @@ export function createWorker(db, options = {}) {
     Object.assign(job, labels);
     const progress = (message) => publish(owners, 'progress', job, message);
 
+    held.set(job.id, job);
     publish(owners, 'started', job, `attempt ${job.attempts}`);
     try {
       const handler = handlers[job.type];
       if (!handler) throw new Error(`Unknown job type: ${job.type}`);
       const backend = backendFactory(await getLlmSettings(db, job.type));
-      await handler(job, backend, progress);
+      // The handler is raced rather than aborted: it has no cancellation to
+      // offer, so the attempt is given up on and the runner freed. Whatever it
+      // was waiting for is left to finish and be ignored.
+      await withTimeout(
+        handler(job, backend, progress),
+        jobTimeoutMs,
+        `job exceeded its ${Math.round(jobTimeoutMs / 60000)} minute time limit`
+      );
       const [, doneRows] = await db.models.Job.update(
         { status: 'complete', error: null },
         { where: { id: job.id }, returning: true }
@@ -355,10 +509,13 @@ export function createWorker(db, options = {}) {
       publish(owners, status === 'failed' ? 'failed' : 'progress', failed,
         status === 'failed' ? e.message : `attempt failed, will retry: ${e.message}`);
       return failed;
+    } finally {
+      held.delete(job.id);
     }
   }
 
   let timer = null;
+  let heartbeatTimer = null;
   let running = false;
   let stopped = false;
 
@@ -366,6 +523,14 @@ export function createWorker(db, options = {}) {
     if (running) return;
     running = true;
     try {
+      // Jobs left 'running' by a process that died mid-job go back on the
+      // queue before this pass claims anything, so a restart picks up the
+      // work it was interrupted doing.
+      try {
+        await reclaimStaleJobs();
+      } catch (e) {
+        log(`could not reclaim stalled jobs: ${e.message}`);
+      }
       // The worker count is admin-configurable (app_config.import_workers)
       // and re-read on every wake-up, so changes apply without a restart.
       let workers = DEFAULT_IMPORT_WORKERS;
@@ -407,15 +572,25 @@ export function createWorker(db, options = {}) {
 
   return {
     tick,
+    reclaimStaleJobs,
+    workerId,
     start() {
       stopped = false;
       timer = setInterval(loop, pollIntervalMs);
+      heartbeatTimer = setInterval(() => {
+        heartbeat().catch((e) => log(`heartbeat failed: ${e.message}`));
+      }, heartbeatMs);
       loop();
     },
-    stop() {
+    // Awaited on shutdown: the in-flight jobs are given back to the queue so
+    // the next process runs them immediately instead of waiting out a lease.
+    async stop() {
       stopped = true;
       if (timer) clearInterval(timer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       timer = null;
+      heartbeatTimer = null;
+      await releaseHeldJobs();
     },
   };
 }

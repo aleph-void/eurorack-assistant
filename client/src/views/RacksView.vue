@@ -93,64 +93,66 @@ async function remove(rack) {
   <p v-if="notice" class="success" data-test="notice">{{ notice }}</p>
   <p v-if="loading" class="muted">Loading…</p>
   <div v-else class="panel">
-    <table v-if="racks.length" data-test="rack-table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Modules</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="rack in racks" :key="rack.id" :data-test="`rack-${rack.id}`">
-          <td>
-            <template v-if="renamingId === rack.id">
-              <form style="display: inline" @submit.prevent="rename(rack)">
-                <input
-                  v-model="renameValue"
-                  :data-test="`rename-input-${rack.id}`"
-                  style="width: auto"
-                />
-                <button type="submit" style="margin: 0 0 0 0.4rem" :data-test="`rename-save-${rack.id}`">
-                  Save
-                </button>
-                <button type="button" style="margin: 0 0 0 0.4rem" @click="renamingId = null">
-                  Cancel
-                </button>
-              </form>
-            </template>
-            <template v-else>
-              <RouterLink :to="{ path: '/modules', query: { rack: rack.id } }">
-                {{ rack.name }}
-              </RouterLink>
-            </template>
-          </td>
-          <td>{{ rack.module_count }}</td>
-          <td>
-            <button
-              v-if="renamingId !== rack.id"
-              style="margin: 0 0.4rem 0 0"
-              :data-test="`rename-${rack.id}`"
-              @click="startRename(rack)"
-            >
-              Rename
-            </button>
-            <button
-              class="secondary"
-              style="margin: 0 0.4rem 0 0"
-              :disabled="rack.module_count === 0"
-              :data-test="`export-${rack.id}`"
-              @click="exportRack(rack)"
-            >
-              Export Rack
-            </button>
-            <button class="danger" style="margin: 0" :data-test="`delete-${rack.id}`" @click="remove(rack)">
-              Delete
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div v-if="racks.length" class="table-wrap">
+      <table data-test="rack-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Modules</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="rack in racks" :key="rack.id" :data-test="`rack-${rack.id}`">
+            <td>
+              <template v-if="renamingId === rack.id">
+                <form style="display: inline" @submit.prevent="rename(rack)">
+                  <input
+                    v-model="renameValue"
+                    :data-test="`rename-input-${rack.id}`"
+                    style="width: auto"
+                  />
+                  <button type="submit" style="margin: 0 0 0 0.4rem" :data-test="`rename-save-${rack.id}`">
+                    Save
+                  </button>
+                  <button type="button" style="margin: 0 0 0 0.4rem" @click="renamingId = null">
+                    Cancel
+                  </button>
+                </form>
+              </template>
+              <template v-else>
+                <RouterLink :to="{ path: '/modules', query: { rack: rack.id } }">
+                  {{ rack.name }}
+                </RouterLink>
+              </template>
+            </td>
+            <td>{{ rack.module_count }}</td>
+            <td>
+              <button
+                v-if="renamingId !== rack.id"
+                style="margin: 0 0.4rem 0 0"
+                :data-test="`rename-${rack.id}`"
+                @click="startRename(rack)"
+              >
+                Rename
+              </button>
+              <button
+                class="secondary"
+                style="margin: 0 0.4rem 0 0"
+                :disabled="rack.module_count === 0"
+                :data-test="`export-${rack.id}`"
+                @click="exportRack(rack)"
+              >
+                Export Rack
+              </button>
+              <button class="danger" style="margin: 0" :data-test="`delete-${rack.id}`" @click="remove(rack)">
+                Delete
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <p v-else class="muted">
       No racks yet. <RouterLink to="/import">Import your module list</RouterLink> to create one.
     </p>

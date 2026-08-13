@@ -172,7 +172,10 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
   `src/services/`, the queue worker in `src/jobs/worker.js`. Sessions are
   httpOnly cookies backed by a `sessions` table; passwords are bcrypt hashes.
 - `client/` — Vue 3 + Pinia + Vue Router (Vite). Live job progress arrives over
-  the WebSocket and feeds the Jobs page, the Import page, and the nav badge.
+  the WebSocket and feeds the Jobs page, the Import page, and the badge on the
+  menu button. Navigation lives in a hamburger drawer, styling follows the
+  Aleph Void palette in `src/style.css`, and the long detail pages (module,
+  patch, question) keep each section behind a click-to-open expander.
 - Database schema is created by `server/migrations/*.sql`, applied
   automatically at server start (tracked in `schema_migrations`).
 

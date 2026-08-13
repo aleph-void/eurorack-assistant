@@ -208,175 +208,242 @@ onUnmounted(() => clearTimeout(pollTimer));
       </p>
     </div>
 
-    <div v-else-if="isReview && options" class="panel" data-test="review">
-      <h2>Review scope &amp; attachments</h2>
-      <p class="muted">
-        The assistant picked the modules it thinks are relevant. Adjust the selection, choose
-        what to send along, then request the answer.
-      </p>
-
-      <h3>Modules</h3>
-      <ul class="check-list">
-        <li v-for="m in options.modules" :key="m.id">
-          <label>
-            <input type="checkbox" :value="m.id" v-model="selectedModules" data-test="module-option" />
-            <span>
-              {{ m.manufacturer }} {{ m.name }}
-              <span v-if="m.in_scope" class="badge scoped">suggested</span>
-            </span>
-          </label>
-        </li>
-      </ul>
-
-      <template v-if="visibleComponents.length > 0">
-        <h3>Components</h3>
-        <ul class="check-list">
-          <li v-for="c in visibleComponents" :key="c.id">
-            <label>
-              <input
-                type="checkbox"
-                :value="c.id"
-                v-model="selectedComponents"
-                data-test="component-option"
-              />
-              <span>
-                {{ moduleLabel(c.module_id) }} — {{ c.name }}
-                <span class="badge">{{ c.type }}</span>
-                <span v-if="c.in_scope" class="badge scoped">suggested</span>
-              </span>
-            </label>
-          </li>
-        </ul>
-      </template>
-
-      <h3>Manual documents</h3>
-      <p v-if="visibleManuals.length === 0" class="muted">
-        No manual documents for the selected modules.
-      </p>
-      <ul v-else class="check-list">
-        <li v-for="m in visibleManuals" :key="m.id">
-          <label>
-            <input type="checkbox" :value="m.id" v-model="selectedManuals" data-test="manual-option" />
-            <span>
-              {{ moduleLabel(m.module_id) }} — {{ manualLabel(m) }}
-              <span v-if="m.source === 'upload'" class="badge">upload</span>
-            </span>
-          </label>
-        </li>
-      </ul>
-
-      <template v-if="visibleAnswers.length > 0">
-        <h3>Previous answers</h3>
-        <ul class="check-list">
-          <li v-for="a in visibleAnswers" :key="a.id">
-            <label>
-              <input type="checkbox" :value="a.id" v-model="selectedAnswers" data-test="answer-option" />
-              <span>{{ a.prompt }}</span>
-            </label>
-          </li>
-        </ul>
-      </template>
-
-      <template v-if="visibleNotes.length > 0">
-        <h3>Notes</h3>
-        <ul class="check-list">
-          <li v-for="n in visibleNotes" :key="n.id">
-            <label>
-              <input type="checkbox" :value="n.id" v-model="selectedNotes" data-test="note-option" />
-              <span>{{ n.title || n.body.slice(0, 80) }}</span>
-            </label>
-          </li>
-        </ul>
-      </template>
-
-      <template v-if="visibleCaptures.length > 0">
-        <h3>Oscilloscope captures</h3>
-        <ul class="check-list">
-          <li v-for="c in visibleCaptures" :key="c.id">
-            <label>
-              <input
-                type="checkbox"
-                :value="c.id"
-                v-model="selectedCaptures"
-                data-test="capture-option"
-              />
-              <span>
-                {{ c.title || `Capture #${c.id}` }}
-                <span class="muted">
-                  — {{ c.channel_count }} channels, {{ new Date(c.captured_at).toLocaleString() }}
-                </span>
-              </span>
-            </label>
-          </li>
-        </ul>
-      </template>
-
-      <template v-if="patchOptions.length > 0">
-        <h3>Patches</h3>
+    <details v-else-if="isReview && options" open class="panel" data-test="review">
+      <summary>
+        <h2>Review scope &amp; attachments</h2>
+      </summary>
+      <div class="panel-body">
         <p class="muted">
-          Attach a patch and the question is answered from it: its cables, the control settings it
-          records, the normalled connections it leaves intact and the signal flow they add up to.
-          The modules the patch uses are added to the scope above.
+          The assistant picked the modules it thinks are relevant. Adjust the selection, choose
+          what to send along, then request the answer.
         </p>
-        <ul class="check-list">
-          <li v-for="p in patchOptions" :key="p.id">
-            <label>
-              <input
-                v-model="selectedPatches"
-                type="checkbox"
-                :value="p.id"
-                data-test="patch-option"
-                @change="onPatchToggled(p)"
-              />
-              <span>
-                {{ p.name }}
-                <span class="muted">
-                  — {{ p.rack_name }}, {{ p.module_ids.length }} modules in play
-                </span>
-              </span>
-            </label>
-          </li>
-        </ul>
-      </template>
 
-      <p v-if="selectedModules.length === 0" class="muted">Select at least one module.</p>
-      <p v-else-if="attachmentCount === 0" class="muted">
-        Attach at least one document (manual, previous answer, note, capture, or patch).
-      </p>
-      <button
-        type="button"
-        :disabled="submitting || selectedModules.length === 0 || attachmentCount === 0"
-        data-test="request-answer"
-        @click="requestAnswer"
-      >
-        Get answer
-      </button>
-    </div>
+        <!-- One list per kind of attachment, each folded away behind its
+             heading with what it holds counted on the outside. -->
+        <details open class="expander">
+          <summary>
+            <h3>Modules</h3>
+            <span class="summary-count">
+              {{ selectedModules.length }} of {{ options.modules.length }}
+            </span>
+          </summary>
+          <div class="expander-body">
+            <ul class="check-list">
+              <li v-for="m in options.modules" :key="m.id">
+                <label>
+                  <input type="checkbox" :value="m.id" v-model="selectedModules" data-test="module-option" />
+                  <span>
+                    {{ m.manufacturer }} {{ m.name }}
+                    <span v-if="m.in_scope" class="badge scoped">suggested</span>
+                  </span>
+                </label>
+              </li>
+            </ul>
+          </div>
+        </details>
+
+        <details v-if="visibleComponents.length > 0" class="expander">
+          <summary>
+            <h3>Components</h3>
+            <span class="summary-count">
+              {{ chosenComponentIds.length }} of {{ visibleComponents.length }}
+            </span>
+          </summary>
+          <div class="expander-body">
+            <ul class="check-list">
+              <li v-for="c in visibleComponents" :key="c.id">
+                <label>
+                  <input
+                    type="checkbox"
+                    :value="c.id"
+                    v-model="selectedComponents"
+                    data-test="component-option"
+                  />
+                  <span>
+                    {{ moduleLabel(c.module_id) }} — {{ c.name }}
+                    <span class="badge">{{ c.type }}</span>
+                    <span v-if="c.in_scope" class="badge scoped">suggested</span>
+                  </span>
+                </label>
+              </li>
+            </ul>
+          </div>
+        </details>
+
+        <details open class="expander">
+          <summary>
+            <h3>Manual documents</h3>
+            <span class="summary-count">
+              {{ chosenManualIds.length }} of {{ visibleManuals.length }}
+            </span>
+          </summary>
+          <div class="expander-body">
+            <p v-if="visibleManuals.length === 0" class="muted">
+              No manual documents for the selected modules.
+            </p>
+            <ul v-else class="check-list">
+              <li v-for="m in visibleManuals" :key="m.id">
+                <label>
+                  <input type="checkbox" :value="m.id" v-model="selectedManuals" data-test="manual-option" />
+                  <span>
+                    {{ moduleLabel(m.module_id) }} — {{ manualLabel(m) }}
+                    <span v-if="m.source === 'upload'" class="badge">upload</span>
+                  </span>
+                </label>
+              </li>
+            </ul>
+          </div>
+        </details>
+
+        <details v-if="visibleAnswers.length > 0" class="expander">
+          <summary>
+            <h3>Previous answers</h3>
+            <span class="summary-count">
+              {{ chosenAnswerIds.length }} of {{ visibleAnswers.length }}
+            </span>
+          </summary>
+          <div class="expander-body">
+            <ul class="check-list">
+              <li v-for="a in visibleAnswers" :key="a.id">
+                <label>
+                  <input type="checkbox" :value="a.id" v-model="selectedAnswers" data-test="answer-option" />
+                  <span>{{ a.prompt }}</span>
+                </label>
+              </li>
+            </ul>
+          </div>
+        </details>
+
+        <details v-if="visibleNotes.length > 0" class="expander">
+          <summary>
+            <h3>Notes</h3>
+            <span class="summary-count">
+              {{ chosenNoteIds.length }} of {{ visibleNotes.length }}
+            </span>
+          </summary>
+          <div class="expander-body">
+            <ul class="check-list">
+              <li v-for="n in visibleNotes" :key="n.id">
+                <label>
+                  <input type="checkbox" :value="n.id" v-model="selectedNotes" data-test="note-option" />
+                  <span>{{ n.title || n.body.slice(0, 80) }}</span>
+                </label>
+              </li>
+            </ul>
+          </div>
+        </details>
+
+        <details v-if="visibleCaptures.length > 0" class="expander">
+          <summary>
+            <h3>Oscilloscope captures</h3>
+            <span class="summary-count">
+              {{ chosenCaptureIds.length }} of {{ visibleCaptures.length }}
+            </span>
+          </summary>
+          <div class="expander-body">
+            <ul class="check-list">
+              <li v-for="c in visibleCaptures" :key="c.id">
+                <label>
+                  <input
+                    type="checkbox"
+                    :value="c.id"
+                    v-model="selectedCaptures"
+                    data-test="capture-option"
+                  />
+                  <span>
+                    {{ c.title || `Capture #${c.id}` }}
+                    <span class="muted">
+                      — {{ c.channel_count }} channels, {{ new Date(c.captured_at).toLocaleString() }}
+                    </span>
+                  </span>
+                </label>
+              </li>
+            </ul>
+          </div>
+        </details>
+
+        <details v-if="patchOptions.length > 0" class="expander">
+          <summary>
+            <h3>Patches</h3>
+            <span class="summary-count">
+              {{ chosenPatchIds.length }} of {{ patchOptions.length }}
+            </span>
+          </summary>
+          <div class="expander-body">
+            <p class="muted">
+              Attach a patch and the question is answered from it: its cables, the control settings it
+              records, the normalled connections it leaves intact and the signal flow they add up to.
+              The modules the patch uses are added to the scope above.
+            </p>
+            <ul class="check-list">
+              <li v-for="p in patchOptions" :key="p.id">
+                <label>
+                  <input
+                    v-model="selectedPatches"
+                    type="checkbox"
+                    :value="p.id"
+                    data-test="patch-option"
+                    @change="onPatchToggled(p)"
+                  />
+                  <span>
+                    {{ p.name }}
+                    <span class="muted">
+                      — {{ p.rack_name }}, {{ p.module_ids.length }} modules in play
+                    </span>
+                  </span>
+                </label>
+              </li>
+            </ul>
+          </div>
+        </details>
+
+        <p v-if="selectedModules.length === 0" class="muted">Select at least one module.</p>
+        <p v-else-if="attachmentCount === 0" class="muted">
+          Attach at least one document (manual, previous answer, note, capture, or patch).
+        </p>
+        <button
+          type="button"
+          :disabled="submitting || selectedModules.length === 0 || attachmentCount === 0"
+          data-test="request-answer"
+          @click="requestAnswer"
+        >
+          Get answer
+        </button>
+      </div>
+    </details>
 
     <template v-else>
-      <div v-if="question.modules?.length" class="panel" data-test="modules">
-        <h2>Modules in scope</h2>
-        <p>
-          <template v-for="(m, i) in question.modules" :key="m.id">
-            <RouterLink :to="`/modules/${m.id}`">{{ m.manufacturer }} {{ m.name }}</RouterLink>
-            <span v-if="i < question.modules.length - 1">, </span>
-          </template>
-        </p>
-      </div>
+      <details v-if="question.modules?.length" class="panel" data-test="modules">
+        <summary>
+          <h2>Modules in scope</h2>
+        </summary>
+        <div class="panel-body">
+          <p>
+            <template v-for="(m, i) in question.modules" :key="m.id">
+              <RouterLink :to="`/modules/${m.id}`">{{ m.manufacturer }} {{ m.name }}</RouterLink>
+              <span v-if="i < question.modules.length - 1">, </span>
+            </template>
+          </p>
+        </div>
+      </details>
 
-      <div v-if="question.components?.length" class="panel" data-test="components">
-        <h2>Jacks in scope</h2>
-        <ul>
-          <li v-for="c in question.components" :key="c.id">
-            {{ c.module_manufacturer }} {{ c.module_name }} — <strong>{{ c.name }}</strong>
-            <span class="badge" :class="c.type === 'input_jack' ? 'pending' : 'found'">
-              {{ c.type === 'input_jack' ? 'input' : c.type === 'bidirectional_jack' ? 'mult' : 'output' }}
-            </span>
-          </li>
-        </ul>
-      </div>
+      <details v-if="question.components?.length" class="panel" data-test="components">
+        <summary>
+          <h2>Jacks in scope</h2>
+        </summary>
+        <div class="panel-body">
+          <ul>
+            <li v-for="c in question.components" :key="c.id">
+              {{ c.module_manufacturer }} {{ c.module_name }} — <strong>{{ c.name }}</strong>
+              <span class="badge" :class="c.type === 'input_jack' ? 'pending' : 'found'">
+                {{ c.type === 'input_jack' ? 'input' : c.type === 'bidirectional_jack' ? 'mult' : 'output' }}
+              </span>
+            </li>
+          </ul>
+        </div>
+      </details>
 
-      <div
+      <details
         v-if="
           question.manuals?.length ||
           question.answers?.length ||
@@ -387,30 +454,34 @@ onUnmounted(() => clearTimeout(pollTimer));
         class="panel"
         data-test="attachments"
       >
-        <h2>Attached context</h2>
-        <ul>
-          <li v-for="m in question.manuals" :key="`manual-${m.id}`">
-            {{ m.module_manufacturer }} {{ m.module_name }} — {{ manualLabel(m) }}
-            <span class="badge">document</span>
-          </li>
-          <li v-for="a in question.answers" :key="`answer-${a.id}`">
-            <RouterLink :to="`/questions/${a.id}`">{{ a.prompt }}</RouterLink>
-            <span class="badge">previous answer</span>
-          </li>
-          <li v-for="n in question.notes" :key="`note-${n.id}`">
-            {{ n.title || `Note ${n.id}` }}
-            <span class="badge">note</span>
-          </li>
-          <li v-for="c in question.captures" :key="`capture-${c.id}`">
-            {{ c.title || `Capture ${c.id}` }}
-            <span class="badge">waveform</span>
-          </li>
-          <li v-for="p in question.patches" :key="`patch-${p.id}`">
-            <RouterLink :to="`/patches/${p.id}`">{{ p.name }}</RouterLink>
-            <span class="badge">patch</span>
-          </li>
-        </ul>
-      </div>
+        <summary>
+          <h2>Attached context</h2>
+        </summary>
+        <div class="panel-body">
+          <ul>
+            <li v-for="m in question.manuals" :key="`manual-${m.id}`">
+              {{ m.module_manufacturer }} {{ m.module_name }} — {{ manualLabel(m) }}
+              <span class="badge">document</span>
+            </li>
+            <li v-for="a in question.answers" :key="`answer-${a.id}`">
+              <RouterLink :to="`/questions/${a.id}`">{{ a.prompt }}</RouterLink>
+              <span class="badge">previous answer</span>
+            </li>
+            <li v-for="n in question.notes" :key="`note-${n.id}`">
+              {{ n.title || `Note ${n.id}` }}
+              <span class="badge">note</span>
+            </li>
+            <li v-for="c in question.captures" :key="`capture-${c.id}`">
+              {{ c.title || `Capture ${c.id}` }}
+              <span class="badge">waveform</span>
+            </li>
+            <li v-for="p in question.patches" :key="`patch-${p.id}`">
+              <RouterLink :to="`/patches/${p.id}`">{{ p.name }}</RouterLink>
+              <span class="badge">patch</span>
+            </li>
+          </ul>
+        </div>
+      </details>
 
       <div v-if="isWorking" class="panel" data-test="answer-pending">
         <p class="muted">
@@ -420,11 +491,15 @@ onUnmounted(() => clearTimeout(pollTimer));
       <div v-else-if="question.status === 'failed'" class="panel">
         <p class="error" data-test="answer-error">Failed: {{ question.error }}</p>
       </div>
-      <div v-else-if="question.answer" class="panel">
-        <h2>Answer</h2>
-        <!-- eslint-disable-next-line vue/no-v-html -- sanitized with DOMPurify -->
-        <div class="answer" data-test="answer" v-html="answerHtml"></div>
-      </div>
+      <details v-else-if="question.answer" open class="panel">
+        <summary>
+          <h2>Answer</h2>
+        </summary>
+        <div class="panel-body">
+          <!-- eslint-disable-next-line vue/no-v-html -- sanitized with DOMPurify -->
+          <div class="answer" data-test="answer" v-html="answerHtml"></div>
+        </div>
+      </details>
     </template>
   </template>
 </template>

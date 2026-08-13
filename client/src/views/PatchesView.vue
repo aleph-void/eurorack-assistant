@@ -80,48 +80,50 @@ onMounted(load);
   <p v-if="error" class="error" data-test="error">{{ error }}</p>
   <p v-if="loading" class="muted">Loading…</p>
   <div v-else class="panel">
-    <table v-if="patches.length" data-test="patch-table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Rack</th>
-          <th>Modules</th>
-          <th>Cables</th>
-          <th>Created</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="patch in patches" :key="patch.id" :data-test="`patch-${patch.id}`">
-          <td>
-            <RouterLink :to="`/patches/${patch.id}`">{{ patch.name }}</RouterLink>
-            <span v-if="patch.description" class="muted"> — {{ patch.description }}</span>
-          </td>
-          <td>{{ patch.rack_name }}</td>
-          <td>{{ patch.module_count }}</td>
-          <td>{{ patch.cable_count }}</td>
-          <td>{{ new Date(patch.created_at).toLocaleString() }}</td>
-          <td>
-            <button
-              class="secondary"
-              style="margin: 0"
-              :data-test="`duplicate-${patch.id}`"
-              @click="duplicate(patch)"
-            >
-              Duplicate
-            </button>
-            <button
-              class="danger"
-              style="margin: 0 0 0 0.4rem"
-              :data-test="`delete-${patch.id}`"
-              @click="remove(patch)"
-            >
-              Delete
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div v-if="patches.length" class="table-wrap">
+      <table data-test="patch-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Rack</th>
+            <th>Modules</th>
+            <th>Cables</th>
+            <th>Created</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="patch in patches" :key="patch.id" :data-test="`patch-${patch.id}`">
+            <td>
+              <RouterLink :to="`/patches/${patch.id}`">{{ patch.name }}</RouterLink>
+              <span v-if="patch.description" class="muted"> — {{ patch.description }}</span>
+            </td>
+            <td>{{ patch.rack_name }}</td>
+            <td>{{ patch.module_count }}</td>
+            <td>{{ patch.cable_count }}</td>
+            <td>{{ new Date(patch.created_at).toLocaleString() }}</td>
+            <td>
+              <button
+                class="secondary"
+                style="margin: 0"
+                :data-test="`duplicate-${patch.id}`"
+                @click="duplicate(patch)"
+              >
+                Duplicate
+              </button>
+              <button
+                class="danger"
+                style="margin: 0 0 0 0.4rem"
+                :data-test="`delete-${patch.id}`"
+                @click="remove(patch)"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <p v-else class="muted" data-test="empty">No patches yet — create one from a rack below.</p>
 
     <form @submit.prevent="create">

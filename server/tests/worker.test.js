@@ -611,6 +611,240 @@ describe('worker', () => {
     expect(maxInFlight).toBe(3);
   });
 
+  // A process killed mid-job (a redeploy recreating the container is enough)
+  // leaves its jobs 'running' with nobody working on them. Without a lease
+  // they stayed that way for good: never retried, and never re-queued either,
+  // because the dedupe guards saw a live job for the module.
+  describe('orphaned jobs', () => {
+    async function insertRunning(db, moduleId, { heartbeatAt, attempts = 1 }) {
+      const { rows } = await db.query(
+        `INSERT INTO jobs (type, module_id, status, attempts, heartbeat_at, worker_id)
+         VALUES ('analyze_manual', $1, 'running', $2, $3, 'dead-worker#1') RETURNING *`,
+        [moduleId, attempts, heartbeatAt]
+      );
+      return rows[0];
+    }
+
+    it('requeues a running job whose worker stopped reporting progress', async () => {
+      const db = await createTestDb();
+      const user = await createUser(db, { username: 'u' });
+      const module = await insertModule(db, user.id);
+      await db.query("UPDATE modules SET analysis_status = 'analyzing' WHERE id = $1", [module.id]);
+      const stale = await insertRunning(db, module.id, {
+        heartbeatAt: new Date(Date.now() - 60 * 60 * 1000),
+      });
+
+      const worker = makeWorker(db, fakeBackend());
+      const reclaimed = await worker.reclaimStaleJobs();
+
+      expect(reclaimed.map((j) => j.id)).toEqual([stale.id]);
+      const { rows } = await db.query('SELECT * FROM jobs WHERE id = $1', [stale.id]);
+      expect(rows[0].status).toBe('pending');
+      expect(rows[0].attempts).toBe(1); // the lost attempt still counts
+      expect(rows[0].error).toMatch(/worker stopped/);
+      expect(rows[0].worker_id).toBeNull();
+      // The module has to come off 'analyzing' too, or the UI shows work in
+      // progress that nothing is doing.
+      const { rows: mods } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
+      expect(mods[0].analysis_status).toBe('pending');
+    });
+
+    it('fails an orphaned job that has no attempts left', async () => {
+      const db = await createTestDb();
+      const user = await createUser(db, { username: 'u' });
+      const module = await insertModule(db, user.id);
+      const stale = await insertRunning(db, module.id, {
+        heartbeatAt: new Date(Date.now() - 60 * 60 * 1000),
+        attempts: MAX_ATTEMPTS,
+      });
+
+      await makeWorker(db, fakeBackend()).reclaimStaleJobs();
+
+      const { rows } = await db.query('SELECT * FROM jobs WHERE id = $1', [stale.id]);
+      expect(rows[0].status).toBe('failed');
+      const { rows: mods } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
+      expect(mods[0].analysis_status).toBe('failed');
+    });
+
+    it('leaves a job alone while its worker is still reporting', async () => {
+      const db = await createTestDb();
+      const user = await createUser(db, { username: 'u' });
+      const module = await insertModule(db, user.id);
+      const fresh = await insertRunning(db, module.id, { heartbeatAt: new Date() });
+
+      expect(await makeWorker(db, fakeBackend()).reclaimStaleJobs()).toHaveLength(0);
+      const { rows } = await db.query('SELECT * FROM jobs WHERE id = $1', [fresh.id]);
+      expect(rows[0].status).toBe('running');
+    });
+
+    it('never reclaims a job this worker is running right now', async () => {
+      const db = await createTestDb();
+      const user = await createUser(db, { username: 'u' });
+      const module = await insertModule(db, user.id);
+      await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
+      await db.query(
+        `INSERT INTO manuals (module_id, hash, source, original_name)
+         VALUES ($1, $2, 'found', 'm.pdf')`,
+        [module.id, PDF_HASH]
+      );
+      fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+
+      let reclaimedMidRun = null;
+      // Even with every running job counting as stale, the one in flight here
+      // must survive — reclaiming it would run the analysis twice.
+      const worker = makeWorker(
+        db,
+        fakeBackend({
+          analyzeDocument: async () => {
+            reclaimedMidRun = await worker.reclaimStaleJobs();
+            return '{"summary": "S", "components": []}';
+          },
+        }),
+        null,
+        null,
+        { staleJobMs: 0 }
+      );
+      const done = await worker.tick();
+
+      expect(reclaimedMidRun).toEqual([]);
+      expect(done.status).toBe('complete');
+    });
+
+    it('hands in-flight jobs back to the queue when the worker is stopped', async () => {
+      const db = await createTestDb();
+      const user = await createUser(db, { username: 'u' });
+      const module = await insertModule(db, user.id);
+      const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
+      await db.query(
+        `INSERT INTO manuals (module_id, hash, source, original_name)
+         VALUES ($1, $2, 'found', 'm.pdf')`,
+        [module.id, PDF_HASH]
+      );
+      fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+
+      // The analysis never returns: the job is still genuinely in flight when
+      // the process is told to shut down, exactly as during a deploy.
+      let midAnalysis;
+      const analysing = new Promise((resolve) => {
+        midAnalysis = resolve;
+      });
+      const worker = makeWorker(
+        db,
+        fakeBackend({ analyzeDocument: () => (midAnalysis(), new Promise(() => {})) }),
+        null,
+        null,
+        { pollIntervalMs: 10 }
+      );
+      worker.start();
+      await analysing;
+      await worker.stop();
+
+      const { rows } = await db.query('SELECT * FROM jobs WHERE id = $1', [job.id]);
+      expect(rows[0].status).toBe('pending');
+      // A deploy is not the job's fault, so the interrupted attempt is
+      // refunded rather than counted against MAX_ATTEMPTS.
+      expect(rows[0].attempts).toBe(0);
+      expect(rows[0].error).toMatch(/shut down/);
+    });
+
+    it('picks orphaned jobs up again on the next poll', async () => {
+      const db = await createTestDb();
+      const user = await createUser(db, { username: 'u' });
+      const module = await insertModule(db, user.id);
+      await db.query(
+        `INSERT INTO manuals (module_id, hash, source, original_name)
+         VALUES ($1, $2, 'found', 'm.pdf')`,
+        [module.id, PDF_HASH]
+      );
+      fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+      const stale = await insertRunning(db, module.id, {
+        heartbeatAt: new Date(Date.now() - 60 * 60 * 1000),
+      });
+
+      const worker = makeWorker(
+        db,
+        fakeBackend({ analyzeDocument: '{"summary": "S", "components": []}' }),
+        null,
+        null,
+        { pollIntervalMs: 10 }
+      );
+      worker.start();
+      try {
+        const deadline = Date.now() + 3000;
+        for (;;) {
+          const { rows } = await db.query('SELECT status FROM jobs WHERE id = $1', [stale.id]);
+          if (rows[0].status === 'complete') break;
+          if (Date.now() > deadline) throw new Error(`stalled job was not rerun: ${rows[0].status}`);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      } finally {
+        await worker.stop();
+      }
+    });
+
+    it('gives up on a job that never finishes, freeing the runner', async () => {
+      const db = await createTestDb();
+      const user = await createUser(db, { username: 'u' });
+      const module = await insertModule(db, user.id);
+      const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
+      await db.query(
+        `INSERT INTO manuals (module_id, hash, source, original_name)
+         VALUES ($1, $2, 'found', 'm.pdf')`,
+        [module.id, PDF_HASH]
+      );
+      fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+
+      const worker = makeWorker(
+        db,
+        fakeBackend({ analyzeDocument: () => new Promise(() => {}) }),
+        null,
+        null,
+        { jobTimeoutMs: 50 }
+      );
+      const result = await worker.tick();
+
+      expect(result.id).toBe(job.id);
+      expect(result.status).toBe('pending'); // attempts left, so it goes back
+      expect(result.error).toMatch(/time limit/);
+    });
+
+    it('keeps the heartbeat fresh while a long job runs', async () => {
+      const db = await createTestDb();
+      const user = await createUser(db, { username: 'u' });
+      const module = await insertModule(db, user.id);
+      const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
+      await db.query(
+        `INSERT INTO manuals (module_id, hash, source, original_name)
+         VALUES ($1, $2, 'found', 'm.pdf')`,
+        [module.id, PDF_HASH]
+      );
+      fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+
+      let beat = null;
+      const worker = makeWorker(
+        db,
+        fakeBackend({
+          analyzeDocument: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 120));
+            const { rows } = await db.query('SELECT heartbeat_at FROM jobs WHERE id = $1', [job.id]);
+            beat = rows[0].heartbeat_at;
+            return '{"summary": "S", "components": []}';
+          },
+        }),
+        null,
+        null,
+        { pollIntervalMs: 10, heartbeatMs: 20 }
+      );
+      const claimedAt = new Date();
+      worker.start();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await worker.stop();
+
+      expect(beat).toBeTruthy();
+      expect(new Date(beat).getTime()).toBeGreaterThanOrEqual(claimedAt.getTime());
+    });
+  });
+
   it('falls back to the default worker count when the stored value is unusable', async () => {
     const db = await createTestDb();
     expect(await getImportWorkerCount(db)).toBe(DEFAULT_IMPORT_WORKERS);

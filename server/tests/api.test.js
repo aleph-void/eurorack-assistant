@@ -1122,6 +1122,44 @@ describe('jobs API', () => {
     expect(retry.body.status).toBe('pending');
   });
 
+  it('marks a job whose worker died as stalled and lets it be retried', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id);
+    const { rows: jobs } = await db.query(
+      `INSERT INTO jobs (type, user_id, module_id, status, heartbeat_at)
+       VALUES ('analyze_manual', $1, $2, 'running', $3) RETURNING *`,
+      [rows[0].id, module.id, new Date(Date.now() - 60 * 60 * 1000)]
+    );
+
+    const list = await request(app).get('/api/jobs').set('Cookie', aliceCookie);
+    expect(list.body[0].stalled).toBe(true);
+
+    const retry = await request(app)
+      .post(`/api/jobs/${jobs[0].id}/retry`)
+      .set('Cookie', aliceCookie);
+    expect(retry.status).toBe(200);
+    expect(retry.body.status).toBe('pending');
+  });
+
+  it('refuses to retry a job that is still running', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id);
+    const { rows: jobs } = await db.query(
+      `INSERT INTO jobs (type, user_id, module_id, status, heartbeat_at)
+       VALUES ('analyze_manual', $1, $2, 'running', now()) RETURNING *`,
+      [rows[0].id, module.id]
+    );
+
+    const list = await request(app).get('/api/jobs').set('Cookie', aliceCookie);
+    expect(list.body[0].stalled).toBe(false);
+    const retry = await request(app)
+      .post(`/api/jobs/${jobs[0].id}/retry`)
+      .set('Cookie', aliceCookie);
+    expect(retry.status).toBe(400);
+  });
+
   it("hides other users' jobs — even for a shared module — except from admins", async () => {
     const { app, db, aliceCookie, adminCookie } = await createTestApp();
     const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");

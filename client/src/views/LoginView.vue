@@ -27,8 +27,11 @@ async function submit() {
 </script>
 
 <template>
-  <div class="panel" style="max-width: 26rem; margin: 4rem auto">
-    <h1>Log in</h1>
+  <!-- The only page without the top bar, so it carries the mark itself. -->
+  <div class="panel login-panel">
+    <img class="login-mark" src="/logo-white.svg" alt="Aleph Void" />
+    <h1>Eurorack Assistant</h1>
+    <p class="muted">Log in to your rack.</p>
     <form @submit.prevent="submit">
       <label for="username">Username</label>
       <input id="username" v-model="username" autocomplete="username" required />

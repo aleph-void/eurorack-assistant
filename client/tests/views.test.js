@@ -1133,6 +1133,32 @@ describe('JobsView', () => {
     expect(wrapper.find('[data-test="retry-all"]').exists()).toBe(false);
   });
 
+  it('flags a stalled job and offers to retry it', async () => {
+    api.get.mockResolvedValue([
+      {
+        id: 1,
+        type: 'analyze_manual',
+        status: 'running',
+        stalled: true,
+        attempts: 1,
+        module_manufacturer: 'Tiptop Audio',
+        module_name: 'MISO',
+      },
+      { id: 2, type: 'analyze_manual', status: 'running', stalled: false, attempts: 1 },
+    ]);
+    api.post.mockResolvedValue({ id: 1, status: 'pending', stalled: false, error: null });
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="stalled-1"]').exists()).toBe(true);
+    // A job that is genuinely still running is neither flagged nor retryable.
+    expect(wrapper.find('[data-test="stalled-2"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="retry-2"]').exists()).toBe(false);
+    await wrapper.find('[data-test="retry-1"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/jobs/1/retry');
+    expect(wrapper.find('[data-test="stalled-1"]').exists()).toBe(false);
+  });
+
   it('labels rack exports and links the not-yet-taken download', async () => {
     api.get.mockResolvedValue([
       {

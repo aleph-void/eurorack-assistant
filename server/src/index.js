@@ -53,13 +53,25 @@ async function main() {
     console.log(`eurorack-assistant server listening on :${PORT}`);
   });
 
+  // Shutting down has to wait for the worker: it hands its in-flight jobs
+  // back to the queue, and exiting before that leaves them stranded in
+  // 'running' until their lease goes stale. Docker gives us 10s by default,
+  // which is plenty — the jobs are released, not waited on.
+  let shuttingDown = false;
   for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, () => {
-      worker.stop();
+    process.on(signal, async () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
       clearInterval(prune);
       hub.closeAll();
       ws.close();
-      server.close(() => process.exit(0));
+      server.close();
+      try {
+        await worker.stop();
+      } catch (e) {
+        console.error('worker shutdown failed:', e.message);
+      }
+      process.exit(0);
     });
   }
 }

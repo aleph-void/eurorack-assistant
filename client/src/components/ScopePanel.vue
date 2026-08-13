@@ -185,209 +185,233 @@ watch(connected, (isConnected) => {
 </script>
 
 <template>
-  <div class="panel" data-test="scope-panel">
-    <h2>Oscilloscope</h2>
-
-    <p v-if="!connected" class="muted" data-test="scope-disconnected">
-      No oscilloscope is connected.
-      <RouterLink to="/devices">Link one</RouterLink> and it will appear here.
-    </p>
-    <p v-else class="muted" data-test="scope-connected">
-      Connected: <strong>{{ connection.name }}</strong>
-      <span v-if="connection.audio_device?.name"> — {{ connection.audio_device.name }}</span>
-      <span v-if="connection.audio_device?.channel_count">
-        ({{ connection.audio_device.channel_count }} channels)
+  <details class="panel" data-test="scope-panel">
+    <summary>
+      <h2>Oscilloscope</h2>
+      <span class="summary-count">
+        {{ connected ? 'connected' : 'no scope' }}
       </span>
-    </p>
+    </summary>
+    <div class="panel-body">
 
-    <p v-if="error" class="error" data-test="scope-error">{{ error }}</p>
-    <p v-if="status" class="ok" data-test="scope-status">{{ status }}</p>
+      <p v-if="!connected" class="muted" data-test="scope-disconnected">
+        No oscilloscope is connected.
+        <RouterLink to="/devices">Link one</RouterLink> and it will appear here.
+      </p>
+      <p v-else class="muted" data-test="scope-connected">
+        Connected: <strong>{{ connection.name }}</strong>
+        <span v-if="connection.audio_device?.name"> — {{ connection.audio_device.name }}</span>
+        <span v-if="connection.audio_device?.channel_count">
+          ({{ connection.audio_device.channel_count }} channels)
+        </span>
+      </p>
 
-    <div class="row">
-      <button :disabled="!connected || busy" data-test="scope-automap" @click="automap">
-        Map channels automatically
-      </button>
-      <button :disabled="!connected || busy" data-test="scope-tuner" @click="readTuner">
-        Read tuner now
-      </button>
-    </div>
+      <p v-if="error" class="error" data-test="scope-error">{{ error }}</p>
+      <p v-if="status" class="ok" data-test="scope-status">{{ status }}</p>
 
-    <p
-      v-if="suggestion && suggestion.matched_by === 'none' && connected"
-      class="muted"
-      data-test="scope-no-match"
-    >
-      This patch has no module matching the connected audio device, so channels have to be
-      mapped by hand.
-    </p>
+      <div class="row">
+        <button :disabled="!connected || busy" data-test="scope-automap" @click="automap">
+          Map channels automatically
+        </button>
+        <button :disabled="!connected || busy" data-test="scope-tuner" @click="readTuner">
+          Read tuner now
+        </button>
+      </div>
 
-    <table v-if="channels.length > 0" data-test="scope-channels">
-      <thead>
-        <tr>
-          <th>Channel</th>
-          <th>Watching</th>
-          <th>Showing</th>
-          <th>Type</th>
-          <th>Set by</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr
-          v-for="channel in channels"
-          :key="channel.channel_index"
-          :data-test="`scope-channel-${channel.channel_index}`"
-        >
-          <td>{{ channel.channel_index + 1 }}</td>
-          <td>{{ channel.component_name || '—' }}</td>
-          <td>{{ channel.label || '—' }}</td>
-          <td>{{ channel.signal_type || '—' }}</td>
-          <td>
-            <span class="badge" :class="channel.source === 'manual' ? 'found' : 'pending'">
-              {{ channel.source }}
-            </span>
-          </td>
-          <td>
-            <button
-              class="danger"
-              :data-test="`scope-clear-${channel.channel_index}`"
-              @click="clearChannel(channel.channel_index)"
-            >
-              Clear
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-
-    <details v-if="connected" data-test="scope-override">
-      <summary>Map a channel by hand</summary>
-      <div
-        v-for="index in connection.audio_device?.channel_count || channels.length || 0"
-        :key="index"
-        class="row"
+      <p
+        v-if="suggestion && suggestion.matched_by === 'none' && connected"
+        class="muted"
+        data-test="scope-no-match"
       >
-        <span class="shrink">Ch {{ index }}</span>
-        <select
-          v-model="overrideModule[index - 1]"
-          :data-test="`scope-override-module-${index - 1}`"
-        >
-          <option value="">Module…</option>
-          <option v-for="pm in modules" :key="pm.id" :value="pm.id">
-            {{ moduleLabel(pm) }}
-          </option>
-        </select>
-        <select
-          v-model="overrideComponent[index - 1]"
-          :data-test="`scope-override-jack-${index - 1}`"
-        >
-          <option value="">Jack…</option>
-          <option v-for="jack in jacksOf(overrideModule[index - 1])" :key="jack.id" :value="jack.id">
-            {{ jack.name }}
-          </option>
-        </select>
-        <button
-          class="shrink"
-          :data-test="`scope-override-save-${index - 1}`"
-          @click="saveOverride(index - 1)"
-        >
-          Set
-        </button>
-      </div>
-    </details>
-
-    <div v-if="tuner.length > 0" class="subpanel" data-test="scope-tuner-readings">
-      <h3>Tuner</h3>
-      <table>
-        <thead>
-          <tr><th>Channel</th><th>Reading</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in tuner" :key="row.index">
-            <td>{{ (row.index ?? 0) + 1 }}</td>
-            <td>{{ reading(row.tuning || row) }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="subpanel">
-      <h3>Capture a waveform</h3>
-      <div class="row">
-        <input
-          v-model="captureTitle"
-          placeholder="Title (optional)"
-          data-test="capture-title"
-        />
-        <button
-          class="shrink"
-          :disabled="!connected || busy"
-          data-test="scope-capture"
-          @click="capture"
-        >
-          Capture waveform + tuner
-        </button>
-      </div>
-      <p class="muted">
-        The image and the tuner reading taken with it are stored as a note on this patch, and
-        can be attached to a question afterwards.
+        This patch has no module matching the connected audio device, so channels have to be
+        mapped by hand.
       </p>
-    </div>
 
-    <div
-      v-for="capture in captures"
-      :key="capture.id"
-      class="subpanel"
-      :data-test="`capture-${capture.id}`"
-    >
-      <h3>{{ capture.title || `Capture #${capture.id}` }}</h3>
-      <p class="muted">
-        {{ new Date(capture.captured_at).toLocaleString() }}
-        <span v-if="capture.device_name"> · {{ capture.device_name }}</span>
-        <span v-if="capture.audio_device_name"> · {{ capture.audio_device_name }}</span>
-      </p>
-      <img
-        v-if="capture.image_hash"
-        :src="`/api/captures/${capture.id}/image`"
-        :alt="capture.title || `Capture ${capture.id}`"
-        style="max-width: 100%; height: auto"
-        :data-test="`capture-image-${capture.id}`"
-      />
-      <table v-if="capture.channels?.length">
-        <thead>
-          <tr><th>Channel</th><th>Showing</th><th>Reading</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="channel in capture.channels" :key="channel.id">
-            <td>{{ channel.channel_index + 1 }}</td>
-            <td>
-              {{ channel.label || channel.component_name || '—' }}
-              <span v-if="channel.source_description" class="muted">
-                ({{ channel.source_description }})
-              </span>
-            </td>
-            <td>{{ reading(channel) }}</td>
-          </tr>
-        </tbody>
-      </table>
-      <div class="row">
-        <input
-          :value="captionDraft[capture.id] ?? capture.caption ?? ''"
-          placeholder="Caption"
-          :data-test="`capture-caption-${capture.id}`"
-          @input="captionDraft[capture.id] = $event.target.value"
-        />
-        <button class="shrink" :data-test="`capture-save-${capture.id}`" @click="saveCaption(capture)">
-          Save
-        </button>
-        <button
-          class="danger shrink"
-          :data-test="`capture-delete-${capture.id}`"
-          @click="removeCapture(capture)"
-        >
-          Delete
-        </button>
+      <div v-if="channels.length > 0" class="table-wrap">
+        <table data-test="scope-channels">
+          <thead>
+            <tr>
+              <th>Channel</th>
+              <th>Watching</th>
+              <th>Showing</th>
+              <th>Type</th>
+              <th>Set by</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="channel in channels"
+              :key="channel.channel_index"
+              :data-test="`scope-channel-${channel.channel_index}`"
+            >
+              <td>{{ channel.channel_index + 1 }}</td>
+              <td>{{ channel.component_name || '—' }}</td>
+              <td>{{ channel.label || '—' }}</td>
+              <td>{{ channel.signal_type || '—' }}</td>
+              <td>
+                <span class="badge" :class="channel.source === 'manual' ? 'found' : 'pending'">
+                  {{ channel.source }}
+                </span>
+              </td>
+              <td>
+                <button
+                  class="danger"
+                  :data-test="`scope-clear-${channel.channel_index}`"
+                  @click="clearChannel(channel.channel_index)"
+                >
+                  Clear
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
+
+      <details v-if="connected" class="expander" data-test="scope-override">
+        <summary>Map a channel by hand</summary>
+        <div class="expander-body">
+          <div
+            v-for="index in connection.audio_device?.channel_count || channels.length || 0"
+            :key="index"
+            class="row"
+          >
+            <span class="shrink">Ch {{ index }}</span>
+            <select
+              v-model="overrideModule[index - 1]"
+              :data-test="`scope-override-module-${index - 1}`"
+            >
+              <option value="">Module…</option>
+              <option v-for="pm in modules" :key="pm.id" :value="pm.id">
+                {{ moduleLabel(pm) }}
+              </option>
+            </select>
+            <select
+              v-model="overrideComponent[index - 1]"
+              :data-test="`scope-override-jack-${index - 1}`"
+            >
+              <option value="">Jack…</option>
+              <option v-for="jack in jacksOf(overrideModule[index - 1])" :key="jack.id" :value="jack.id">
+                {{ jack.name }}
+              </option>
+            </select>
+            <button
+              class="shrink"
+              :data-test="`scope-override-save-${index - 1}`"
+              @click="saveOverride(index - 1)"
+            >
+              Set
+            </button>
+          </div>
+        </div>
+      </details>
+
+      <div v-if="tuner.length > 0" class="subpanel" data-test="scope-tuner-readings">
+        <h3>Tuner</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Channel</th><th>Reading</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in tuner" :key="row.index">
+                <td>{{ (row.index ?? 0) + 1 }}</td>
+                <td>{{ reading(row.tuning || row) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="subpanel">
+        <h3>Capture a waveform</h3>
+        <div class="row">
+          <input
+            v-model="captureTitle"
+            placeholder="Title (optional)"
+            data-test="capture-title"
+          />
+          <button
+            class="shrink"
+            :disabled="!connected || busy"
+            data-test="scope-capture"
+            @click="capture"
+          >
+            Capture waveform + tuner
+          </button>
+        </div>
+        <p class="muted">
+          The image and the tuner reading taken with it are stored as a note on this patch, and
+          can be attached to a question afterwards.
+        </p>
+      </div>
+
+      <!-- Captures carry a waveform image each, so all but the one just
+           taken stay folded away. -->
+      <details
+        v-for="(capture, i) in captures"
+        :key="capture.id"
+        class="expander"
+        :open="i === 0"
+        :data-test="`capture-${capture.id}`"
+      >
+        <summary>
+          <h3>{{ capture.title || `Capture #${capture.id}` }}</h3>
+          <span class="summary-count">
+            {{ new Date(capture.captured_at).toLocaleString() }}
+          </span>
+        </summary>
+        <div class="expander-body">
+          <p class="muted">
+            <span v-if="capture.device_name">{{ capture.device_name }}</span>
+            <span v-if="capture.audio_device_name"> · {{ capture.audio_device_name }}</span>
+          </p>
+          <img
+            v-if="capture.image_hash"
+            :src="`/api/captures/${capture.id}/image`"
+            :alt="capture.title || `Capture ${capture.id}`"
+            style="max-width: 100%; height: auto"
+            :data-test="`capture-image-${capture.id}`"
+          />
+          <div v-if="capture.channels?.length" class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Channel</th><th>Showing</th><th>Reading</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="channel in capture.channels" :key="channel.id">
+                  <td>{{ channel.channel_index + 1 }}</td>
+                  <td>
+                    {{ channel.label || channel.component_name || '—' }}
+                    <span v-if="channel.source_description" class="muted">
+                      ({{ channel.source_description }})
+                    </span>
+                  </td>
+                  <td>{{ reading(channel) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="row">
+            <input
+              :value="captionDraft[capture.id] ?? capture.caption ?? ''"
+              placeholder="Caption"
+              :data-test="`capture-caption-${capture.id}`"
+              @input="captionDraft[capture.id] = $event.target.value"
+            />
+            <button class="shrink" :data-test="`capture-save-${capture.id}`" @click="saveCaption(capture)">
+              Save
+            </button>
+            <button
+              class="danger shrink"
+              :data-test="`capture-delete-${capture.id}`"
+              @click="removeCapture(capture)"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </details>
     </div>
-  </div>
+  </details>
 </template>

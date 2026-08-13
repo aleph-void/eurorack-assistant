@@ -791,823 +791,906 @@ onMounted(async () => {
     </p>
     <p v-if="patch.description" style="white-space: pre-wrap">{{ patch.description }}</p>
 
-    <div class="panel" data-test="cables">
-      <h2>Cables</h2>
-      <table v-if="patch.cables.length">
-        <thead>
-          <tr>
-            <th>From (output)</th>
-            <th>To (input)</th>
-            <th>Notes</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="cable in patch.cables" :key="cable.id" :data-test="`cable-${cable.id}`">
-            <td>
-              {{ moduleLabel(modulesById.get(cable.from_patch_module_id)) }} —
-              <strong>{{ cable.from_component_name }}</strong>
-            </td>
-            <td>
-              {{ moduleLabel(modulesById.get(cable.to_patch_module_id)) }} —
-              <strong>{{ cable.to_component_name }}</strong>
-            </td>
-            <td>
-              <span v-if="cable.optional" class="badge pending">optional</span>
-              <span v-if="cable.stacked" class="badge found">stacked</span>
-              <span v-if="cable.alt_group" class="badge pending">{{ cable.alt_group }}</span>
-              {{ cable.note || '' }}
-            </td>
-            <td>
-              <button
-                class="secondary"
-                style="margin: 0"
-                title="Load this cable into the form to plug a variant of it"
-                :data-test="`cable-reuse-${cable.id}`"
-                @click="reuseCable(cable)"
-              >
-                Reuse
-              </button>
-              <button
-                v-if="reversible(cable)"
-                class="secondary"
-                style="margin: 0 0 0 0.4rem"
-                title="Swap the ends of this cable"
-                :data-test="`cable-reverse-${cable.id}`"
-                @click="reverseCable(cable)"
-              >
-                Reverse
-              </button>
-              <button
-                style="margin: 0 0 0 0.4rem"
-                :data-test="`cable-optional-${cable.id}`"
-                @click="toggleCableFlag(cable, 'optional')"
-              >
-                {{ cable.optional ? 'Required' : 'Optional' }}
-              </button>
-              <button
-                style="margin: 0 0 0 0.4rem"
-                :data-test="`cable-stacked-${cable.id}`"
-                @click="toggleCableFlag(cable, 'stacked')"
-              >
-                {{ cable.stacked ? 'Not stacked' : 'Stacked' }}
-              </button>
-              <button
-                class="danger"
-                style="margin: 0 0 0 0.4rem"
-                :data-test="`delete-cable-${cable.id}`"
-                @click="removeCable(cable)"
-              >
-                Unplug
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-else class="muted">No cables yet.</p>
-
-      <form data-test="quick-form" @submit.prevent="addQuickCable">
-        <label for="quick-cable">Quick entry — name both ends on one line</label>
-        <div class="row">
-          <div style="flex: 3">
-            <input
-              id="quick-cable"
-              v-model="quickLine"
-              data-test="quick-cable"
-              placeholder="e.g. maths eor > optomix ch1 in"
-            />
-          </div>
-          <div class="shrink">
-            <button type="submit" style="margin: 0" :disabled="!quickReady" data-test="quick-create">
-              Plug in
-            </button>
-          </div>
-        </div>
-        <p v-if="quickReady" class="muted" data-test="quick-preview">
-          {{ endpointText(quickParsed.from) }} → {{ endpointText(quickParsed.to) }}
-        </p>
-        <template v-else-if="quickParsed.error">
-          <p class="muted" data-test="quick-problem">{{ quickParsed.error }}</p>
-          <p v-if="quickParsed.matches.length" class="muted" data-test="quick-matches">
-            {{ quickParsed.matches.map(endpointText).join(' · ') }}
-          </p>
-        </template>
-        <p v-if="quickError" class="error" data-test="quick-error">{{ quickError }}</p>
-      </form>
-
-      <form data-test="cable-form" @submit.prevent="addCable">
-        <h3 style="margin-bottom: 0">Add a cable</h3>
-        <p class="muted" style="margin: 0.2rem 0 0">
-          Type to find each end — the arrow keys move through the matches, Enter takes the
-          highlighted one and moves on to the next field.
-        </p>
-        <div class="row">
-          <div>
-            <label for="cable-from-module">From module</label>
-            <AutocompleteSelect
-              ref="fromModuleBox"
-              v-model="fromModuleId"
-              input-id="cable-from-module"
-              data-test="cable-from-module"
-              placeholder="Type a manufacturer, module or role…"
-              :options="fromModuleOptions"
-              @select="focusBox(fromJackBox)"
-            />
-          </div>
-          <div>
-            <label for="cable-from-jack">Output jack</label>
-            <AutocompleteSelect
-              ref="fromJackBox"
-              v-model="fromComponentId"
-              input-id="cable-from-jack"
-              data-test="cable-from-jack"
-              placeholder="Type a jack name…"
-              empty-text="No output or mult jack matches"
-              :disabled="!fromModuleId"
-              :options="fromJackOptions"
-              @select="focusBox(toModuleBox)"
-            />
-          </div>
-          <div>
-            <label for="cable-to-module">To module</label>
-            <AutocompleteSelect
-              ref="toModuleBox"
-              v-model="toModuleId"
-              input-id="cable-to-module"
-              data-test="cable-to-module"
-              placeholder="Type a manufacturer, module or role…"
-              :options="toModuleOptions"
-              @select="focusBox(toJackBox)"
-            />
-          </div>
-          <div>
-            <label for="cable-to-jack">Input jack</label>
-            <AutocompleteSelect
-              ref="toJackBox"
-              v-model="toComponentId"
-              input-id="cable-to-jack"
-              data-test="cable-to-jack"
-              placeholder="Type a jack name…"
-              empty-text="No free input or mult jack matches"
-              :disabled="!toModuleId"
-              :options="toJackOptions"
-            />
-          </div>
-          <div class="shrink">
-            <button type="submit" style="margin: 0" :disabled="!cableValid" data-test="cable-create">
-              Plug in
-            </button>
-          </div>
-        </div>
-        <div class="row">
-          <div class="shrink">
-            <label for="cable-chain">Chain — the next cable starts where this one lands</label>
-            <input id="cable-chain" v-model="chainFromDestination" type="checkbox" data-test="cable-chain" />
-          </div>
-        </div>
-        <div class="row">
-          <div style="flex: 2">
-            <label for="cable-note">Note (optional)</label>
-            <input
-              id="cable-note"
-              v-model="cableNote"
-              data-test="cable-note"
-              placeholder="e.g. adds the distortion layer"
-            />
-          </div>
-          <div>
-            <label for="cable-alt-group">Alternative to (optional)</label>
-            <input
-              id="cable-alt-group"
-              v-model="cableAltGroup"
-              data-test="cable-alt-group"
-              placeholder="e.g. vca choice"
-            />
-          </div>
-          <div class="shrink">
-            <label for="cable-optional">Provisional</label>
-            <input id="cable-optional" v-model="cableOptional" type="checkbox" data-test="cable-optional" />
-          </div>
-          <div class="shrink">
-            <label for="cable-stacked">Stackcable / mult</label>
-            <input id="cable-stacked" v-model="cableStacked" type="checkbox" data-test="cable-stacked" />
-          </div>
-          <div v-if="pairable" class="shrink">
-            <label for="cable-pair">
-              Patch the pair ({{ pairable.from.name }} → {{ pairable.to.name }} too)
-            </label>
-            <input id="cable-pair" v-model="cablePair" type="checkbox" data-test="cable-pair" />
-          </div>
-        </div>
-        <p v-if="cableError" class="error" data-test="cable-error">{{ cableError }}</p>
-      </form>
-    </div>
-
-    <div v-if="suggestions.length || looseEnds.length" class="panel" data-test="suggestions">
-      <h2>What to patch next</h2>
-      <template v-if="suggestions.length">
-        <p class="muted">
-          Cables you have plugged in your other patches, waiting to be plugged here — a rack is
-          patched in habits.
-        </p>
-        <table>
-          <tbody>
-            <tr
-              v-for="s in suggestions"
-              :key="`${s.from_patch_module_id}:${s.from_component_id}-${s.to_patch_module_id}:${s.to_component_id}`"
-              :data-test="`suggestion-${s.from_component_id}-${s.to_component_id}`"
-            >
-              <td>
-                {{ moduleLabel(modulesById.get(s.from_patch_module_id)) }} —
-                <strong>{{ s.from_component_name }}</strong>
-                →
-                {{ moduleLabel(modulesById.get(s.to_patch_module_id)) }} —
-                <strong>{{ s.to_component_name }}</strong>
-              </td>
-              <td class="muted">
-                in {{ s.patches }} other {{ s.patches === 1 ? 'patch' : 'patches' }}
-              </td>
-              <td>
-                <button
-                  style="margin: 0"
-                  :data-test="`plug-suggestion-${s.from_component_id}-${s.to_component_id}`"
-                  @click="plugSuggestion(s)"
-                >
-                  Plug in
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </template>
-
-      <template v-if="looseEnds.length">
-        <h3>Loose ends</h3>
-        <p class="muted">
-          Signal reaches these modules and nothing carries it onward. That is a patch in progress —
-          or a module doing its work through a normalled connection.
-        </p>
-        <table>
-          <tbody>
-            <tr v-for="pm in looseEnds" :key="pm.id" :data-test="`loose-end-${pm.id}`">
-              <td>{{ moduleLabel(pm) }}</td>
-              <td>
-                <button
-                  class="secondary"
-                  style="margin: 0"
-                  :data-test="`patch-from-${pm.id}`"
-                  @click="patchFrom(pm)"
-                >
-                  Patch from here
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </template>
-    </div>
-
-    <div v-if="patch.flow?.length" class="panel" data-test="flow">
-      <h2>Signal flow</h2>
-      <p class="muted">
-        Every signal source in the patch — generator outputs (which no internal path feeds) and
-        internal normalled signals — traced through cables, mult copies, normalled connections,
-        each module's internal signal paths, expander panels and bridged links to everywhere it
-        goes. Splits show as branches; merges, alternatives (only one is live at a time) and
-        feedback loops are flagged.
-      </p>
-      <p v-if="flowTruncated" class="muted" data-test="flow-truncated">
-        One or more paths were cut short — this patch's graph is larger than the tracer follows
-        in one tree.
-      </p>
-      <div
-        v-for="(row, i) in flowRows"
-        :key="i"
-        :style="{ paddingLeft: `${row.depth * 1.4}rem`, padding: `0.15rem 0 0.15rem ${row.depth * 1.4}rem` }"
-        :data-test="`flow-row-${i}`"
-      >
-        <span v-if="row.node.via" class="muted">{{ EDGE_LABELS[row.node.via] || row.node.via }} → </span>
-        <strong v-if="row.depth === 0">{{ flowNodeText(row.node) }}</strong>
-        <template v-else>{{ flowNodeText(row.node) }}</template>
-        <span v-if="row.node.port_kind" class="badge">{{ portKindLabel(row.node.port_kind) }}</span>
-        <span v-if="row.depth === 0" class="badge found">
-          {{ row.node.kind === 'internal' ? 'internal source' : 'generator' }}
+    <details open class="panel" data-test="cables">
+      <summary>
+        <h2>Cables</h2>
+        <span class="summary-count">
+          {{ patch.cables.length }} {{ (patch.cables.length) === 1 ? 'cable' : 'cables' }}
         </span>
-        <span v-if="row.node.switched && !row.node.conditional" class="badge pending">
-          one switch position
-        </span>
-        <span v-if="row.node.conditional" class="badge pending">
-          {{ conditionText(row.node.condition) }}
-        </span>
-        <span v-if="row.node.optional" class="badge pending">optional cable</span>
-        <span v-if="row.node.merge" class="badge pending">merge point</span>
-        <span v-if="row.node.switched_merge" class="badge pending">
-          switched — one source at a time
-        </span>
-        <span v-if="row.node.cycle" class="badge failed">feedback loop ↺</span>
-        <span v-if="row.node.truncated" class="badge failed">…path cut short</span>
-      </div>
-    </div>
-
-    <div v-if="patch.normalizations?.length" class="panel" data-test="normalled">
-      <h2>Normalled connections in this patch</h2>
-      <p class="muted">
-        Built-in default connections. Each one stays active until the cable that cancels it is
-        patched; chained normals are traced to the signal that actually arrives. Defaults that
-        depend on a switch position show which setting they need.
-      </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Module</th>
-            <th>Jack</th>
-            <th>Normalled to</th>
-            <th>Only when</th>
-            <th>In this patch</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="n in patch.normalizations"
-            :key="`${n.patch_module_id}-${n.normalization_id}`"
-            :data-test="`normalled-${n.patch_module_id}-${n.normalization_id}`"
-          >
-            <td>{{ moduleLabel(modulesById.get(n.patch_module_id)) }}</td>
-            <td>{{ n.target_component_name }}</td>
-            <td>{{ n.source_component_name || n.source_label }}</td>
-            <td>
-              {{ conditionText(n.condition) || 'always' }}
-              <span v-if="n.exclusive" class="badge pending">one of several</span>
-            </td>
-            <td>
-              <span class="badge" :class="n.active ? 'found' : 'pending'">
-                {{ n.active ? 'active' : 'overridden' }}
-              </span>
-              {{ normalizationStatus(n) }}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="panel" data-test="settings">
-      <h2>Control settings</h2>
-      <p class="muted">
-        How each control is dialed in. Settings are more than a record: a switch that decides
-        which signal is normalled to an input, or turns an output into a channel mix, resolves
-        the signal flow above once its position is recorded here.
-      </p>
-      <table v-if="patch.settings.length">
-        <thead>
-          <tr>
-            <th>Control</th>
-            <th>Value</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="setting in patch.settings" :key="setting.id" :data-test="`setting-${setting.id}`">
-            <td>{{ settingLabel(setting) }}</td>
-            <td>
-              <strong>{{ setting.value }}</strong>
-            </td>
-            <td>
-              <button
-                class="danger"
-                style="margin: 0"
-                :data-test="`delete-setting-${setting.id}`"
-                @click="removeSetting(setting)"
-              >
-                Remove
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-else class="muted">No settings recorded yet.</p>
-
-      <div class="row">
-        <div>
-          <label for="settings-module">Dial in a module — type to find it</label>
-          <AutocompleteSelect
-            v-model="settingsModuleId"
-            input-id="settings-module"
-            data-test="settings-module"
-            placeholder="Type a manufacturer, module or role…"
-            :options="settingsModuleOptions"
-          />
+      </summary>
+      <div class="panel-body">
+        <div v-if="patch.cables.length" class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>From (output)</th>
+                <th>To (input)</th>
+                <th>Notes</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="cable in patch.cables" :key="cable.id" :data-test="`cable-${cable.id}`">
+                <td>
+                  {{ moduleLabel(modulesById.get(cable.from_patch_module_id)) }} —
+                  <strong>{{ cable.from_component_name }}</strong>
+                </td>
+                <td>
+                  {{ moduleLabel(modulesById.get(cable.to_patch_module_id)) }} —
+                  <strong>{{ cable.to_component_name }}</strong>
+                </td>
+                <td>
+                  <span v-if="cable.optional" class="badge pending">optional</span>
+                  <span v-if="cable.stacked" class="badge found">stacked</span>
+                  <span v-if="cable.alt_group" class="badge pending">{{ cable.alt_group }}</span>
+                  {{ cable.note || '' }}
+                </td>
+                <td>
+                  <button
+                    class="secondary"
+                    style="margin: 0"
+                    title="Load this cable into the form to plug a variant of it"
+                    :data-test="`cable-reuse-${cable.id}`"
+                    @click="reuseCable(cable)"
+                  >
+                    Reuse
+                  </button>
+                  <button
+                    v-if="reversible(cable)"
+                    class="secondary"
+                    style="margin: 0 0 0 0.4rem"
+                    title="Swap the ends of this cable"
+                    :data-test="`cable-reverse-${cable.id}`"
+                    @click="reverseCable(cable)"
+                  >
+                    Reverse
+                  </button>
+                  <button
+                    style="margin: 0 0 0 0.4rem"
+                    :data-test="`cable-optional-${cable.id}`"
+                    @click="toggleCableFlag(cable, 'optional')"
+                  >
+                    {{ cable.optional ? 'Required' : 'Optional' }}
+                  </button>
+                  <button
+                    style="margin: 0 0 0 0.4rem"
+                    :data-test="`cable-stacked-${cable.id}`"
+                    @click="toggleCableFlag(cable, 'stacked')"
+                  >
+                    {{ cable.stacked ? 'Not stacked' : 'Stacked' }}
+                  </button>
+                  <button
+                    class="danger"
+                    style="margin: 0 0 0 0.4rem"
+                    :data-test="`delete-cable-${cable.id}`"
+                    @click="removeCable(cable)"
+                  >
+                    Unplug
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-      </div>
+        <p v-else class="muted">No cables yet.</p>
 
-      <table v-if="settingsModule && settableComponents.length" data-test="settings-controls">
-        <thead>
-          <tr>
-            <th>Control</th>
-            <th>Type</th>
-            <th>Value</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="c in settableComponents" :key="c.id" :data-test="`control-${c.id}`">
-            <td>
-              {{ c.name }}
-              <span v-if="currentSetting(Number(settingsModuleId), c.id)" class="badge found">set</span>
-            </td>
-            <td>{{ c.type }}</td>
-            <td>
-              <template v-if="control(c).kind === 'enum'">
-                <select v-model="draft[draftValue(Number(settingsModuleId), c)]" :data-test="`control-input-${c.id}`">
-                  <option value="" disabled>Select…</option>
-                  <option v-for="v in control(c).options" :key="v.id" :value="v.value">
-                    {{ v.value }}{{ v.description ? ` — ${v.description}` : '' }}
-                  </option>
-                </select>
-              </template>
-              <template v-else-if="control(c).kind === 'range'">
-                <input
-                  v-model="draft[draftValue(Number(settingsModuleId), c)]"
-                  type="number"
-                  step="any"
-                  :min="control(c).min"
-                  :max="control(c).max"
-                  :placeholder="`${control(c).min ?? '?'} … ${control(c).max ?? '?'}`"
-                  :data-test="`control-input-${c.id}`"
-                />
-              </template>
-              <template v-else>
-                <input
-                  v-model="draft[draftValue(Number(settingsModuleId), c)]"
-                  :placeholder="'e.g. 12 o\'clock'"
-                  :data-test="`control-input-${c.id}`"
-                />
-              </template>
-            </td>
-            <td>
-              <button
-                style="margin: 0"
-                :disabled="!String(draft[draftKey(Number(settingsModuleId), c.id)] ?? '').trim()"
-                :data-test="`control-save-${c.id}`"
-                @click="saveSetting(c)"
-              >
-                Set
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-else-if="settingsModule" class="muted">
-        This module has no knobs, switches or other controls recorded.
-      </p>
-      <p v-if="settingsError" class="error" data-test="settings-error">{{ settingsError }}</p>
-    </div>
-
-    <div class="panel" data-test="links">
-      <h2>Linked instances</h2>
-      <p class="muted">
-        Modules wired to each other without patch cables: a host and its expander panel, or a
-        bridged pair carrying signals between two points of the system — where a signal patched
-        into one panel comes out of the matching jack on the other.
-      </p>
-      <table v-if="links.length">
-        <thead>
-          <tr>
-            <th>Modules</th>
-            <th>Kind</th>
-            <th>Bridged jacks</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="link in links" :key="link.id" :data-test="`link-${link.id}`">
-            <td>
-              {{ moduleLabel(modulesById.get(link.a_patch_module_id)) }} ↔
-              {{ moduleLabel(modulesById.get(link.b_patch_module_id)) }}
-            </td>
-            <td>{{ link.kind }}</td>
-            <td>
-              {{
-                link.jacks.length
-                  ? link.jacks.map((j) => `${j.a_component_name}↔${j.b_component_name}`).join(', ')
-                  : '—'
-              }}
-            </td>
-            <td>
-              <button
-                class="danger"
-                style="margin: 0"
-                :data-test="`delete-link-${link.id}`"
-                @click="removeLink(link)"
-              >
-                Unlink
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-else class="muted">No linked instances in this patch.</p>
-
-      <form @submit.prevent="addLink">
-        <div class="row">
-          <div>
-            <label for="link-a">Module</label>
-            <select id="link-a" v-model="linkA" data-test="link-a">
-              <option value="" disabled>Select a module…</option>
-              <option v-for="pm in modules" :key="pm.id" :value="pm.id">{{ moduleLabel(pm) }}</option>
-            </select>
-          </div>
-          <div>
-            <label for="link-b">Linked to</label>
-            <select id="link-b" v-model="linkB" data-test="link-b">
-              <option value="" disabled>Select a module…</option>
-              <option v-for="pm in modules" :key="pm.id" :value="pm.id">{{ moduleLabel(pm) }}</option>
-            </select>
-          </div>
-          <div>
-            <label for="link-kind">Kind</label>
-            <select id="link-kind" v-model="linkKind" data-test="link-kind">
-              <option value="bridge">Bridge — jacks pair up by name</option>
-              <option value="expander">Expander panel</option>
-            </select>
-          </div>
-          <div class="shrink">
-            <button
-              type="submit"
-              style="margin: 0"
-              :disabled="!linkA || !linkB || linkA === linkB"
-              data-test="link-create"
-            >
-              Link
-            </button>
-          </div>
-        </div>
-        <p v-if="linkError" class="error" data-test="link-error">{{ linkError }}</p>
-      </form>
-    </div>
-
-    <div class="panel" data-test="groups">
-      <h2>Buses and layers</h2>
-      <p class="muted">
-        Name the groups a patch is really built from — a rhythm layer, a granular bus — and give
-        each instance the role it plays, so "LXR #2" reads as the ghost-note voice it is.
-      </p>
-      <div v-for="entry in groupedModules" :key="entry.group?.id ?? 'ungrouped'">
-        <h3 v-if="entry.group" :data-test="`group-${entry.group.id}`">
-          {{ entry.group.name }}
-          <button
-            class="danger"
-            style="margin: 0 0 0 0.6rem; font-size: 0.8rem"
-            :data-test="`delete-group-${entry.group.id}`"
-            @click="removeGroup(entry.group)"
-          >
-            Remove
-          </button>
-        </h3>
-        <h3 v-else-if="entry.members.length">Not in a bus</h3>
-        <table v-if="entry.members.length">
-          <thead>
-            <tr>
-              <th>Module</th>
-              <th>Role in this patch</th>
-              <th>Bus</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="pm in entry.members" :key="pm.id" :data-test="`instance-${pm.id}`">
-              <td>{{ pm.manufacturer }} {{ pm.module_name }} #{{ pm.instance }}</td>
-              <td>
-                <input
-                  v-model="labelDraft[labelKey(pm)]"
-                  :data-test="`label-input-${pm.id}`"
-                  placeholder="e.g. snare voice"
-                  @keyup.enter="saveInstance(pm, { label: labelDraft[pm.id] })"
-                />
-                <button
-                  style="margin: 0 0 0 0.4rem"
-                  :data-test="`label-save-${pm.id}`"
-                  @click="saveInstance(pm, { label: labelDraft[pm.id] })"
-                >
-                  Save
-                </button>
-              </td>
-              <td>
-                <select
-                  :value="pm.group_id ?? ''"
-                  :data-test="`group-select-${pm.id}`"
-                  @change="saveInstance(pm, { group_id: $event.target.value || null })"
-                >
-                  <option value="">—</option>
-                  <option v-for="g in groups" :key="g.id" :value="g.id">{{ g.name }}</option>
-                </select>
-              </td>
-              <td>
-                <button
-                  class="danger"
-                  style="margin: 0"
-                  :data-test="`remove-instance-${pm.id}`"
-                  @click="removeInstance(pm)"
-                >
-                  Remove
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p v-if="instanceError" class="error" data-test="instance-error">{{ instanceError }}</p>
-
-      <form @submit.prevent="addGroup">
-        <div class="row">
-          <div>
-            <label for="group-name">New bus / layer</label>
-            <input id="group-name" v-model="groupName" data-test="group-name" placeholder="e.g. Rhythm" />
-          </div>
-          <div class="shrink">
-            <button type="submit" style="margin: 0" :disabled="!groupName.trim()" data-test="group-create">
-              Add
-            </button>
-          </div>
-        </div>
-        <p v-if="groupError" class="error" data-test="group-error">{{ groupError }}</p>
-      </form>
-    </div>
-
-    <div class="panel" data-test="extras">
-      <h2>Other gear in this patch</h2>
-      <p class="muted">
-        A patch reaches past the rack: a computer and its DAW at the end of an audio interface,
-        the MIDI source driving a sequencer, the monitors everything lands in — and modules the
-        patch calls for that this rack does not hold. Give each one the connection points it
-        needs and cable it up like any other module.
-      </p>
-      <table v-if="declaredModules.length">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Kind</th>
-            <th>Connection points</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="pm in declaredModules" :key="pm.id" :data-test="`declared-${pm.id}`">
-            <td>{{ moduleLabel(pm) }}</td>
-            <td>
-              <span class="badge" :class="pm.external ? 'pending' : 'failed'">
-                {{ pm.external ? 'off-rack gear' : 'not in this rack' }}
-              </span>
-            </td>
-            <td>
-              <span v-for="port in pm.components" :key="port.id" style="margin-right: 0.6rem">
-                {{ jackLabel(port) }}
-                <button
-                  class="danger"
-                  style="margin: 0; font-size: 0.75rem"
-                  :data-test="`delete-port-${port.id}`"
-                  @click="removePort(pm, port)"
-                >
-                  ×
-                </button>
-              </span>
-              <span v-if="!pm.components.length" class="muted">none yet</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      <form @submit.prevent="addInstance">
-        <div class="row">
-          <div>
-            <label for="add-kind">Add</label>
-            <select id="add-kind" v-model="addKind" data-test="add-kind">
-              <option value="rack">Another instance of a module you own</option>
-              <option value="other">A module this rack does not hold</option>
-              <option value="external">Off-rack gear (DAW, MIDI, PA…)</option>
-            </select>
-          </div>
-          <div v-if="addKind === 'rack'">
-            <label for="add-module">Module</label>
-            <AutocompleteSelect
-              v-model="addModuleId"
-              input-id="add-module"
-              data-test="add-module"
-              placeholder="Type a manufacturer or module…"
-              :options="rackModuleOptions"
-            />
-          </div>
-          <template v-else>
-            <div>
-              <label for="add-manufacturer">Manufacturer (optional)</label>
-              <input id="add-manufacturer" v-model="addManufacturer" data-test="add-manufacturer" />
-            </div>
-            <div>
-              <label for="add-name">Name</label>
+        <form data-test="quick-form" @submit.prevent="addQuickCable">
+          <label for="quick-cable">Quick entry — name both ends on one line</label>
+          <div class="row">
+            <div style="flex: 3">
               <input
-                id="add-name"
-                v-model="addName"
-                data-test="add-name"
-                placeholder="e.g. Behringer UMC404HD"
+                id="quick-cable"
+                v-model="quickLine"
+                data-test="quick-cable"
+                placeholder="e.g. maths eor > optomix ch1 in"
               />
             </div>
+            <div class="shrink">
+              <button type="submit" style="margin: 0" :disabled="!quickReady" data-test="quick-create">
+                Plug in
+              </button>
+            </div>
+          </div>
+          <p v-if="quickReady" class="muted" data-test="quick-preview">
+            {{ endpointText(quickParsed.from) }} → {{ endpointText(quickParsed.to) }}
+          </p>
+          <template v-else-if="quickParsed.error">
+            <p class="muted" data-test="quick-problem">{{ quickParsed.error }}</p>
+            <p v-if="quickParsed.matches.length" class="muted" data-test="quick-matches">
+              {{ quickParsed.matches.map(endpointText).join(' · ') }}
+            </p>
           </template>
-          <div>
-            <label for="add-label">Role (optional)</label>
-            <input id="add-label" v-model="addLabel" data-test="add-label" />
-          </div>
-          <div class="shrink">
-            <button type="submit" style="margin: 0" :disabled="!addValid" data-test="add-create">
-              Add
-            </button>
-          </div>
-        </div>
-        <p v-if="addError" class="error" data-test="add-error">{{ addError }}</p>
-      </form>
+          <p v-if="quickError" class="error" data-test="quick-error">{{ quickError }}</p>
+        </form>
 
-      <form v-if="declaredModules.length" @submit.prevent="addPort">
+        <form data-test="cable-form" @submit.prevent="addCable">
+          <h3 style="margin-bottom: 0">Add a cable</h3>
+          <p class="muted" style="margin: 0.2rem 0 0">
+            Type to find each end — the arrow keys move through the matches, Enter takes the
+            highlighted one and moves on to the next field.
+          </p>
+          <div class="row">
+            <div>
+              <label for="cable-from-module">From module</label>
+              <AutocompleteSelect
+                ref="fromModuleBox"
+                v-model="fromModuleId"
+                input-id="cable-from-module"
+                data-test="cable-from-module"
+                placeholder="Type a manufacturer, module or role…"
+                :options="fromModuleOptions"
+                @select="focusBox(fromJackBox)"
+              />
+            </div>
+            <div>
+              <label for="cable-from-jack">Output jack</label>
+              <AutocompleteSelect
+                ref="fromJackBox"
+                v-model="fromComponentId"
+                input-id="cable-from-jack"
+                data-test="cable-from-jack"
+                placeholder="Type a jack name…"
+                empty-text="No output or mult jack matches"
+                :disabled="!fromModuleId"
+                :options="fromJackOptions"
+                @select="focusBox(toModuleBox)"
+              />
+            </div>
+            <div>
+              <label for="cable-to-module">To module</label>
+              <AutocompleteSelect
+                ref="toModuleBox"
+                v-model="toModuleId"
+                input-id="cable-to-module"
+                data-test="cable-to-module"
+                placeholder="Type a manufacturer, module or role…"
+                :options="toModuleOptions"
+                @select="focusBox(toJackBox)"
+              />
+            </div>
+            <div>
+              <label for="cable-to-jack">Input jack</label>
+              <AutocompleteSelect
+                ref="toJackBox"
+                v-model="toComponentId"
+                input-id="cable-to-jack"
+                data-test="cable-to-jack"
+                placeholder="Type a jack name…"
+                empty-text="No free input or mult jack matches"
+                :disabled="!toModuleId"
+                :options="toJackOptions"
+              />
+            </div>
+            <div class="shrink">
+              <button type="submit" style="margin: 0" :disabled="!cableValid" data-test="cable-create">
+                Plug in
+              </button>
+            </div>
+          </div>
+          <div class="row">
+            <div class="shrink">
+              <label for="cable-chain">Chain — the next cable starts where this one lands</label>
+              <input id="cable-chain" v-model="chainFromDestination" type="checkbox" data-test="cable-chain" />
+            </div>
+          </div>
+          <div class="row">
+            <div style="flex: 2">
+              <label for="cable-note">Note (optional)</label>
+              <input
+                id="cable-note"
+                v-model="cableNote"
+                data-test="cable-note"
+                placeholder="e.g. adds the distortion layer"
+              />
+            </div>
+            <div>
+              <label for="cable-alt-group">Alternative to (optional)</label>
+              <input
+                id="cable-alt-group"
+                v-model="cableAltGroup"
+                data-test="cable-alt-group"
+                placeholder="e.g. vca choice"
+              />
+            </div>
+            <div class="shrink">
+              <label for="cable-optional">Provisional</label>
+              <input id="cable-optional" v-model="cableOptional" type="checkbox" data-test="cable-optional" />
+            </div>
+            <div class="shrink">
+              <label for="cable-stacked">Stackcable / mult</label>
+              <input id="cable-stacked" v-model="cableStacked" type="checkbox" data-test="cable-stacked" />
+            </div>
+            <div v-if="pairable" class="shrink">
+              <label for="cable-pair">
+                Patch the pair ({{ pairable.from.name }} → {{ pairable.to.name }} too)
+              </label>
+              <input id="cable-pair" v-model="cablePair" type="checkbox" data-test="cable-pair" />
+            </div>
+          </div>
+          <p v-if="cableError" class="error" data-test="cable-error">{{ cableError }}</p>
+        </form>
+      </div>
+    </details>
+
+    <details v-if="suggestions.length || looseEnds.length" class="panel" data-test="suggestions">
+      <summary>
+        <h2>What to patch next</h2>
+        <span class="summary-count">{{ suggestions.length + looseEnds.length }}</span>
+      </summary>
+      <div class="panel-body">
+        <template v-if="suggestions.length">
+          <p class="muted">
+            Cables you have plugged in your other patches, waiting to be plugged here — a rack is
+            patched in habits.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <tr
+                  v-for="s in suggestions"
+                  :key="`${s.from_patch_module_id}:${s.from_component_id}-${s.to_patch_module_id}:${s.to_component_id}`"
+                  :data-test="`suggestion-${s.from_component_id}-${s.to_component_id}`"
+                >
+                  <td>
+                    {{ moduleLabel(modulesById.get(s.from_patch_module_id)) }} —
+                    <strong>{{ s.from_component_name }}</strong>
+                    →
+                    {{ moduleLabel(modulesById.get(s.to_patch_module_id)) }} —
+                    <strong>{{ s.to_component_name }}</strong>
+                  </td>
+                  <td class="muted">
+                    in {{ s.patches }} other {{ s.patches === 1 ? 'patch' : 'patches' }}
+                  </td>
+                  <td>
+                    <button
+                      style="margin: 0"
+                      :data-test="`plug-suggestion-${s.from_component_id}-${s.to_component_id}`"
+                      @click="plugSuggestion(s)"
+                    >
+                      Plug in
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <template v-if="looseEnds.length">
+          <h3>Loose ends</h3>
+          <p class="muted">
+            Signal reaches these modules and nothing carries it onward. That is a patch in progress —
+            or a module doing its work through a normalled connection.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <tr v-for="pm in looseEnds" :key="pm.id" :data-test="`loose-end-${pm.id}`">
+                  <td>{{ moduleLabel(pm) }}</td>
+                  <td>
+                    <button
+                      class="secondary"
+                      style="margin: 0"
+                      :data-test="`patch-from-${pm.id}`"
+                      @click="patchFrom(pm)"
+                    >
+                      Patch from here
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+    </details>
+
+    <details v-if="patch.flow?.length" class="panel" data-test="flow">
+      <summary>
+        <h2>Signal flow</h2>
+        <span class="summary-count">
+          {{ flowRows.length }} {{ (flowRows.length) === 1 ? 'step' : 'steps' }}
+        </span>
+      </summary>
+      <div class="panel-body">
+        <p class="muted">
+          Every signal source in the patch — generator outputs (which no internal path feeds) and
+          internal normalled signals — traced through cables, mult copies, normalled connections,
+          each module's internal signal paths, expander panels and bridged links to everywhere it
+          goes. Splits show as branches; merges, alternatives (only one is live at a time) and
+          feedback loops are flagged.
+        </p>
+        <p v-if="flowTruncated" class="muted" data-test="flow-truncated">
+          One or more paths were cut short — this patch's graph is larger than the tracer follows
+          in one tree.
+        </p>
+        <div
+          v-for="(row, i) in flowRows"
+          :key="i"
+          :style="{ paddingLeft: `${row.depth * 1.4}rem`, padding: `0.15rem 0 0.15rem ${row.depth * 1.4}rem` }"
+          :data-test="`flow-row-${i}`"
+        >
+          <span v-if="row.node.via" class="muted">{{ EDGE_LABELS[row.node.via] || row.node.via }} → </span>
+          <strong v-if="row.depth === 0">{{ flowNodeText(row.node) }}</strong>
+          <template v-else>{{ flowNodeText(row.node) }}</template>
+          <span v-if="row.node.port_kind" class="badge">{{ portKindLabel(row.node.port_kind) }}</span>
+          <span v-if="row.depth === 0" class="badge found">
+            {{ row.node.kind === 'internal' ? 'internal source' : 'generator' }}
+          </span>
+          <span v-if="row.node.switched && !row.node.conditional" class="badge pending">
+            one switch position
+          </span>
+          <span v-if="row.node.conditional" class="badge pending">
+            {{ conditionText(row.node.condition) }}
+          </span>
+          <span v-if="row.node.optional" class="badge pending">optional cable</span>
+          <span v-if="row.node.merge" class="badge pending">merge point</span>
+          <span v-if="row.node.switched_merge" class="badge pending">
+            switched — one source at a time
+          </span>
+          <span v-if="row.node.cycle" class="badge failed">feedback loop ↺</span>
+          <span v-if="row.node.truncated" class="badge failed">…path cut short</span>
+        </div>
+      </div>
+    </details>
+
+    <details v-if="patch.normalizations?.length" class="panel" data-test="normalled">
+      <summary>
+        <h2>Normalled connections in this patch</h2>
+        <span class="summary-count">
+          {{ patch.normalizations.length }}
+          {{ patch.normalizations.length === 1 ? 'connection' : 'connections' }}
+        </span>
+      </summary>
+      <div class="panel-body">
+        <p class="muted">
+          Built-in default connections. Each one stays active until the cable that cancels it is
+          patched; chained normals are traced to the signal that actually arrives. Defaults that
+          depend on a switch position show which setting they need.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Module</th>
+                <th>Jack</th>
+                <th>Normalled to</th>
+                <th>Only when</th>
+                <th>In this patch</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="n in patch.normalizations"
+                :key="`${n.patch_module_id}-${n.normalization_id}`"
+                :data-test="`normalled-${n.patch_module_id}-${n.normalization_id}`"
+              >
+                <td>{{ moduleLabel(modulesById.get(n.patch_module_id)) }}</td>
+                <td>{{ n.target_component_name }}</td>
+                <td>{{ n.source_component_name || n.source_label }}</td>
+                <td>
+                  {{ conditionText(n.condition) || 'always' }}
+                  <span v-if="n.exclusive" class="badge pending">one of several</span>
+                </td>
+                <td>
+                  <span class="badge" :class="n.active ? 'found' : 'pending'">
+                    {{ n.active ? 'active' : 'overridden' }}
+                  </span>
+                  {{ normalizationStatus(n) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel" data-test="settings">
+      <summary>
+        <h2>Control settings</h2>
+        <span class="summary-count">
+          {{ patch.settings.length }}
+          {{ patch.settings.length === 1 ? 'setting' : 'settings' }}
+        </span>
+      </summary>
+      <div class="panel-body">
+        <p class="muted">
+          How each control is dialed in. Settings are more than a record: a switch that decides
+          which signal is normalled to an input, or turns an output into a channel mix, resolves
+          the signal flow above once its position is recorded here.
+        </p>
+        <div v-if="patch.settings.length" class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Control</th>
+                <th>Value</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="setting in patch.settings" :key="setting.id" :data-test="`setting-${setting.id}`">
+                <td>{{ settingLabel(setting) }}</td>
+                <td>
+                  <strong>{{ setting.value }}</strong>
+                </td>
+                <td>
+                  <button
+                    class="danger"
+                    style="margin: 0"
+                    :data-test="`delete-setting-${setting.id}`"
+                    @click="removeSetting(setting)"
+                  >
+                    Remove
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="muted">No settings recorded yet.</p>
+
         <div class="row">
           <div>
-            <label for="port-module">Declare a connection point on</label>
-            <select id="port-module" v-model="portModuleId" data-test="port-module">
-              <option value="" disabled>Select…</option>
-              <option v-for="pm in declaredModules" :key="pm.id" :value="pm.id">
-                {{ moduleLabel(pm) }}
-              </option>
-            </select>
-          </div>
-          <div>
-            <label for="port-name">Name</label>
-            <input id="port-name" v-model="portName" data-test="port-name" placeholder="e.g. MIDI OUT" />
-          </div>
-          <div>
-            <label for="port-type">Direction</label>
-            <select id="port-type" v-model="portType" data-test="port-type">
-              <option value="output_jack">Output</option>
-              <option value="input_jack">Input</option>
-              <option value="bidirectional_jack">Either way</option>
-            </select>
-          </div>
-          <div>
-            <label for="port-kind">Connector</label>
-            <select id="port-kind" v-model="portKind" data-test="port-kind">
-              <option value="">3.5mm patch point</option>
-              <option v-for="k in PORT_KINDS" :key="k" :value="k">{{ portKindLabel(k) }}</option>
-            </select>
-          </div>
-          <div class="shrink">
-            <button
-              type="submit"
-              style="margin: 0"
-              :disabled="!portModuleId || !portName.trim()"
-              data-test="port-create"
-            >
-              Declare
-            </button>
+            <label for="settings-module">Dial in a module — type to find it</label>
+            <AutocompleteSelect
+              v-model="settingsModuleId"
+              input-id="settings-module"
+              data-test="settings-module"
+              placeholder="Type a manufacturer, module or role…"
+              :options="settingsModuleOptions"
+            />
           </div>
         </div>
-        <p v-if="portError" class="error" data-test="port-error">{{ portError }}</p>
-      </form>
-    </div>
+
+        <div v-if="settingsModule && settableComponents.length" class="table-wrap">
+          <table data-test="settings-controls">
+            <thead>
+              <tr>
+                <th>Control</th>
+                <th>Type</th>
+                <th>Value</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in settableComponents" :key="c.id" :data-test="`control-${c.id}`">
+                <td>
+                  {{ c.name }}
+                  <span v-if="currentSetting(Number(settingsModuleId), c.id)" class="badge found">set</span>
+                </td>
+                <td>{{ c.type }}</td>
+                <td>
+                  <template v-if="control(c).kind === 'enum'">
+                    <select v-model="draft[draftValue(Number(settingsModuleId), c)]" :data-test="`control-input-${c.id}`">
+                      <option value="" disabled>Select…</option>
+                      <option v-for="v in control(c).options" :key="v.id" :value="v.value">
+                        {{ v.value }}{{ v.description ? ` — ${v.description}` : '' }}
+                      </option>
+                    </select>
+                  </template>
+                  <template v-else-if="control(c).kind === 'range'">
+                    <input
+                      v-model="draft[draftValue(Number(settingsModuleId), c)]"
+                      type="number"
+                      step="any"
+                      :min="control(c).min"
+                      :max="control(c).max"
+                      :placeholder="`${control(c).min ?? '?'} … ${control(c).max ?? '?'}`"
+                      :data-test="`control-input-${c.id}`"
+                    />
+                  </template>
+                  <template v-else>
+                    <input
+                      v-model="draft[draftValue(Number(settingsModuleId), c)]"
+                      :placeholder="'e.g. 12 o\'clock'"
+                      :data-test="`control-input-${c.id}`"
+                    />
+                  </template>
+                </td>
+                <td>
+                  <button
+                    style="margin: 0"
+                    :disabled="!String(draft[draftKey(Number(settingsModuleId), c.id)] ?? '').trim()"
+                    :data-test="`control-save-${c.id}`"
+                    @click="saveSetting(c)"
+                  >
+                    Set
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else-if="settingsModule" class="muted">
+          This module has no knobs, switches or other controls recorded.
+        </p>
+        <p v-if="settingsError" class="error" data-test="settings-error">{{ settingsError }}</p>
+      </div>
+    </details>
+
+    <details class="panel" data-test="links">
+      <summary>
+        <h2>Linked instances</h2>
+        <span class="summary-count">
+          {{ links.length }} {{ (links.length) === 1 ? 'link' : 'links' }}
+        </span>
+      </summary>
+      <div class="panel-body">
+        <p class="muted">
+          Modules wired to each other without patch cables: a host and its expander panel, or a
+          bridged pair carrying signals between two points of the system — where a signal patched
+          into one panel comes out of the matching jack on the other.
+        </p>
+        <div v-if="links.length" class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Modules</th>
+                <th>Kind</th>
+                <th>Bridged jacks</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="link in links" :key="link.id" :data-test="`link-${link.id}`">
+                <td>
+                  {{ moduleLabel(modulesById.get(link.a_patch_module_id)) }} ↔
+                  {{ moduleLabel(modulesById.get(link.b_patch_module_id)) }}
+                </td>
+                <td>{{ link.kind }}</td>
+                <td>
+                  {{
+                    link.jacks.length
+                      ? link.jacks.map((j) => `${j.a_component_name}↔${j.b_component_name}`).join(', ')
+                      : '—'
+                  }}
+                </td>
+                <td>
+                  <button
+                    class="danger"
+                    style="margin: 0"
+                    :data-test="`delete-link-${link.id}`"
+                    @click="removeLink(link)"
+                  >
+                    Unlink
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="muted">No linked instances in this patch.</p>
+
+        <form @submit.prevent="addLink">
+          <div class="row">
+            <div>
+              <label for="link-a">Module</label>
+              <select id="link-a" v-model="linkA" data-test="link-a">
+                <option value="" disabled>Select a module…</option>
+                <option v-for="pm in modules" :key="pm.id" :value="pm.id">{{ moduleLabel(pm) }}</option>
+              </select>
+            </div>
+            <div>
+              <label for="link-b">Linked to</label>
+              <select id="link-b" v-model="linkB" data-test="link-b">
+                <option value="" disabled>Select a module…</option>
+                <option v-for="pm in modules" :key="pm.id" :value="pm.id">{{ moduleLabel(pm) }}</option>
+              </select>
+            </div>
+            <div>
+              <label for="link-kind">Kind</label>
+              <select id="link-kind" v-model="linkKind" data-test="link-kind">
+                <option value="bridge">Bridge — jacks pair up by name</option>
+                <option value="expander">Expander panel</option>
+              </select>
+            </div>
+            <div class="shrink">
+              <button
+                type="submit"
+                style="margin: 0"
+                :disabled="!linkA || !linkB || linkA === linkB"
+                data-test="link-create"
+              >
+                Link
+              </button>
+            </div>
+          </div>
+          <p v-if="linkError" class="error" data-test="link-error">{{ linkError }}</p>
+        </form>
+      </div>
+    </details>
+
+    <details class="panel" data-test="groups">
+      <summary>
+        <h2>Buses and layers</h2>
+        <span class="summary-count">
+          {{ groups.length }} {{ (groups.length) === 1 ? 'bus' : 'buss' }}
+        </span>
+      </summary>
+      <div class="panel-body">
+        <p class="muted">
+          Name the groups a patch is really built from — a rhythm layer, a granular bus — and give
+          each instance the role it plays, so "LXR #2" reads as the ghost-note voice it is.
+        </p>
+        <div v-for="entry in groupedModules" :key="entry.group?.id ?? 'ungrouped'">
+          <h3 v-if="entry.group" :data-test="`group-${entry.group.id}`">
+            {{ entry.group.name }}
+            <button
+              class="danger"
+              style="margin: 0 0 0 0.6rem; font-size: 0.8rem"
+              :data-test="`delete-group-${entry.group.id}`"
+              @click="removeGroup(entry.group)"
+            >
+              Remove
+            </button>
+          </h3>
+          <h3 v-else-if="entry.members.length">Not in a bus</h3>
+          <div v-if="entry.members.length" class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Module</th>
+                  <th>Role in this patch</th>
+                  <th>Bus</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="pm in entry.members" :key="pm.id" :data-test="`instance-${pm.id}`">
+                  <td>{{ pm.manufacturer }} {{ pm.module_name }} #{{ pm.instance }}</td>
+                  <td>
+                    <input
+                      v-model="labelDraft[labelKey(pm)]"
+                      :data-test="`label-input-${pm.id}`"
+                      placeholder="e.g. snare voice"
+                      @keyup.enter="saveInstance(pm, { label: labelDraft[pm.id] })"
+                    />
+                    <button
+                      style="margin: 0 0 0 0.4rem"
+                      :data-test="`label-save-${pm.id}`"
+                      @click="saveInstance(pm, { label: labelDraft[pm.id] })"
+                    >
+                      Save
+                    </button>
+                  </td>
+                  <td>
+                    <select
+                      :value="pm.group_id ?? ''"
+                      :data-test="`group-select-${pm.id}`"
+                      @change="saveInstance(pm, { group_id: $event.target.value || null })"
+                    >
+                      <option value="">—</option>
+                      <option v-for="g in groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+                    </select>
+                  </td>
+                  <td>
+                    <button
+                      class="danger"
+                      style="margin: 0"
+                      :data-test="`remove-instance-${pm.id}`"
+                      @click="removeInstance(pm)"
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <p v-if="instanceError" class="error" data-test="instance-error">{{ instanceError }}</p>
+
+        <form @submit.prevent="addGroup">
+          <div class="row">
+            <div>
+              <label for="group-name">New bus / layer</label>
+              <input id="group-name" v-model="groupName" data-test="group-name" placeholder="e.g. Rhythm" />
+            </div>
+            <div class="shrink">
+              <button type="submit" style="margin: 0" :disabled="!groupName.trim()" data-test="group-create">
+                Add
+              </button>
+            </div>
+          </div>
+          <p v-if="groupError" class="error" data-test="group-error">{{ groupError }}</p>
+        </form>
+      </div>
+    </details>
+
+    <details class="panel" data-test="extras">
+      <summary>
+        <h2>Other gear in this patch</h2>
+        <span class="summary-count">
+          {{ declaredModules.length }} {{ (declaredModules.length) === 1 ? 'item' : 'items' }}
+        </span>
+      </summary>
+      <div class="panel-body">
+        <p class="muted">
+          A patch reaches past the rack: a computer and its DAW at the end of an audio interface,
+          the MIDI source driving a sequencer, the monitors everything lands in — and modules the
+          patch calls for that this rack does not hold. Give each one the connection points it
+          needs and cable it up like any other module.
+        </p>
+        <div v-if="declaredModules.length" class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Kind</th>
+                <th>Connection points</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="pm in declaredModules" :key="pm.id" :data-test="`declared-${pm.id}`">
+                <td>{{ moduleLabel(pm) }}</td>
+                <td>
+                  <span class="badge" :class="pm.external ? 'pending' : 'failed'">
+                    {{ pm.external ? 'off-rack gear' : 'not in this rack' }}
+                  </span>
+                </td>
+                <td>
+                  <span v-for="port in pm.components" :key="port.id" style="margin-right: 0.6rem">
+                    {{ jackLabel(port) }}
+                    <button
+                      class="danger"
+                      style="margin: 0; font-size: 0.75rem"
+                      :data-test="`delete-port-${port.id}`"
+                      @click="removePort(pm, port)"
+                    >
+                      ×
+                    </button>
+                  </span>
+                  <span v-if="!pm.components.length" class="muted">none yet</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <form @submit.prevent="addInstance">
+          <div class="row">
+            <div>
+              <label for="add-kind">Add</label>
+              <select id="add-kind" v-model="addKind" data-test="add-kind">
+                <option value="rack">Another instance of a module you own</option>
+                <option value="other">A module this rack does not hold</option>
+                <option value="external">Off-rack gear (DAW, MIDI, PA…)</option>
+              </select>
+            </div>
+            <div v-if="addKind === 'rack'">
+              <label for="add-module">Module</label>
+              <AutocompleteSelect
+                v-model="addModuleId"
+                input-id="add-module"
+                data-test="add-module"
+                placeholder="Type a manufacturer or module…"
+                :options="rackModuleOptions"
+              />
+            </div>
+            <template v-else>
+              <div>
+                <label for="add-manufacturer">Manufacturer (optional)</label>
+                <input id="add-manufacturer" v-model="addManufacturer" data-test="add-manufacturer" />
+              </div>
+              <div>
+                <label for="add-name">Name</label>
+                <input
+                  id="add-name"
+                  v-model="addName"
+                  data-test="add-name"
+                  placeholder="e.g. Behringer UMC404HD"
+                />
+              </div>
+            </template>
+            <div>
+              <label for="add-label">Role (optional)</label>
+              <input id="add-label" v-model="addLabel" data-test="add-label" />
+            </div>
+            <div class="shrink">
+              <button type="submit" style="margin: 0" :disabled="!addValid" data-test="add-create">
+                Add
+              </button>
+            </div>
+          </div>
+          <p v-if="addError" class="error" data-test="add-error">{{ addError }}</p>
+        </form>
+
+        <form v-if="declaredModules.length" @submit.prevent="addPort">
+          <div class="row">
+            <div>
+              <label for="port-module">Declare a connection point on</label>
+              <select id="port-module" v-model="portModuleId" data-test="port-module">
+                <option value="" disabled>Select…</option>
+                <option v-for="pm in declaredModules" :key="pm.id" :value="pm.id">
+                  {{ moduleLabel(pm) }}
+                </option>
+              </select>
+            </div>
+            <div>
+              <label for="port-name">Name</label>
+              <input id="port-name" v-model="portName" data-test="port-name" placeholder="e.g. MIDI OUT" />
+            </div>
+            <div>
+              <label for="port-type">Direction</label>
+              <select id="port-type" v-model="portType" data-test="port-type">
+                <option value="output_jack">Output</option>
+                <option value="input_jack">Input</option>
+                <option value="bidirectional_jack">Either way</option>
+              </select>
+            </div>
+            <div>
+              <label for="port-kind">Connector</label>
+              <select id="port-kind" v-model="portKind" data-test="port-kind">
+                <option value="">3.5mm patch point</option>
+                <option v-for="k in PORT_KINDS" :key="k" :value="k">{{ portKindLabel(k) }}</option>
+              </select>
+            </div>
+            <div class="shrink">
+              <button
+                type="submit"
+                style="margin: 0"
+                :disabled="!portModuleId || !portName.trim()"
+                data-test="port-create"
+              >
+                Declare
+              </button>
+            </div>
+          </div>
+          <p v-if="portError" class="error" data-test="port-error">{{ portError }}</p>
+        </form>
+      </div>
+    </details>
 
     <ScopePanel :patch-id="props.id" :modules="modules" @captured="onCaptured" />
 
     <PatchNotesPanel ref="notesPanel" :patch-id="props.id" />
 
-    <div class="panel" data-test="snapshot">
-      <h2>Modules in this patch</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Module</th>
-            <th>Bus</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="pm in modules" :key="pm.id" :data-test="`patch-module-${pm.id}`">
-            <td>
-              <RouterLink v-if="pm.live" :to="`/modules/${pm.module_id}`">
-                {{ moduleLabel(pm) }}
-              </RouterLink>
-              <template v-else>{{ moduleLabel(pm) }}</template>
-            </td>
-            <td>{{ groupsById.get(pm.group_id)?.name || '—' }}</td>
-            <td>
-              <span
-                class="badge"
-                :class="pm.live ? 'found' : pm.external ? 'pending' : 'failed'"
-              >
-                {{
-                  pm.live
-                    ? 'in your system'
-                    : pm.external
-                      ? 'off-rack gear'
-                      : 'no longer in your system'
-                }}
-              </span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <details class="panel" data-test="snapshot">
+      <summary>
+        <h2>Modules in this patch</h2>
+        <span class="summary-count">
+          {{ modules.length }} {{ (modules.length) === 1 ? 'module' : 'modules' }}
+        </span>
+      </summary>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Module</th>
+                <th>Bus</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="pm in modules" :key="pm.id" :data-test="`patch-module-${pm.id}`">
+                <td>
+                  <RouterLink v-if="pm.live" :to="`/modules/${pm.module_id}`">
+                    {{ moduleLabel(pm) }}
+                  </RouterLink>
+                  <template v-else>{{ moduleLabel(pm) }}</template>
+                </td>
+                <td>{{ groupsById.get(pm.group_id)?.name || '—' }}</td>
+                <td>
+                  <span
+                    class="badge"
+                    :class="pm.live ? 'found' : pm.external ? 'pending' : 'failed'"
+                  >
+                    {{
+                      pm.live
+                        ? 'in your system'
+                        : pm.external
+                          ? 'off-rack gear'
+                          : 'no longer in your system'
+                    }}
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
   </template>
 </template>

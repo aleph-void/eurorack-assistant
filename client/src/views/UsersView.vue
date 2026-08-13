@@ -125,45 +125,47 @@ onMounted(load);
         </span>
       </p>
     </div>
-    <table data-test="user-table">
-      <thead>
-        <tr>
-          <th>Username</th>
-          <th>Role</th>
-          <th>Created</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="user in users" :key="user.id">
-          <td>{{ user.username }}</td>
-          <td>
-            <span class="badge" :class="user.is_admin ? 'found' : ''">
-              {{ user.is_admin ? 'admin' : 'user' }}
-            </span>
-          </td>
-          <td class="muted">{{ new Date(user.created_at).toLocaleDateString() }}</td>
-          <td>
-            <template v-if="user.id !== auth.user?.id">
-              <button
-                style="margin: 0 0.5rem 0 0"
-                :data-test="`reset-${user.id}`"
-                @click="resetPassword(user)"
-              >
-                Reset password
-              </button>
-              <button
-                class="danger"
-                style="margin: 0"
-                :data-test="`delete-${user.id}`"
-                @click="removeUser(user)"
-              >
-                Delete
-              </button>
-            </template>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table data-test="user-table">
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Role</th>
+            <th>Created</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="user in users" :key="user.id">
+            <td>{{ user.username }}</td>
+            <td>
+              <span class="badge" :class="user.is_admin ? 'found' : ''">
+                {{ user.is_admin ? 'admin' : 'user' }}
+              </span>
+            </td>
+            <td class="muted">{{ new Date(user.created_at).toLocaleDateString() }}</td>
+            <td>
+              <template v-if="user.id !== auth.user?.id">
+                <button
+                  style="margin: 0 0.5rem 0 0"
+                  :data-test="`reset-${user.id}`"
+                  @click="resetPassword(user)"
+                >
+                  Reset password
+                </button>
+                <button
+                  class="danger"
+                  style="margin: 0"
+                  :data-test="`delete-${user.id}`"
+                  @click="removeUser(user)"
+                >
+                  Delete
+                </button>
+              </template>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>

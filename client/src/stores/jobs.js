@@ -12,6 +12,9 @@ export const useJobsStore = defineStore('jobs', {
     activeCount: (state) =>
       state.jobs.filter((j) => j.status === 'pending' || j.status === 'running').length,
     failedJobs: (state) => state.jobs.filter((j) => j.status === 'failed'),
+    // Stalled jobs are still 'running', but the worker holding them died —
+    // the server reclaims them on its next pass and accepts a retry meanwhile.
+    retryableJobs: (state) => state.jobs.filter((j) => j.status === 'failed' || j.stalled),
   },
   actions: {
     async fetchJobs() {
@@ -24,13 +27,13 @@ export const useJobsStore = defineStore('jobs', {
       if (idx !== -1) this.jobs[idx] = { ...this.jobs[idx], ...updated };
       return updated;
     },
-    // Retry every failed job, one at a time so the queue picks them up in the
-    // order they are listed. One job refusing (already retried elsewhere, for
-    // instance) must not strand the rest, so failures are collected and
-    // reported after the whole sweep.
+    // Retry every failed or stalled job, one at a time so the queue picks them
+    // up in the order they are listed. One job refusing (already retried
+    // elsewhere, for instance) must not strand the rest, so failures are
+    // collected and reported after the whole sweep.
     async retryAll() {
       const failures = [];
-      for (const job of this.failedJobs.slice()) {
+      for (const job of this.retryableJobs.slice()) {
         try {
           await this.retry(job.id);
         } catch (e) {

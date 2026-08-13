@@ -57,48 +57,65 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="panel" data-test="patch-notes">
-    <h2>Notes on this patch</h2>
-    <p v-if="error" class="error" data-test="patch-notes-error">{{ error }}</p>
+  <details class="panel" data-test="patch-notes">
+    <summary>
+      <h2>Notes on this patch</h2>
+      <span class="summary-count">
+        {{ notes.length }} {{ notes.length === 1 ? 'note' : 'notes' }}
+      </span>
+    </summary>
+    <div class="panel-body">
+      <p v-if="error" class="error" data-test="patch-notes-error">{{ error }}</p>
 
-    <form @submit.prevent="create">
-      <label for="patch-note-title">Title (optional)</label>
-      <input id="patch-note-title" v-model="title" data-test="patch-note-title" />
-      <label for="patch-note-body">Note</label>
-      <textarea id="patch-note-body" v-model="body" data-test="patch-note-body"></textarea>
-      <button type="submit" :disabled="busy || !body.trim()" data-test="patch-note-create">
-        Add note
-      </button>
-    </form>
+      <form @submit.prevent="create">
+        <label for="patch-note-title">Title (optional)</label>
+        <input id="patch-note-title" v-model="title" data-test="patch-note-title" />
+        <label for="patch-note-body">Note</label>
+        <textarea id="patch-note-body" v-model="body" data-test="patch-note-body"></textarea>
+        <button type="submit" :disabled="busy || !body.trim()" data-test="patch-note-create">
+          Add note
+        </button>
+      </form>
 
-    <p v-if="notes.length === 0" class="muted" data-test="patch-notes-empty">
-      Nothing written down about this patch yet.
-    </p>
-
-    <div
-      v-for="note in notes"
-      :key="note.id"
-      class="subpanel"
-      :data-test="`patch-note-${note.id}`"
-    >
-      <h3>{{ note.title || `Note #${note.id}` }}</h3>
-      <pre class="note-body">{{ note.body }}</pre>
-      <div v-for="capture in note.captures || []" :key="capture.id" class="row">
-        <img
-          v-if="capture.image_hash"
-          :src="`/api/captures/${capture.id}/image`"
-          :alt="capture.title || `Capture ${capture.id}`"
-          style="max-width: 100%; height: auto"
-          :data-test="`patch-note-capture-${capture.id}`"
-        />
-      </div>
-      <p v-if="note.modules?.length" class="muted">
-        Also about:
-        <span v-for="m in note.modules" :key="m.id">{{ m.manufacturer }} {{ m.name }} </span>
+      <p v-if="notes.length === 0" class="muted" data-test="patch-notes-empty">
+        Nothing written down about this patch yet.
       </p>
-      <button class="danger" :data-test="`patch-note-detach-${note.id}`" @click="detach(note)">
-        Detach from patch
-      </button>
+
+      <!-- One note per expander: the newest is open, the rest are a click
+           away. -->
+      <details
+        v-for="(note, i) in notes"
+        :key="note.id"
+        class="expander"
+        :open="i === 0"
+        :data-test="`patch-note-${note.id}`"
+      >
+        <summary>
+          <h3>{{ note.title || `Note #${note.id}` }}</h3>
+          <span v-if="note.captures?.length" class="summary-count">
+            {{ note.captures.length }} captured
+          </span>
+        </summary>
+        <div class="expander-body">
+          <pre class="note-body">{{ note.body }}</pre>
+          <div v-for="capture in note.captures || []" :key="capture.id" class="row">
+            <img
+              v-if="capture.image_hash"
+              :src="`/api/captures/${capture.id}/image`"
+              :alt="capture.title || `Capture ${capture.id}`"
+              style="max-width: 100%; height: auto"
+              :data-test="`patch-note-capture-${capture.id}`"
+            />
+          </div>
+          <p v-if="note.modules?.length" class="muted">
+            Also about:
+            <span v-for="m in note.modules" :key="m.id">{{ m.manufacturer }} {{ m.name }} </span>
+          </p>
+          <button class="danger" :data-test="`patch-note-detach-${note.id}`" @click="detach(note)">
+            Detach from patch
+          </button>
+        </div>
+      </details>
     </div>
-  </div>
+  </details>
 </template>

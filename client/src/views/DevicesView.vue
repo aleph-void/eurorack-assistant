@@ -78,18 +78,20 @@ onMounted(load);
         </span>
       </p>
       <p v-if="connection.app" class="muted">{{ connection.app }} {{ connection.version }}</p>
-      <table v-if="connection.channels?.length" class="grid">
-        <thead>
-          <tr><th>Channel</th><th>Name</th><th>Type</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="channel in connection.channels" :key="channel.index">
-            <td>{{ channel.index + 1 }}</td>
-            <td>{{ channel.name }}</td>
-            <td>{{ channel.signal_type }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-if="connection.channels?.length" class="table-wrap">
+        <table class="grid">
+          <thead>
+            <tr><th>Channel</th><th>Name</th><th>Type</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="channel in connection.channels" :key="channel.index">
+              <td>{{ channel.index + 1 }}</td>
+              <td>{{ channel.name }}</td>
+              <td>{{ channel.signal_type }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <button class="danger" :data-test="`revoke-${device.id}`" @click="revoke(device)">

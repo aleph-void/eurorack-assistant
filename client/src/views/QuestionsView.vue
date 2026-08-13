@@ -40,34 +40,36 @@ async function remove(q) {
     <p>No questions yet. <RouterLink to="/ask">Ask one</RouterLink>.</p>
   </div>
   <div v-else class="panel">
-    <table data-test="question-table">
-      <thead>
-        <tr>
-          <th>Question</th>
-          <th>Status</th>
-          <th>Asked</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="q in questions" :key="q.id">
-          <td>
-            <RouterLink :to="`/questions/${q.id}`">{{ q.prompt }}</RouterLink>
-          </td>
-          <td><span class="badge" :class="q.status">{{ q.status }}</span></td>
-          <td class="muted">{{ formatDate(q.created_at) }}</td>
-          <td>
-            <button
-              class="danger"
-              style="margin: 0"
-              :data-test="`delete-question-${q.id}`"
-              @click="remove(q)"
-            >
-              Delete
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table data-test="question-table">
+        <thead>
+          <tr>
+            <th>Question</th>
+            <th>Status</th>
+            <th>Asked</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="q in questions" :key="q.id">
+            <td>
+              <RouterLink :to="`/questions/${q.id}`">{{ q.prompt }}</RouterLink>
+            </td>
+            <td><span class="badge" :class="q.status">{{ q.status }}</span></td>
+            <td class="muted">{{ formatDate(q.created_at) }}</td>
+            <td>
+              <button
+                class="danger"
+                style="margin: 0"
+                :data-test="`delete-question-${q.id}`"
+                @click="remove(q)"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>
