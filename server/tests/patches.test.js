@@ -285,8 +285,25 @@ describe('normalled connections in patches', () => {
     const norm = (d, targetName) =>
       d.normalizations.find((n) => n.target_component_name === targetName);
 
-    // Nothing patched: both normals are active; In 2's chained signal is the
-    // internal source feeding In 1.
+    // A patch is what is plugged in: a module no cable reaches has no
+    // normalled connections to report here — they are the module's business
+    // until the patch uses it.
+    expect(detail.normalizations).toEqual([]);
+
+    // Its output into Maths brings Ripples into the patch without touching
+    // its inputs. Both its normals are then active, and In 2's chained
+    // signal is the internal source feeding In 1.
+    const inUse = await request(app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: ripples.id,
+        from_component_id: filterJacks['LP'].id,
+        to_patch_module_id: maths.id,
+        to_component_id: fixture.input.id,
+      });
+    expect(inUse.status).toBe(201);
+    detail = await getDetail();
     expect(detail.normalizations).toHaveLength(2);
     expect(norm(detail, 'In 1')).toMatchObject({
       active: true,
@@ -360,6 +377,9 @@ describe('normalled connections in patches', () => {
             ],
           ],
         ]),
+        // The patch dials this instance in, which is what puts it in play —
+        // normals are reported for the modules a patch uses.
+        settings: [{ patch_module_id: 10, component_id: 99, value: 'noon' }],
         cables: [],
       })
     );
@@ -1120,5 +1140,278 @@ describe('patches API', () => {
       from_component_name: 'EOR',
       to_component_name: 'Signal In',
     });
+  });
+});
+
+// Building a patch faster: copying one whole, turning a cable around, and
+// the cables the user's other patches suggest for this one.
+describe('patch shortcuts', () => {
+  it('clones a patch with its cables, settings, buses, labels and links', async () => {
+    const fixture = await withPatchFixture();
+    const { app, db, aliceCookie, input, output, knob } = fixture;
+    const patch = (await createPatch(fixture)).body;
+    const detail = async (id) =>
+      (await request(app).get(`/api/patches/${id}`).set('Cookie', aliceCookie)).body;
+
+    const before = await detail(patch.id);
+    const maths = before.modules.find((m) => m.module_name === 'Maths');
+    const post = (path, body) =>
+      request(app).post(`/api/patches/${patch.id}${path}`).set('Cookie', aliceCookie).send(body);
+
+    await post('/cables', {
+      from_patch_module_id: maths.id,
+      from_component_id: output.id,
+      to_patch_module_id: maths.id,
+      to_component_id: input.id,
+      note: 'self-patched',
+    });
+    await request(app)
+      .put(`/api/patches/${patch.id}/settings`)
+      .set('Cookie', aliceCookie)
+      .send({ patch_module_id: maths.id, component_id: knob.id, value: '7' });
+    const group = (await post('/groups', { name: 'Rhythm' })).body;
+    await request(app)
+      .put(`/api/patches/${patch.id}/modules/${maths.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ label: 'the voice', group_id: group.id });
+    // Off-rack gear with a connection point declared inside the patch, and a
+    // cable into it — its component id must be rewritten by the clone.
+    const gear = (await post('/modules', { module_name: 'UMC404HD', external: true })).body;
+    const port = (await post(`/modules/${gear.id}/ports`, { name: 'IN 1' })).body;
+    await post('/cables', {
+      from_patch_module_id: maths.id,
+      from_component_id: output.id,
+      to_patch_module_id: gear.id,
+      to_component_id: port.id,
+    });
+
+    const cloned = await request(app)
+      .post(`/api/patches/${patch.id}/clone`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'Krell variation' });
+    expect(cloned.status).toBe(201);
+    expect(cloned.body.name).toBe('Krell variation');
+
+    const copy = await detail(cloned.body.id);
+    expect(copy.id).not.toBe(patch.id);
+    expect(copy.rack_name).toBe(before.rack_name);
+    expect(copy.modules).toHaveLength(before.modules.length + 1);
+    const copiedMaths = copy.modules.find((m) => m.module_name === 'Maths');
+    expect(copiedMaths.label).toBe('the voice');
+    expect(copy.groups.map((g) => g.name)).toEqual(['Rhythm']);
+    expect(copiedMaths.group_id).toBe(copy.groups[0].id);
+    expect(copy.settings).toHaveLength(1);
+    expect(copy.settings[0]).toMatchObject({ component_name: 'Rise', value: '7' });
+
+    // Every cable points at the COPY's instances, not the original's.
+    expect(copy.cables).toHaveLength(2);
+    const ids = new Set(copy.modules.map((m) => m.id));
+    for (const cable of copy.cables) {
+      expect(ids.has(cable.from_patch_module_id)).toBe(true);
+      expect(ids.has(cable.to_patch_module_id)).toBe(true);
+    }
+    expect(copy.cables[0].note).toBe('self-patched');
+    // The declared connection point was copied, and the cable follows it.
+    const copiedGear = copy.modules.find((m) => m.module_name === 'UMC404HD');
+    expect(copiedGear.components).toHaveLength(1);
+    expect(copiedGear.components[0].id).not.toBe(port.id);
+    const toGear = copy.cables.find((c) => c.to_patch_module_id === copiedGear.id);
+    expect(toGear.to_component_id).toBe(copiedGear.components[0].id);
+    expect(toGear.to_component_name).toBe('IN 1');
+
+    // The original is untouched, and the copy is independent of it.
+    const original = await detail(patch.id);
+    expect(original.cables).toHaveLength(2);
+    await request(app)
+      .delete(`/api/patches/${cloned.body.id}/cables/${copy.cables[0].id}`)
+      .set('Cookie', aliceCookie);
+    expect((await detail(patch.id)).cables).toHaveLength(2);
+
+    // Default name, and no reaching into someone else's patch.
+    const unnamed = await request(app)
+      .post(`/api/patches/${patch.id}/clone`)
+      .set('Cookie', aliceCookie)
+      .send({});
+    expect(unnamed.body.name).toBe('Krell (copy)');
+    const stranger = await request(app)
+      .post(`/api/patches/${patch.id}/clone`)
+      .set('Cookie', fixture.adminCookie)
+      .send({});
+    expect(stranger.status).toBe(404);
+  });
+
+  it('turns a cable around when both jacks can take the other role', async () => {
+    const fixture = await withPatchFixture();
+    const { app, db, aliceCookie, alice, output } = fixture;
+    const mult = await insertModule(db, alice.id, { manufacturer: 'Doepfer', name: 'A-180-2' });
+    const { rows: jacks } = await db.query(
+      `INSERT INTO module_components (module_id, type, name, group_label) VALUES
+         ($1, 'bidirectional_jack', 'M1', '1'), ($1, 'bidirectional_jack', 'M2', '1')
+       RETURNING *`,
+      [mult.id]
+    );
+    const patch = (await createPatch(fixture)).body;
+    const detail = async () =>
+      (await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie)).body;
+    const before = await detail();
+    const multPm = before.modules.find((m) => m.module_name === 'A-180-2');
+    const mathsPm = before.modules.find((m) => m.module_name === 'Maths');
+
+    // Entered backwards: the mult jack sending into Maths' input is right,
+    // but the user typed it the other way round first.
+    const cable = await request(app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: multPm.id,
+        from_component_id: jacks[0].id,
+        to_patch_module_id: multPm.id,
+        to_component_id: jacks[1].id,
+        note: 'keep me',
+      });
+    expect(cable.status).toBe(400); // same mult group — nothing to reverse
+
+    const real = await request(app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: mathsPm.id,
+        from_component_id: output.id,
+        to_patch_module_id: multPm.id,
+        to_component_id: jacks[0].id,
+        note: 'keep me',
+      });
+    expect(real.status).toBe(201);
+    // EOR is an output: it cannot become a destination.
+    const refused = await request(app)
+      .post(`/api/patches/${patch.id}/cables/${real.body.id}/reverse`)
+      .set('Cookie', aliceCookie);
+    expect(refused.status).toBe(400);
+    expect((await detail()).cables).toHaveLength(1);
+
+    // Between two mult jacks of different groups, reversing is legal — as
+    // long as neither group already takes its input elsewhere (group 1 does:
+    // EOR is patched into M1).
+    const { rows: more } = await db.query(
+      `INSERT INTO module_components (module_id, type, name, group_label) VALUES
+         ($1, 'bidirectional_jack', 'M3', '2'), ($1, 'bidirectional_jack', 'M4', '3')
+       RETURNING *`,
+      [mult.id]
+    );
+    const [m3, m4] = more;
+    const blocked = await request(app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: multPm.id,
+        from_component_id: jacks[1].id,
+        to_patch_module_id: multPm.id,
+        to_component_id: m3.id,
+      });
+    expect(blocked.status).toBe(201);
+    // M2 carries a copy out of group 1, so turning THAT cable around would
+    // make M2 an input its group already has at M1.
+    const refusedGroup = await request(app)
+      .post(`/api/patches/${patch.id}/cables/${blocked.body.id}/reverse`)
+      .set('Cookie', aliceCookie);
+    expect(refusedGroup.status).toBe(409);
+    await request(app)
+      .delete(`/api/patches/${patch.id}/cables/${blocked.body.id}`)
+      .set('Cookie', aliceCookie);
+
+    const both = await request(app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: multPm.id,
+        from_component_id: m3.id,
+        to_patch_module_id: multPm.id,
+        to_component_id: m4.id,
+        note: 'turn me around',
+      });
+    expect(both.status).toBe(201);
+    const reversed = await request(app)
+      .post(`/api/patches/${patch.id}/cables/${both.body.id}/reverse`)
+      .set('Cookie', aliceCookie);
+    expect(reversed.status).toBe(201);
+    expect(reversed.body).toMatchObject({
+      from_component_name: 'M4',
+      to_component_name: 'M3',
+      note: 'turn me around',
+    });
+    const after = await detail();
+    expect(after.cables).toHaveLength(2);
+    expect(after.cables.some((c) => c.id === both.body.id)).toBe(false);
+  });
+
+  it('suggests cables from the patches the user has already built', async () => {
+    const fixture = await withPatchFixture();
+    const { app, db, aliceCookie, alice, input, output } = fixture;
+    const vca = await insertModule(db, alice.id, { manufacturer: 'Intellijel', name: 'Dual VCA' });
+    const { rows: vcaJacks } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES
+         ($1, 'input_jack', 'IN 1'), ($1, 'output_jack', 'OUT 1') RETURNING *`,
+      [vca.id]
+    );
+    const inJack = vcaJacks.find((j) => j.name === 'IN 1');
+
+    // Two earlier patches with the same habit: Maths EOR → Dual VCA IN 1.
+    const older = [];
+    for (const name of ['First', 'Second']) {
+      const p = (await createPatch(fixture, { name })).body;
+      const body = (
+        await request(app).get(`/api/patches/${p.id}`).set('Cookie', aliceCookie)
+      ).body;
+      const maths = body.modules.find((m) => m.module_name === 'Maths');
+      const dual = body.modules.find((m) => m.module_name === 'Dual VCA');
+      const res = await request(app)
+        .post(`/api/patches/${p.id}/cables`)
+        .set('Cookie', aliceCookie)
+        .send({
+          from_patch_module_id: maths.id,
+          from_component_id: output.id,
+          to_patch_module_id: dual.id,
+          to_component_id: inJack.id,
+        });
+      expect(res.status).toBe(201);
+      older.push(p);
+    }
+    expect(older).toHaveLength(2);
+
+    const patch = (await createPatch(fixture, { name: 'Third' })).body;
+    const suggest = async () =>
+      (await request(app).get(`/api/patches/${patch.id}/suggestions`).set('Cookie', aliceCookie))
+        .body;
+
+    const first = await suggest();
+    expect(first.suggestions).toHaveLength(1);
+    expect(first.suggestions[0]).toMatchObject({
+      from_component_name: 'EOR',
+      to_component_name: 'IN 1',
+      patches: 2,
+    });
+
+    // Plug it and it stops being a suggestion.
+    const plugged = await request(app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: first.suggestions[0].from_patch_module_id,
+        from_component_id: first.suggestions[0].from_component_id,
+        to_patch_module_id: first.suggestions[0].to_patch_module_id,
+        to_component_id: first.suggestions[0].to_component_id,
+      });
+    expect(plugged.status).toBe(201);
+    expect((await suggest()).suggestions).toEqual([]);
+
+    // A patch with nothing to learn from suggests nothing, and another
+    // user's patches never leak in.
+    const { rows: patches } = await db.query('SELECT id FROM patches ORDER BY id');
+    expect(patches.length).toBeGreaterThan(2);
+    const strangers = await request(app)
+      .get(`/api/patches/${patch.id}/suggestions`)
+      .set('Cookie', fixture.adminCookie);
+    expect(strangers.status).toBe(404);
+    expect(input).toBeTruthy();
   });
 });

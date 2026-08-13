@@ -1,11 +1,14 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { api } from '../api.js';
+import { parseQuickCable } from '../patchQuickCable.js';
 import AutocompleteSelect from '../components/AutocompleteSelect.vue';
 import ScopePanel from '../components/ScopePanel.vue';
 import PatchNotesPanel from '../components/PatchNotesPanel.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
+const router = useRouter();
 
 // A capture files itself under a note on this patch, so the notes panel is
 // refreshed when one is taken.
@@ -56,14 +59,44 @@ const settingsError = ref('');
 // Draft value per component id of the selected module instance.
 const draft = reactive({});
 
+// Cables worth plugging next, learned from the user's other patches.
+const suggestions = ref([]);
+
+async function loadSuggestions() {
+  try {
+    const res = await api.get(`/api/patches/${props.id}/suggestions`);
+    suggestions.value = res?.suggestions ?? [];
+  } catch {
+    suggestions.value = [];
+  }
+}
+
 async function load() {
   try {
     patch.value = await api.get(`/api/patches/${props.id}`);
+    await loadSuggestions();
   } catch (e) {
     error.value = e.message;
   }
 }
 onMounted(load);
+
+// Copy the whole patch: the same instances, cables, settings and buses under
+// a new name, as the starting point for the next version of it.
+const duplicating = ref(false);
+
+async function duplicatePatch() {
+  error.value = '';
+  duplicating.value = true;
+  try {
+    const copy = await api.post(`/api/patches/${props.id}/clone`, {});
+    router.push(`/patches/${copy.id}`);
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    duplicating.value = false;
+  }
+}
 
 const modules = computed(() => patch.value?.modules || []);
 const modulesById = computed(() => new Map(modules.value.map((m) => [m.id, m])));
@@ -190,6 +223,56 @@ const pairable = computed(() => {
   return from && to ? { from, to } : null;
 });
 
+// ---- one line, one cable ----
+// "maths eor > optomix ch1 in": both ends named in the words you would use
+// out loud, resolved against every jack in the patch as you type.
+const quickLine = ref('');
+const quickError = ref('');
+
+const jackCandidates = (types, forDestination) =>
+  modules.value.flatMap((pm) =>
+    pm.components
+      .filter((c) => types.includes(c.type))
+      .map((c) => ({
+        patch_module_id: pm.id,
+        component_id: c.id,
+        module_label: moduleLabel(pm),
+        jack_name: c.name,
+        disabled: forDestination ? Boolean(cableInto(pm.id, c.id)) : false,
+      }))
+  );
+const quickParsed = computed(() =>
+  parseQuickCable(quickLine.value, {
+    from: jackCandidates(FROM_TYPES, false),
+    to: jackCandidates(TO_TYPES, true),
+  })
+);
+const quickReady = computed(
+  () => Boolean(quickParsed.value.from && quickParsed.value.to && !quickParsed.value.error)
+);
+const endpointText = (end) => `${end.module_label} — ${end.jack_name}`;
+
+async function addQuickCable() {
+  quickError.value = '';
+  if (!quickReady.value) {
+    quickError.value = quickParsed.value.error || 'Name both ends: source > destination';
+    return;
+  }
+  const { from, to } = quickParsed.value;
+  try {
+    await api.post(`/api/patches/${props.id}/cables`, {
+      from_patch_module_id: from.patch_module_id,
+      from_component_id: from.component_id,
+      to_patch_module_id: to.patch_module_id,
+      to_component_id: to.component_id,
+    });
+    quickLine.value = '';
+    await load();
+  } catch (e) {
+    quickError.value = e.message;
+  }
+}
+
 async function addCable() {
   cableError.value = '';
   try {
@@ -235,6 +318,77 @@ async function removeCable(cable) {
   } catch (e) {
     cableError.value = e.message;
   }
+}
+
+// Load an existing cable back into the form to plug a variant of it — the
+// same output into somewhere else, or the same input from somewhere else.
+async function reuseCable(cable) {
+  cableError.value = '';
+  fromModuleId.value = cable.from_patch_module_id;
+  toModuleId.value = cable.to_patch_module_id;
+  // The module watchers clear the jacks, so the jacks are set after them.
+  await nextTick();
+  fromComponentId.value = cable.from_component_id;
+  toComponentId.value = cable.to_component_id;
+  focusBox(toModuleBox);
+}
+
+const jackOf = (pmId, componentId) =>
+  modulesById.value.get(pmId)?.components.find((c) => c.id === componentId) ?? null;
+
+// A cable can only be turned around when both jacks can play the other role:
+// mult jacks, a bridged pair, a switch section. Everywhere else the ends are
+// fixed by the panel.
+function reversible(cable) {
+  const from = jackOf(cable.from_patch_module_id, cable.from_component_id);
+  const to = jackOf(cable.to_patch_module_id, cable.to_component_id);
+  return Boolean(from && to && TO_TYPES.includes(from.type) && FROM_TYPES.includes(to.type));
+}
+
+async function reverseCable(cable) {
+  cableError.value = '';
+  try {
+    await api.post(`/api/patches/${props.id}/cables/${cable.id}/reverse`, {});
+    await load();
+  } catch (e) {
+    cableError.value = e.message;
+  }
+}
+
+// ---- suggestions ----
+// Signal arrives at a module and nothing carries it onward. Off-rack gear is
+// where a patch is supposed to end, so it is not a loose end.
+const looseEnds = computed(() => {
+  const fed = new Set(cables.value.map((c) => c.to_patch_module_id));
+  const sending = new Set(cables.value.map((c) => c.from_patch_module_id));
+  return modules.value.filter(
+    (pm) =>
+      fed.has(pm.id) &&
+      !sending.has(pm.id) &&
+      !pm.external &&
+      pm.components.some((c) => FROM_TYPES.includes(c.type))
+  );
+});
+
+async function plugSuggestion(suggestion) {
+  cableError.value = '';
+  try {
+    await api.post(`/api/patches/${props.id}/cables`, {
+      from_patch_module_id: suggestion.from_patch_module_id,
+      from_component_id: suggestion.from_component_id,
+      to_patch_module_id: suggestion.to_patch_module_id,
+      to_component_id: suggestion.to_component_id,
+    });
+    await load();
+  } catch (e) {
+    cableError.value = e.message;
+  }
+}
+
+// Start a cable out of a module that has signal but sends none.
+function patchFrom(pm) {
+  fromModuleId.value = pm.id;
+  focusBox(fromJackBox);
 }
 
 // Provisional cables and stackcables are recorded, not just drawn: toggling
@@ -613,6 +767,15 @@ onMounted(async () => {
       >
         Rename
       </button>
+      <button
+        style="margin: 0 0 0 0.4rem; font-size: 0.8rem"
+        class="secondary"
+        :disabled="duplicating"
+        data-test="duplicate-patch"
+        @click="duplicatePatch"
+      >
+        Duplicate
+      </button>
       <RouterLink
         :to="`/ask?patch=${props.id}`"
         style="margin-left: 0.6rem; font-size: 0.8rem"
@@ -657,7 +820,26 @@ onMounted(async () => {
             </td>
             <td>
               <button
+                class="secondary"
                 style="margin: 0"
+                title="Load this cable into the form to plug a variant of it"
+                :data-test="`cable-reuse-${cable.id}`"
+                @click="reuseCable(cable)"
+              >
+                Reuse
+              </button>
+              <button
+                v-if="reversible(cable)"
+                class="secondary"
+                style="margin: 0 0 0 0.4rem"
+                title="Swap the ends of this cable"
+                :data-test="`cable-reverse-${cable.id}`"
+                @click="reverseCable(cable)"
+              >
+                Reverse
+              </button>
+              <button
+                style="margin: 0 0 0 0.4rem"
                 :data-test="`cable-optional-${cable.id}`"
                 @click="toggleCableFlag(cable, 'optional')"
               >
@@ -684,7 +866,36 @@ onMounted(async () => {
       </table>
       <p v-else class="muted">No cables yet.</p>
 
-      <form @submit.prevent="addCable">
+      <form data-test="quick-form" @submit.prevent="addQuickCable">
+        <label for="quick-cable">Quick entry — name both ends on one line</label>
+        <div class="row">
+          <div style="flex: 3">
+            <input
+              id="quick-cable"
+              v-model="quickLine"
+              data-test="quick-cable"
+              placeholder="e.g. maths eor > optomix ch1 in"
+            />
+          </div>
+          <div class="shrink">
+            <button type="submit" style="margin: 0" :disabled="!quickReady" data-test="quick-create">
+              Plug in
+            </button>
+          </div>
+        </div>
+        <p v-if="quickReady" class="muted" data-test="quick-preview">
+          {{ endpointText(quickParsed.from) }} → {{ endpointText(quickParsed.to) }}
+        </p>
+        <template v-else-if="quickParsed.error">
+          <p class="muted" data-test="quick-problem">{{ quickParsed.error }}</p>
+          <p v-if="quickParsed.matches.length" class="muted" data-test="quick-matches">
+            {{ quickParsed.matches.map(endpointText).join(' · ') }}
+          </p>
+        </template>
+        <p v-if="quickError" class="error" data-test="quick-error">{{ quickError }}</p>
+      </form>
+
+      <form data-test="cable-form" @submit.prevent="addCable">
         <h3 style="margin-bottom: 0">Add a cable</h3>
         <p class="muted" style="margin: 0.2rem 0 0">
           Type to find each end — the arrow keys move through the matches, Enter takes the
@@ -790,6 +1001,70 @@ onMounted(async () => {
         </div>
         <p v-if="cableError" class="error" data-test="cable-error">{{ cableError }}</p>
       </form>
+    </div>
+
+    <div v-if="suggestions.length || looseEnds.length" class="panel" data-test="suggestions">
+      <h2>What to patch next</h2>
+      <template v-if="suggestions.length">
+        <p class="muted">
+          Cables you have plugged in your other patches, waiting to be plugged here — a rack is
+          patched in habits.
+        </p>
+        <table>
+          <tbody>
+            <tr
+              v-for="s in suggestions"
+              :key="`${s.from_patch_module_id}:${s.from_component_id}-${s.to_patch_module_id}:${s.to_component_id}`"
+              :data-test="`suggestion-${s.from_component_id}-${s.to_component_id}`"
+            >
+              <td>
+                {{ moduleLabel(modulesById.get(s.from_patch_module_id)) }} —
+                <strong>{{ s.from_component_name }}</strong>
+                →
+                {{ moduleLabel(modulesById.get(s.to_patch_module_id)) }} —
+                <strong>{{ s.to_component_name }}</strong>
+              </td>
+              <td class="muted">
+                in {{ s.patches }} other {{ s.patches === 1 ? 'patch' : 'patches' }}
+              </td>
+              <td>
+                <button
+                  style="margin: 0"
+                  :data-test="`plug-suggestion-${s.from_component_id}-${s.to_component_id}`"
+                  @click="plugSuggestion(s)"
+                >
+                  Plug in
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
+
+      <template v-if="looseEnds.length">
+        <h3>Loose ends</h3>
+        <p class="muted">
+          Signal reaches these modules and nothing carries it onward. That is a patch in progress —
+          or a module doing its work through a normalled connection.
+        </p>
+        <table>
+          <tbody>
+            <tr v-for="pm in looseEnds" :key="pm.id" :data-test="`loose-end-${pm.id}`">
+              <td>{{ moduleLabel(pm) }}</td>
+              <td>
+                <button
+                  class="secondary"
+                  style="margin: 0"
+                  :data-test="`patch-from-${pm.id}`"
+                  @click="patchFrom(pm)"
+                >
+                  Patch from here
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
     </div>
 
     <div v-if="patch.flow?.length" class="panel" data-test="flow">

@@ -199,6 +199,118 @@ export function patchRoutes(db) {
     }
   });
 
+  // Cables worth plugging next, learned from the user's other patches.
+  //
+  // A rack is patched in habits: the same VCO output into the same filter,
+  // the same envelope into the same VCA. Every cable in the user's other
+  // patches is reduced to (module, jack) → (module, jack) — which survives
+  // being a different patch of a different rack — counted by how many patches
+  // it appears in, and resolved back onto THIS patch's instances. Anything
+  // already patched here, and any input that already has a cable in it, is
+  // dropped: a suggestion you cannot act on is noise.
+  router.get('/:id/suggestions', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+
+      const mine = await PatchModule.findAll({
+        where: { patch_id: patch.id },
+        order: [['id', 'ASC']],
+      });
+      const myCables = await PatchCable.findAll({ where: { patch_id: patch.id } });
+      const others = await Patch.findAll({
+        where: { user_id: req.user.id, id: { [Op.ne]: patch.id } },
+        attributes: ['id'],
+      });
+      const otherIds = others.map((p) => p.id);
+      if (otherIds.length === 0 || mine.length === 0) return res.json({ suggestions: [] });
+
+      const otherModules = await PatchModule.findAll({ where: { patch_id: otherIds } });
+      const otherCables = await PatchCable.findAll({ where: { patch_id: otherIds } });
+      const moduleOfInstance = new Map(otherModules.map((pm) => [pm.id, pm.module_id]));
+
+      // One entry per (module, jack) → (module, jack) pair, counting the
+      // patches it appears in rather than the cables: a pair stacked twice in
+      // one patch is still one habit.
+      const habits = new Map();
+      for (const c of otherCables) {
+        const fromModule = moduleOfInstance.get(c.from_patch_module_id);
+        const toModule = moduleOfInstance.get(c.to_patch_module_id);
+        if (!fromModule || !toModule || !c.from_component_id || !c.to_component_id) continue;
+        const key = `${fromModule}:${c.from_component_id}>${toModule}:${c.to_component_id}`;
+        if (!habits.has(key)) {
+          habits.set(key, {
+            from_module_id: fromModule,
+            from_component_id: c.from_component_id,
+            to_module_id: toModule,
+            to_component_id: c.to_component_id,
+            patches: new Set(),
+          });
+        }
+        habits.get(key).patches.add(c.patch_id);
+      }
+      if (habits.size === 0) return res.json({ suggestions: [] });
+
+      // Only jacks that still exist: a module re-analyzed since then has new
+      // component ids, and a habit pointing at the old ones is stale.
+      const componentIds = [
+        ...new Set([...habits.values()].flatMap((h) => [h.from_component_id, h.to_component_id])),
+      ];
+      const components = await ModuleComponent.findAll({ where: { id: componentIds } });
+      const componentById = new Map(components.map((c) => [c.id, c]));
+
+      const instancesOf = (moduleId) => mine.filter((pm) => pm.module_id === moduleId);
+      const cableInto = (pmId, componentId) =>
+        myCables.some((c) => c.to_patch_module_id === pmId && c.to_component_id === componentId);
+      const alreadyPatched = (fromPm, fromId, toPm, toId) =>
+        myCables.some(
+          (c) =>
+            c.from_patch_module_id === fromPm &&
+            c.from_component_id === fromId &&
+            c.to_patch_module_id === toPm &&
+            c.to_component_id === toId
+        );
+
+      const suggestions = [];
+      for (const habit of habits.values()) {
+        const fromComponent = componentById.get(habit.from_component_id);
+        const toComponent = componentById.get(habit.to_component_id);
+        if (!fromComponent || !toComponent) continue;
+        if (fromComponent.module_id !== habit.from_module_id) continue;
+        if (toComponent.module_id !== habit.to_module_id) continue;
+        const fromInstance = instancesOf(habit.from_module_id)[0];
+        // The first instance whose input is still free — a second Optomix is
+        // exactly where the next copy of a habitual cable goes.
+        const toInstance = instancesOf(habit.to_module_id).find(
+          (pm) => !cableInto(pm.id, habit.to_component_id)
+        );
+        if (!fromInstance || !toInstance) continue;
+        if (fromInstance.id === toInstance.id && fromComponent.id === toComponent.id) continue;
+        if (alreadyPatched(fromInstance.id, fromComponent.id, toInstance.id, toComponent.id)) {
+          continue;
+        }
+        suggestions.push({
+          from_patch_module_id: fromInstance.id,
+          from_component_id: fromComponent.id,
+          from_component_name: fromComponent.name,
+          to_patch_module_id: toInstance.id,
+          to_component_id: toComponent.id,
+          to_component_name: toComponent.name,
+          patches: habit.patches.size,
+        });
+      }
+      suggestions.sort(
+        (a, b) =>
+          b.patches - a.patches ||
+          a.from_patch_module_id - b.from_patch_module_id ||
+          a.from_component_name.localeCompare(b.from_component_name)
+      );
+      res.json({ suggestions: suggestions.slice(0, 8) });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // Rename / edit description. Body: { name?, description? }
   router.put('/:id', async (req, res, next) => {
     try {
@@ -226,6 +338,186 @@ export function patchRoutes(db) {
       if (!patch) return res.status(404).json({ error: 'Patch not found' });
       await patch.destroy();
       res.json({ ok: true });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Copy a patch, whole: the same instances, cables, settings, buses, links
+  // and declared connection points under a new name. This is how a patch
+  // becomes a starting point — a house voice you build variations on, or a
+  // template you keep and never touch again.
+  //
+  // Every id inside a patch is rewritten, including the connection points
+  // declared on instances with no live module: patch_module_ports live in the
+  // same id namespace as module components, so a cable end on such an
+  // instance is remapped to the copied port rather than left pointing at the
+  // original patch's row.
+  // Body: { name? }
+  router.post('/:id/clone', async (req, res, next) => {
+    try {
+      const source = await ownPatch(req.user.id, req.params.id);
+      if (!source) return res.status(404).json({ error: 'Patch not found' });
+      const name = String(req.body?.name || '').trim() || `${source.name} (copy)`;
+
+      const where = { patch_id: source.id };
+      const modules = await PatchModule.findAll({ where, order: [['id', 'ASC']] });
+      const [groups, ports, cables, settings, links] = await Promise.all([
+        PatchGroup.findAll({ where, order: [['id', 'ASC']] }),
+        modules.length === 0
+          ? []
+          : PatchModulePort.findAll({
+              where: { patch_module_id: modules.map((pm) => pm.id) },
+              order: [['id', 'ASC']],
+            }),
+        PatchCable.findAll({ where, order: [['id', 'ASC']] }),
+        PatchSetting.findAll({ where, order: [['id', 'ASC']] }),
+        PatchModuleLink.findAll({ where, order: [['id', 'ASC']] }),
+      ]);
+      const linkJacks =
+        links.length === 0
+          ? []
+          : await PatchModuleLinkJack.findAll({
+              where: { link_id: links.map((l) => l.id) },
+              order: [['id', 'ASC']],
+            });
+
+      let copy;
+      await db.sequelize.transaction(async (transaction) => {
+        copy = await Patch.create(
+          {
+            user_id: req.user.id,
+            rack_id: source.rack_id,
+            rack_name: source.rack_name,
+            name,
+            description: source.description,
+          },
+          { transaction }
+        );
+
+        // Buses first: instances point at them.
+        const groupMap = new Map();
+        for (const g of groups) {
+          const created = await PatchGroup.create(
+            {
+              patch_id: copy.id,
+              name: g.name,
+              description: g.description,
+              position: g.position,
+            },
+            { transaction }
+          );
+          groupMap.set(g.id, created.id);
+        }
+
+        const moduleMap = new Map();
+        for (const pm of modules) {
+          const created = await PatchModule.create(
+            {
+              patch_id: copy.id,
+              module_id: pm.module_id,
+              manufacturer: pm.manufacturer,
+              module_name: pm.module_name,
+              instance: pm.instance,
+              label: pm.label,
+              external: pm.external,
+              group_id: pm.group_id === null ? null : (groupMap.get(pm.group_id) ?? null),
+            },
+            { transaction }
+          );
+          moduleMap.set(pm.id, created.id);
+        }
+
+        // Connection points declared inside the patch, and the map that
+        // rewrites cable ends referring to them.
+        const portMap = new Map();
+        for (const p of ports) {
+          const created = await PatchModulePort.create(
+            {
+              patch_module_id: moduleMap.get(p.patch_module_id),
+              name: p.name,
+              type: p.type,
+              port_kind: p.port_kind,
+              description: p.description,
+              position: p.position,
+            },
+            { transaction }
+          );
+          portMap.set(p.id, created.id);
+        }
+        // A component id belongs to the ports table only when its instance
+        // has no analyzed module behind it.
+        const declared = new Set(modules.filter((pm) => !pm.module_id).map((pm) => pm.id));
+        const componentIdIn = (patchModuleId, componentId) =>
+          declared.has(patchModuleId) && portMap.has(componentId)
+            ? portMap.get(componentId)
+            : componentId;
+
+        for (const c of cables) {
+          await PatchCable.create(
+            {
+              patch_id: copy.id,
+              from_patch_module_id: moduleMap.get(c.from_patch_module_id),
+              from_component_id: componentIdIn(c.from_patch_module_id, c.from_component_id),
+              from_component_name: c.from_component_name,
+              to_patch_module_id: moduleMap.get(c.to_patch_module_id),
+              to_component_id: componentIdIn(c.to_patch_module_id, c.to_component_id),
+              to_component_name: c.to_component_name,
+              note: c.note,
+              optional: c.optional,
+              stacked: c.stacked,
+              alt_group: c.alt_group,
+            },
+            { transaction }
+          );
+        }
+
+        for (const s of settings) {
+          await PatchSetting.create(
+            {
+              patch_id: copy.id,
+              patch_module_id: moduleMap.get(s.patch_module_id),
+              component_id: s.component_id,
+              component_name: s.component_name,
+              value: s.value,
+            },
+            { transaction }
+          );
+        }
+
+        for (const link of links) {
+          const created = await PatchModuleLink.create(
+            {
+              patch_id: copy.id,
+              a_patch_module_id: moduleMap.get(link.a_patch_module_id),
+              b_patch_module_id: moduleMap.get(link.b_patch_module_id),
+              kind: link.kind,
+              description: link.description,
+            },
+            { transaction }
+          );
+          for (const jack of linkJacks.filter((j) => j.link_id === link.id)) {
+            await PatchModuleLinkJack.create(
+              {
+                link_id: created.id,
+                a_component_id: componentIdIn(link.a_patch_module_id, jack.a_component_id),
+                a_component_name: jack.a_component_name,
+                b_component_id: componentIdIn(link.b_patch_module_id, jack.b_component_id),
+                b_component_name: jack.b_component_name,
+              },
+              { transaction }
+            );
+          }
+        }
+      });
+
+      res.status(201).json(
+        patchJson(copy, {
+          module_count: modules.length,
+          cable_count: cables.length,
+          cloned_from: source.id,
+        })
+      );
     } catch (e) {
       next(e);
     }
@@ -933,6 +1225,59 @@ export function patchRoutes(db) {
       }
       await cable.update(updates);
       res.json(cableJson(cable));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Turn a cable around: the end it came from becomes the end it goes to.
+  // Only ever legal when both jacks can play the other role — two mult jacks,
+  // a bridged pair, a switch section — which is exactly where a cable is easy
+  // to enter backwards. The swap is validated against every other cable in
+  // the patch before the original is replaced.
+  router.post('/:id/cables/:cableId/reverse', async (req, res, next) => {
+    try {
+      const patch = await ownPatch(req.user.id, req.params.id);
+      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const cable = await PatchCable.findOne({
+        where: { id: Number(req.params.cableId) || 0, patch_id: patch.id },
+      });
+      if (!cable) return res.status(404).json({ error: 'Cable not found' });
+
+      // The reversed cable starts where this one ended.
+      const from = await resolveEndpoint(patch, cable.to_patch_module_id, cable.to_component_id);
+      if (from.error) return res.status(400).json({ error: `from: ${from.error}` });
+      const to = await resolveEndpoint(patch, cable.from_patch_module_id, cable.from_component_id);
+      if (to.error) return res.status(400).json({ error: `to: ${to.error}` });
+
+      // Judged against the patch as it will be once this cable is gone.
+      const existing = (await PatchCable.findAll({ where: { patch_id: patch.id } })).filter(
+        (c) => c.id !== cable.id
+      );
+      const problem = await cableProblem(patch, from, to, existing);
+      if (problem) return res.status(problem.status).json({ error: problem.error });
+
+      let reversed;
+      await db.sequelize.transaction(async (transaction) => {
+        await cable.destroy({ transaction });
+        reversed = await PatchCable.create(
+          {
+            patch_id: patch.id,
+            from_patch_module_id: from.pm.id,
+            from_component_id: from.component.id,
+            from_component_name: from.component.name,
+            to_patch_module_id: to.pm.id,
+            to_component_id: to.component.id,
+            to_component_name: to.component.name,
+            note: cable.note,
+            optional: cable.optional,
+            stacked: cable.stacked,
+            alt_group: cable.alt_group,
+          },
+          { transaction }
+        );
+      });
+      res.status(201).json(cableJson(reversed));
     } catch (e) {
       next(e);
     }

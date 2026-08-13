@@ -44,15 +44,29 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   every control is dialed in, what each instance is doing in this patch
   ("LXR #2 — ghost layer") and which bus or layer it belongs to. The snapshot
   keeps rendering after modules move racks, get re-analyzed or are deleted.
+- **Fast patch entry**: every end of a cable is found by typing — arrow keys
+  move through the matches, Enter takes one and moves to the next field —
+  or the whole cable on one line (`maths eor > optomix ch1 in`), resolved as
+  you type and never guessed when the words match more than one jack. Inputs
+  that already have a cable in them are shown as such instead of being offered
+  and refused; a cable can be reused as the starting point for a variant or
+  turned around where both jacks allow it; "chain" mode starts the next cable
+  where the last one landed; and a whole patch can be duplicated as the
+  starting point for its next version.
+- **What to patch next**: every cable in your other patches is reduced to
+  (module, jack) → (module, jack), counted, and offered here when both ends
+  are free — a rack is patched in habits. Modules that receive signal and send
+  none are listed as loose ends.
 - **Signal flow**: patches are traced, not just listed. The analysis records
   each module's internal signal paths, normalled connections, routing switch
   sections, mult groups and stereo pairs, and the patch view follows every
   signal from its source through cables, mult copies, defaults, switches and
   module internals to everywhere it ends up — flagging splits, merges,
   feedback loops and paths that are only one of several alternatives. Only the
-  modules the patch actually uses are traced: a patch snapshots the whole rack,
-  but a module nothing is plugged into (and whose controls the patch does not
-  dial in) is not part of the patch.
+  modules the patch actually uses are traced — and the same goes for the
+  normalled connections it lists: a patch snapshots the whole rack, but a
+  module nothing is plugged into (and whose controls the patch does not dial
+  in) is not part of the patch.
 - **Ask about a patch**: a question can name one of your patches — from the
   Ask page or the "Ask about this patch" link on the patch itself. The patch is
   attached to the question as a document of its cables, control settings, the

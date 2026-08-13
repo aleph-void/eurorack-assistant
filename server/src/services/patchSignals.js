@@ -18,6 +18,8 @@
 // here: a position the patch rules out never appears, and one it has not
 // recorded arrives flagged `exclusive` — a possibility, not a certainty.
 
+import { engagedPatchModuleIds } from './patchTopology.js';
+
 export const MAX_NORMAL_DEPTH = 10;
 
 // topology: the result of buildPatchTopology().
@@ -30,7 +32,18 @@ export const MAX_NORMAL_DEPTH = 10;
 //     signals: [{ kind: 'cable'|'output'|'internal'|'none', via: [...], ... }] }
 // `via` lists the intermediate input names a chained signal passes through.
 export function resolveNormalledSignals(topology) {
-  const { jacksByPatchModule = new Map(), normalizations = [], cables = [] } = topology || {};
+  const {
+    jacksByPatchModule = new Map(),
+    normalizations = [],
+    settings = [],
+    links = [],
+    cables = [],
+  } = topology || {};
+
+  // Like the signal flow, this is a picture of THIS patch, not of the rack it
+  // was snapshotted from: the defaults inside a module nothing is plugged
+  // into are the module's business, not the patch's.
+  const engaged = engagedPatchModuleIds({ cables, settings, links });
 
   const jackAt = (pmId, componentId) =>
     (jacksByPatchModule.get(pmId) || []).find((c) => c.id === componentId) || null;
@@ -104,34 +117,36 @@ export function resolveNormalledSignals(topology) {
     return feedsOf(n.source_patch_module_id, source.id, [...via, source.name], visited);
   };
 
-  return normalizations.map((n) => {
-    const overriding = overridingCable(n);
-    return {
-      patch_module_id: n.patch_module_id,
-      normalization_id: n.id,
-      target_patch_module_id: n.target_patch_module_id,
-      target_component_id: n.target_component_id,
-      target_component_name: nameAt(n.target_patch_module_id, n.target_component_id),
-      source_patch_module_id: n.source_patch_module_id,
-      source_component_id: n.source_component_id,
-      source_component_name: n.source_component_id
-        ? (jackAt(n.source_patch_module_id, n.source_component_id)?.name ?? null)
-        : null,
-      source_label: n.source_label,
-      kind: n.kind,
-      // What cancels it, so the GUI can explain an unexpected 'overridden'.
-      break_component_name: nameAt(n.break_patch_module_id, n.break_component_id),
-      break_on: n.break_on,
-      // Which control position this default belongs to, when it has one.
-      condition: n.condition,
-      alt_group: n.alt_group,
-      exclusive: n.exclusive,
-      description: n.description,
-      active: !overriding,
-      overriding_cable_id: overriding ? overriding.id : null,
-      signals: overriding
-        ? []
-        : signalOf(n, [], new Set([`${n.target_patch_module_id}:${n.target_component_id}`])),
-    };
-  });
+  return normalizations
+    .filter((n) => engaged.has(n.target_patch_module_id))
+    .map((n) => {
+      const overriding = overridingCable(n);
+      return {
+        patch_module_id: n.patch_module_id,
+        normalization_id: n.id,
+        target_patch_module_id: n.target_patch_module_id,
+        target_component_id: n.target_component_id,
+        target_component_name: nameAt(n.target_patch_module_id, n.target_component_id),
+        source_patch_module_id: n.source_patch_module_id,
+        source_component_id: n.source_component_id,
+        source_component_name: n.source_component_id
+          ? (jackAt(n.source_patch_module_id, n.source_component_id)?.name ?? null)
+          : null,
+        source_label: n.source_label,
+        kind: n.kind,
+        // What cancels it, so the GUI can explain an unexpected 'overridden'.
+        break_component_name: nameAt(n.break_patch_module_id, n.break_component_id),
+        break_on: n.break_on,
+        // Which control position this default belongs to, when it has one.
+        condition: n.condition,
+        alt_group: n.alt_group,
+        exclusive: n.exclusive,
+        description: n.description,
+        active: !overriding,
+        overriding_cable_id: overriding ? overriding.id : null,
+        signals: overriding
+          ? []
+          : signalOf(n, [], new Set([`${n.target_patch_module_id}:${n.target_component_id}`])),
+      };
+    });
 }

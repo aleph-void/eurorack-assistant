@@ -44,6 +44,18 @@ async function create() {
   }
 }
 
+// A patch is often the starting point for the next one: the same voice with
+// one thing moved. Copying keeps the original intact.
+async function duplicate(patch) {
+  error.value = '';
+  try {
+    await api.post(`/api/patches/${patch.id}/clone`, {});
+    await load();
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
 async function remove(patch) {
   if (!confirm(`Delete patch '${patch.name}'? Its cables and settings are lost.`)) return;
   error.value = '';
@@ -90,7 +102,20 @@ onMounted(load);
           <td>{{ patch.cable_count }}</td>
           <td>{{ new Date(patch.created_at).toLocaleString() }}</td>
           <td>
-            <button class="danger" style="margin: 0" :data-test="`delete-${patch.id}`" @click="remove(patch)">
+            <button
+              class="secondary"
+              style="margin: 0"
+              :data-test="`duplicate-${patch.id}`"
+              @click="duplicate(patch)"
+            >
+              Duplicate
+            </button>
+            <button
+              class="danger"
+              style="margin: 0 0 0 0.4rem"
+              :data-test="`delete-${patch.id}`"
+              @click="remove(patch)"
+            >
               Delete
             </button>
           </td>

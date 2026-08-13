@@ -1334,6 +1334,27 @@ describe('PatchesView', () => {
     expect(row.text()).toContain('main rack');
   });
 
+  it('duplicates a patch from the list', async () => {
+    mockLists([
+      {
+        id: 5,
+        name: 'Krell',
+        rack_name: 'main rack',
+        module_count: 3,
+        cable_count: 2,
+        created_at: '2026-08-12T10:00:00Z',
+      },
+    ]);
+    api.post.mockResolvedValue({ id: 6, name: 'Krell (copy)' });
+    const wrapper = mount(PatchesView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="duplicate-5"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/5/clone', {});
+    // The list is reloaded so the copy shows up.
+    expect(api.get).toHaveBeenCalledWith('/api/patches');
+  });
+
   it('creates a patch from the selected rack', async () => {
     mockLists([]);
     api.post.mockResolvedValue({ id: 9 });
@@ -1581,7 +1602,7 @@ describe('PatchDetailView', () => {
     await pick(wrapper, 'cable-from-jack', 'eor');
     await pick(wrapper, 'cable-to-module', 'doepfer');
     await pick(wrapper, 'cable-to-jack', 'm1');
-    await wrapper.find('[data-test="cables"] form').trigger('submit');
+    await wrapper.find('[data-test="cable-form"]').trigger('submit');
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith('/api/patches/7/cables', {
       from_patch_module_id: 11,
@@ -1635,6 +1656,160 @@ describe('PatchDetailView', () => {
     expect(wrapper.find('[data-test="cable-create"]').attributes('disabled')).toBeDefined();
   });
 
+  it('plugs a cable from one typed line', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.post.mockResolvedValue({ id: 22 });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    const line = wrapper.find('[data-test="quick-cable"]');
+    // Half a line explains itself instead of failing silently.
+    await line.setValue('maths eor');
+    expect(wrapper.find('[data-test="quick-problem"]').text()).toContain('Name both ends');
+    expect(wrapper.find('[data-test="quick-create"]').attributes('disabled')).toBeDefined();
+
+    // An end that names several jacks lists them rather than guessing.
+    await line.setValue('maths eor > doepfer m');
+    expect(wrapper.find('[data-test="quick-problem"]').text()).toContain('2 different jacks');
+    expect(wrapper.find('[data-test="quick-matches"]').text()).toContain('M1');
+
+    // An input that already has a cable in it is refused by name.
+    await line.setValue('maths eor > maths signal in');
+    expect(wrapper.find('[data-test="quick-problem"]').text()).toContain('already has a cable');
+
+    await line.setValue('maths eor > doepfer m1');
+    expect(wrapper.find('[data-test="quick-preview"]').text()).toContain(
+      'Make Noise Maths — EOR → Doepfer A-180-2 — M1'
+    );
+    await wrapper.find('[data-test="quick-form"]').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/cables', {
+      from_patch_module_id: 11,
+      from_component_id: 2,
+      to_patch_module_id: 13,
+      to_component_id: 5,
+    });
+    expect(wrapper.find('[data-test="quick-cable"]').element.value).toBe('');
+  });
+
+  it('reuses an existing cable and turns a reversible one around', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.post.mockResolvedValue({ id: 23 });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    // The patch's cable runs EOR → Signal In, both fixed-direction jacks, so
+    // there is nothing to reverse.
+    expect(wrapper.find('[data-test="cable-reverse-21"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="cable-reuse-21"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="cable-from-module"]').element.value).toBe('Make Noise Maths');
+    expect(wrapper.find('[data-test="cable-from-jack"]').element.value).toBe('EOR');
+    expect(wrapper.find('[data-test="cable-to-jack"]').element.value).toBe('Signal In');
+
+    // A cable between two mult jacks can be turned around.
+    api.get.mockResolvedValue({
+      ...patchResponse,
+      cables: [
+        {
+          id: 24,
+          from_patch_module_id: 13,
+          from_component_id: 5,
+          from_component_name: 'M1',
+          to_patch_module_id: 13,
+          to_component_id: 6,
+          to_component_name: 'M2',
+        },
+      ],
+    });
+    const mults = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    await mults.find('[data-test="cable-reverse-24"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/cables/24/reverse', {});
+  });
+
+  it('offers cables from other patches and flags loose ends', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path === '/api/patches/7/suggestions') {
+        return {
+          suggestions: [
+            {
+              from_patch_module_id: 11,
+              from_component_id: 2,
+              from_component_name: 'EOR',
+              to_patch_module_id: 13,
+              to_component_id: 5,
+              to_component_name: 'M1',
+              patches: 3,
+            },
+          ],
+        };
+      }
+      return patchResponse;
+    });
+    api.post.mockResolvedValue({ id: 25 });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    const row = wrapper.find('[data-test="suggestion-2-5"]');
+    expect(row.text()).toContain('Make Noise Maths — EOR');
+    expect(row.text()).toContain('in 3 other patches');
+    await wrapper.find('[data-test="plug-suggestion-2-5"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/cables', {
+      from_patch_module_id: 11,
+      from_component_id: 2,
+      to_patch_module_id: 13,
+      to_component_id: 5,
+    });
+
+    // Maths is fed by the patch's one cable and sends nothing onward... which
+    // it also sends, so it is not a loose end; nothing else is fed at all.
+    expect(wrapper.find('[data-test="loose-end-11"]').exists()).toBe(false);
+  });
+
+  it('marks a module that receives signal but sends none as a loose end', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path === '/api/patches/7/suggestions') return { suggestions: [] };
+      return {
+        ...patchResponse,
+        cables: [
+          {
+            id: 26,
+            from_patch_module_id: 13,
+            from_component_id: 5,
+            from_component_name: 'M1',
+            to_patch_module_id: 11,
+            to_component_id: 1,
+            to_component_name: 'Signal In',
+          },
+        ],
+      };
+    });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    // Signal reaches Maths and nothing leaves it.
+    expect(wrapper.find('[data-test="loose-end-11"]').text()).toContain('Make Noise Maths');
+    await wrapper.find('[data-test="patch-from-11"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="cable-from-module"]').element.value).toBe('Make Noise Maths');
+  });
+
+  it('duplicates the patch and opens the copy', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.post.mockResolvedValue({ id: 99, name: 'Krell (copy)' });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="duplicate-patch"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/clone', {});
+    expect(routerPush).toHaveBeenCalledWith('/patches/99');
+  });
+
   it('chains the next cable from the module the last one landed in', async () => {
     api.get.mockResolvedValue(patchResponse);
     api.post.mockResolvedValue({ id: 22 });
@@ -1646,7 +1821,7 @@ describe('PatchDetailView', () => {
     await pick(wrapper, 'cable-from-jack', 'eor');
     await pick(wrapper, 'cable-to-module', 'doepfer');
     await pick(wrapper, 'cable-to-jack', 'm1');
-    await wrapper.find('[data-test="cables"] form').trigger('submit');
+    await wrapper.find('[data-test="cable-form"]').trigger('submit');
     await flushPromises();
 
     // The destination becomes the source of the next cable, both jacks clear.
