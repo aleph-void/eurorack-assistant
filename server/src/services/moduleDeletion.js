@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import { manualPath } from './pdf.js';
 import { panelPath } from './image.js';
+import { removeShares } from './sharing.js';
 
 export async function deleteModulesDeep(
   db,
@@ -73,7 +74,10 @@ export async function deleteModulesDeep(
     }
   }
 
-  const manuals = await Manual.findAll({ where: { module_id: moduleIds }, attributes: ['hash'] });
+  const manuals = await Manual.findAll({
+    where: { module_id: moduleIds },
+    attributes: ['id', 'hash'],
+  });
   const hashes = [...new Set(manuals.map((m) => m.hash))];
   const panels = await ModulePanel.findAll({
     where: { module_id: moduleIds },
@@ -88,6 +92,11 @@ export async function deleteModulesDeep(
       await Note.destroy({ where: { id: [...noteIds] }, transaction });
     }
     await Module.destroy({ where: { id: moduleIds }, transaction });
+    // Shares point at their record by id with no foreign key to cascade
+    // through, so the records that go here take their shares by hand.
+    for (const id of questionIds) await removeShares(db, 'question', id, { transaction });
+    for (const id of noteIds) await removeShares(db, 'note', id, { transaction });
+    for (const manual of manuals) await removeShares(db, 'document', manual.id, { transaction });
   });
 
   // Manual files are content-addressed and shared by every record with the

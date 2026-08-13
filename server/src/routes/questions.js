@@ -10,6 +10,7 @@ import { Op } from 'sequelize';
 import { requireAuth } from '../auth.js';
 import { engagedPatchModuleIds } from '../services/patchTopology.js';
 import { userModuleIds } from '../services/racks.js';
+import { readableResource, removeShares } from '../services/sharing.js';
 
 // Positive integer ids from a client-supplied array, deduped.
 function uniqueIds(value) {
@@ -40,6 +41,7 @@ export function questionRoutes(db) {
     PatchCable,
     PatchSetting,
     PatchModuleLink,
+    User,
     Job,
   } = db.models;
   const router = Router();
@@ -139,12 +141,15 @@ export function questionRoutes(db) {
     }
   });
 
+  // Yours, or one somebody shared with you. A shared question is the question
+  // and its answer, read-only: the review step and the delete below find it
+  // under its owner alone, so a reader can neither re-answer nor remove it.
   router.get('/:id', async (req, res, next) => {
     try {
-      const question = await Question.findOne({
-        where: { id: Number(req.params.id), user_id: req.user.id },
-      });
-      if (!question) return res.status(404).json({ error: 'Question not found' });
+      const found = await readableResource(db, req.user.id, 'question', req.params.id);
+      if (!found) return res.status(404).json({ error: 'Question not found' });
+      const question = found.row;
+      const owner = found.shared ? await User.findByPk(question.user_id) : null;
       const links = await QuestionModule.findAll({
         where: { question_id: question.id },
         include: Module,
@@ -185,6 +190,8 @@ export function questionRoutes(db) {
       });
       res.json({
         ...question.get({ plain: true }),
+        shared: found.shared,
+        owner_username: owner?.username ?? req.user.username,
         modules: links.map(({ Module: m }) => ({
           id: m.id,
           manufacturer: m.manufacturer,
@@ -723,6 +730,7 @@ export function questionRoutes(db) {
       });
       if (!question) return res.status(404).json({ error: 'Question not found' });
       await question.destroy();
+      await removeShares(db, 'question', question.id);
       res.json({ ok: true });
     } catch (e) {
       next(e);

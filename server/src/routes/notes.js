@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { userHasModule } from '../services/racks.js';
+import { readableResource, removeShares } from '../services/sharing.js';
 
 // Per-user notes, attachable to any number of the user's modules, module
 // components and patches. Attachments can be added or removed after creation
@@ -194,6 +195,23 @@ export function noteRoutes(db) {
     }
   });
 
+  // One note: yours, or one somebody shared with you (which is read-only —
+  // every other route here finds the note under its owner and nowhere else).
+  router.get('/:id', async (req, res, next) => {
+    try {
+      const found = await readableResource(db, req.user.id, 'note', req.params.id);
+      if (!found) return res.status(404).json({ error: 'Note not found' });
+      const owner = found.shared ? await db.models.User.findByPk(found.row.user_id) : null;
+      res.json({
+        ...(await noteWithAttachments(found.row)),
+        shared: found.shared,
+        owner_username: owner?.username ?? req.user.username,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   router.put('/:id', async (req, res, next) => {
     try {
       const note = await ownNote(req.user.id, req.params.id);
@@ -216,6 +234,7 @@ export function noteRoutes(db) {
       const note = await ownNote(req.user.id, req.params.id);
       if (!note) return res.status(404).json({ error: 'Note not found' });
       await note.destroy();
+      await removeShares(db, 'note', note.id);
       res.json({ ok: true });
     } catch (e) {
       next(e);

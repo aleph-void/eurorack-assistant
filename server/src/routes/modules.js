@@ -21,6 +21,7 @@ import {
   savePanel,
 } from '../services/panelImage.js';
 import { enqueueExtractManual, enqueueModuleJob } from '../jobs/worker.js';
+import { readableIds, removeShares } from '../services/sharing.js';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
@@ -50,6 +51,7 @@ export function moduleRoutes(
     Note,
     NoteModule,
     NoteComponent,
+    User,
   } = db.models;
   const router = Router();
   router.use(requireAuth(db));
@@ -444,15 +446,38 @@ export function moduleRoutes(
           .map((st) => st.component_id),
         description: s.description,
       }));
-      // Documents: the shared auto-found manual plus this user's own uploads.
-      const manualRows = await Manual.findAll({
-        where: {
-          module_id: module.id,
-          [Op.or]: [{ user_id: null }, { user_id: req.user.id }],
-        },
+      // Documents: the shared auto-found manual, this user's own uploads, and
+      // any upload another user shared with them. A module carries a handful
+      // of these, so the three-way visibility test is a filter in JS rather
+      // than an OR the query planner (and pg-mem) would have to untangle.
+      const sharedDocumentIds = new Set(await readableIds(db, req.user.id, 'document'));
+      const allManualRows = await Manual.findAll({
+        where: { module_id: module.id },
         attributes: ['id', 'hash', 'name', 'original_name', 'source', 'user_id', 'created_at'],
         order: [['id', 'ASC']],
       });
+      const manualRows = allManualRows.filter(
+        (m) => m.user_id === null || m.user_id === req.user.id || sharedDocumentIds.has(m.id)
+      );
+      // Who to credit for a document that is neither the shared manual nor
+      // yours — it is on this page because somebody handed it to you.
+      const documentOwnerIds = [
+        ...new Set(
+          manualRows
+            .filter((m) => m.user_id !== null && m.user_id !== req.user.id)
+            .map((m) => m.user_id)
+        ),
+      ];
+      const documentOwners = new Map(
+        documentOwnerIds.length
+          ? (
+              await User.findAll({
+                where: { id: documentOwnerIds },
+                attributes: ['id', 'username'],
+              })
+            ).map((u) => [u.id, u.username])
+          : []
+      );
       // Which of them have had their text extracted, so the page can offer to
       // read the manual rather than only to download it.
       const extracted =
@@ -470,6 +495,7 @@ export function moduleRoutes(
           has_text: Boolean(text),
           text_pages: text?.pages ?? null,
           text_chars: text?.chars ?? null,
+          shared_by: documentOwners.get(m.user_id) ?? null,
         };
       });
       // The requesting user's notes attached to this module (component_id NULL)
@@ -1446,6 +1472,7 @@ export function moduleRoutes(
       });
       if (!manual) return res.status(404).json({ error: 'Document not found' });
       await manual.destroy();
+      await removeShares(db, 'document', manual.id);
       // The file is shared by every record with the same content hash; only
       // remove it once the last reference is gone.
       const remaining = await Manual.count({ where: { hash: manual.hash } });

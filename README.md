@@ -226,8 +226,17 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   as a selection rather than as signals summing, and recording the switch's
   position in a patch resolves the flow.
 - **Private notes**: attach notes to modules, to specific components and to
-  patches; a note can be reused across any number of them and is never visible
-  to other users.
+  patches; a note can be reused across any number of them and is private to
+  you until you share it.
+- **Sharing**: a note, a patch, a question and its answer, a whole rack, or a
+  document you uploaded can be shown to one other user, to several, or to
+  everyone (including users added later). Sharing grants reading and nothing
+  else — the owner stays the only one who can change or delete what they made,
+  and clearing the recipient list takes it back. The Share button sits on each
+  record and says who can currently see it; the **Shared** page lists both
+  what other people have given you and what you have given out. A shared
+  document also appears on the module page of whoever received it, credited to
+  whoever sent it, and joins their manual search.
 - **Oscilloscope integration**: an oscilloscope application (such as
   [CVOsc](https://github.com/aleph-void/CVOsc.com)) links itself to your
   account with an OAuth 2.0 device code you approve in the browser, then holds
@@ -356,6 +365,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `patch_module_links` / `patch_module_link_jacks` | instances wired together without patch cables: `expander` pairs and `bridge` pairs (jack N ↔ jack N) |
 | `notes` | per-user private notes |
 | `note_modules` / `note_components` / `note_patches` | attach one note to any number of modules / components / patches |
+| `shares` | one record (`note`, `patch`, `question`, `rack` or `document`) readable by one other user — or by everyone, when `user_id` is NULL |
 | `oauth_clients` | applications allowed to obtain a device token (public clients; `cvosc` is seeded) |
 | `device_authorizations` | in-flight device-grant codes: the hashed device code, the short user code, and whether the user approved it |
 | `device_tokens` | issued device credentials (access + refresh stored as sha256 hashes), revocable from the web UI |
@@ -403,7 +413,12 @@ database are all injected fakes (`pg-mem` in-memory Postgres for the server).
   link in the nav; admins can reset any other user's password without it.
 - Only admins can create users (always non-admin) and change the LLM config.
 - Each user sees only their own module mappings, questions, notes, uploaded
-  documents, captures, and jobs (admins see all jobs).
+  documents, captures, and jobs (admins see all jobs), plus whatever another
+  user has explicitly shared with them.
+- A share grants reading only, and only of the record it names. Managing a
+  share is the owner's alone: a recipient cannot re-share, edit or delete what
+  they were given, and a record somebody else owns and has not shared answers
+  404 — the same answer as one that does not exist.
 - LLM answers are rendered as markdown sanitized with DOMPurify.
 - An oscilloscope never sees a password: it gets a token only after the user
   approves its short code in an already-authenticated browser session. Device

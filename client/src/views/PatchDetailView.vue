@@ -7,6 +7,7 @@ import AutocompleteSelect from '../components/AutocompleteSelect.vue';
 import ScopePanel from '../components/ScopePanel.vue';
 import PatchNotesPanel from '../components/PatchNotesPanel.vue';
 import PatchDiagram from '../components/PatchDiagram.vue';
+import ShareButton from '../components/ShareButton.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -74,7 +75,14 @@ async function loadSuggestions() {
 
 async function load() {
   try {
-    patch.value = await api.get(`/api/patches/${props.id}`);
+    const loaded = await api.get(`/api/patches/${props.id}`);
+    // Somebody else's patch, shared with you: this page is an editor and none
+    // of it would work, so the read-only page is where that belongs.
+    if (loaded.shared) {
+      router.replace(`/shared/patch/${props.id}`);
+      return;
+    }
+    patch.value = loaded;
     await loadSuggestions();
   } catch (e) {
     error.value = e.message;
@@ -777,6 +785,7 @@ onMounted(async () => {
       >
         Duplicate
       </button>
+      <ShareButton type="patch" :id="props.id" :label="patch.name" small />
       <RouterLink
         :to="`/ask?patch=${props.id}`"
         style="margin-left: 0.6rem; font-size: 0.8rem"

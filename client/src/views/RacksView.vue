@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
+import ShareButton from '../components/ShareButton.vue';
 
 const racks = ref([]);
 const error = ref('');
@@ -131,9 +132,10 @@ async function remove(rack) {
             </td>
             <td>{{ rack.module_count }}</td>
             <td>
+              <ShareButton type="rack" :id="rack.id" :label="rack.name" small />
               <button
                 v-if="renamingId !== rack.id"
-                style="margin: 0 0.4rem 0 0"
+                style="margin: 0 0.4rem"
                 :data-test="`rename-${rack.id}`"
                 @click="startRename(rack)"
               >

@@ -5,6 +5,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
+import ShareButton from '../components/ShareButton.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -137,7 +138,14 @@ async function loadOptions() {
 
 async function load() {
   try {
-    question.value = await api.get(`/api/questions/${props.id}`);
+    const loaded = await api.get(`/api/questions/${props.id}`);
+    // Somebody else's question, shared with you: read it on the page meant
+    // for that rather than in the review-and-answer machinery.
+    if (loaded.shared) {
+      router.replace(`/shared/question/${props.id}`);
+      return;
+    }
+    question.value = loaded;
     if (isReview.value && !options.value) await loadOptions();
     if (isWorking.value) {
       pollTimer = setTimeout(load, 3000);
@@ -198,9 +206,16 @@ onUnmounted(() => clearTimeout(pollTimer));
     <h1 data-test="prompt">{{ question.prompt }}</h1>
     <p>
       <span class="badge" :class="question.status">{{ question.status }}</span>
+      <ShareButton
+        type="question"
+        :id="props.id"
+        :label="question.prompt"
+        small
+        style="margin-left: 0.8rem"
+      />
       <button
         class="danger"
-        style="margin: 0 0 0 0.8rem"
+        style="margin: 0 0 0 0.4rem"
         data-test="delete-question"
         @click="removeQuestion"
       >

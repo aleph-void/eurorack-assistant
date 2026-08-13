@@ -10,6 +10,7 @@ import {
   portJson,
 } from '../services/patchDetail.js';
 import { PORT_KINDS } from '../services/manualAnalyzer.js';
+import { readableResource, removeShares } from '../services/sharing.js';
 
 // A user's patches. A patch is created FROM a rack but owns a snapshot of the
 // rack's contents (patch_modules, one row per module instance): modules can
@@ -188,12 +189,23 @@ export function patchRoutes(db) {
   // Full detail: the snapshot instances (with each live module's components
   // and their valid values joined in), the cables, settings, groups, links,
   // and the traced normalled connections and signal flow.
+  // Yours, or one somebody shared with you. A shared patch is readable and
+  // nothing more: every route below finds the patch under its owner, so a
+  // reader gets the picture and the owner keeps the patch.
   router.get('/:id', async (req, res, next) => {
     try {
-      const patch = await ownPatch(req.user.id, req.params.id);
-      if (!patch) return res.status(404).json({ error: 'Patch not found' });
+      const found = await readableResource(db, req.user.id, 'patch', req.params.id);
+      if (!found) return res.status(404).json({ error: 'Patch not found' });
+      const patch = found.row;
       const { json } = await loadPatchDetail(patch);
-      res.json(patchJson(patch, json));
+      const owner = found.shared ? await db.models.User.findByPk(patch.user_id) : null;
+      res.json(
+        patchJson(patch, {
+          ...json,
+          shared: found.shared,
+          owner_username: owner?.username ?? req.user.username,
+        })
+      );
     } catch (e) {
       next(e);
     }
@@ -337,6 +349,7 @@ export function patchRoutes(db) {
       const patch = await ownPatch(req.user.id, req.params.id);
       if (!patch) return res.status(404).json({ error: 'Patch not found' });
       await patch.destroy();
+      await removeShares(db, 'patch', patch.id);
       res.json({ ok: true });
     } catch (e) {
       next(e);

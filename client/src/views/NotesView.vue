@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
+import ShareButton from '../components/ShareButton.vue';
 
 const notes = ref([]);
 const modules = ref([]);
@@ -128,7 +129,13 @@ onMounted(load);
     <div class="row" style="align-items: baseline">
       <h2 style="margin: 0">{{ note.title || 'Untitled note' }}</h2>
       <div class="shrink">
-        <button class="danger" style="margin: 0" :data-test="`note-delete-${note.id}`" @click="removeNote(note)">
+        <ShareButton type="note" :id="note.id" :label="note.title || 'this note'" small />
+        <button
+          class="danger"
+          style="margin: 0 0 0 0.4rem"
+          :data-test="`note-delete-${note.id}`"
+          @click="removeNote(note)"
+        >
           Delete
         </button>
       </div>

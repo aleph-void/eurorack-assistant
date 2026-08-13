@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
+import ShareButton from '../components/ShareButton.vue';
 
 const patches = ref([]);
 const racks = ref([]);
@@ -110,9 +111,10 @@ onMounted(load);
             <td>{{ patch.cable_count }}</td>
             <td>{{ new Date(patch.created_at).toLocaleString() }}</td>
             <td>
+              <ShareButton type="patch" :id="patch.id" :label="patch.name" small />
               <button
                 class="secondary"
-                style="margin: 0"
+                style="margin: 0 0 0 0.4rem"
                 :data-test="`duplicate-${patch.id}`"
                 @click="duplicate(patch)"
               >

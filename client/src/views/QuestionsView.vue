@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
+import ShareButton from '../components/ShareButton.vue';
 
 const questions = ref([]);
 const error = ref('');
@@ -65,9 +66,10 @@ async function remove(q) {
             <td><span class="badge" :class="q.status">{{ q.status }}</span></td>
             <td class="muted">{{ formatDate(q.created_at) }}</td>
             <td>
+              <ShareButton type="question" :id="q.id" :label="q.prompt" small />
               <button
                 class="danger"
-                style="margin: 0"
+                style="margin: 0 0 0 0.4rem"
                 :data-test="`delete-question-${q.id}`"
                 @click="remove(q)"
               >
