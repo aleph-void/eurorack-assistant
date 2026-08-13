@@ -20,6 +20,11 @@
 //            between them (Omnitone 7Path's ethernet pair): the side a cable
 //            lands in feeds its partner jack on the other instance.
 //
+// A patch snapshots the whole rack, but a patch is only the part of it that
+// is in play: modules a cable reaches, modules the patch dials in, and the
+// panels those are wired to without cables. Everything else is left out —
+// otherwise the flow reads as if every module in the case were patched.
+//
 // Sources (tree roots) are nodes that emit signal but receive none: output
 // jacks no route feeds (= signal generators — oscillators, noise, LFOs) and
 // internal normalled sources. Splits appear as multiple children (stacked
@@ -36,6 +41,8 @@
 // incoming edges are all exclusive is flagged `switched_merge` instead of
 // `merge` — it receives one of those signals at a time, it does not mix them.
 
+import { engagedPatchModuleIds } from './patchTopology.js';
+
 export const MAX_FLOW_NODES = 200;
 
 export function buildSignalFlow(topology) {
@@ -46,8 +53,16 @@ export function buildSignalFlow(topology) {
     normalizations = [],
     switches = [],
     bridges = [],
+    links = [],
+    settings = [],
     cables = [],
   } = topology || {};
+
+  // Only the instances this patch actually uses: tracing every module's
+  // internal routes and normalled connections would otherwise fill the flow
+  // with signals inside modules the patch never touches.
+  const engaged = engagedPatchModuleIds({ cables, settings, links });
+  const inPlay = (...pmIds) => pmIds.every((id) => engaged.has(id));
 
   const nodes = new Map();
   const edges = [];
@@ -100,6 +115,7 @@ export function buildSignalFlow(topology) {
   }
 
   for (const r of routes) {
+    if (!inPlay(r.from_patch_module_id, r.to_patch_module_id)) continue;
     edges.push({
       from: addJackNode(r.from_patch_module_id, r.from_component_id),
       to: addJackNode(r.to_patch_module_id, r.to_component_id),
@@ -111,6 +127,7 @@ export function buildSignalFlow(topology) {
 
   for (const n of normalizations) {
     if (n.broken_by_cable_id) continue; // overridden by a cable
+    if (!inPlay(n.target_patch_module_id, n.source_patch_module_id ?? n.patch_module_id)) continue;
     const from = n.source_component_id
       ? addJackNode(n.source_patch_module_id, n.source_component_id)
       : addInternalNode(n.patch_module_id, n.source_label || 'internal signal');

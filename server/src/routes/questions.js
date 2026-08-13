@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import { Op } from 'sequelize';
 import { requireAuth } from '../auth.js';
+import { engagedPatchModuleIds } from '../services/patchTopology.js';
 import { userModuleIds } from '../services/racks.js';
 
 // Positive integer ids from a client-supplied array, deduped.
@@ -25,6 +26,8 @@ export function questionRoutes(db) {
     QuestionAnswer,
     QuestionNote,
     QuestionCapture,
+    QuestionPatch,
+    Patch,
     Module,
     ModuleComponent,
     Manual,
@@ -34,6 +37,9 @@ export function questionRoutes(db) {
     Capture,
     CaptureChannel,
     PatchModule,
+    PatchCable,
+    PatchSetting,
+    PatchModuleLink,
     Job,
   } = db.models;
   const router = Router();
@@ -83,6 +89,38 @@ export function questionRoutes(db) {
       });
     }
     return byCapture;
+  }
+
+  // The modules each patch uses, keyed by patch id — the same "actually in
+  // play" rule the signal flow and the patch document use.
+  async function patchModulesByPatch(patchIds) {
+    const byPatch = new Map();
+    if (patchIds.length === 0) return byPatch;
+    const where = { patch_id: patchIds };
+    const [rows, cables, settings, links] = await Promise.all([
+      PatchModule.findAll({ where }),
+      PatchCable.findAll({ where }),
+      PatchSetting.findAll({ where }),
+      PatchModuleLink.findAll({ where }),
+    ]);
+    for (const id of patchIds) {
+      const engaged = engagedPatchModuleIds({
+        cables: cables.filter((c) => c.patch_id === id),
+        settings: settings.filter((s) => s.patch_id === id),
+        links: links.filter((l) => l.patch_id === id),
+      });
+      byPatch.set(
+        id,
+        [
+          ...new Set(
+            rows
+              .filter((pm) => pm.patch_id === id && engaged.has(pm.id) && pm.module_id)
+              .map((pm) => pm.module_id)
+          ),
+        ]
+      );
+    }
+    return byPatch;
   }
 
   router.get('/', async (req, res, next) => {
@@ -140,6 +178,11 @@ export function questionRoutes(db) {
         include: Capture,
         order: [['capture_id', 'ASC']],
       });
+      const patchLinkRows = await QuestionPatch.findAll({
+        where: { question_id: question.id },
+        include: Patch,
+        order: [['patch_id', 'ASC']],
+      });
       res.json({
         ...question.get({ plain: true }),
         modules: links.map(({ Module: m }) => ({
@@ -179,6 +222,9 @@ export function questionRoutes(db) {
             captured_at: c.captured_at,
             image_hash: c.image_hash,
           })),
+        patches: patchLinkRows
+          .filter((l) => l.Patch)
+          .map(({ Patch: p }) => ({ id: p.id, name: p.name, rack_name: p.rack_name })),
       });
     } catch (e) {
       next(e);
@@ -340,7 +386,28 @@ export function questionRoutes(db) {
             c.component_ids.some((id) => componentIdSet.has(id))
         );
 
+      // The user's patches, each carrying the modules it uses so the client
+      // can show which of them the current scope covers. They are all offered
+      // whatever the scope: a patch is attached deliberately, and attaching
+      // one is how the question becomes a question about that patch.
+      const patchRows = await Patch.findAll({
+        where: { user_id: req.user.id },
+        order: [['created_at', 'DESC']],
+      });
+      const attachedPatches = await QuestionPatch.findAll({ where: { question_id: question.id } });
+      const attachedPatchIds = new Set(attachedPatches.map((l) => l.patch_id));
+      const patchModuleIds = await patchModulesByPatch(patchRows.map((p) => p.id));
+      const patches = patchRows.map((p) => ({
+        id: p.id,
+        name: p.name,
+        rack_name: p.rack_name,
+        created_at: p.created_at,
+        attached: attachedPatchIds.has(p.id),
+        module_ids: patchModuleIds.get(p.id) ?? [],
+      }));
+
       res.json({
+        patches,
         modules: rack.map((m) => ({
           id: m.id,
           manufacturer: m.manufacturer,
@@ -382,6 +449,18 @@ export function questionRoutes(db) {
         return res.status(400).json({ error: 'Import some modules before asking questions' });
       }
 
+      // Asking about a patch: the patch is attached before scoping, so the
+      // modules it uses are in scope from the start of the review step.
+      const patchIds = uniqueIds(
+        req.body?.patch_ids ?? (req.body?.patch_id ? [req.body.patch_id] : [])
+      );
+      if (patchIds.length > 0) {
+        const owned = await Patch.count({ where: { id: patchIds, user_id: req.user.id } });
+        if (owned !== patchIds.length) {
+          return res.status(400).json({ error: 'patch_ids must be your patches' });
+        }
+      }
+
       // The question and the job that scopes it are created together — a
       // question without its job would sit unscoped forever.
       const question = await db.sequelize.transaction(async (transaction) => {
@@ -389,6 +468,12 @@ export function questionRoutes(db) {
           { user_id: req.user.id, prompt, status: 'scoping' },
           { transaction }
         );
+        if (patchIds.length > 0) {
+          await QuestionPatch.bulkCreate(
+            patchIds.map((id) => ({ question_id: created.id, patch_id: id })),
+            { transaction }
+          );
+        }
         await Job.create(
           {
             type: 'scope_question',
@@ -536,9 +621,23 @@ export function questionRoutes(db) {
         }
       }
 
-      if (manualIds.length + answerIds.length + noteIds.length + captureIds.length === 0) {
+      // Patches are the user's own; unlike notes and captures they are not
+      // narrowed to the selected modules — attaching a patch is what makes
+      // the question a question about that patch.
+      const patchIds = uniqueIds(req.body?.patch_ids);
+      if (patchIds.length > 0) {
+        const rows = await Patch.count({ where: { id: patchIds, user_id: req.user.id } });
+        if (rows !== patchIds.length) {
+          return res.status(400).json({ error: 'patch_ids must be your patches' });
+        }
+      }
+
+      if (
+        manualIds.length + answerIds.length + noteIds.length + captureIds.length + patchIds.length ===
+        0
+      ) {
         return res.status(400).json({
-          error: 'Attach at least one document (manual, previous answer, note, or capture)',
+          error: 'Attach at least one document (manual, previous answer, note, capture, or patch)',
         });
       }
 
@@ -580,6 +679,13 @@ export function questionRoutes(db) {
         if (captureIds.length > 0) {
           await QuestionCapture.bulkCreate(
             captureIds.map((id) => ({ question_id: question.id, capture_id: id })),
+            { transaction }
+          );
+        }
+        await QuestionPatch.destroy({ where: { question_id: question.id }, transaction });
+        if (patchIds.length > 0) {
+          await QuestionPatch.bulkCreate(
+            patchIds.map((id) => ({ question_id: question.id, patch_id: id })),
             { transaction }
           );
         }

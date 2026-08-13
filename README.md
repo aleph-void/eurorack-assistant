@@ -33,9 +33,10 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   specific components — the question applies to, then you review that scope
   before the answer is generated: add or remove modules and components, and
   choose what to attach (each module's manual is preselected but can be
-  deselected, plus your uploaded documents, previous answers, and notes tied
-  to the selected modules/components). Questions, answers, the reviewed scope,
-  and the attachments are all stored and linked in the database.
+  deselected, plus your uploaded documents, previous answers, notes tied
+  to the selected modules/components, oscilloscope captures, and your patches).
+  Questions, answers, the reviewed scope, and the attachments are all stored
+  and linked in the database.
 - **LLM provider is admin-configurable** in the web UI: Claude Code CLI
   (`claude -p`) or Codex CLI (`codex exec`), with an optional model override —
   both use your existing subscription login, no API key needed.
@@ -48,7 +49,15 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   sections, mult groups and stereo pairs, and the patch view follows every
   signal from its source through cables, mult copies, defaults, switches and
   module internals to everywhere it ends up — flagging splits, merges,
-  feedback loops and paths that are only one of several alternatives.
+  feedback loops and paths that are only one of several alternatives. Only the
+  modules the patch actually uses are traced: a patch snapshots the whole rack,
+  but a module nothing is plugged into (and whose controls the patch does not
+  dial in) is not part of the patch.
+- **Ask about a patch**: a question can name one of your patches — from the
+  Ask page or the "Ask about this patch" link on the patch itself. The patch is
+  attached to the question as a document of its cables, control settings, the
+  normalled connections it leaves intact or cancels and the signal flow they
+  add up to, and the modules it uses are put in scope with their manuals.
 - **Hardware that doesn't fit one panel**: connections that are not 3.5mm
   patch points (MIDI DIN/TRS, USB, S/PDIF, mics, ethernet) are typed as such
   and only patch into their own kind; expander panels joined by ribbon cable
@@ -188,6 +197,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `question_modules` | links a question to the modules in scope (LLM-suggested, then user-reviewed) |
 | `question_components` | links a question to the specific components it pertains to (LLM-suggested, then user-reviewed) |
 | `question_manuals` / `question_answers` / `question_notes` / `question_captures` | the documents the user attached during review: manual PDFs, previous answers, notes, oscilloscope captures |
+| `question_patches` | the patches a question is about — the patch rides along as a document of its cables, settings, normalled connections and signal flow, and the modules it uses go into scope |
 | `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `scope_question`, `answer_question`) with attempts + errors |
 | `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`) and job worker count (`import_workers`, default 4) |
 

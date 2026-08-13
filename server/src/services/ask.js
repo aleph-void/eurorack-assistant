@@ -8,6 +8,9 @@
 import fs from 'node:fs';
 import { extractJsonArray } from './json.js';
 import { capturePath, captureTextDocument } from './captures.js';
+import { loadPatchDetail } from './patchDetail.js';
+import { patchTextDocument } from './patchDocument.js';
+import { engagedPatchModuleIds } from './patchTopology.js';
 import { isProbablyPdf, manualPath } from './pdf.js';
 import { userModuleIds } from './racks.js';
 
@@ -118,12 +121,33 @@ export async function jackComponentsForModules(db, moduleIds) {
   }));
 }
 
+// The modules a set of patches actually uses — what a question about a patch
+// is unavoidably about. Instances whose module record is gone (or which are
+// off-rack gear) have nothing to put in scope and drop out.
+export async function patchScopeModuleIds(db, patchIds) {
+  if (patchIds.length === 0) return [];
+  const { PatchModule, PatchCable, PatchSetting, PatchModuleLink } = db.models;
+  const where = { patch_id: patchIds };
+  const [patchModules, cables, settings, links] = await Promise.all([
+    PatchModule.findAll({ where }),
+    PatchCable.findAll({ where }),
+    PatchSetting.findAll({ where }),
+    PatchModuleLink.findAll({ where }),
+  ]);
+  const engaged = engagedPatchModuleIds({ cables, settings, links });
+  return [
+    ...new Set(
+      patchModules.filter((pm) => engaged.has(pm.id) && pm.module_id).map((pm) => pm.module_id)
+    ),
+  ];
+}
+
 // Phase one: figure out which of the user's modules (and which jacks) the
 // question applies to, persist the links, and mark the question 'scoped' so
 // the user can review the scope and pick attachments before it is answered.
 // An empty scope is not an error — the user adds modules during review.
 export async function scopeQuestion(db, backend, question, { log = () => {} } = {}) {
-  const { Module, Question, QuestionModule, QuestionComponent } = db.models;
+  const { Module, Question, QuestionModule, QuestionComponent, QuestionPatch } = db.models;
   // Every module across all of the user's racks, deduped.
   const ownedIds = await userModuleIds(db, question.user_id);
   if (ownedIds.length === 0) throw new Error('No modules imported yet');
@@ -137,6 +161,25 @@ export async function scopeQuestion(db, backend, question, { log = () => {} } = 
   const modules = records.map((m) => m.get({ plain: true }));
 
   const scoped = await determineScope(backend, question.prompt, modules);
+
+  // A question asked about a patch is about the modules that patch uses,
+  // whatever the model made of the wording — they go in scope on top of what
+  // it picked, and the user can still take them out during review.
+  const patchLinks = await QuestionPatch.findAll({ where: { question_id: question.id } });
+  if (patchLinks.length > 0) {
+    const patched = new Set(await patchScopeModuleIds(db, patchLinks.map((l) => l.patch_id)));
+    const already = new Set(scoped.map((m) => m.id));
+    const added = modules.filter((m) => patched.has(m.id) && !already.has(m.id));
+    if (added.length > 0) {
+      log(
+        `in scope from the attached patch: ${added
+          .map((m) => `${m.manufacturer} ${m.name}`)
+          .join(', ')}`
+      );
+      scoped.push(...added);
+    }
+  }
+
   log(
     scoped.length > 0
       ? `in scope: ${scoped.map((m) => `${m.manufacturer} ${m.name}`).join(', ')}`
@@ -244,6 +287,7 @@ export async function answerQuestion(
     QuestionAnswer,
     QuestionNote,
     QuestionCapture,
+    QuestionPatch,
     Capture,
     CaptureChannel,
   } = db.models;
@@ -345,10 +389,30 @@ export async function answerQuestion(
     }
   }
 
-  const textDocs = [...previous, ...notes, ...captures];
+  // The patches the question is about: what is plugged into what, how the
+  // controls are set, which defaults survive and where the signal goes.
+  const patchLinks = await QuestionPatch.findAll({
+    where: { question_id: question.id },
+    order: [['patch_id', 'ASC']],
+  });
+  const patches = [];
+  for (const link of patchLinks) {
+    const patch = await Patch.findByPk(link.patch_id);
+    if (!patch) {
+      log(`skipping patch ${link.patch_id}: it has been deleted`);
+      continue;
+    }
+    const { json } = await loadPatchDetail(db, patch);
+    patches.push({
+      name: `patch-${patch.id}.md`,
+      text: patchTextDocument({ ...patch.get({ plain: true }), ...json }),
+    });
+  }
+
+  const textDocs = [...previous, ...notes, ...captures, ...patches];
   if (pdfPaths.length === 0 && textDocs.length === 0) {
     throw new Error(
-      'No valid manual PDFs, previous answers, notes, or captures are attached to this question.'
+      'No valid manual PDFs, previous answers, notes, captures, or patches are attached to this question.'
     );
   }
   const manuals = pdfPaths.slice(0, MAX_MANUALS);
@@ -358,10 +422,19 @@ export async function answerQuestion(
   if (previous.length > 0) kinds.push('previous question-and-answer documents');
   if (notes.length > 0) kinds.push("the user's own notes");
   if (captures.length > 0) kinds.push('oscilloscope captures of the live patch');
+  if (patches.length > 0) kinds.push('a description of the patch itself');
   const moduleNames = scoped.map((m) => `${m.manufacturer} ${m.name}`).join(', ');
   let answerPrompt =
     `You are a eurorack modular synthesizer expert. Using the attached ${kinds.join(', ')} ` +
     `(for: ${moduleNames}), answer the following question. `;
+  if (patches.length > 0) {
+    answerPrompt +=
+      `The question is about ${patches.length === 1 ? 'a patch the user has built' : 'patches the user has built'}: ` +
+      `the attached patch ${patches.length === 1 ? 'document lists' : 'documents list'} its cables, the control ` +
+      `settings it records, the normalled connections it leaves intact or cancels, and the signal flow those add ` +
+      `up to. Answer from that patch as it actually is — do not assume connections it does not list, and say so ` +
+      `when what is recorded is not enough to be sure. `;
+  }
   if (components.length > 0) {
     const componentNames = components
       .map((c) => `${c.Module.manufacturer} ${c.Module.name} — ${c.name} (${c.type})`.trim())

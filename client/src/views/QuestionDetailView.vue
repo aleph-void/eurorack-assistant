@@ -18,6 +18,7 @@ const selectedManuals = ref([]);
 const selectedAnswers = ref([]);
 const selectedNotes = ref([]);
 const selectedCaptures = ref([]);
+const selectedPatches = ref([]);
 let pollTimer = null;
 
 const answerHtml = computed(() => {
@@ -79,13 +80,30 @@ const visibleCaptures = computed(
 const chosenCaptureIds = computed(() =>
   visibleCaptures.value.filter((c) => selectedCaptures.value.includes(c.id)).map((c) => c.id)
 );
+// Patches are offered whatever the module selection: attaching one is what
+// makes this a question about that patch, and it brings its own modules with
+// it rather than being narrowed to the ones already picked.
+const patchOptions = computed(() => options.value?.patches ?? []);
+const chosenPatchIds = computed(() =>
+  patchOptions.value.filter((p) => selectedPatches.value.includes(p.id)).map((p) => p.id)
+);
 const attachmentCount = computed(
   () =>
     chosenManualIds.value.length +
     chosenAnswerIds.value.length +
     chosenNoteIds.value.length +
-    chosenCaptureIds.value.length
+    chosenCaptureIds.value.length +
+    chosenPatchIds.value.length
 );
+
+// Adding a patch pulls the modules it uses into the scope, so the question is
+// answered with their manuals rather than the patch text alone.
+function onPatchToggled(patch) {
+  if (!selectedPatches.value.includes(patch.id)) return;
+  for (const id of patch.module_ids ?? []) {
+    if (!selectedModules.value.includes(id)) selectedModules.value.push(id);
+  }
+}
 
 function moduleLabel(moduleId) {
   const m = options.value?.modules.find((mod) => mod.id === moduleId);
@@ -110,6 +128,10 @@ async function loadOptions() {
   selectedAnswers.value = [];
   selectedNotes.value = [];
   selectedCaptures.value = [];
+  // A patch named when the question was asked stays attached through review.
+  selectedPatches.value = (options.value.patches ?? [])
+    .filter((p) => p.attached)
+    .map((p) => p.id);
 }
 
 async function load() {
@@ -135,6 +157,7 @@ async function requestAnswer() {
       answer_ids: chosenAnswerIds.value,
       note_ids: chosenNoteIds.value,
       capture_ids: chosenCaptureIds.value,
+      patch_ids: chosenPatchIds.value,
     });
     options.value = null;
     pollTimer = setTimeout(load, 3000);
@@ -288,9 +311,37 @@ onUnmounted(() => clearTimeout(pollTimer));
         </ul>
       </template>
 
+      <template v-if="patchOptions.length > 0">
+        <h3>Patches</h3>
+        <p class="muted">
+          Attach a patch and the question is answered from it: its cables, the control settings it
+          records, the normalled connections it leaves intact and the signal flow they add up to.
+          The modules the patch uses are added to the scope above.
+        </p>
+        <ul class="check-list">
+          <li v-for="p in patchOptions" :key="p.id">
+            <label>
+              <input
+                v-model="selectedPatches"
+                type="checkbox"
+                :value="p.id"
+                data-test="patch-option"
+                @change="onPatchToggled(p)"
+              />
+              <span>
+                {{ p.name }}
+                <span class="muted">
+                  — {{ p.rack_name }}, {{ p.module_ids.length }} modules in play
+                </span>
+              </span>
+            </label>
+          </li>
+        </ul>
+      </template>
+
       <p v-if="selectedModules.length === 0" class="muted">Select at least one module.</p>
       <p v-else-if="attachmentCount === 0" class="muted">
-        Attach at least one document (manual, previous answer, note, or capture).
+        Attach at least one document (manual, previous answer, note, capture, or patch).
       </p>
       <button
         type="button"
@@ -330,7 +381,8 @@ onUnmounted(() => clearTimeout(pollTimer));
           question.manuals?.length ||
           question.answers?.length ||
           question.notes?.length ||
-          question.captures?.length
+          question.captures?.length ||
+          question.patches?.length
         "
         class="panel"
         data-test="attachments"
@@ -352,6 +404,10 @@ onUnmounted(() => clearTimeout(pollTimer));
           <li v-for="c in question.captures" :key="`capture-${c.id}`">
             {{ c.title || `Capture ${c.id}` }}
             <span class="badge">waveform</span>
+          </li>
+          <li v-for="p in question.patches" :key="`patch-${p.id}`">
+            <RouterLink :to="`/patches/${p.id}`">{{ p.name }}</RouterLink>
+            <span class="badge">patch</span>
           </li>
         </ul>
       </div>

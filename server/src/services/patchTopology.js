@@ -26,6 +26,36 @@ function isExclusive(condition, altGroup) {
   return Boolean(altGroup) && condition?.state !== 'selected';
 }
 
+// The module INSTANCES a patch actually uses. A patch snapshots the whole
+// rack, so "the modules in the patch" is never the same question as "the
+// modules the patch uses": an instance is in play once a cable reaches it or
+// the patch dials one of its controls in, and so is anything wired to it
+// without cables — an expander panel, the far side of a bridge.
+export function engagedPatchModuleIds({ cables = [], settings = [], links = [] } = {}) {
+  const engaged = new Set();
+  for (const c of cables) {
+    engaged.add(c.from_patch_module_id);
+    engaged.add(c.to_patch_module_id);
+  }
+  for (const s of settings) engaged.add(s.patch_module_id);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const link of links) {
+      const { a_patch_module_id: a, b_patch_module_id: b } = link;
+      for (const [x, y] of [
+        [a, b],
+        [b, a],
+      ]) {
+        if (engaged.has(x) && !engaged.has(y)) {
+          engaged.add(y);
+          grew = true;
+        }
+      }
+    }
+  }
+  return engaged;
+}
+
 export function buildPatchTopology({
   patchModules = [],
   componentsByModule = new Map(),
@@ -251,6 +281,7 @@ export function buildPatchTopology({
     bridges,
     pairs,
     links,
+    settings,
     cables,
   };
 }

@@ -1,6 +1,7 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { api } from '../api.js';
+import AutocompleteSelect from '../components/AutocompleteSelect.vue';
 import ScopePanel from '../components/ScopePanel.vue';
 import PatchNotesPanel from '../components/PatchNotesPanel.vue';
 
@@ -20,7 +21,6 @@ const renameValue = ref('');
 const renameError = ref('');
 
 // ---- cable form ----
-const cableFilter = ref('');
 const fromModuleId = ref(''); // patch_module id
 const fromComponentId = ref('');
 const toModuleId = ref('');
@@ -31,9 +31,26 @@ const cableStacked = ref(false);
 const cableAltGroup = ref('');
 const cablePair = ref(false);
 const cableError = ref('');
+// Signal usually travels onward: with this on, the module a cable lands in
+// becomes the source of the next one.
+const chainFromDestination = ref(false);
+
+// The four pickers, so choosing in one moves on to the next.
+const fromModuleBox = ref(null);
+const fromJackBox = ref(null);
+const toModuleBox = ref(null);
+const toJackBox = ref(null);
+const focusBox = (box) => nextTick(() => box.value?.focus());
+
+// A jack only belongs to the module it was picked on.
+watch(fromModuleId, () => {
+  fromComponentId.value = '';
+});
+watch(toModuleId, () => {
+  toComponentId.value = '';
+});
 
 // ---- settings form ----
-const settingsFilter = ref('');
 const settingsModuleId = ref(''); // patch_module id
 const settingsError = ref('');
 // Draft value per component id of the selected module instance.
@@ -66,14 +83,6 @@ function moduleLabel(pm) {
   return pm.label ? `${numbered} (${pm.label})` : numbered;
 }
 
-// Type-to-find: narrow the module dropdowns by manufacturer, module name or
-// the label the patch gives the instance.
-function matchesFilter(pm, filter) {
-  const needle = filter.trim().toLowerCase();
-  if (!needle) return true;
-  return `${pm.manufacturer} ${pm.module_name} ${pm.label || ''}`.toLowerCase().includes(needle);
-}
-
 // A mult's bidirectional jacks can sit at either end of a cable: plugging
 // into one makes it the group's input, the rest carry copies out.
 const FROM_TYPES = ['output_jack', 'bidirectional_jack'];
@@ -87,12 +96,11 @@ function jackLabel(c) {
   return `${c.name}${suffix}${port ? ` [${port}]` : ''}`;
 }
 
-const cableModules = computed(() => modules.value.filter((m) => matchesFilter(m, cableFilter.value)));
 const fromModules = computed(() =>
-  cableModules.value.filter((m) => m.components.some((c) => FROM_TYPES.includes(c.type)))
+  modules.value.filter((m) => m.components.some((c) => FROM_TYPES.includes(c.type)))
 );
 const toModules = computed(() =>
-  cableModules.value.filter((m) => m.components.some((c) => TO_TYPES.includes(c.type)))
+  modules.value.filter((m) => m.components.some((c) => TO_TYPES.includes(c.type)))
 );
 const fromJacks = computed(
   () =>
@@ -106,6 +114,57 @@ const toJacks = computed(
       TO_TYPES.includes(c.type)
     ) || []
 );
+
+// ---- what the pickers offer ----
+// Options are searched on their hint as well as their label, so a module can
+// also be found by the role the patch gives it and a jack by what is already
+// plugged into it.
+const moduleOptions = (list) =>
+  list.map((pm) => ({
+    value: pm.id,
+    label: moduleLabel(pm),
+    hint: pm.live ? undefined : pm.external ? 'off-rack gear' : 'not in this rack',
+  }));
+const fromModuleOptions = computed(() => moduleOptions(fromModules.value));
+const toModuleOptions = computed(() => moduleOptions(toModules.value));
+
+const cables = computed(() => patch.value?.cables || []);
+const cableInto = (pmId, componentId) =>
+  cables.value.find((c) => c.to_patch_module_id === pmId && c.to_component_id === componentId) ??
+  null;
+const cablesOutOf = (pmId, componentId) =>
+  cables.value.filter(
+    (c) => c.from_patch_module_id === pmId && c.from_component_id === componentId
+  );
+
+// An output can fan out, so its list says how busy it already is; a mult jack
+// a cable feeds is its group's input and the copies come out of the others.
+const fromJackOptions = computed(() => {
+  const pmId = Number(fromModuleId.value);
+  return fromJacks.value.map((c) => {
+    const feeding = cableInto(pmId, c.id);
+    const out = cablesOutOf(pmId, c.id).length;
+    let hint;
+    if (feeding && c.type === 'bidirectional_jack') hint = 'mult input — copies come out of the others';
+    else if (out) hint = out === 1 ? '1 cable already' : `${out} cables already`;
+    return { value: c.id, label: jackLabel(c), hint };
+  });
+});
+
+// An input takes exactly one cable, so one that is already fed is shown with
+// what is in it rather than offered and refused.
+const toJackOptions = computed(() => {
+  const pmId = Number(toModuleId.value);
+  return toJacks.value.map((c) => {
+    const taken = cableInto(pmId, c.id);
+    return {
+      value: c.id,
+      label: jackLabel(c),
+      hint: taken ? `in use — ${taken.from_component_name} is patched here` : undefined,
+      disabled: Boolean(taken),
+    };
+  });
+});
 const cableValid = computed(
   () => fromModuleId.value && fromComponentId.value && toModuleId.value && toComponentId.value
 );
@@ -145,8 +204,18 @@ async function addCable() {
       alt_group: cableAltGroup.value.trim() || undefined,
       pair: cablePair.value && pairable.value ? true : undefined,
     });
+    // Following the signal: the module this cable landed in sends the next
+    // one. Otherwise the source stays put, ready for another cable out of it.
+    const destination = toModuleId.value;
     fromComponentId.value = '';
     toComponentId.value = '';
+    if (chainFromDestination.value) {
+      toModuleId.value = '';
+      fromModuleId.value = destination;
+      focusBox(fromJackBox);
+    } else {
+      focusBox(fromModuleBox);
+    }
     cableNote.value = '';
     cableOptional.value = false;
     cableStacked.value = false;
@@ -182,9 +251,8 @@ async function toggleCableFlag(cable, field) {
 
 // ---- settings ----
 
-const settingsModules = computed(() =>
-  modules.value.filter((m) => m.live && matchesFilter(m, settingsFilter.value))
-);
+const settingsModules = computed(() => modules.value.filter((m) => m.live));
+const settingsModuleOptions = computed(() => moduleOptions(settingsModules.value));
 const settingsModule = computed(() => modulesById.value.get(Number(settingsModuleId.value)));
 // Controls you can dial in: everything that isn't a jack.
 const settableComponents = computed(
@@ -387,6 +455,10 @@ const addLabel = ref('');
 const addError = ref('');
 const rackModules = ref([]);
 
+const rackModuleOptions = computed(() =>
+  rackModules.value.map((m) => ({ value: m.id, label: `${m.manufacturer} ${m.name}`.trim() }))
+);
+
 const addValid = computed(() =>
   addKind.value === 'rack' ? Boolean(addModuleId.value) : addName.value.trim() !== ''
 );
@@ -541,6 +613,13 @@ onMounted(async () => {
       >
         Rename
       </button>
+      <RouterLink
+        :to="`/ask?patch=${props.id}`"
+        style="margin-left: 0.6rem; font-size: 0.8rem"
+        data-test="ask-about-patch"
+      >
+        Ask about this patch
+      </RouterLink>
     </h1>
     <p class="muted" data-test="snapshot-note">
       Snapshot of rack '{{ patch.rack_name }}' as of
@@ -606,52 +685,73 @@ onMounted(async () => {
       <p v-else class="muted">No cables yet.</p>
 
       <form @submit.prevent="addCable">
-        <label for="cable-filter">Add a cable — type to find a module</label>
-        <div class="row">
-          <input
-            id="cable-filter"
-            v-model="cableFilter"
-            data-test="cable-filter"
-            placeholder="Filter by manufacturer, module name or label…"
-          />
-        </div>
+        <h3 style="margin-bottom: 0">Add a cable</h3>
+        <p class="muted" style="margin: 0.2rem 0 0">
+          Type to find each end — the arrow keys move through the matches, Enter takes the
+          highlighted one and moves on to the next field.
+        </p>
         <div class="row">
           <div>
             <label for="cable-from-module">From module</label>
-            <select id="cable-from-module" v-model="fromModuleId" data-test="cable-from-module" @change="fromComponentId = ''">
-              <option value="" disabled>Select a module…</option>
-              <option v-for="pm in fromModules" :key="pm.id" :value="pm.id">
-                {{ moduleLabel(pm) }}
-              </option>
-            </select>
+            <AutocompleteSelect
+              ref="fromModuleBox"
+              v-model="fromModuleId"
+              input-id="cable-from-module"
+              data-test="cable-from-module"
+              placeholder="Type a manufacturer, module or role…"
+              :options="fromModuleOptions"
+              @select="focusBox(fromJackBox)"
+            />
           </div>
           <div>
             <label for="cable-from-jack">Output jack</label>
-            <select id="cable-from-jack" v-model="fromComponentId" data-test="cable-from-jack">
-              <option value="" disabled>Select an output…</option>
-              <option v-for="c in fromJacks" :key="c.id" :value="c.id">{{ jackLabel(c) }}</option>
-            </select>
+            <AutocompleteSelect
+              ref="fromJackBox"
+              v-model="fromComponentId"
+              input-id="cable-from-jack"
+              data-test="cable-from-jack"
+              placeholder="Type a jack name…"
+              empty-text="No output or mult jack matches"
+              :disabled="!fromModuleId"
+              :options="fromJackOptions"
+              @select="focusBox(toModuleBox)"
+            />
           </div>
           <div>
             <label for="cable-to-module">To module</label>
-            <select id="cable-to-module" v-model="toModuleId" data-test="cable-to-module" @change="toComponentId = ''">
-              <option value="" disabled>Select a module…</option>
-              <option v-for="pm in toModules" :key="pm.id" :value="pm.id">
-                {{ moduleLabel(pm) }}
-              </option>
-            </select>
+            <AutocompleteSelect
+              ref="toModuleBox"
+              v-model="toModuleId"
+              input-id="cable-to-module"
+              data-test="cable-to-module"
+              placeholder="Type a manufacturer, module or role…"
+              :options="toModuleOptions"
+              @select="focusBox(toJackBox)"
+            />
           </div>
           <div>
             <label for="cable-to-jack">Input jack</label>
-            <select id="cable-to-jack" v-model="toComponentId" data-test="cable-to-jack">
-              <option value="" disabled>Select an input…</option>
-              <option v-for="c in toJacks" :key="c.id" :value="c.id">{{ jackLabel(c) }}</option>
-            </select>
+            <AutocompleteSelect
+              ref="toJackBox"
+              v-model="toComponentId"
+              input-id="cable-to-jack"
+              data-test="cable-to-jack"
+              placeholder="Type a jack name…"
+              empty-text="No free input or mult jack matches"
+              :disabled="!toModuleId"
+              :options="toJackOptions"
+            />
           </div>
           <div class="shrink">
             <button type="submit" style="margin: 0" :disabled="!cableValid" data-test="cable-create">
               Plug in
             </button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="shrink">
+            <label for="cable-chain">Chain — the next cable starts where this one lands</label>
+            <input id="cable-chain" v-model="chainFromDestination" type="checkbox" data-test="cable-chain" />
           </div>
         </div>
         <div class="row">
@@ -811,26 +911,16 @@ onMounted(async () => {
       </table>
       <p v-else class="muted">No settings recorded yet.</p>
 
-      <label for="settings-filter">Dial in a module — type to find it</label>
       <div class="row">
-        <input
-          id="settings-filter"
-          v-model="settingsFilter"
-          data-test="settings-filter"
-          placeholder="Filter by manufacturer or module name…"
-        />
         <div>
-          <select
-            id="settings-module"
+          <label for="settings-module">Dial in a module — type to find it</label>
+          <AutocompleteSelect
             v-model="settingsModuleId"
+            input-id="settings-module"
             data-test="settings-module"
-            aria-label="Module"
-          >
-            <option value="" disabled>Select a module…</option>
-            <option v-for="pm in settingsModules" :key="pm.id" :value="pm.id">
-              {{ moduleLabel(pm) }}
-            </option>
-          </select>
+            placeholder="Type a manufacturer, module or role…"
+            :options="settingsModuleOptions"
+          />
         </div>
       </div>
 
@@ -1122,12 +1212,13 @@ onMounted(async () => {
           </div>
           <div v-if="addKind === 'rack'">
             <label for="add-module">Module</label>
-            <select id="add-module" v-model="addModuleId" data-test="add-module">
-              <option value="" disabled>Select a module…</option>
-              <option v-for="m in rackModules" :key="m.id" :value="m.id">
-                {{ m.manufacturer }} {{ m.name }}
-              </option>
-            </select>
+            <AutocompleteSelect
+              v-model="addModuleId"
+              input-id="add-module"
+              data-test="add-module"
+              placeholder="Type a manufacturer or module…"
+              :options="rackModuleOptions"
+            />
           </div>
           <template v-else>
             <div>

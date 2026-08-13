@@ -7,12 +7,13 @@ vi.mock('../src/api.js', () => ({
 }));
 
 const routerPush = vi.fn();
+let currentRouteQuery = {};
 vi.mock('vue-router', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     useRouter: () => ({ push: routerPush }),
-    useRoute: () => ({ query: {} }),
+    useRoute: () => ({ query: currentRouteQuery }),
   };
 });
 
@@ -37,6 +38,7 @@ import { useAuthStore } from '../src/stores/auth.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  currentRouteQuery = {};
 });
 
 describe('LoginView', () => {
@@ -673,6 +675,51 @@ describe('AskView', () => {
     const wrapper = mount(AskView, { global: testGlobal() });
     expect(wrapper.find('[data-test="submit"]').attributes('disabled')).toBeDefined();
   });
+
+  it('asks about the patch named in the URL', async () => {
+    currentRouteQuery = { patch: '3' };
+    api.get.mockResolvedValue([
+      { id: 3, name: 'Krell', rack_name: 'main rack' },
+      { id: 4, name: 'Drone', rack_name: 'main rack' },
+    ]);
+    api.post.mockResolvedValue({ id: 12 });
+    const wrapper = mount(AskView, { global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="ask-patch"]').element.value).toBe('Krell');
+    await wrapper.find('[data-test="prompt"]').setValue('Why is there no sound?');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/questions', {
+      prompt: 'Why is there no sound?',
+      patch_id: 3,
+    });
+  });
+
+  it('finds a patch by typing its name', async () => {
+    api.get.mockResolvedValue([
+      { id: 3, name: 'Krell', rack_name: 'main rack' },
+      { id: 4, name: 'Drone', rack_name: 'main rack' },
+    ]);
+    api.post.mockResolvedValue({ id: 12 });
+    const wrapper = mount(AskView, { global: testGlobal() });
+    await flushPromises();
+
+    const box = wrapper.find('[data-test="ask-patch"]');
+    await box.trigger('focus');
+    await box.setValue('dro');
+    const options = wrapper.findAll('[data-test^="ask-patch-option-"]');
+    expect(options).toHaveLength(1);
+    await box.trigger('keydown', { key: 'Enter' });
+
+    await wrapper.find('[data-test="prompt"]').setValue('What is this?');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/questions', {
+      prompt: 'What is this?',
+      patch_id: 4,
+    });
+  });
 });
 
 describe('QuestionsView', () => {
@@ -793,6 +840,15 @@ describe('QuestionDetailView', () => {
             { id: 7, prompt: 'Earlier?', answered_at: null, module_ids: [3], component_ids: [] },
           ],
           notes: [{ id: 5, title: 'Krell', body: 'x', module_ids: [], component_ids: [9] }],
+          patches: [
+            {
+              id: 6,
+              name: 'Krell patch',
+              rack_name: 'main rack',
+              attached: false,
+              module_ids: [4],
+            },
+          ],
         };
       throw new Error(`unexpected ${path}`);
     });
@@ -831,8 +887,57 @@ describe('QuestionDetailView', () => {
       answer_ids: [7],
       note_ids: [5],
       capture_ids: [],
+      patch_ids: [],
     });
     expect(wrapper.find('[data-test="answer-pending"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('attaches a patch in review and pulls the modules it uses into scope', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path === '/api/questions/1')
+        return { id: 1, prompt: 'Why no sound?', status: 'scoped', modules: [], components: [] };
+      if (path === '/api/questions/1/options')
+        return {
+          modules: [
+            { id: 3, manufacturer: 'Make Noise', name: 'Maths', in_scope: true },
+            { id: 4, manufacturer: '2hp', name: 'Pluck', in_scope: false },
+          ],
+          components: [],
+          manuals: [{ id: 11, module_id: 3, name: 'manual', original_name: null, source: 'found' }],
+          answers: [],
+          notes: [],
+          patches: [
+            { id: 6, name: 'Krell patch', rack_name: 'main rack', attached: false, module_ids: [4] },
+          ],
+        };
+      throw new Error(`unexpected ${path}`);
+    });
+    api.post.mockResolvedValue({ id: 1, status: 'pending', modules: [], components: [] });
+
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const patchBox = wrapper.find('[data-test="patch-option"]');
+    expect(wrapper.find('[data-test="review"]').text()).toContain('Krell patch');
+    expect(patchBox.element.checked).toBe(false);
+    await patchBox.setValue(true);
+
+    // The patch's module joins the scope, so its manual comes along.
+    const moduleBoxes = wrapper.findAll('[data-test="module-option"]');
+    expect(moduleBoxes[1].element.checked).toBe(true);
+
+    await wrapper.find('[data-test="request-answer"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/questions/1/answer', {
+      module_ids: [3, 4],
+      component_ids: [],
+      manual_ids: [11],
+      answer_ids: [],
+      note_ids: [],
+      capture_ids: [],
+      patch_ids: [6],
+    });
     wrapper.unmount();
   });
 
@@ -1442,31 +1547,112 @@ describe('PatchDetailView', () => {
     expect(wrapper.find('[data-test="setting-31"]').text()).toContain('Rise');
     // A module deleted since the snapshot still shows, marked as gone.
     expect(wrapper.find('[data-test="patch-module-12"]').text()).toContain('no longer in your system');
+    // The patch can be taken straight to the assistant.
+    expect(wrapper.find('[data-test="ask-about-patch"]').attributes('to')).toBe('/ask?patch=7');
   });
 
-  it('filters modules by typed text and plugs a cable', async () => {
+  // Typing into a picker, then taking the highlighted match with Enter.
+  async function pick(wrapper, test, text) {
+    const input = wrapper.find(`[data-test="${test}"]`);
+    await input.trigger('focus');
+    await input.setValue(text);
+    await input.trigger('keydown', { key: 'Enter' });
+    return input;
+  }
+
+  it('finds each end of a cable by typing and plugs it in', async () => {
     api.get.mockResolvedValue(patchResponse);
     api.post.mockResolvedValue({ id: 22 });
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
 
-    // Typing narrows the module dropdowns (only live Maths has jacks anyway).
-    await wrapper.find('[data-test="cable-filter"]').setValue('make noise');
-    const fromOptions = wrapper.find('[data-test="cable-from-module"]').findAll('option');
-    expect(fromOptions.map((o) => o.text()).join(' ')).toContain('Make Noise Maths');
+    // Typing lists the matching modules with the first one highlighted.
+    const from = wrapper.find('[data-test="cable-from-module"]');
+    await from.trigger('focus');
+    await from.setValue('make noise');
+    const options = wrapper.findAll('[data-test^="cable-from-module-option-"]');
+    expect(options).toHaveLength(1);
+    expect(options[0].text()).toContain('Make Noise Maths');
+    expect(options[0].classes()).toContain('ac-active');
+    await from.trigger('keydown', { key: 'Enter' });
+    expect(from.element.value).toBe('Make Noise Maths');
 
-    await wrapper.find('[data-test="cable-from-module"]').setValue('11');
-    await wrapper.find('[data-test="cable-from-jack"]').setValue('2');
-    await wrapper.find('[data-test="cable-to-module"]').setValue('11');
-    await wrapper.find('[data-test="cable-to-jack"]').setValue('1');
+    // Picking the module lists its jacks, which are found the same way.
+    await pick(wrapper, 'cable-from-jack', 'eor');
+    await pick(wrapper, 'cable-to-module', 'doepfer');
+    await pick(wrapper, 'cable-to-jack', 'm1');
     await wrapper.find('[data-test="cables"] form').trigger('submit');
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith('/api/patches/7/cables', {
       from_patch_module_id: 11,
       from_component_id: 2,
-      to_patch_module_id: 11,
-      to_component_id: 1,
+      to_patch_module_id: 13,
+      to_component_id: 5,
     });
+  });
+
+  it('moves the highlight with the arrow keys', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await pick(wrapper, 'cable-to-module', 'doepfer');
+    const jack = wrapper.find('[data-test="cable-to-jack"]');
+    await jack.trigger('focus');
+    await jack.setValue('m');
+    const highlighted = () =>
+      wrapper.findAll('[data-test^="cable-to-jack-option-"]').findIndex((o) =>
+        o.classes().includes('ac-active')
+      );
+    expect(highlighted()).toBe(0);
+    await jack.trigger('keydown', { key: 'ArrowDown' });
+    expect(highlighted()).toBe(1);
+    // Past the end it wraps back to the first match.
+    await jack.trigger('keydown', { key: 'ArrowDown' });
+    expect(highlighted()).toBe(0);
+    await jack.trigger('keydown', { key: 'ArrowUp' });
+    expect(highlighted()).toBe(1);
+    await jack.trigger('keydown', { key: 'Enter' });
+    expect(jack.element.value).toBe('M2 (mult 1)');
+  });
+
+  it('shows an input that already has a cable in it as unavailable', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    // Maths' Signal In is fed by the patch's one cable.
+    await pick(wrapper, 'cable-to-module', 'maths');
+    const jack = wrapper.find('[data-test="cable-to-jack"]');
+    await jack.trigger('focus');
+    await jack.setValue('signal');
+    const option = wrapper.find('[data-test="cable-to-jack-option-1"]');
+    expect(option.text()).toContain('in use — EOR is patched here');
+    expect(option.classes()).toContain('ac-disabled');
+    // ...and it cannot be taken, by Enter or by clicking it.
+    await jack.trigger('keydown', { key: 'Enter' });
+    await option.trigger('mousedown');
+    expect(wrapper.find('[data-test="cable-create"]').attributes('disabled')).toBeDefined();
+  });
+
+  it('chains the next cable from the module the last one landed in', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.post.mockResolvedValue({ id: 22 });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="cable-chain"]').setValue(true);
+    await pick(wrapper, 'cable-from-module', 'make noise');
+    await pick(wrapper, 'cable-from-jack', 'eor');
+    await pick(wrapper, 'cable-to-module', 'doepfer');
+    await pick(wrapper, 'cable-to-jack', 'm1');
+    await wrapper.find('[data-test="cables"] form').trigger('submit');
+    await flushPromises();
+
+    // The destination becomes the source of the next cable, both jacks clear.
+    expect(wrapper.find('[data-test="cable-from-module"]').element.value).toBe('Doepfer A-180-2');
+    expect(wrapper.find('[data-test="cable-from-jack"]').element.value).toBe('');
+    expect(wrapper.find('[data-test="cable-to-module"]').element.value).toBe('');
   });
 
   it('renders the signal flow as an indented tree with source, merge and cycle badges', async () => {
@@ -1572,19 +1758,19 @@ describe('PatchDetailView', () => {
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
 
-    // The mult module shows up in both dropdowns even though it has no fixed
+    // The mult module is offered at both ends even though it has no fixed
     // input/output jacks, and its jacks are labeled with their group.
-    const fromModules = wrapper.find('[data-test="cable-from-module"]');
-    expect(fromModules.findAll('option').map((o) => o.text()).join(' ')).toContain('Doepfer A-180-2');
-    await fromModules.setValue('13');
-    const fromJacks = wrapper.find('[data-test="cable-from-jack"]').findAll('option');
-    expect(fromJacks.map((o) => o.text()).join(' ')).toContain('M1 (mult 1)');
-
-    const toModules = wrapper.find('[data-test="cable-to-module"]');
-    expect(toModules.findAll('option').map((o) => o.text()).join(' ')).toContain('Doepfer A-180-2');
-    await toModules.setValue('13');
-    const toJacks = wrapper.find('[data-test="cable-to-jack"]').findAll('option');
-    expect(toJacks.map((o) => o.text()).join(' ')).toContain('M2 (mult 1)');
+    const jackNames = async (moduleBox, jackBox) => {
+      await pick(wrapper, moduleBox, 'a-180-2');
+      const box = wrapper.find(`[data-test="${jackBox}"]`);
+      await box.trigger('focus');
+      return wrapper
+        .findAll(`[data-test^="${jackBox}-option-"]`)
+        .map((o) => o.text())
+        .join(' ');
+    };
+    expect(await jackNames('cable-from-module', 'cable-from-jack')).toContain('M1 (mult 1)');
+    expect(await jackNames('cable-to-module', 'cable-to-jack')).toContain('M2 (mult 1)');
   });
 
   it('offers enum options as a dropdown and ranges as numbers when dialing in a module', async () => {
@@ -1593,7 +1779,7 @@ describe('PatchDetailView', () => {
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
 
-    await wrapper.find('[data-test="settings-module"]').setValue('11');
+    await pick(wrapper, 'settings-module', 'maths');
     // Rise has min/max 0..10 → a number input, prefilled from the saved setting.
     const rise = wrapper.find('[data-test="control-input-3"]');
     expect(rise.attributes('type')).toBe('number');

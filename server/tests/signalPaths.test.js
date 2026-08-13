@@ -127,8 +127,28 @@ describe('conditional signal paths', () => {
   it('treats alternatives as a selection, not a merge, until the switch is dialed in', async () => {
     const f = await fixture();
     await atlantix(f);
+    // The flow only traces modules the patch uses, so the Atlantix is cabled
+    // into something — its internal defaults are what the test is about.
+    await withComponents(f, {
+      manufacturer: 'Intellijel',
+      name: 'Mixup',
+      components: [{ type: 'input_jack', name: 'IN 1' }],
+    });
     const patch = await createPatch(f);
     let body = await detail(f, patch.id);
+    const atlx = instanceOf(body, 'Atlantix');
+    const mixup = instanceOf(body, 'Mixup');
+    const patched = await request(f.app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', f.aliceCookie)
+      .send({
+        from_patch_module_id: atlx.id,
+        from_component_id: jack(atlx, 'SINE B').id,
+        to_patch_module_id: mixup.id,
+        to_component_id: jack(mixup, 'IN 1').id,
+      });
+    expect(patched.status).toBe(201);
+    body = await detail(f, patch.id);
 
     // Both defaults are possible; neither is claimed to be certain, and the
     // input is fed by a selection rather than by two signals summing.
@@ -882,6 +902,105 @@ describe('output-side normals and stereo pairs', () => {
     await analyzeManualForModule(f.db, backend2, module, '/tmp/x.pdf');
     const after = await request(f.app).get(`/api/modules/${module.id}`).set('Cookie', f.aliceCookie);
     expect(after.body.pairs).toEqual([]);
+  });
+});
+
+describe('modules a patch does not use', () => {
+  // A patch snapshots the whole rack. Tracing every module's internal paths
+  // filled the flow with signals inside modules nothing was plugged into.
+  it('keeps the signal flow to the modules the patch actually uses', async () => {
+    const f = await fixture();
+    const filter = await withComponents(f, {
+      manufacturer: 'Doepfer',
+      name: 'A-120',
+      components: [
+        { type: 'input_jack', name: 'AUDIO IN' },
+        { type: 'output_jack', name: 'AUDIO OUT' },
+      ],
+    });
+    await request(f.app)
+      .post(`/api/modules/${filter.module.id}/routes`)
+      .set('Cookie', f.aliceCookie)
+      .send({
+        input_component_id: filter.components['AUDIO IN'].id,
+        output_component_id: filter.components['AUDIO OUT'].id,
+      });
+    const osc = await withComponents(f, {
+      manufacturer: 'Doepfer',
+      name: 'A-110',
+      components: [{ type: 'output_jack', name: 'SAW' }],
+    });
+    // An idle module with a normalled connection of its own.
+    const idle = await withComponents(f, {
+      manufacturer: 'Doepfer',
+      name: 'A-140',
+      components: [
+        { type: 'input_jack', name: 'GATE' },
+        { type: 'output_jack', name: 'ENV OUT' },
+      ],
+    });
+    await request(f.app)
+      .post(`/api/modules/${idle.module.id}/normalizations`)
+      .set('Cookie', f.aliceCookie)
+      .send({ target_component_id: idle.components['GATE'].id, source_label: 'internal clock' });
+
+    const patch = await createPatch(f);
+    let body = await detail(f, patch.id);
+    // Nothing is patched yet, so nothing flows — not even the paths inside
+    // the modules sitting in the rack.
+    expect(body.flow).toEqual([]);
+
+    const oscPm = instanceOf(body, 'A-110');
+    const filterPm = instanceOf(body, 'A-120');
+    const res = await request(f.app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', f.aliceCookie)
+      .send({
+        from_patch_module_id: oscPm.id,
+        from_component_id: jack(oscPm, 'SAW').id,
+        to_patch_module_id: filterPm.id,
+        to_component_id: jack(filterPm, 'AUDIO IN').id,
+      });
+    expect(res.status).toBe(201);
+
+    body = await detail(f, patch.id);
+    const names = flatFlow(body).map((n) => n.name);
+    // The cabled pair traces all the way across the filter...
+    expect(names).toEqual(['SAW', 'AUDIO IN', 'AUDIO OUT']);
+    // ...and the module no cable reaches contributes nothing.
+    expect(names).not.toContain('internal clock');
+    expect(names).not.toContain('GATE');
+  });
+
+  it('brings a module into the flow once the patch dials one of its controls in', async () => {
+    const f = await fixture();
+    const drone = await withComponents(f, {
+      manufacturer: 'Make Noise',
+      name: 'DPO',
+      components: [
+        { type: 'input_jack', name: 'FM' },
+        { type: 'output_jack', name: 'SINE' },
+        { type: 'knob', name: 'FREQ' },
+      ],
+    });
+    await request(f.app)
+      .post(`/api/modules/${drone.module.id}/normalizations`)
+      .set('Cookie', f.aliceCookie)
+      .send({ target_component_id: drone.components['FM'].id, source_label: 'internal LFO' });
+
+    const patch = await createPatch(f);
+    let body = await detail(f, patch.id);
+    expect(body.flow).toEqual([]);
+
+    const pm = instanceOf(body, 'DPO');
+    const res = await request(f.app)
+      .put(`/api/patches/${patch.id}/settings`)
+      .set('Cookie', f.aliceCookie)
+      .send({ patch_module_id: pm.id, component_id: jack(pm, 'FREQ').id, value: '3' });
+    expect(res.status).toBe(201);
+
+    body = await detail(f, patch.id);
+    expect(flatFlow(body).map((n) => n.name)).toContain('internal LFO');
   });
 });
 

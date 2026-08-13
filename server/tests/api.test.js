@@ -814,6 +814,100 @@ describe('questions API', () => {
     expect(noteLinks.map((l) => l.note_id)).toEqual([note[0].id]);
   });
 
+  // Asking about the patch in front of you: the patch is attached to the
+  // question and the modules it uses come into scope with it.
+  it('asks about a patch, offers it in review, and attaches it', async () => {
+    const { app, db, aliceCookie, alice, moduleId, question } = await withScopedQuestion();
+    const { rows: jacks } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES
+         ($1, 'output_jack', 'EOR'), ($1, 'input_jack', 'Signal In') RETURNING id, name`,
+      [moduleId]
+    );
+    const { rows: racks } = await db.query('SELECT id FROM racks WHERE user_id = $1', [alice.id]);
+    const created = await request(app)
+      .post('/api/patches')
+      .set('Cookie', aliceCookie)
+      .send({ rack_id: racks[0].id, name: 'Krell' });
+    expect(created.status).toBe(201);
+    const detail = await request(app)
+      .get(`/api/patches/${created.body.id}`)
+      .set('Cookie', aliceCookie);
+    const pm = detail.body.modules.find((m) => m.module_id === moduleId);
+    const cable = await request(app)
+      .post(`/api/patches/${created.body.id}/cables`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: pm.id,
+        from_component_id: jacks.find((j) => j.name === 'EOR').id,
+        to_patch_module_id: pm.id,
+        to_component_id: jacks.find((j) => j.name === 'Signal In').id,
+      });
+    expect(cable.status).toBe(201);
+
+    // A new question can name the patch, which attaches it before scoping.
+    const asked = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({ prompt: 'Why is there no sound?', patch_id: created.body.id });
+    expect(asked.status).toBe(201);
+    const { rows: attachedAtAsk } = await db.query(
+      'SELECT * FROM question_patches WHERE question_id = $1',
+      [asked.body.id]
+    );
+    expect(attachedAtAsk.map((l) => l.patch_id)).toEqual([created.body.id]);
+
+    // The review step offers it, with the modules the patch actually uses.
+    const options = await request(app)
+      .get(`/api/questions/${question.id}/options`)
+      .set('Cookie', aliceCookie);
+    expect(options.status).toBe(200);
+    expect(options.body.patches).toHaveLength(1);
+    expect(options.body.patches[0]).toMatchObject({
+      id: created.body.id,
+      name: 'Krell',
+      attached: false,
+      module_ids: [moduleId],
+    });
+
+    // A patch on its own satisfies the "attach something" rule.
+    const answered = await request(app)
+      .post(`/api/questions/${question.id}/answer`)
+      .set('Cookie', aliceCookie)
+      .send({ module_ids: [moduleId], patch_ids: [created.body.id] });
+    expect(answered.status).toBe(200);
+    const { rows: links } = await db.query(
+      'SELECT * FROM question_patches WHERE question_id = $1',
+      [question.id]
+    );
+    expect(links.map((l) => l.patch_id)).toEqual([created.body.id]);
+    const shown = await request(app)
+      .get(`/api/questions/${question.id}`)
+      .set('Cookie', aliceCookie);
+    expect(shown.body.patches).toEqual([
+      { id: created.body.id, name: 'Krell', rack_name: 'main rack' },
+    ]);
+  });
+
+  it("refuses another user's patch", async () => {
+    const { app, db, aliceCookie, moduleId, question } = await withScopedQuestion();
+    const { rows: others } = await db.query("SELECT id FROM users WHERE username = 'admin'");
+    const { rows: patch } = await db.query(
+      `INSERT INTO patches (user_id, rack_name, name) VALUES ($1, 'other rack', 'Someone else''s patch')
+       RETURNING id`,
+      [others[0].id]
+    );
+    const asked = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({ prompt: 'Whose patch?', patch_id: patch[0].id });
+    expect(asked.status).toBe(400);
+    const reviewed = await request(app)
+      .post(`/api/questions/${question.id}/answer`)
+      .set('Cookie', aliceCookie)
+      .send({ module_ids: [moduleId], patch_ids: [patch[0].id] });
+    expect(reviewed.status).toBe(400);
+  });
+
   it('rejects review submissions that fail validation', async () => {
     const { app, db, aliceCookie, alice, moduleId, question } = await withScopedQuestion();
     const { rows: manual } = await db.query('SELECT id FROM manuals WHERE module_id = $1', [

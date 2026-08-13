@@ -494,6 +494,17 @@ export function defineModels(sequelize) {
     { tableName: 'question_captures', timestamps: false }
   );
 
+  // A patch a question is about: it brings the patch's modules into scope and
+  // rides along as a document describing the whole patch.
+  const QuestionPatch = define(
+    'QuestionPatch',
+    {
+      question_id: { type: DataTypes.INTEGER, primaryKey: true },
+      patch_id: { type: DataTypes.INTEGER, primaryKey: true },
+    },
+    { tableName: 'question_patches', timestamps: false }
+  );
+
   // An application allowed to obtain a device token. Public clients only —
   // see migration 013.
   const OAuthClient = define(
@@ -752,6 +763,10 @@ export function defineModels(sequelize) {
   QuestionCapture.belongsTo(Question, { foreignKey: 'question_id' });
   QuestionCapture.belongsTo(Capture, { foreignKey: 'capture_id' });
 
+  Question.hasMany(QuestionPatch, { foreignKey: 'question_id' });
+  QuestionPatch.belongsTo(Question, { foreignKey: 'question_id' });
+  QuestionPatch.belongsTo(Patch, { foreignKey: 'patch_id' });
+
   DeviceToken.belongsTo(User, { foreignKey: 'user_id' });
   User.hasMany(DeviceToken, { foreignKey: 'user_id' });
   DeviceAuthorization.belongsTo(User, { foreignKey: 'user_id' });
@@ -805,6 +820,7 @@ export function defineModels(sequelize) {
     QuestionAnswer,
     QuestionNote,
     QuestionCapture,
+    QuestionPatch,
     OAuthClient,
     DeviceAuthorization,
     DeviceToken,

@@ -968,6 +968,43 @@ describe('scopeQuestion', () => {
     expect(links.map((l) => l.component_id)).toEqual([jacks[1].id]);
   });
 
+  // A question asked about a patch is about the modules that patch uses,
+  // whatever the model makes of the wording.
+  it('puts the modules an attached patch uses in scope', async () => {
+    const { db, user, module, question } = await fixture();
+    const { rows: jacks } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES
+         ($1, 'output_jack', 'EOR'), ($1, 'input_jack', 'Signal In') RETURNING id, name`,
+      [module.id]
+    );
+    const { rows: patch } = await db.query(
+      `INSERT INTO patches (user_id, rack_name, name) VALUES ($1, 'main rack', 'Krell') RETURNING *`,
+      [user.id]
+    );
+    const { rows: pm } = await db.query(
+      `INSERT INTO patch_modules (patch_id, module_id, manufacturer, module_name)
+       VALUES ($1, $2, 'Make Noise', 'Maths') RETURNING *`,
+      [patch[0].id, module.id]
+    );
+    await db.query(
+      `INSERT INTO patch_cables
+         (patch_id, from_patch_module_id, from_component_id, from_component_name,
+          to_patch_module_id, to_component_id, to_component_name)
+       VALUES ($1, $2, $3, 'EOR', $2, $4, 'Signal In')`,
+      [patch[0].id, pm[0].id, jacks[0].id, jacks[1].id]
+    );
+    await db.query('INSERT INTO question_patches (question_id, patch_id) VALUES ($1, $2)', [
+      question.id,
+      patch[0].id,
+    ]);
+
+    // The model finds nothing; the patch still puts its module in scope.
+    const backend = fakeBackend({ completeText: '[]' });
+    await scopeQuestion(db, backend, question);
+    const { rows: links } = await db.query('SELECT module_id FROM question_modules');
+    expect(links.map((l) => l.module_id)).toEqual([module.id]);
+  });
+
   it('leaves the scope empty when no modules match', async () => {
     const { db, question } = await fixture();
     const backend = fakeBackend({ completeText: '[]' });
@@ -1132,6 +1169,65 @@ describe('answerQuestion', () => {
     expect(textDocs[1].text).toContain('Krell into VCA');
     expect(prompt).toContain('previous question-and-answer documents');
     expect(prompt).toContain("the user's own notes");
+  });
+
+  // Asking about a patch: the answer has to see what is plugged into what,
+  // how the controls are set, and what the module's own defaults do about it.
+  it('feeds an attached patch as a document of its cables, settings and flow', async () => {
+    const { db, user, module, question } = await fixture();
+    const { rows: jacks } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES
+         ($1, 'output_jack', 'EOR'), ($1, 'input_jack', 'Signal In'), ($1, 'knob', 'Rise')
+       RETURNING id, name`,
+      [module.id]
+    );
+    const byName = new Map(jacks.map((j) => [j.name, j.id]));
+    // A normalled default the patch's cable cancels.
+    await db.query(
+      `INSERT INTO component_normalizations (module_id, target_component_id, source_label, kind)
+       VALUES ($1, $2, 'internal noise source', 'internal')`,
+      [module.id, byName.get('Signal In')]
+    );
+    const { rows: patch } = await db.query(
+      `INSERT INTO patches (user_id, rack_name, name, description)
+       VALUES ($1, 'main rack', 'Krell', 'A self-playing patch.') RETURNING *`,
+      [user.id]
+    );
+    const { rows: pm } = await db.query(
+      `INSERT INTO patch_modules (patch_id, module_id, manufacturer, module_name)
+       VALUES ($1, $2, 'Make Noise', 'Maths') RETURNING *`,
+      [patch[0].id, module.id]
+    );
+    await db.query(
+      `INSERT INTO patch_cables
+         (patch_id, from_patch_module_id, from_component_id, from_component_name,
+          to_patch_module_id, to_component_id, to_component_name)
+       VALUES ($1, $2, $3, 'EOR', $2, $4, 'Signal In')`,
+      [patch[0].id, pm[0].id, byName.get('EOR'), byName.get('Signal In')]
+    );
+    await db.query(
+      `INSERT INTO patch_settings (patch_id, patch_module_id, component_id, component_name, value)
+       VALUES ($1, $2, $3, 'Rise', '7')`,
+      [patch[0].id, pm[0].id, byName.get('Rise')]
+    );
+    await db.query('INSERT INTO question_patches (question_id, patch_id) VALUES ($1, $2)', [
+      question.id,
+      patch[0].id,
+    ]);
+
+    const backend = fakeBackend({ answerWithDocuments: 'ok' });
+    await answerQuestion(db, backend, question, manualsDir);
+    const [prompt, , textDocs] = backend.calls.answerWithDocuments[0];
+    const doc = textDocs.find((d) => d.name === `patch-${patch[0].id}.md`);
+    expect(doc).toBeTruthy();
+    expect(doc.text).toContain('# Patch: Krell');
+    expect(doc.text).toContain('A self-playing patch.');
+    expect(doc.text).toContain('- Make Noise Maths "EOR" → Make Noise Maths "Signal In"');
+    expect(doc.text).toContain('- Make Noise Maths "Rise": 7');
+    // The cable cancels the module's default, and the document says so.
+    expect(doc.text).toContain('CANCELLED in this patch');
+    expect(prompt).toContain('a description of the patch itself');
+    expect(prompt).toContain('do not assume connections it does not list');
   });
 
   it('answers from notes alone when the attached manual file is invalid', async () => {
