@@ -1207,6 +1207,116 @@ describe('jobs API', () => {
     ).toBe(400);
   });
 
+  it('stops a running job and hands its module back to pending', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id);
+    await db.query("UPDATE modules SET analysis_status = 'analyzing' WHERE id = $1", [module.id]);
+    const { rows: jobs } = await db.query(
+      `INSERT INTO jobs (type, user_id, module_id, status, heartbeat_at)
+       VALUES ('analyze_manual', $1, $2, 'running', now()) RETURNING *`,
+      [rows[0].id, module.id]
+    );
+
+    const stop = await request(app).post(`/api/jobs/${jobs[0].id}/stop`).set('Cookie', aliceCookie);
+    expect(stop.status).toBe(200);
+    expect(stop.body.status).toBe('cancelled');
+    // The module was mid-analysis; with the job gone it goes back on the shelf
+    // rather than claiming something is still analyzing it.
+    const { rows: after } = await db.query('SELECT analysis_status FROM modules WHERE id = $1', [
+      module.id,
+    ]);
+    expect(after[0].analysis_status).toBe('pending');
+  });
+
+  it('refuses to stop a job that has already finished', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id);
+    const { rows: jobs } = await db.query(
+      `INSERT INTO jobs (type, user_id, module_id, status)
+       VALUES ('find_manual', $1, $2, 'complete') RETURNING *`,
+      [rows[0].id, module.id]
+    );
+    const stop = await request(app).post(`/api/jobs/${jobs[0].id}/stop`).set('Cookie', aliceCookie);
+    expect(stop.status).toBe(400);
+  });
+
+  it('deletes a job, stopping it first when it is still live', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id);
+    await db.query("UPDATE modules SET manual_status = 'searching' WHERE id = $1", [module.id]);
+    const { rows: jobs } = await db.query(
+      `INSERT INTO jobs (type, user_id, module_id, status)
+       VALUES ('find_manual', $1, $2, 'pending') RETURNING *`,
+      [rows[0].id, module.id]
+    );
+
+    const del = await request(app).delete(`/api/jobs/${jobs[0].id}`).set('Cookie', aliceCookie);
+    expect(del.status).toBe(200);
+    expect((await db.query('SELECT id FROM jobs')).rows).toHaveLength(0);
+    const { rows: after } = await db.query('SELECT manual_status FROM modules WHERE id = $1', [
+      module.id,
+    ]);
+    expect(after[0].manual_status).toBe('pending');
+  });
+
+  it('stops and deletes only the caller\'s own jobs in bulk', async () => {
+    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { rows: alice } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const { rows: admin } = await db.query('SELECT id FROM users WHERE is_admin = true');
+    const module = await insertModule(db, alice[0].id);
+    await db.query(
+      `INSERT INTO jobs (type, user_id, module_id, status) VALUES
+         ('find_manual', $1, $3, 'pending'),
+         ('analyze_manual', $1, $3, 'complete'),
+         ('find_manual', $2, $3, 'pending')`,
+      [alice[0].id, admin[0].id, module.id]
+    );
+
+    const stopped = await request(app).post('/api/jobs/stop-all').set('Cookie', aliceCookie);
+    expect(stopped.status).toBe(200);
+    expect(stopped.body.stopped).toBe(1); // only alice's pending one
+    const { rows: statuses } = await db.query('SELECT user_id, status FROM jobs ORDER BY id');
+    expect(statuses.map((r) => r.status)).toEqual(['cancelled', 'complete', 'pending']);
+
+    const deleted = await request(app).delete('/api/jobs').set('Cookie', aliceCookie);
+    expect(deleted.body.deleted).toBe(2);
+    const { rows: left } = await db.query('SELECT user_id FROM jobs');
+    expect(left.map((r) => Number(r.user_id))).toEqual([admin[0].id]);
+  });
+
+  it('lets no one, admin included, stop or delete a job they do not own', async () => {
+    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id);
+    const { rows: jobs } = await db.query(
+      `INSERT INTO jobs (type, user_id, module_id, status)
+       VALUES ('find_manual', $1, $2, 'pending') RETURNING *`,
+      [rows[0].id, module.id]
+    );
+
+    // The admin can see it and could retry it, but it is not theirs to bin.
+    const list = await request(app).get('/api/jobs').set('Cookie', adminCookie);
+    expect(list.body).toHaveLength(1);
+    expect(list.body[0].own).toBe(false);
+    expect(
+      (await request(app).post(`/api/jobs/${jobs[0].id}/stop`).set('Cookie', adminCookie)).status
+    ).toBe(404);
+    expect(
+      (await request(app).delete(`/api/jobs/${jobs[0].id}`).set('Cookie', adminCookie)).status
+    ).toBe(404);
+    expect((await db.query('SELECT id FROM jobs')).rows).toHaveLength(1);
+
+    // Its owner sees it as theirs and can.
+    const own = await request(app).get('/api/jobs').set('Cookie', aliceCookie);
+    expect(own.body[0].own).toBe(true);
+    expect(
+      (await request(app).delete(`/api/jobs/${jobs[0].id}`).set('Cookie', aliceCookie)).status
+    ).toBe(200);
+  });
+
   it('stamps scope_question jobs with the asking user', async () => {
     const { app, db, aliceCookie } = await createTestApp();
     const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");

@@ -1301,6 +1301,92 @@ describe('JobsView', () => {
     // Already-downloaded exports have no link (the zip is gone).
     expect(wrapper.find('[data-test="download-3"]').exists()).toBe(false);
   });
+
+  it('stops a live job and deletes a finished one', async () => {
+    api.get.mockResolvedValue([
+      { id: 1, type: 'analyze_manual', status: 'running', attempts: 1, own: true },
+      { id: 2, type: 'find_manual', status: 'complete', attempts: 1, own: true },
+    ]);
+    api.post.mockResolvedValue({ id: 1, status: 'cancelled', error: 'stopped by user' });
+    api.delete.mockResolvedValue({ ok: true });
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+
+    // A finished job has nothing to stop, only something to delete.
+    expect(wrapper.find('[data-test="stop-2"]').exists()).toBe(false);
+    await wrapper.find('[data-test="stop-1"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/jobs/1/stop');
+    expect(wrapper.find('[data-test="stop-1"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="delete-2"]').trigger('click');
+    await flushPromises();
+    expect(dialog.confirm).toHaveBeenCalled();
+    expect(api.delete).toHaveBeenCalledWith('/api/jobs/2');
+    expect(wrapper.find('[data-test="delete-2"]').exists()).toBe(false);
+    vi.restoreAllMocks();
+  });
+
+  it('offers Stop All and Delete All over the whole list', async () => {
+    api.get.mockResolvedValue([
+      { id: 1, type: 'find_manual', status: 'pending', attempts: 0, own: true },
+      { id: 2, type: 'export_rack', status: 'complete', attempts: 1, own: true },
+    ]);
+    api.post.mockResolvedValue({ stopped: 1 });
+    api.delete.mockResolvedValue({ deleted: 2 });
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="stop-all"]').text()).toContain('(1)');
+    // The refetch after a bulk stop reports what actually settled.
+    api.get.mockResolvedValue([
+      { id: 1, type: 'find_manual', status: 'cancelled', attempts: 0, own: true },
+      { id: 2, type: 'export_rack', status: 'complete', attempts: 1, own: true },
+    ]);
+    await wrapper.find('[data-test="stop-all"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/jobs/stop-all');
+    // Nothing left to stop, so the button goes away.
+    expect(wrapper.find('[data-test="stop-all"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="delete-all"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/jobs');
+    expect(wrapper.find('[data-test="delete-all"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('No jobs yet.');
+    vi.restoreAllMocks();
+  });
+
+  it('declines to delete when the confirmation is dismissed', async () => {
+    api.get.mockResolvedValue([
+      { id: 1, type: 'find_manual', status: 'failed', attempts: 3, own: true },
+    ]);
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="delete-1"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="delete-1"]').exists()).toBe(true);
+    vi.restoreAllMocks();
+  });
+
+  it("offers an admin no way to stop or delete another user's job", async () => {
+    api.get.mockResolvedValue([
+      { id: 1, type: 'analyze_manual', status: 'running', attempts: 1, own: false },
+      { id: 2, type: 'find_manual', status: 'failed', attempts: 3, own: false },
+    ]);
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="stop-1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="delete-1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="stop-all"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="delete-all"]').exists()).toBe(false);
+    // Retry is still theirs to press — it costs nobody their work.
+    expect(wrapper.find('[data-test="retry-2"]').exists()).toBe(true);
+  });
 });
 
 describe('UsersView', () => {

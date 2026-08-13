@@ -82,6 +82,37 @@ export function isStalled(job, staleMs = STALE_JOB_MS, now = Date.now()) {
   return !seen || now - seen.getTime() >= staleMs;
 }
 
+// A job's target carries its own status for the UI; when the job goes back to
+// the queue (or gives up, or is stopped by hand) that has to be walked back
+// too, otherwise a module sits on 'analyzing' with nothing analyzing it.
+// Shared with the jobs route, which stops and deletes jobs out from under the
+// worker.
+export async function resetJobTarget(db, job, status, message) {
+  const { Module, Question } = db.models;
+  const settled = status === 'failed' || status === 'cancelled';
+  if (job.type === 'find_manual' && job.module_id) {
+    await Module.update(
+      { manual_status: status === 'failed' ? 'failed' : 'pending' },
+      { where: { id: job.module_id } }
+    );
+  } else if (job.type === 'analyze_manual' && job.module_id) {
+    await Module.update(
+      { analysis_status: status === 'failed' ? 'failed' : 'pending' },
+      { where: { id: job.module_id } }
+    );
+  } else if (job.type === 'panel_image' && job.module_id) {
+    await Module.update(
+      { panel_status: status === 'failed' ? 'failed' : 'pending' },
+      { where: { id: job.module_id } }
+    );
+    // A question whose job is never going to finish would otherwise spin on
+    // 'scoping'/'answering' for good; 'failed' carries the reason and lets the
+    // user ask again.
+  } else if (settled && job.question_id) {
+    await Question.update({ status: 'failed', error: message }, { where: { id: job.question_id } });
+  }
+}
+
 export async function enqueueJob(db, type, { userId = null, moduleId = null, questionId = null, payload = null } = {}) {
   const job = await db.models.Job.create({
     type,
@@ -272,35 +303,6 @@ export function createWorker(db, options = {}) {
     );
   }
 
-  // A job's target carries its own status for the UI; when the job goes back
-  // to the queue (or gives up) that has to be walked back too, otherwise a
-  // module sits on 'analyzing' with nothing analyzing it.
-  async function resetJobTarget(job, status, message) {
-    const { Module, Question } = db.models;
-    const failed = status === 'failed';
-    if (job.type === 'find_manual' && job.module_id) {
-      await Module.update(
-        { manual_status: failed ? 'failed' : 'pending' },
-        { where: { id: job.module_id } }
-      );
-    } else if (job.type === 'analyze_manual' && job.module_id) {
-      await Module.update(
-        { analysis_status: failed ? 'failed' : 'pending' },
-        { where: { id: job.module_id } }
-      );
-    } else if (job.type === 'panel_image' && job.module_id) {
-      await Module.update(
-        { panel_status: failed ? 'failed' : 'pending' },
-        { where: { id: job.module_id } }
-      );
-    } else if (failed && job.question_id) {
-      await Question.update(
-        { status: 'failed', error: message },
-        { where: { id: job.question_id } }
-      );
-    }
-  }
-
   // Put a running job back: on the queue if it has attempts left, otherwise
   // failed. Guarded on the row still being 'running' so a job another process
   // finished in the meantime is left alone.
@@ -313,7 +315,7 @@ export function createWorker(db, options = {}) {
       { where: { id: job.id, status: 'running' }, returning: true }
     );
     if (!rows || !rows[0]) return null;
-    await resetJobTarget(job, status, message);
+    await resetJobTarget(db, job, status, message);
     const row = { ...rows[0].get({ plain: true }), ...(await jobLabels(job)) };
     publish(await jobOwners(job), status === 'failed' ? 'failed' : 'progress', row, message);
     return row;
@@ -602,6 +604,18 @@ export function createWorker(db, options = {}) {
     return runJob(job);
   }
 
+  // The row stopped being 'running' underneath us: the user stopped the job,
+  // or deleted it outright. Either way its result is discarded — the row (if
+  // there still is one) already says what the user asked for.
+  async function abandoned(job, owners, outcome) {
+    log(`job ${job.id} (${job.type}) ${outcome}, but it was stopped or deleted — discarding`);
+    const row = await db.models.Job.findByPk(job.id);
+    if (!row) return null;
+    const plain = { ...row.get({ plain: true }), ...(await jobLabels(job)) };
+    publish(owners, 'progress', plain, `job was stopped; the ${outcome} result was discarded`);
+    return plain;
+  }
+
   async function runJob(job) {
     const owners = await jobOwners(job);
     const labels = await jobLabels(job);
@@ -623,10 +637,14 @@ export function createWorker(db, options = {}) {
         limitMs,
         `job exceeded its ${Math.round(limitMs / 60000)} minute time limit`
       );
+      // Guarded on the row still being 'running': the user can stop (or
+      // delete) a job while its runner is mid-flight, and the outcome of work
+      // they cancelled must not put the row back on the board.
       const [, doneRows] = await db.models.Job.update(
         { status: 'complete', error: null },
-        { where: { id: job.id }, returning: true }
+        { where: { id: job.id, status: 'running' }, returning: true }
       );
+      if (!doneRows || !doneRows[0]) return abandoned(job, owners, 'completed');
       const done = { ...doneRows[0].get({ plain: true }), ...labels };
       publish(owners, 'completed', done);
       return done;
@@ -634,8 +652,9 @@ export function createWorker(db, options = {}) {
       const status = job.attempts >= MAX_ATTEMPTS ? 'failed' : 'pending';
       const [, failedRows] = await db.models.Job.update(
         { status, error: e.message },
-        { where: { id: job.id }, returning: true }
+        { where: { id: job.id, status: 'running' }, returning: true }
       );
+      if (!failedRows || !failedRows[0]) return abandoned(job, owners, 'failed');
       const failed = { ...failedRows[0].get({ plain: true }), ...labels };
       publish(owners, status === 'failed' ? 'failed' : 'progress', failed,
         status === 'failed' ? e.message : `attempt failed, will retry: ${e.message}`);

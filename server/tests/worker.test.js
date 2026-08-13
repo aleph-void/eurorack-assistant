@@ -979,6 +979,70 @@ describe('worker', () => {
     });
   });
 
+  // Stopping a job cannot interrupt its runner — handlers have no
+  // cancellation to offer — so the row is taken off the queue instead and the
+  // runner has to notice on its way out.
+  describe('jobs stopped mid-flight', () => {
+    async function analyzeJob(db) {
+      const user = await createUser(db, { username: 'u' });
+      const module = await insertModule(db, user.id);
+      await db.query(
+        `INSERT INTO manuals (module_id, hash, source, original_name)
+         VALUES ($1, $2, 'found', 'm.pdf')`,
+        [module.id, PDF_HASH]
+      );
+      fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+      const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
+      return { user, module, job };
+    }
+
+    it('leaves a job cancelled rather than completing it', async () => {
+      const db = await createTestDb();
+      const { job } = await analyzeJob(db);
+
+      // Cancel the row while the analysis is in the model's hands.
+      const analyzeDocument = async () => {
+        await db.query("UPDATE jobs SET status = 'cancelled' WHERE id = $1", [job.id]);
+        return JSON.stringify({ summary: 'done anyway', components: [] });
+      };
+      const result = await makeWorker(db, fakeBackend({ analyzeDocument })).tick();
+
+      expect(result.status).toBe('cancelled');
+      const { rows } = await db.query('SELECT status FROM jobs WHERE id = $1', [job.id]);
+      expect(rows[0].status).toBe('cancelled');
+    });
+
+    it('leaves a cancelled job cancelled when its attempt fails too', async () => {
+      const db = await createTestDb();
+      const { job } = await analyzeJob(db);
+
+      const analyzeDocument = async () => {
+        await db.query("UPDATE jobs SET status = 'cancelled' WHERE id = $1", [job.id]);
+        throw new Error('boom');
+      };
+      const result = await makeWorker(db, fakeBackend({ analyzeDocument })).tick();
+
+      expect(result.status).toBe('cancelled');
+      // Not 'pending': a stopped job must not put itself back on the queue.
+      const { rows } = await db.query('SELECT status FROM jobs WHERE id = $1', [job.id]);
+      expect(rows[0].status).toBe('cancelled');
+    });
+
+    it('survives the row being deleted out from under a running job', async () => {
+      const db = await createTestDb();
+      const { job } = await analyzeJob(db);
+
+      const analyzeDocument = async () => {
+        await db.query('DELETE FROM jobs WHERE id = $1', [job.id]);
+        return JSON.stringify({ summary: 'done anyway', components: [] });
+      };
+      const result = await makeWorker(db, fakeBackend({ analyzeDocument })).tick();
+
+      expect(result).toBeNull();
+      expect((await db.query('SELECT id FROM jobs')).rows).toHaveLength(0);
+    });
+  });
+
   it('falls back to the default worker count when the stored value is unusable', async () => {
     const db = await createTestDb();
     expect(await getImportWorkerCount(db)).toBe(DEFAULT_IMPORT_WORKERS);

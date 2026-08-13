@@ -193,4 +193,56 @@ describe('jobs store', () => {
     await expect(jobs.retryAll()).rejects.toThrow('job 1: Only failed jobs can be retried');
     expect(jobs.jobs[1].status).toBe('pending');
   });
+
+  it('stop cancels a job in place and clears its stalled flag', async () => {
+    api.post.mockResolvedValue({ id: 4, status: 'cancelled', error: 'stopped by user' });
+    const jobs = useJobsStore();
+    jobs.jobs = [{ id: 4, status: 'running', stalled: true, type: 'analyze_manual' }];
+    await jobs.stop(4);
+    expect(api.post).toHaveBeenCalledWith('/api/jobs/4/stop');
+    expect(jobs.jobs[0].status).toBe('cancelled');
+    expect(jobs.jobs[0].stalled).toBe(false);
+  });
+
+  it('stopAll is one request, then refetches the settled list', async () => {
+    api.post.mockResolvedValue({ stopped: 2 });
+    api.get.mockResolvedValue([{ id: 1, status: 'cancelled' }, { id: 2, status: 'cancelled' }]);
+    const jobs = useJobsStore();
+    jobs.jobs = [
+      { id: 1, status: 'pending' },
+      { id: 2, status: 'running' },
+    ];
+    expect(jobs.stoppableJobs).toHaveLength(2);
+    expect(await jobs.stopAll()).toEqual({ stopped: 2 });
+    expect(api.post).toHaveBeenCalledWith('/api/jobs/stop-all');
+    expect(jobs.stoppableJobs).toHaveLength(0);
+  });
+
+  it('remove drops one job from the list', async () => {
+    api.delete.mockResolvedValue({ ok: true });
+    const jobs = useJobsStore();
+    jobs.jobs = [
+      { id: 1, status: 'complete' },
+      { id: 2, status: 'failed' },
+    ];
+    await jobs.remove(1);
+    expect(api.delete).toHaveBeenCalledWith('/api/jobs/1');
+    expect(jobs.jobs.map((j) => j.id)).toEqual([2]);
+  });
+
+  it('deleteAll clears the caller\'s own jobs but keeps the ones they only watch', async () => {
+    api.delete.mockResolvedValue({ deleted: 2 });
+    const jobs = useJobsStore();
+    jobs.jobs = [
+      { id: 1, status: 'complete', own: true },
+      { id: 2, status: 'failed' }, // unmarked — arrived over the socket, so ours
+      { id: 3, status: 'running', own: false }, // another user's, admin view
+    ];
+    expect(jobs.ownJobs.map((j) => j.id)).toEqual([1, 2]);
+    // An admin cannot stop someone else's job, so it is not offered either.
+    expect(jobs.stoppableJobs).toHaveLength(0);
+    expect(await jobs.deleteAll()).toEqual({ deleted: 2 });
+    expect(api.delete).toHaveBeenCalledWith('/api/jobs');
+    expect(jobs.jobs.map((j) => j.id)).toEqual([3]);
+  });
 });

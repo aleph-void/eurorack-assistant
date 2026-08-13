@@ -15,6 +15,14 @@ export const useJobsStore = defineStore('jobs', {
     // Stalled jobs are still 'running', but the worker holding them died —
     // the server reclaims them on its next pass and accepts a retry meanwhile.
     retryableJobs: (state) => state.jobs.filter((j) => j.status === 'failed' || j.stalled),
+    // Stopping and deleting are owner-only: an admin's list also holds other
+    // users' jobs, which they may watch and retry but not throw away. The
+    // list marks each row; anything unmarked (a job that arrived over the
+    // socket) is by definition the viewer's own.
+    ownJobs: (state) => state.jobs.filter((j) => j.own !== false),
+    // Own jobs the queue still has designs on — what Stop All applies to.
+    stoppableJobs: (state) =>
+      state.jobs.filter((j) => j.own !== false && (j.status === 'pending' || j.status === 'running')),
   },
   actions: {
     async fetchJobs() {
@@ -41,6 +49,34 @@ export const useJobsStore = defineStore('jobs', {
         }
       }
       if (failures.length) throw new Error(`Some jobs could not be retried — ${failures.join('; ')}`);
+    },
+    // Stopping takes a job off the queue; a job already running is left to
+    // finish in the background and its result discarded by the worker, so the
+    // row goes to 'cancelled' either way.
+    async stop(jobId) {
+      const updated = await api.post(`/api/jobs/${jobId}/stop`);
+      const idx = this.jobs.findIndex((j) => j.id === jobId);
+      if (idx !== -1) this.jobs[idx] = { ...this.jobs[idx], ...updated, stalled: false };
+      return updated;
+    },
+    // Bulk stop and delete are one request each rather than a sweep of
+    // per-job calls: the set to act on is decided by the server, so jobs that
+    // started (or finished) since the list was fetched are handled correctly.
+    async stopAll() {
+      const result = await api.post('/api/jobs/stop-all');
+      await this.fetchJobs();
+      return result;
+    },
+    async remove(jobId) {
+      await api.delete(`/api/jobs/${jobId}`);
+      this.jobs = this.jobs.filter((j) => j.id !== jobId);
+    },
+    // Only the caller's own jobs are deleted, so an admin's view of everyone
+    // else's survives — refetch rather than assuming an empty list.
+    async deleteAll() {
+      const result = await api.delete('/api/jobs');
+      this.jobs = this.jobs.filter((j) => j.own === false);
+      return result;
     },
     applyEvent(event) {
       if (event.kind !== 'job' || !event.job) return;
