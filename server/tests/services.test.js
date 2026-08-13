@@ -44,6 +44,7 @@ describe('config service', () => {
     const perTypeDefaults = {
       llm_model_find_manual: '',
       llm_model_analyze_manual: '',
+      llm_model_extract_manual: '',
       llm_model_panel_image: '',
       llm_model_scope_question: '',
       llm_model_answer_question: '',

@@ -13,6 +13,13 @@
 // The result is deliberately deterministic — no model runs. A manual is
 // extracted in a second or two, on import and on upload alike, which is what
 // makes it affordable to do for every document the app holds.
+//
+// The exception is the document poppler gets nothing out of: a manual that is
+// a scan, or pages drawn as images, has no text layer to recover structure
+// from and no amount of heuristics will invent one. Those fall back to asking
+// the LLM provider to read the pages (extractWithModel, at the bottom), which
+// is the one thing a deterministic path cannot do at any price. The row
+// records which of the two it was, in `source`.
 
 import { execFile } from 'node:child_process';
 import { findPdftotext } from './pdf.js';
@@ -380,25 +387,110 @@ export function manualDocumentTitle(module, manual) {
   return !label || label.toLowerCase() === 'manual' ? moduleName : `${moduleName} — ${label}`;
 }
 
+// ---- the fallback, for the PDFs poppler cannot read ----
+
+// Asked only when pdftotext came back with nothing: a manual that is page
+// images with no text layer, or a file poppler refuses outright. The model
+// reads the pages the way a person would, which is the one thing the
+// deterministic path cannot do at any price.
+export const MANUAL_TEXT_TEMPLATE = (manufacturer, name) =>
+  `The attached PDF is the user manual for the eurorack modular synthesizer
+module "${manufacturer} ${name}". Its text cannot be extracted mechanically —
+it is most likely a scan, or pages drawn as images.
+
+Task: transcribe the whole document into Markdown, so it can be read and
+searched as text.
+
+Rules:
+- Reproduce what the manual SAYS, in the order it says it, from the first page
+  to the last. This is a transcription, not a summary: do not shorten, skip,
+  reorder or explain anything, and do not add anything the pages do not say.
+- Use Markdown for the structure that is visibly there: "#"/"##"/"###" for the
+  headings, "-" for bulleted lists, "1." for numbered ones, tables as Markdown
+  tables. Ordinary prose becomes ordinary paragraphs.
+- Leave out page furniture — the header, footer and page number repeated on
+  every page.
+- Where a page is genuinely unreadable, write "> [unreadable page]" on its own
+  line and carry on. Do not guess at what it might have said.
+- Do not start with a title heading; one is added afterwards.
+- Answer with the Markdown ALONE. No preamble, no commentary, no code fences
+  around the whole thing.
+`;
+
+// The model's answer as a document body: the fence it may have wrapped
+// everything in, and any title of its own, both removed — the H1 is ours, and
+// is what tells the reader which manual this is.
+export function cleanModelMarkdown(answer) {
+  let text = String(answer ?? '').trim();
+  const fenced = text.match(/^```(?:markdown|md)?\n([\s\S]*?)\n?```$/);
+  if (fenced) text = fenced[1].trim();
+  return text.replace(/^# .*\n+/, '').trim();
+}
+
+export async function extractWithModel(backend, module, manual, filePath, log = () => {}) {
+  log('the PDF has no text layer; asking the model to read it instead');
+  const answer = await backend.analyzeDocument(
+    MANUAL_TEXT_TEMPLATE(module.manufacturer, module.name),
+    filePath
+  );
+  const body = cleanModelMarkdown(answer);
+  if (body.replace(/\s+/g, ' ').trim().length < MIN_DOCUMENT_CHARS) {
+    throw new Error('the model read nothing out of the PDF either');
+  }
+  return body;
+}
+
 // Extract one document's text and record it. The row is keyed on the manual,
 // so re-extracting (a re-import, a manual replaced by a newer revision)
 // rewrites the text in place rather than accumulating copies.
+//
+// pdftotext first, always: it is free, deterministic and takes a second, which
+// is what makes extracting every document the app holds affordable. A model is
+// asked only where that produces nothing — a scanned manual, or a PDF poppler
+// will not open — and only when the caller supplied a backend to ask.
 export async function extractManualDocument(db, manual, module, filePath, deps = {}) {
-  const { log = () => {}, ...extractOpts } = deps;
+  const { log = () => {}, backend = null, ...extractOpts } = deps;
   const { ManualDocument } = db.models;
 
-  const raw = await extractPdfText(filePath, extractOpts);
   const title = manualDocumentTitle(module, manual);
-  const content = pdfTextToMarkdown(raw, { title });
-  // The H1 is ours, so it does not count towards "did this PDF have any text".
-  const extracted = content.replace(/^# .*\n/, '').replace(/\s+/g, ' ').trim();
-  if (extracted.length < MIN_DOCUMENT_CHARS) {
-    throw new Error(
-      'the PDF has no text to extract (it is most likely a scan, which would need OCR)'
-    );
+  let raw = null;
+  let body = null;
+  let source = 'pdftotext';
+  let failure = null;
+
+  try {
+    raw = await extractPdfText(filePath, extractOpts);
+    const markdown = pdfTextToMarkdown(raw, { title });
+    // The H1 is ours, so it does not count towards "did this PDF have any
+    // text".
+    const stripped = markdown.replace(/^# .*\n/, '').trim();
+    if (stripped.replace(/\s+/g, ' ').length >= MIN_DOCUMENT_CHARS) body = stripped;
+    else failure = new Error('the PDF has no text to extract (it is most likely a scan)');
+  } catch (e) {
+    failure = e;
   }
-  const pages = splitPages(normalizeText(raw)).length;
-  log(`extracted ${pages} page(s), ${content.length} characters of markdown`);
+
+  if (!body) {
+    if (!backend) {
+      throw new Error(`${failure.message}, and there is no model configured to read it instead`);
+    }
+    log(failure.message);
+    try {
+      body = await extractWithModel(backend, module, manual, filePath, log);
+      source = 'llm';
+    } catch (e) {
+      // Both roads are closed; the deterministic failure is the one that
+      // explains the document, so it leads.
+      throw new Error(`${failure.message}. Reading it with the model failed too: ${e.message}`);
+    }
+  }
+
+  const content = `# ${title}\n\n${body}\n`;
+  const pages = raw ? splitPages(normalizeText(raw)).length : null;
+  log(
+    `extracted ${pages ?? 'an unknown number of'} page(s), ${content.length} characters of ` +
+      `markdown${source === 'llm' ? ' (read by the model)' : ''}`
+  );
 
   const fields = {
     manual_id: manual.id,
@@ -409,7 +501,7 @@ export async function extractManualDocument(db, manual, module, filePath, deps =
     content,
     pages,
     chars: content.length,
-    source: 'pdftotext',
+    source,
   };
   const existing = await ManualDocument.findOne({ where: { manual_id: manual.id } });
   const row = existing ? await existing.update(fields) : await ManualDocument.create(fields);

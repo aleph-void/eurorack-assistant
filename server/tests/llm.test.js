@@ -2,7 +2,13 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ClaudeBackend, CodexBackend, createBackend, DEFAULT_MODELS } from '../src/services/llm.js';
+import {
+  ClaudeBackend,
+  CodexBackend,
+  createBackend,
+  runCli,
+  DEFAULT_MODELS,
+} from '../src/services/llm.js';
 
 function captureRun(response = 'ok') {
   const calls = [];
@@ -109,6 +115,41 @@ describe('CodexBackend', () => {
     await expect(
       new CodexBackend(null, { run, tmpdir: tmpdirFactory() }).completeText('hi')
     ).rejects.toThrow(/empty answer/);
+  });
+});
+
+// Both CLIs report no-login, no-quota and unknown-model on stdout and exit
+// non-zero with an empty stderr. An error carrying only stderr says nothing
+// at all, which is how an exhausted subscription looked like a mystery across
+// a whole rack's worth of panel jobs.
+describe('reporting what a CLI actually said when it fails', () => {
+  const script = (code, out, err = '') =>
+    runCli('sh', ['-c', `printf '%s' "${out}" ; printf '%s' "${err}" >&2 ; exit ${code}`], '');
+
+  it('puts the process output in the error when it exits non-zero', async () => {
+    await expect(script(1, "You're out of usage credits.")).rejects.toThrow(
+      /sh failed \(exit 1\):\nYou're out of usage credits\./
+    );
+  });
+
+  it('keeps stderr as well, when there is any', async () => {
+    const error = await script(2, 'said on stdout', 'said on stderr').catch((e) => e);
+    expect(error.message).toContain('said on stderr');
+    expect(error.message).toContain('said on stdout');
+  });
+
+  it('says only that it failed when the process said nothing', async () => {
+    await expect(script(3, '')).rejects.toThrow(/^sh failed \(exit 3\)$/);
+  });
+
+  it('keeps the tail of a long complaint rather than all of it', async () => {
+    const error = await script(1, 'x'.repeat(2000)).catch((e) => e);
+    expect(error.message.length).toBeLessThan(900);
+    expect(error.message).toContain('…');
+  });
+
+  it('still resolves with stdout when the process succeeds', async () => {
+    await expect(script(0, 'the answer')).resolves.toBe('the answer');
   });
 });
 

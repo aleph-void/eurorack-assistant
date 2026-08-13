@@ -18,9 +18,16 @@ export const DEFAULT_MODELS = { claude: 'claude-fable-5', codex: 'gpt-5.1-codex'
 
 // Job types that invoke an LLM backend and accept a per-type model override.
 // (import and export_rack never call the LLM.)
+//
+// extract_manual is on the list for a fallback rather than for its job: it
+// reads a PDF with pdftotext and no model at all, and only asks one when that
+// comes back empty — a manual that is a scan. Worth its own override for
+// exactly that reason: transcribing page images is the cheapest thing here to
+// point at a small model.
 export const LLM_JOB_TYPES = [
   'find_manual',
   'analyze_manual',
+  'extract_manual',
   'panel_image',
   'scope_question',
   'answer_question',
@@ -45,8 +52,16 @@ export function runCli(cmd, args, input, { timeoutMs = 600000 } = {}) {
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (code !== 0) reject(new Error(`${cmd} failed (exit ${code}):\n${stderr}`));
-      else resolve(stdout.trim());
+      if (code === 0) return resolve(stdout.trim());
+      // Both agent CLIs report the things that actually go wrong — no login,
+      // no quota, an unknown model, a refusal — on STDOUT, and exit non-zero
+      // with nothing on stderr at all. An error built from stderr alone is
+      // then the bare string "claude failed (exit 1):", which is how an
+      // exhausted subscription managed to look like a mystery for a whole
+      // rack's worth of jobs. Whatever the process said is the error.
+      const said = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n').trim();
+      const detail = said.length > 800 ? `…${said.slice(-800)}` : said;
+      reject(new Error(`${cmd} failed (exit ${code})${detail ? `:\n${detail}` : ''}`));
     });
     child.stdin.write(input);
     child.stdin.end();

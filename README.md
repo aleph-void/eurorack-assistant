@@ -42,7 +42,8 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
      and the structure heuristics in `services/manualText.js` turn it back
      into markdown (headings, lists, paragraphs; running headers and page
      numbers dropped), stored for reading and full-text search (see below). No
-     model runs, so it costs nothing to do for every document — it is queued
+     model runs unless the PDF turns out to be a scan with no text layer at
+     all, so it costs nothing for almost every document — it is queued
      alongside the analysis rather than behind it.
 
   Gaps in all of that can be filled from the modules page ("Fill in missing
@@ -109,7 +110,18 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   markdown document — headings, lists and paragraphs recovered from line
   layout, words rejoined across line breaks, the header and page number
   repeated on every page dropped — stored in `manual_documents` behind a
-  postgres GIN full-text index.
+  postgres GIN full-text index. No model runs, which is what makes it
+  affordable to do for every document the app holds.
+
+  Some manuals are scans, though: page images with no text layer, which no
+  amount of structure recovery can read. Those (and any PDF poppler refuses
+  outright) fall back to asking the LLM provider to transcribe the pages —
+  the one thing the deterministic path cannot do at any price. It is a
+  fallback and not the method: it fires only where `pdftotext` came back
+  empty, and `manual_documents.source` records which of the two produced the
+  text (`pdftotext` or `llm`). `extract_manual` therefore takes a model
+  override of its own in the admin config, so the transcription can be pointed
+  at a cheap model.
 
   The **Search manuals** page searches all of it at once: bare words, `"quoted
   phrases"` and `-exclusions`, ranked, each hit showing the matched words in

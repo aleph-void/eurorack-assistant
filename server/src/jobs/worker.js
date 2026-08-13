@@ -7,7 +7,9 @@
 //   analyze_manual  — LLM analysis of the manual into a summary + components,
 //                     then queue a panel_image job for it
 //   extract_manual  — pdftotext + markdown structuring of one document, stored
-//                     for reading and full-text search (no LLM involved)
+//                     for reading and full-text search. No LLM involved unless
+//                     the PDF turns out to have no text layer at all, which
+//                     only a model can read
 //   panel_image     — find (or draw) the module's front panel and place every
 //                     analyzed component on it
 //   scope_question  — determine which modules/jacks a question applies to,
@@ -453,7 +455,9 @@ export function createWorker(db, options = {}) {
       manual.get({ plain: true }),
       module,
       manualPath(manualsDir, manual.hash),
-      { log: progress }
+      // The backend is the fallback, not the method: it is asked only if
+      // pdftotext reads nothing out of the file (services/manualText.js).
+      { log: progress, backend }
     );
     progress(`text saved: ${document.pages ?? '?'} page(s), ${document.chars} characters`);
   }

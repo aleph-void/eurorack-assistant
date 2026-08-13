@@ -464,15 +464,23 @@ describe('building a module panel', () => {
   // the photographs — which is what a rebuild across a whole system did the
   // first time the subscription ran out of credits mid-run.
   describe('when the model is not answering at all', () => {
-    // What `claude -p` actually prints, and then exits 0 on.
+    // What `claude -p` prints when the subscription is spent. It says this on
+    // STDOUT and then exits 1, so runCli rejects — which is why the tally has
+    // to count a call on the way out and not on the way back.
     const OUT_OF_CREDITS =
       "You're out of usage credits. Run /usage-credits to keep using Fable 5 or /model to switch models.";
-    const silentBackend = () =>
-      fakeBackend({
-        completeTextWithSearch: OUT_OF_CREDITS,
-        analyzeImage: OUT_OF_CREDITS,
-        analyzeDocument: OUT_OF_CREDITS,
+    const silentBackend = ({ throws = true } = {}) => {
+      // Either shape of not-answering: the CLI exiting non-zero (what the
+      // real one does), or returning prose where JSON was asked for.
+      const response = throws
+        ? new Error(`claude failed (exit 1):\n${OUT_OF_CREDITS}`)
+        : OUT_OF_CREDITS;
+      return fakeBackend({
+        completeTextWithSearch: response,
+        analyzeImage: response,
+        analyzeDocument: response,
       });
+    };
 
     it('fails the panel instead of drawing one over the photograph it had', async () => {
       const { module } = await analyzedModule(db, manualsDir);
@@ -532,6 +540,16 @@ describe('building a module panel', () => {
 
       expect(await db.models.ModulePanelComponent.count({ where: { panel_id: panel.id } })).toBe(1);
       expect(fs.existsSync(panelPath(panelsDir, hash, 'png'))).toBe(true);
+    });
+
+    it('fails the same way when the CLI answers with prose instead of exiting', async () => {
+      const { module } = await analyzedModule(db, manualsDir);
+      await expect(
+        buildPanelForModule(db, silentBackend({ throws: false }), module, panelsDir, {
+          fetchImpl: fakeFetch({}),
+          manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`),
+        })
+      ).rejects.toThrow(/came back readable/);
     });
 
     // The point is to tell an outage from an answer, not to stop drawing

@@ -238,16 +238,20 @@ Rules:
 //
 // So the two are counted apart. A job where nothing answered is a failed job,
 // which leaves the panel the module already has exactly where it is.
+// The call has to be counted BEFORE it is made, not after it returns: the
+// commonest way for a provider to be down is the CLI exiting non-zero, which
+// throws rather than returning anything to read. Counting on the way back
+// misses exactly the case this is for.
 export function answerTally() {
   return {
     asked: 0,
     answered: 0,
-    // One call: counted, and counted again if it produced a JSON object.
-    // Throws what extractJsonObject throws, which every caller already
-    // handles as "this step found nothing".
-    read(text) {
+    // One call: counted going in, counted as answered only if it came back
+    // and held a JSON object. Throws what the call or the parse throws, which
+    // every caller already handles as "this step found nothing".
+    async attempt(call) {
       this.asked += 1;
-      const value = extractJsonObject(text);
+      const value = extractJsonObject(await call());
       this.answered += 1;
       return value;
     },
@@ -600,8 +604,8 @@ export async function locateComponentsOnImage(
 ) {
   let parsed;
   try {
-    parsed = tally.read(
-      await backend.analyzeImage(
+    parsed = await tally.attempt(() =>
+      backend.analyzeImage(
         PANEL_MAP_TEMPLATE(module.manufacturer, module.name, components, { cropped }),
         imagePath
       )
@@ -727,8 +731,8 @@ export async function layoutFromManual(
   if (!manualFile || !fs.existsSync(manualFile)) return null;
   let parsed;
   try {
-    parsed = tally.read(
-      await backend.analyzeDocument(
+    parsed = await tally.attempt(() =>
+      backend.analyzeDocument(
         PANEL_LAYOUT_TEMPLATE(module.manufacturer, module.name, components),
         manualFile
       )
@@ -754,8 +758,8 @@ async function researchPanelImage(
 ) {
   let info;
   try {
-    info = tally.read(
-      await backend.completeTextWithSearch(template(module.manufacturer, module.name))
+    info = await tally.attempt(() =>
+      backend.completeTextWithSearch(template(module.manufacturer, module.name))
     );
   } catch (e) {
     log(`panel image research failed: ${e.message}`);
