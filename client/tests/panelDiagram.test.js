@@ -324,6 +324,58 @@ describe('ModulePanel', () => {
     expect(titles).toContain('IN');
   });
 
+  // Panels come in every colour, so one fixed marker colour is invisible on
+  // some of them. The button is how the viewer picks one that shows up.
+  describe('changing the marker colour', () => {
+    const coloured = () =>
+      mount(ModulePanel, {
+        props: {
+          panel: panelFor([
+            { id: 7, component_id: 1, name: 'EOR', shape: 'jack', x: 0.3, y: 0.8 },
+            { id: 8, component_id: 2, name: 'IN', shape: 'jack', x: 0.6, y: 0.8 },
+          ]),
+          highlight: [2],
+        },
+        global: testGlobal(),
+      });
+
+    beforeEach(() => localStorage.clear());
+
+    it('recolours every marker at a press, and says which colour it is on', async () => {
+      const wrapper = coloured();
+      const button = wrapper.find('[data-test="panel-marker-color"]');
+      expect(button.text()).toContain('Violet');
+      const before = wrapper.find('[data-test="module-panel-svg"]').attributes('style');
+
+      await button.trigger('click');
+      expect(button.text()).toContain('Lime');
+      const after = wrapper.find('[data-test="module-panel-svg"]').attributes('style');
+      expect(after).not.toBe(before);
+      expect(after).toContain('--marker-ring');
+      // The highlighted marker takes its colour from the same place, so it
+      // moves with the rest instead of staying violet on a lime panel.
+      expect(wrapper.findAll('.marker.on')).toHaveLength(1);
+    });
+
+    it('comes back round to where it started', async () => {
+      const wrapper = coloured();
+      const button = wrapper.find('[data-test="panel-marker-color"]');
+      const names = new Set();
+      for (let i = 0; i < 6; i += 1) {
+        names.add(button.text());
+        await button.trigger('click');
+      }
+      expect(names.size).toBe(6);
+      expect(button.text()).toContain('Violet');
+    });
+
+    it('remembers the choice for the next panel opened', async () => {
+      const first = coloured();
+      await first.find('[data-test="panel-marker-color"]').trigger('click');
+      expect(coloured().find('[data-test="panel-marker-color"]').text()).toContain('Lime');
+    });
+  });
+
   // The marker positions are estimates all the way down; this is how someone
   // looking at the picture overrules them.
   describe('dragging a marker onto the hardware it names', () => {

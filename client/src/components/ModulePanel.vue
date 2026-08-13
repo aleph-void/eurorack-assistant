@@ -11,6 +11,32 @@
 import { computed, ref } from 'vue';
 import { placementFraction } from '../panelLayout.js';
 
+// A marker has to be seen against whatever the panel happens to look like, and
+// panels are every colour there is: a violet ring vanishes on a purple Make
+// Noise plate, a pale one vanishes on brushed aluminium. So the colour is the
+// viewer's to choose, cycled through a handful that each win somewhere.
+const MARKER_SCHEMES = [
+  { name: 'Violet', ring: '#a78bfa', body: 'rgba(139, 92, 246, 0.2)', halo: 'rgba(9, 9, 11, 0.55)' },
+  { name: 'Lime', ring: '#bef264', body: 'rgba(163, 230, 53, 0.25)', halo: 'rgba(9, 9, 11, 0.6)' },
+  { name: 'Cyan', ring: '#67e8f9', body: 'rgba(34, 211, 238, 0.25)', halo: 'rgba(9, 9, 11, 0.6)' },
+  { name: 'Magenta', ring: '#f472b6', body: 'rgba(236, 72, 153, 0.25)', halo: 'rgba(9, 9, 11, 0.6)' },
+  { name: 'White', ring: '#ffffff', body: 'rgba(255, 255, 255, 0.25)', halo: 'rgba(9, 9, 11, 0.7)' },
+  { name: 'Black', ring: '#09090b', body: 'rgba(9, 9, 11, 0.3)', halo: 'rgba(250, 250, 250, 0.7)' },
+];
+
+const SCHEME_KEY = 'panel-marker-scheme';
+
+// Remembered between visits: someone with a rack of black panels should not
+// have to re-pick the colour on every module they open.
+function storedScheme() {
+  try {
+    const at = MARKER_SCHEMES.findIndex((s) => s.name === localStorage.getItem(SCHEME_KEY));
+    return at < 0 ? 0 : at;
+  } catch {
+    return 0;
+  }
+}
+
 const props = defineProps({
   panel: { type: Object, required: true },
   height: { type: Number, default: 560 },
@@ -23,6 +49,25 @@ const props = defineProps({
 const emit = defineEmits(['move']);
 
 const svg = ref(null);
+const schemeAt = ref(storedScheme());
+const scheme = computed(() => MARKER_SCHEMES[schemeAt.value]);
+
+// The colours the markers are drawn in, handed to the SVG as custom properties
+// so every marker — plain, highlighted or held — moves together.
+const schemeStyle = computed(() => ({
+  '--marker-ring': scheme.value.ring,
+  '--marker-body': scheme.value.body,
+  '--marker-halo': scheme.value.halo,
+}));
+
+function cycleScheme() {
+  schemeAt.value = (schemeAt.value + 1) % MARKER_SCHEMES.length;
+  try {
+    localStorage.setItem(SCHEME_KEY, scheme.value.name);
+  } catch {
+    // A browser that will not remember it is not a reason to refuse the change.
+  }
+}
 // The marker being dragged, and where it has been dragged to — held apart from
 // the panel prop so the circle follows the pointer without a round trip, and
 // so a failed save leaves nothing behind.
@@ -131,7 +176,7 @@ function endDrag() {
     <svg
       ref="svg"
       :viewBox="`0 0 ${width} ${height}`"
-      :style="{ width: '100%', maxWidth: `${width}px` }"
+      :style="{ width: '100%', maxWidth: `${width}px`, ...schemeStyle }"
       data-test="module-panel-svg"
       @pointermove="onDrag"
       @pointerup="endDrag"
@@ -155,6 +200,9 @@ function endDrag() {
         />
       </svg>
       <g v-for="m in markers" :key="m.id ?? m.name + m.cx">
+        <!-- A ring of the opposite colour behind the marker, so the marker has
+             an edge to be seen against on a panel of its own colour. -->
+        <circle :cx="m.cx" :cy="m.cy" r="11" class="marker-halo" />
         <circle
           :cx="m.cx"
           :cy="m.cy"
@@ -168,6 +216,18 @@ function endDrag() {
         </circle>
       </g>
     </svg>
+    <div class="panel-tools">
+      <button
+        type="button"
+        class="secondary marker-color"
+        data-test="panel-marker-color"
+        :title="`Marker colour: ${scheme.name} — press for the next one`"
+        @click="cycleScheme"
+      >
+        <span class="swatch" :style="{ background: scheme.ring }" aria-hidden="true"></span>
+        Marker colour: {{ scheme.name }}
+      </button>
+    </div>
     <figcaption class="muted">
       <template v-if="panel.source === 'upload'">
         Panel picture you uploaded — {{ markers.length }} component(s) located on it{{
@@ -205,22 +265,49 @@ function endDrag() {
   border-radius: 6px;
   touch-action: none;
 }
+.marker-halo {
+  fill: none;
+  stroke: var(--marker-halo);
+  stroke-width: 3;
+  pointer-events: none;
+}
 .marker {
-  fill: rgba(139, 92, 246, 0.15);
-  stroke: rgba(228, 228, 231, 0.6);
+  fill: var(--marker-body);
+  stroke: var(--marker-ring);
   stroke-width: 2;
 }
 .marker.on {
-  fill: rgba(139, 92, 246, 0.45);
-  stroke: var(--accent-2);
+  fill: var(--marker-ring);
+  fill-opacity: 0.45;
+  stroke-width: 3;
 }
 .marker.editable {
   cursor: grab;
 }
 .marker.held {
   cursor: grabbing;
-  fill: rgba(139, 92, 246, 0.55);
-  stroke: var(--accent-2);
+  fill: var(--marker-ring);
+  fill-opacity: 0.6;
+  stroke-width: 3;
+}
+.panel-tools {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.marker-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.5rem;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+}
+.swatch {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
 }
 figcaption {
   font-size: 0.85rem;
