@@ -183,13 +183,21 @@ export function moduleRoutes(
   // Redoing complete work costs a model run per module and overwrites
   // corrections made by hand, so it is not the default.
   //
-  // Body: { rack_id?, rediscover_manuals?: boolean }. Re-discovery is off by
-  // default: a module missing its analysis usually has a usable manual on
-  // disk already, and searching for it again costs a web search. Turning it
-  // on sends those modules back to the search first — the escape hatch for a
-  // module whose manual turned out to be the wrong document. A module with no
-  // manual at all is sent to find one either way, since there is nothing else
-  // for it to be analyzed from.
+  // Body: { rack_id?, rediscover_manuals?: boolean, rebuild_panels?: boolean }.
+  // Re-discovery is off by default: a module missing its analysis usually has
+  // a usable manual on disk already, and searching for it again costs a web
+  // search. Turning it on sends those modules back to the search first — the
+  // escape hatch for a module whose manual turned out to be the wrong
+  // document. A module with no manual at all is sent to find one either way,
+  // since there is nothing else for it to be analyzed from.
+  //
+  // rebuild_panels is the same escape hatch for the panels: every analyzed
+  // module goes back through the panel step even if it already has one. The
+  // one thing that reliably wants it is a change to how panels are built —
+  // the positions on an existing panel were worked out by the code as it was
+  // then, and nothing about the module itself says they are out of date. A
+  // panel picture someone uploaded survives it: that job keeps the image and
+  // only works the markers out again (services/panelImage.js).
   //
   // The jobs chain (find_manual → analyze_manual → panel_image), so filling
   // an early gap fills the later ones behind it without queueing them here.
@@ -209,6 +217,7 @@ export function moduleRoutes(
       });
       const modules = [...new Map(mappings.map((rm) => [rm.Module.id, rm.Module])).values()];
       const rediscover = Boolean(req.body?.rediscover_manuals);
+      const rebuildPanels = Boolean(req.body?.rebuild_panels);
       const moduleIds = modules.map((m) => m.id);
 
       const [manuals, components, panels, documents] =
@@ -238,7 +247,7 @@ export function moduleRoutes(
       function missingStep(module) {
         if (!hasManual.has(module.id)) return 'find_manual';
         if (!hasComponents.has(module.id) || !module.summary) return 'analyze_manual';
-        if (!hasPanel.has(module.id) || module.hp == null) return 'panel_image';
+        if (rebuildPanels || !hasPanel.has(module.id) || module.hp == null) return 'panel_image';
         return null;
       }
 

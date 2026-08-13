@@ -11,14 +11,19 @@
 //      kept and only re-located on (routes/modules.js POST /:id/panel).
 //   1. Research the web for the module's real front-panel image on the
 //      manufacturer's own product page (or a retailer's), download it, and ask
-//      the LLM to locate every analyzed component on it.
-//   2. Failing that — no image found, or none of the components could be
+//      the LLM to locate every analyzed component on it. What the model says
+//      is then measured against the pixels and corrected — see
+//      services/panelPixels.js, which is where the accuracy actually comes
+//      from.
+//   2. Failing that, look the module up on ModularGrid, which is not a source
+//      but does have a straight-on panel shot of very nearly everything.
+//   3. Failing that — no image found, or none of the components could be
 //      located on it — ask the LLM to read the module's LAYOUT out of the
 //      manual (how many HP wide, and where each control and jack sits) and
 //      draw that layout here as an SVG. A logical stand-in rather than a
 //      likeness, but positioned from the same manual, so the diagram still
 //      reads as the module.
-//   3. Failing even that (no manual, or an answer with nothing usable in it),
+//   4. Failing even that (no manual, or an answer with nothing usable in it),
 //      lay the components out in columns by type, so every jack still has a
 //      place a cable can be drawn to.
 //
@@ -26,8 +31,19 @@
 // them at any size (see migration 016).
 
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { extractJsonObject } from './json.js';
 import { downloadImage, panelPath, saveImage } from './image.js';
+import { HP_MM, PANEL_MM_HEIGHT, PX_PER_MM, DEFAULT_HP } from './panelGeometry.js';
+import {
+  growBox,
+  panelCrop,
+  pointInBox,
+  readPixels,
+  snapPlacements,
+  writeCrop,
+} from './panelPixels.js';
 
 // How a marker is drawn. Derived from the component's analyzed type, or
 // stated by the LLM when it places something the analysis did not list.
@@ -56,13 +72,7 @@ const SHAPE_FOR_TYPE = {
 
 export const shapeForComponent = (component) => SHAPE_FOR_TYPE[component?.type] || 'other';
 
-// Eurorack panel geometry: 1HP is 5.08mm and a 3U panel is 128.5mm tall.
-// Generated panels are drawn at PX_PER_MM units per millimetre, so every
-// glyph below can be sized in real millimetres.
-export const HP_MM = 5.08;
-export const PANEL_MM_HEIGHT = 128.5;
-export const PX_PER_MM = 8;
-export const DEFAULT_HP = 8;
+export { HP_MM, PANEL_MM_HEIGHT, PX_PER_MM, DEFAULT_HP } from './panelGeometry.js';
 const MIN_HP = 2;
 const MAX_HP = 84;
 
@@ -97,10 +107,40 @@ Rules:
 - "hp": the panel width in HP as a number, or null if it is not stated.
 `;
 
+// Asked only when the search above came back with nothing usable. ModularGrid
+// is a rack planner rather than a source: its pages are user-maintained, and
+// the picture on one is whoever's photograph of whatever they had. But every
+// module in it is shown the same way — one panel, straight on, cropped to the
+// plate — which is exactly the shape this needs, and a real picture of the
+// right module beats the drawing we would otherwise fall back to.
+export const PANEL_MODULARGRID_TEMPLATE = (manufacturer, name) =>
+  `You are looking for a picture of the front panel of the eurorack modular
+synthesizer module "${manufacturer} ${name}". The manufacturer's own site and
+the retailers did not have one.
+
+Task: find this module's page on ModularGrid (modulargrid.net) and collect the
+direct URL of the panel image shown on it.
+
+Respond with ONLY a JSON object, no prose and no code fences, shaped exactly like:
+
+{"image_urls": ["https://..."], "page_url": "https://...", "hp": 8}
+
+Rules:
+- "image_urls": up to 4 direct image FILE URLs (ending .jpg, .jpeg, .png or
+  .webp), best first. ModularGrid serves these from its own image host; give
+  the largest version offered. Use [] if you cannot find the module's page or
+  it has no picture.
+- Make sure the page really is THIS module by THIS manufacturer. ModularGrid
+  holds many modules with the same short name, and a picture of the wrong one
+  is worse than no picture at all.
+- "page_url": the ModularGrid page for the module, or null.
+- "hp": the panel width in HP as a number, or null if the page does not say.
+`;
+
 const componentList = (components) =>
   components.map((c) => `- ${c.name} (${c.type})`).join('\n');
 
-export const PANEL_MAP_TEMPLATE = (manufacturer, name, components) =>
+export const PANEL_MAP_TEMPLATE = (manufacturer, name, components, { cropped = false } = {}) =>
   `You are looking at a photograph of the front panel of the eurorack module
 "${manufacturer} ${name}". Locate each of its components on the image.
 
@@ -111,33 +151,42 @@ ${componentList(components)}
 Respond with ONLY a JSON object, no prose and no code fences, shaped exactly like:
 
 {
-  "is_panel": true,
-  "panel": { "x": 0.12, "y": 0.02, "w": 0.5, "h": 0.96 },
+  "is_panel": true,${cropped ? '' : '\n  "panel": { "x": 0.12, "y": 0.02, "w": 0.5, "h": 0.96 },'}
   "components": [
-    { "name": "1V/OCT", "x": 0.3, "y": 0.82, "w": 0.14, "h": 0.05 }
+    { "name": "1V/OCT", "x": 0.312, "y": 0.824, "w": 0.14, "h": 0.05 }
   ]
 }
 
 Rules:
 - ALL coordinates are fractions of the WHOLE image, with 0,0 at the top left
   and 1,1 at the bottom right. "x"/"y" are the CENTRE of the thing, "w"/"h"
-  its size.
+  its size. Give "x" and "y" to three decimal places.
 - "is_panel" is false if the image does not actually show this module's front
   panel straight on — a different module, a rear/PCB shot, a rack full of
   modules, a heavily angled photo, a logo or a placeholder. Say so honestly
   and return [] for "components": a wrong picture is worse than none, and
   there is a fallback that does not need one.
-- "panel" is the bounding box of this module's front plate within the image,
+${
+  cropped
+    ? `- The image has already been cropped to this module's front plate, so the
+  panel fills the frame edge to edge. Every component is somewhere on it.`
+    : `- "panel" is the bounding box of this module's front plate within the image,
   excluding background, packaging, other modules and rack rails. Use
-  {"x": 0.5, "y": 0.5, "w": 1, "h": 1} if the panel fills the image.
+  {"x": 0.5, "y": 0.5, "w": 1, "h": 1} if the panel fills the image.`
+}
 - List one entry per component you can actually see, using the component's
   EXACT name from the list above. Omit the ones you cannot find rather than
   guessing at a position — an unplaced jack is fine, a jack placed on top of
   the wrong hole is not.
 - Jacks are the round sockets a patch cable plugs into; knobs are the larger
   round controls with a pointer or indent; sliders are the long slots; the
-  small rectangles are buttons and toggles. Place each name on the control it
-  labels, not on the label text.
+  small rectangles are buttons and toggles.
+- Give the centre of the HARDWARE ITSELF: the middle of a jack's hole, the
+  middle of a knob's cap. A panel's silkscreened names are printed a few
+  millimetres above or below the things they name, and are NOT part of them.
+  Read the name to work out WHICH control you are looking at, then give the
+  position of that control alone — a centre that has drifted towards the
+  lettering is the one mistake worth taking care over here.
 `;
 
 export const PANEL_LAYOUT_TEMPLATE = (manufacturer, name, components) =>
@@ -503,15 +552,26 @@ export function normalizeCrop(raw) {
   };
 }
 
-// Ask the LLM where the components are on the image we just downloaded.
-// Returns null when the image turns out not to show this module's panel, or
-// when nothing on it could be identified.
-export async function locateComponentsOnImage(backend, module, components, imagePath, log) {
+// Ask the LLM where the components are on an image. Returns null when the
+// image turns out not to show this module's panel, or when nothing on it
+// could be identified.
+//
+// `cropped` says the file has already been cut down to the front plate, in
+// which case the model is not asked for a panel box (we already know it, and
+// better than it does) and its coordinates are relative to the crop.
+export async function locateComponentsOnImage(
+  backend,
+  module,
+  components,
+  imagePath,
+  log,
+  { cropped = false } = {}
+) {
   let parsed;
   try {
     parsed = extractJsonObject(
       await backend.analyzeImage(
-        PANEL_MAP_TEMPLATE(module.manufacturer, module.name, components),
+        PANEL_MAP_TEMPLATE(module.manufacturer, module.name, components, { cropped }),
         imagePath
       )
     );
@@ -531,7 +591,95 @@ export async function locateComponentsOnImage(backend, module, components, image
     log(`only ${matched} of ${components.length} component(s) could be located on the image`);
     return null;
   }
-  return { placements, crop: normalizeCrop(parsed.panel), matched };
+  return { placements, crop: cropped ? null : normalizeCrop(parsed.panel), matched };
+}
+
+// How much backdrop is left around the plate in the picture handed to the
+// model: enough that nothing along an edge is cut in half, little enough that
+// the panel is still what the picture is of.
+const ANALYSIS_MARGIN = 0.03;
+// A trim that barely shrinks the frame is not worth a second file on disk.
+const WORTH_CROPPING = 0.8;
+
+// Where this module's components are on a panel photograph, in the fractions
+// of the whole image the client renders from — the model's reading of the
+// picture, corrected against the picture itself.
+//
+// The plate is found by trimming the backdrop rather than by asking, the
+// model is then shown the plate on its own rather than a module 4% of the way
+// across a press shot, and every round component it places is finally snapped
+// onto the hardware it names. Each of those steps is skipped silently if the
+// image cannot be decoded, leaving exactly the single unrefined LLM pass this
+// used to be.
+export async function mapPanelImage(backend, module, components, file, deps = {}) {
+  const { hp = null, log = () => {}, tmpdir = os.tmpdir } = deps;
+  const pixels = await readPixels(file);
+  const plate = pixels ? panelCrop(pixels, { hp }) : null;
+
+  // The box the model's answer will be relative to: the crop we hand it, or
+  // the whole image when there is no crop to hand it.
+  let analysisBox = null;
+  let analysisFile = file;
+  let scratch = null;
+  try {
+    if (plate && plate.w * plate.h < WORTH_CROPPING) {
+      const box = growBox(plate, ANALYSIS_MARGIN);
+      scratch = fs.mkdtempSync(path.join(tmpdir(), 'panel-crop-'));
+      const written = await writeCrop(file, box, path.join(scratch, 'panel.png'));
+      if (written) {
+        analysisBox = box;
+        analysisFile = written;
+        log(
+          `cropped the front plate out of the ${pixels.width}x${pixels.height} image ` +
+            `(${Math.round(plate.w * 100)}% of its width) before mapping`
+        );
+      }
+    }
+
+    const located = await locateComponentsOnImage(backend, module, components, analysisFile, log, {
+      cropped: analysisBox !== null,
+    });
+    if (!located) return null;
+
+    let placements = located.placements;
+    if (analysisBox) {
+      placements = placements.map((p) => ({
+        ...p,
+        ...pointInBox(analysisBox, p.x, p.y),
+        w: p.w * analysisBox.w,
+        h: p.h * analysisBox.h,
+      }));
+    }
+
+    const crop = plate
+      ? { crop_x: plate.x, crop_y: plate.y, crop_w: plate.w, crop_h: plate.h }
+      : located.crop ?? { ...FULL_CROP };
+
+    if (pixels) {
+      const snap = snapPlacements(pixels, placements, {
+        x: crop.crop_x,
+        y: crop.crop_y,
+        w: crop.crop_w,
+        h: crop.crop_h,
+      });
+      placements = snap.placements;
+      if (snap.snapped > 0) {
+        // A fraction of the image's height is that many 128.5mm plates.
+        const mm = (Math.abs(snap.shift.y) * PANEL_MM_HEIGHT) / crop.crop_h;
+        log(
+          `snapped ${snap.snapped} of ${placements.length} marker(s) onto the hardware` +
+            (snap.shifted
+              ? `, and moved the other ${snap.shifted} ${snap.shift.y < 0 ? 'up' : 'down'} ` +
+                `the ${mm.toFixed(1)}mm they agreed on`
+              : '')
+        );
+      }
+    }
+
+    return { placements, crop, matched: located.matched };
+  } finally {
+    if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 // Ask the LLM to read the panel layout out of the manual, for the case where
@@ -555,22 +703,21 @@ export async function layoutFromManual(backend, module, components, manualFile, 
   return { placements, hp: normalizeHp(parsed.hp) };
 }
 
-// Research and download a front-panel photograph. Returns the saved image
-// (already content-addressed in panelsDir) or null.
-export async function findPanelImage(backend, module, panelsDir, deps = {}) {
-  const { fetchImpl = fetch, log = () => {} } = deps;
+// One research prompt: ask, then download the first candidate that turns out
+// to be an image we serve. Returns { image, hp, page_url }, image null when
+// the search found nothing or none of what it found could be fetched.
+async function researchPanelImage(backend, template, module, panelsDir, { fetchImpl, log }) {
   let info;
   try {
     info = extractJsonObject(
-      await backend.completeTextWithSearch(
-        PANEL_RESEARCH_TEMPLATE(module.manufacturer, module.name)
-      )
+      await backend.completeTextWithSearch(template(module.manufacturer, module.name))
     );
   } catch (e) {
     log(`panel image research failed: ${e.message}`);
-    return { image: null, hp: null };
+    return { image: null, hp: null, page_url: null };
   }
   const hp = normalizeHp(info.hp);
+  const page_url = info.page_url ? String(info.page_url).trim() : null;
   const urls = (Array.isArray(info.image_urls) ? info.image_urls : [info.image_urls])
     .filter(Boolean)
     .map((u) => String(u).trim())
@@ -584,10 +731,36 @@ export async function findPanelImage(backend, module, panelsDir, deps = {}) {
     return {
       image: { ...image, hash, path: panelPath(panelsDir, hash, image.ext) },
       hp,
-      page_url: info.page_url ? String(info.page_url).trim() : null,
+      page_url,
     };
   }
-  return { image: null, hp, page_url: info.page_url ? String(info.page_url).trim() : null };
+  return { image: null, hp, page_url };
+}
+
+// Research and download a front-panel photograph. The maker's own page and
+// the retailers first; ModularGrid only if that turns up nothing, since it is
+// a rack planner whose pictures are contributed rather than published. A
+// width learnt from either search is kept even when neither yields a picture,
+// because a module with no recorded HP still wants one.
+export async function findPanelImage(backend, module, panelsDir, deps = {}) {
+  const { fetchImpl = fetch, log = () => {} } = deps;
+  const options = { fetchImpl, log };
+  const first = await researchPanelImage(backend, PANEL_RESEARCH_TEMPLATE, module, panelsDir, options);
+  if (first.image) return first;
+
+  log('no panel image from the manufacturer or a retailer; trying ModularGrid');
+  const second = await researchPanelImage(
+    backend,
+    PANEL_MODULARGRID_TEMPLATE,
+    module,
+    panelsDir,
+    options
+  );
+  return {
+    image: second.image,
+    hp: (second.image ? second.hp ?? first.hp : first.hp ?? second.hp) ?? null,
+    page_url: (second.image ? second.page_url : first.page_url ?? second.page_url) ?? null,
+  };
 }
 
 // Replace the module's panel record and its component positions, and mark the
@@ -652,7 +825,10 @@ export async function locateOnUploadedPanel(db, backend, module, panel, componen
   const file = panelPath(panelsDir, panel.image_hash, panel.image_ext);
   if (!fs.existsSync(file)) return null;
   log(`locating components on the uploaded ${panel.width}x${panel.height} image`);
-  const located = await locateComponentsOnImage(backend, module, components, file, log);
+  const located = await mapPanelImage(backend, module, components, file, {
+    hp: module.hp ?? panel.hp ?? null,
+    log,
+  });
   if (!located) {
     log('no component could be located on the uploaded image; keeping it unmarked');
   }
@@ -726,13 +902,10 @@ export async function buildPanelForModule(db, backend, module, panelsDir, deps =
 
   if (researched.image) {
     log(`locating components on ${researched.image.width}x${researched.image.height} image`);
-    const located = await locateComponentsOnImage(
-      backend,
-      module,
-      components,
-      researched.image.path,
-      log
-    );
+    const located = await mapPanelImage(backend, module, components, researched.image.path, {
+      hp: module.hp ?? researched.hp ?? null,
+      log,
+    });
     if (located) {
       log(`panel image mapped: ${located.matched} of ${components.length} component(s) located`);
       const landed = await uploadedPanel();

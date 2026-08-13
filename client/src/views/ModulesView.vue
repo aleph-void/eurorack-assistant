@@ -93,6 +93,11 @@ async function move(module, event) {
 // manuals is a separate, heavier step: it costs a web search per module, so
 // it is off unless asked for.
 const rediscoverManuals = ref(false);
+// Panels are the one part of this that goes stale on its own: the markers on
+// an existing panel were placed by the code as it stood when the job ran, so
+// improving how panels are built is a reason to redo every one of them that
+// nothing about the modules themselves would ever signal.
+const rebuildPanels = ref(false);
 const reanalyzing = ref(false);
 const reanalyzed = ref('');
 
@@ -101,11 +106,15 @@ async function reanalyzeAll() {
   const extra = rediscoverManuals.value
     ? ' Modules still missing their analysis will have their manuals searched for again first.'
     : '';
+  const panels = rebuildPanels.value
+    ? ' Every analyzed module will also have its front panel rebuilt, even if it already has one' +
+      ' — a picture you uploaded is kept, and only its markers are worked out again.'
+    : '';
   const ok = await dialog.confirm({
     title: 'Fill in missing details',
     message:
       `Queue work for every module ${where} that is missing a manual, an analysis, ` +
-      `a panel image, an HP width or the searchable text of its manual?${extra}`,
+      `a panel image, an HP width or the searchable text of its manual?${extra}${panels}`,
     confirmLabel: 'Fill in',
   });
   if (!ok) return;
@@ -116,6 +125,7 @@ async function reanalyzeAll() {
     const res = await api.post('/api/modules/reanalyze', {
       rack_id: selectedRack.value || undefined,
       rediscover_manuals: rediscoverManuals.value,
+      rebuild_panels: rebuildPanels.value,
     });
     const queued = Object.values(res.queued).reduce((sum, n) => sum + n, 0);
     const complete = `${res.complete} of ${res.modules} module(s) already complete`;
@@ -179,6 +189,10 @@ onUnmounted(() => clearTimeout(refreshTimer));
     <label class="inline-check">
       <input v-model="rediscoverManuals" type="checkbox" data-test="rediscover-manuals" />
       Re-discover manuals too
+    </label>
+    <label class="inline-check">
+      <input v-model="rebuildPanels" type="checkbox" data-test="rebuild-panels" />
+      Rebuild every panel
     </label>
   </div>
   <p v-if="reanalyzed" class="muted" data-test="reanalyze-result">{{ reanalyzed }}</p>

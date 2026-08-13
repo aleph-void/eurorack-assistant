@@ -53,19 +53,40 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   analysis costs a model run per module and overwrites corrections made by
   hand. Re-discovering the manuals is an off-by-default option, for a module
   whose analysis is missing because the document found for it was the wrong
-  one.
+  one. "Rebuild every panel" is the same escape hatch for the panels: it sends
+  every analyzed module back through `panel_image` even if it already has one,
+  which is what to reach for when how panels are built has changed (nothing
+  about a module itself ever says its markers were placed by older code). A
+  panel picture you uploaded survives it — the job keeps the image and only
+  works out its markers again.
 
   Each attempt of a job gets a time limit of 45 minutes, widened by the
   attempt count (45, then 90, then 135) — work that timed out because it is
   genuinely long would otherwise fail identically on every retry.
 - **Front panels**: each module gets a picture of its front plate with its
-  jacks and controls located on it. The panel image is researched on the web
-  (the manufacturer's product page, or a retailer's) and the LLM marks where
-  each analyzed component sits on it; when no usable photograph exists — or the
-  one found turns out not to show this module straight on — the LLM reads the
-  panel LAYOUT out of the manual instead (how many HP wide, where each control
-  sits) and the server draws that as an SVG. Either way every jack ends up with
-  a position, which is what makes the patch diagram possible.
+  jacks and controls located on it. The panel image is researched on the web —
+  the manufacturer's product page or a retailer's first, and ModularGrid only
+  if neither has one, since it is a rack planner whose pictures are contributed
+  rather than published. The LLM then marks where each analyzed component sits
+  on it. When no usable photograph exists — or the one found turns out not to
+  show this module straight on — the LLM reads the panel LAYOUT out of the
+  manual instead (how many HP wide, where each control sits) and the server
+  draws that as an SVG. Either way every jack ends up with a position, which is
+  what makes the patch diagram possible.
+
+  Where a photograph is used, what the model says about it is then **measured
+  against the pixels** (`services/panelPixels.js`), because a model reading a
+  photograph is reliable about which control it is looking at and only roughly
+  right about where it is — measured over the first panels captured here, every
+  marker landed about 2% of the panel's height low, dragged towards the
+  silkscreened name printed under its control. So: the front plate is found by
+  trimming the photograph's backdrop rather than by asking; the model is shown
+  that crop rather than a module 4% of the way across a press shot; and every
+  round component it places is finally snapped onto the strongest circular
+  feature within a few millimetres of it, with whatever the group moved by
+  applied to the LEDs and toggles too flat to snap. That took the error on
+  those panels from 2.8–3.1mm RMS to 0.35–0.75mm. All of it degrades quietly:
+  an image that cannot be decoded just keeps what the model said.
 
   You can also **upload your own panel picture** from the module page (PNG,
   JPEG, GIF or WebP). An uploaded panel replaces whatever the module had and is

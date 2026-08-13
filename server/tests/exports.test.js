@@ -188,8 +188,12 @@ describe('rack export', () => {
     expect(questionPdf).toContain('It accepts');
 
     // The zip is one-shot: served once, then removed from disk and the link
-    // goes dead until a new export is queued.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // goes dead until a new export is queued. The removal happens after the
+    // response has been written, so it is waited for rather than assumed to
+    // have already happened by some fixed number of milliseconds later.
+    for (let i = 0; i < 200 && fs.existsSync(exportFilePath(exportsDir, jobId)); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     expect(fs.existsSync(exportFilePath(exportsDir, jobId))).toBe(false);
     expect(
       (await request(app).get(`/api/exports/${jobId}`).set('Cookie', aliceCookie)).status

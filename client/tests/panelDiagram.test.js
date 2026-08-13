@@ -336,6 +336,7 @@ describe('ModulesView fill in missing details', () => {
     expect(api.post).toHaveBeenCalledWith('/api/modules/reanalyze', {
       rack_id: undefined,
       rediscover_manuals: false,
+      rebuild_panels: false,
     });
     expect(wrapper.find('[data-test="reanalyze-result"]').text()).toContain(
       'Queued 2 job(s) — 1 of 3 module(s) already complete.'
@@ -359,6 +360,32 @@ describe('ModulesView fill in missing details', () => {
     expect(api.post).toHaveBeenCalledWith('/api/modules/reanalyze', {
       rack_id: 1,
       rediscover_manuals: true,
+      rebuild_panels: false,
+    });
+  });
+
+  // Panels go stale on their own when how they are built changes, so redoing
+  // every one of them is asked for separately from the rest.
+  it('asks for every panel to be rebuilt when that box is ticked', async () => {
+    api.post.mockResolvedValue({
+      modules: 2,
+      queued: { find_manual: 0, analyze_manual: 0, panel_image: 2 },
+      skipped: 0,
+      complete: 0,
+    });
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="rebuild-panels"]').setValue(true);
+    await wrapper.find('[data-test="reanalyze-all"]').trigger('click');
+    await flushPromises();
+
+    expect(dialog.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('front panel rebuilt') })
+    );
+    expect(api.post).toHaveBeenCalledWith('/api/modules/reanalyze', {
+      rack_id: undefined,
+      rediscover_manuals: false,
+      rebuild_panels: true,
     });
   });
 

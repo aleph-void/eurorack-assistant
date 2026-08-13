@@ -20,6 +20,7 @@ import {
   PDF_HASH,
 } from './helpers.js';
 import { sniffImage, panelPath, saveImage } from '../src/services/image.js';
+import { loadSharp } from '../src/services/panelPixels.js';
 import {
   buildPanelForModule,
   fallbackLayout,
@@ -291,6 +292,80 @@ describe('building a module panel', () => {
     expect(after.panel_status).toBe('complete');
   });
 
+  // A real photograph rather than the flat rectangle the rest of these use:
+  // a 2HP plate on a backdrop with four dark controls down it, so the crop,
+  // the mapping and the snap all have something to actually measure.
+  async function platePng() {
+    const sharp = await loadSharp();
+    const width = 500;
+    const height = 1500;
+    const plate = { x0: 200, x1: 301, y0: 100, y1: 1385 }; // 102 x 1286, a 2HP plate
+    const gray = Buffer.alloc(width * height, 250);
+    for (let y = plate.y0; y <= plate.y1; y++) {
+      for (let x = plate.x0; x <= plate.x1; x++) gray[y * width + x] = 200;
+    }
+    const cx = (plate.x0 + plate.x1) / 2;
+    const controls = [];
+    for (const [i, name] of ['1V/OCT', 'FM', 'FREQ', 'SAW'].entries()) {
+      const cy = plate.y0 + 250 * (i + 1);
+      const r = 22;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (dx * dx + dy * dy <= r * r) gray[Math.round(cy + dy) * width + Math.round(cx + dx)] = 20;
+        }
+      }
+      controls.push({ name, x: cx / width, y: cy / height });
+    }
+    const buffer = await sharp(gray, { raw: { width, height, channels: 1 } }).png().toBuffer();
+    return { buffer, controls, plate, width, height };
+  }
+
+  it('crops the plate out of the photograph, then snaps the markers onto the hardware', async () => {
+    const { module } = await analyzedModule(db, manualsDir, { hp: 2 });
+    const fixture = await platePng();
+    // What a model says about the cropped picture: the right controls, each
+    // dragged 30px down towards where its silkscreen name would be.
+    const cropped = { x0: 194, y0: 61, w: 114, h: 1363 };
+    const backend = fakeBackend({
+      completeTextWithSearch: research,
+      analyzeImage: (prompt) =>
+        JSON.stringify({
+          is_panel: true,
+          components: fixture.controls.map((c) => ({
+            name: c.name,
+            x: (c.x * fixture.width - cropped.x0) / cropped.w,
+            y: (c.y * fixture.height + 30 - cropped.y0) / cropped.h,
+          })),
+        }),
+    });
+    const { panel, placements } = await buildPanelForModule(db, backend, module, panelsDir, {
+      fetchImpl: fakeFetch({ 'doepfer.de/a110.png': { body: fixture.buffer } }),
+      manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`),
+    });
+
+    expect(panel.source).toBe('image');
+    // The crop is the plate itself, measured off the picture rather than
+    // taken from the model's answer (which was not even asked for it).
+    expect(panel.crop_x * fixture.width).toBeCloseTo(fixture.plate.x0, 0);
+    expect(panel.crop_w * fixture.width).toBeCloseTo(102, 0);
+    expect(panel.crop_h * fixture.height).toBeCloseTo(1286, 0);
+    // The model was shown the crop, and told it did not need to find the panel.
+    const [prompt, file] = backend.calls.analyzeImage.at(-1);
+    expect(prompt).toContain('already been cropped');
+    expect(prompt).not.toContain('"panel"');
+    expect(file).not.toBe(panelPath(panelsDir, panel.image_hash, 'png'));
+    // Its 30px drift is gone: every marker is back on its control, to within
+    // a millimetre (a plate is 128.5mm over 1286px here, so ~10px/mm), and in
+    // fractions of the whole image rather than of the crop it was mapped on.
+    for (const control of fixture.controls) {
+      const placed = placements.find((p) => p.name === control.name);
+      expect(Math.abs(placed.y * fixture.height - control.y * fixture.height)).toBeLessThan(10);
+      expect(Math.abs(placed.x * fixture.width - control.x * fixture.width)).toBeLessThan(10);
+    }
+    // And the temporary crop it was shown does not outlive the job.
+    expect(fs.readdirSync(panelsDir).filter((f) => f.endsWith('.png'))).toHaveLength(1);
+  });
+
   // A picture of something else is worse than no picture: the drawn panel is
   // at least the right module.
   it('draws the panel from the manual when the image is not this module', async () => {
@@ -316,6 +391,71 @@ describe('building a module panel', () => {
     expect(fs.readdirSync(panelsDir).filter((f) => f.endsWith('.png'))).toEqual([]);
     const svg = fs.readFileSync(panelPath(panelsDir, panel.image_hash, 'svg'), 'utf-8');
     expect(svg).toContain('1V/OCT');
+  });
+
+  // ModularGrid is a rack planner rather than a source, so it is asked only
+  // once the maker and the retailers have come up empty — but a real picture
+  // of the right module from there still beats the drawing.
+  it('falls back to ModularGrid when nothing else has a picture', async () => {
+    const { module } = await analyzedModule(db, manualsDir);
+    const backend = fakeBackend({
+      // The first prompt names ModularGrid too, to rule it out; the fallback
+      // is the one that says the other searches came up empty.
+      completeTextWithSearch: (prompt) =>
+        /did not have one/.test(prompt)
+          ? JSON.stringify({
+              image_urls: ['https://cdn.modulargrid.net/img/modules/a110.png'],
+              page_url: 'https://modulargrid.net/e/doepfer-a-110',
+              hp: 8,
+            })
+          : JSON.stringify({ image_urls: [], page_url: null, hp: null }),
+      analyzeImage: JSON.stringify({
+        is_panel: true,
+        panel: { x: 0.5, y: 0.5, w: 1, h: 1 },
+        components: COMPONENTS.map((c, i) => ({ name: c.name, x: 0.5, y: 0.1 * (i + 1) })),
+      }),
+    });
+    const { panel } = await buildPanelForModule(db, backend, module, panelsDir, {
+      fetchImpl: fakeFetch({ 'modulargrid.net/img/modules/a110.png': { body: PANEL_PNG } }),
+      manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`),
+    });
+
+    expect(backend.calls.completeTextWithSearch).toHaveLength(2);
+    expect(panel.source).toBe('image');
+    expect(panel.source_url).toContain('modulargrid.net');
+    expect(panel.hp).toBe(8);
+  });
+
+  it('does not go to ModularGrid when the manufacturer had a picture', async () => {
+    const { module } = await analyzedModule(db, manualsDir);
+    const backend = fakeBackend({
+      completeTextWithSearch: research,
+      analyzeImage: JSON.stringify({
+        is_panel: true,
+        components: COMPONENTS.map((c, i) => ({ name: c.name, x: 0.5, y: 0.1 * (i + 1) })),
+      }),
+    });
+    await buildPanelForModule(db, backend, module, panelsDir, {
+      fetchImpl: fakeFetch({ 'doepfer.de/a110.png': { body: PANEL_PNG } }),
+      manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`),
+    });
+    expect(backend.calls.completeTextWithSearch).toHaveLength(1);
+  });
+
+  // Neither search found a picture, but one of them did read the width off a
+  // page, and a module with no recorded HP still wants it.
+  it('keeps a width learnt while researching even when no image came of it', async () => {
+    const { module } = await analyzedModule(db, manualsDir);
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({ image_urls: [], page_url: null, hp: 14 }),
+      analyzeDocument: 'the model did not answer with JSON',
+    });
+    const { panel } = await buildPanelForModule(db, backend, module, panelsDir, {
+      fetchImpl: fakeFetch({}),
+      manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`),
+    });
+    expect(panel.source).toBe('generated');
+    expect(panel.hp).toBe(14);
   });
 
   it('draws the panel from the component list when there is no image and no layout', async () => {
@@ -781,6 +921,33 @@ describe('filling in what modules are missing', () => {
       panel_image: 1,
       extract_manual: 0,
     });
+  });
+
+  // How panels are built changes; the modules do not. Nothing about a
+  // complete module says its markers were placed by older code, so redoing
+  // them has to be something you can just ask for.
+  it('sends every analyzed module back to the panel step when asked to rebuild', async () => {
+    const done = await completeModule({ name: 'Maths' });
+    const alsoDone = await completeModule({ name: 'Optomix' });
+    const noManual = await insertModule(ctx.db, alice.id, { name: 'Rene' });
+
+    const res = await reanalyze({ rebuild_panels: true });
+    expect(res.status).toBe(200);
+    expect(res.body.queued).toMatchObject({ panel_image: 2, find_manual: 1 });
+
+    const panelJobs = await ctx.db.models.Job.findAll({ where: { type: 'panel_image' } });
+    expect(panelJobs.map((j) => j.module_id).sort()).toEqual([done.id, alsoDone.id].sort());
+    // A module with no manual has no components to place, so it goes back to
+    // the start of the pipeline rather than to the panel step.
+    expect(panelJobs.map((j) => j.module_id)).not.toContain(noManual.id);
+    expect((await ctx.db.models.Module.findByPk(done.id)).panel_status).toBe('pending');
+  });
+
+  it('leaves complete panels alone without the flag', async () => {
+    await completeModule({ name: 'Maths' });
+    const res = await reanalyze();
+    expect(res.body.queued.panel_image).toBe(0);
+    expect(res.body.complete).toBe(1);
   });
 
   it('re-discovers the manual of an unanalyzed module when asked to', async () => {
