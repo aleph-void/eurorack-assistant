@@ -233,6 +233,7 @@ describe('ScopePanel', () => {
     expect(api.post).toHaveBeenCalledWith('/api/scope/patches/7/captures', {
       connection_id: 3,
       title: 'Krell gate',
+      channels: [0, 1],
     });
     const capture = wrapper.find('[data-test="capture-5"]');
     expect(capture.find('[data-test="capture-image-5"]').attributes('src')).toBe(
@@ -241,6 +242,46 @@ describe('ScopePanel', () => {
     expect(capture.text()).toContain('A2 +0¢');
     expect(capture.text()).toContain('1.750 V');
     expect(wrapper.emitted('captured')).toBeTruthy();
+  });
+
+  it('captures only the channels that are ticked', async () => {
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
+    );
+    api.post.mockResolvedValue({ id: 6, captured_at: '2026-08-12T18:00:00Z', channels: [] });
+
+    const wrapper = mountPanel();
+    useDevicesStore().connections = [CONNECTION];
+    await flushPromises();
+
+    // Every channel starts ticked, and each is named by what it is watching.
+    expect(wrapper.find('[data-test="capture-channels"]').text()).toContain(
+      'Make Noise Maths — EOR'
+    );
+    await wrapper.find('[data-test="capture-channel-0"]').setValue(false);
+    await wrapper.find('[data-test="scope-capture"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/scope/patches/7/captures', {
+      connection_id: 3,
+      title: undefined,
+      channels: [1],
+    });
+  });
+
+  it('will not capture with every channel unticked', async () => {
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
+    );
+
+    const wrapper = mountPanel();
+    useDevicesStore().connections = [CONNECTION];
+    await flushPromises();
+
+    await wrapper.find('[data-test="capture-channels-all"]').trigger('click');
+    await wrapper.find('[data-test="scope-capture"]').trigger('click');
+    await flushPromises();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="scope-error"]').text()).toContain('at least one channel');
   });
 
   it('surfaces a device that did not answer', async () => {

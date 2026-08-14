@@ -44,6 +44,56 @@ const jacksOf = (patchModuleId) => {
 const moduleLabel = (pm) =>
   pm ? pm.label || `${pm.manufacturer} ${pm.module_name}`.trim() : '(unknown module)';
 
+// Every channel a capture could take: what the device announced, plus any the
+// patch has a mapping for. Named by the mapping where there is one, since a
+// jack name says more than "Ch 3".
+const captureChannels = computed(() => {
+  const indices = new Set();
+  const count = Number(connection.value?.audio_device?.channel_count) || 0;
+  for (let i = 0; i < count; i += 1) indices.add(i);
+  for (const c of asArray(connection.value?.channels)) {
+    if (Number.isInteger(c?.index)) indices.add(c.index);
+  }
+  for (const c of channels.value) {
+    if (Number.isInteger(c?.channel_index)) indices.add(c.channel_index);
+  }
+  const mapped = new Map(channels.value.map((c) => [c.channel_index, c]));
+  const announced = new Map(asArray(connection.value?.channels).map((c) => [c.index, c]));
+  return [...indices]
+    .sort((a, b) => a - b)
+    .map((index) => {
+      const map = mapped.get(index);
+      return {
+        index,
+        name: map?.label || map?.component_name || announced.get(index)?.name || null,
+      };
+    });
+});
+
+// Which of them this capture takes. All of them to begin with; a channel the
+// user unticks stays unticked as the map is reloaded, and one that appears
+// later (a scope with more inputs connects) starts ticked like the rest.
+const chosenChannels = ref([]);
+watch(
+  captureChannels,
+  (list, previous) => {
+    const known = new Set(asArray(previous).map((c) => c.index));
+    const kept = new Set(chosenChannels.value);
+    chosenChannels.value = list
+      .map((c) => c.index)
+      .filter((index) => !known.has(index) || kept.has(index));
+  },
+  { immediate: true }
+);
+
+const allChosen = computed(
+  () => captureChannels.value.length > 0 && chosenChannels.value.length === captureChannels.value.length
+);
+
+function chooseAll(on) {
+  chosenChannels.value = on ? captureChannels.value.map((c) => c.index) : [];
+}
+
 async function load() {
   error.value = '';
   try {
@@ -123,11 +173,20 @@ async function readTuner() {
 async function capture() {
   error.value = '';
   status.value = '';
+  // Only send a channel list when there is one to send: with no channels to
+  // choose from the server picks for itself, and an empty tick list would
+  // otherwise read as that same "you choose".
+  const picked = [...chosenChannels.value].sort((a, b) => a - b);
+  if (captureChannels.value.length > 0 && picked.length === 0) {
+    error.value = 'Pick at least one channel to capture.';
+    return;
+  }
   busy.value = true;
   try {
     const created = await api.post(`/api/scope/patches/${props.patchId}/captures`, {
       connection_id: connection.value?.id,
       title: captureTitle.value.trim() || undefined,
+      channels: picked.length > 0 ? picked : undefined,
     });
     captureTitle.value = '';
     status.value = 'Captured — filed under this patch’s notes.';
@@ -332,6 +391,30 @@ watch(connected, (isConnected) => {
 
       <div class="subpanel">
         <h3>Capture a waveform</h3>
+        <div v-if="captureChannels.length > 0" class="channel-picker" data-test="capture-channels">
+          <div class="row">
+            <span class="shrink muted">Channels to capture</span>
+            <button
+              class="shrink"
+              type="button"
+              data-test="capture-channels-all"
+              @click="chooseAll(!allChosen)"
+            >
+              {{ allChosen ? 'None' : 'All' }}
+            </button>
+          </div>
+          <div class="channel-checks">
+            <label v-for="c in captureChannels" :key="c.index" class="inline-check">
+              <input
+                v-model="chosenChannels"
+                type="checkbox"
+                :value="c.index"
+                :data-test="`capture-channel-${c.index}`"
+              />
+              Ch {{ c.index + 1 }}<span v-if="c.name" class="muted"> — {{ c.name }}</span>
+            </label>
+          </div>
+        </div>
         <div class="row">
           <input
             v-model="captureTitle"
@@ -350,6 +433,10 @@ watch(connected, (isConnected) => {
         <p class="muted">
           The image and the tuner reading taken with it are stored as a note on this patch, and
           can be attached to a question afterwards.
+          <span v-if="captureChannels.length > 0">
+            Only the ticked channels are asked for, so a scope with more inputs than the patch
+            uses does not fill the picture with flat lines.
+          </span>
         </p>
       </div>
 
@@ -422,3 +509,20 @@ watch(connected, (isConnected) => {
     </div>
   </details>
 </template>
+
+<style scoped>
+.channel-picker {
+  margin-bottom: 0.6rem;
+}
+.channel-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.2rem;
+  margin-top: 0.4rem;
+}
+/* A channel carries the jack it watches, which is longer than "Ch 3" and
+   must be allowed to wrap. */
+.channel-checks .inline-check {
+  white-space: normal;
+}
+</style>

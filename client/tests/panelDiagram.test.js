@@ -230,6 +230,17 @@ describe('PatchDiagram', () => {
     expect(wrapper.text()).toContain('A-180');
   });
 
+  // A new patch snapshots the rack before a single cable is patched; drawing
+  // the whole rack then is not a diagram of the patch.
+  it('draws nothing for a patch with no cables yet', async () => {
+    const wrapper = mountDiagram({ cables: [] });
+    expect(wrapper.find('[data-test="diagram-empty"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="diagram-svg"]').exists()).toBe(false);
+    await wrapper.find('[data-test="diagram-show-all"]').setValue(true);
+    expect(wrapper.find('[data-test="diagram-svg"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain('Maths');
+  });
+
   it('names each module with the label the patch uses', () => {
     const wrapper = mountDiagram({ labelFor: (pm) => `${pm.module_name} (voice)` });
     expect(wrapper.text()).toContain('Maths (voice)');

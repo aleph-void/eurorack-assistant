@@ -32,10 +32,12 @@ const showJackNames = ref(false);
 const label = (pm) =>
   props.labelFor ? props.labelFor(pm) : `${pm.manufacturer} ${pm.module_name}`.trim();
 
-const shown = computed(() => {
-  const used = usedModules(props.modules, props.cables);
-  return showAll.value || used.length === 0 ? props.modules : used;
-});
+// A patch with no cables yet uses no modules, and drawing the whole rack in
+// that case buries the diagram in panels the patch has nothing to do with —
+// so an unpatched patch draws nothing until 'show every module' is ticked.
+const shown = computed(() =>
+  showAll.value ? props.modules : usedModules(props.modules, props.cables)
+);
 
 const diagram = computed(() => layoutDiagram(shown.value, { height: PANEL_HEIGHT }));
 
