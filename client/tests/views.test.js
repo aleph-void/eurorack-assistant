@@ -1605,6 +1605,85 @@ describe('ChangePasswordView', () => {
   });
 });
 
+describe('JobsView budget banner', () => {
+  const jobsAnd = (usage) => (path) =>
+    Promise.resolve(path === '/api/usage/me' ? usage : path === '/api/jobs/queue' ? {} : []);
+
+  it('says nothing when no budget applies', async () => {
+    api.get.mockImplementation(jobsAnd({ unlimited: true, limit: 0, used: 0 }));
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="budget"]').exists()).toBe(false);
+  });
+
+  it('explains a queue that is waiting on a spent allowance', async () => {
+    api.get.mockImplementation(
+      jobsAnd({
+        unlimited: false,
+        limit: 1000,
+        used: 1200,
+        remaining: 0,
+        period: 'day',
+        exhausted: true,
+      })
+    );
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+    const banner = wrapper.find('[data-test="budget"]');
+    expect(banner.text()).toContain('Your token budget is spent');
+    expect(banner.text()).toContain('last 24 hours');
+  });
+});
+
+describe('UsersView budgets', () => {
+  const usersResponse = [
+    { id: 1, username: 'admin', is_admin: true, created_at: new Date().toISOString(), token_budget: null },
+    { id: 2, username: 'alice', is_admin: false, created_at: new Date().toISOString(), token_budget: null },
+  ];
+  const usageResponse = {
+    period: 'month',
+    default_limit: 1000,
+    total_tokens: 1200,
+    total_cost_usd: 0,
+    users: [
+      { id: 1, username: 'admin', used: 0, limit: 0, unlimited: true, exhausted: false },
+      { id: 2, username: 'alice', used: 1200, limit: 1000, unlimited: false, exhausted: true },
+    ],
+  };
+
+  it('shows what each user has spent and marks the ones who are out', async () => {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/usage' ? usageResponse : usersResponse)
+    );
+    const wrapper = mount(UsersView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="spent-2"]').text()).toContain('1,200');
+    expect(wrapper.find('[data-test="exhausted"]').exists()).toBe(true);
+    // An admin has no ceiling to set.
+    expect(wrapper.find('[data-test="budget-1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="usage-window"]').text()).toContain('last 30 days');
+  });
+
+  it('sets and clears one user’s allowance', async () => {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/usage' ? usageResponse : usersResponse)
+    );
+    api.put.mockResolvedValue({ id: 2, username: 'alice', token_budget: 5000 });
+    const wrapper = mount(UsersView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="budget-2"]').setValue('5000');
+    await wrapper.find('[data-test="save-budget-2"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/users/2/budget', { token_budget: 5000 });
+
+    // Blank hands them back the configured default.
+    await wrapper.find('[data-test="budget-2"]').setValue('');
+    await wrapper.find('[data-test="save-budget-2"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenLastCalledWith('/api/users/2/budget', { token_budget: null });
+  });
+});
+
 describe('ConfigView', () => {
   const configResponse = {
     llm_provider: 'claude',
@@ -1618,6 +1697,8 @@ describe('ConfigView', () => {
     known_models: { claude: ['claude-fable-5'], codex: ['gpt-5.1-codex'] },
     default_models: { claude: 'claude-fable-5', codex: 'gpt-5.1-codex' },
     llm_job_types: ['find_manual', 'analyze_manual', 'scope_question', 'answer_question'],
+    token_budget_default: '0',
+    token_budget_period: 'month',
   };
 
   it('loads current config and saves changes', async () => {
@@ -1635,6 +1716,10 @@ describe('ConfigView', () => {
     await wrapper.find('[data-test="model"]').setValue('gpt-5.1-codex');
     await wrapper.find('[data-test="model-find_manual"]').setValue('gpt-5.1-codex-mini');
     await wrapper.find('[data-test="import-workers"]').setValue('6');
+    // A token budget is off (0) until an admin sets one here.
+    expect(wrapper.find('[data-test="token-budget-default"]').element.value).toBe('0');
+    await wrapper.find('[data-test="token-budget-default"]').setValue('250000');
+    await wrapper.find('[data-test="token-budget-period"]').setValue('week');
     await wrapper.find('form').trigger('submit');
     await flushPromises();
     expect(api.put).toHaveBeenCalledWith('/api/config', {
@@ -1645,6 +1730,8 @@ describe('ConfigView', () => {
       llm_model_analyze_manual: 'claude-haiku-4-5',
       llm_model_scope_question: '',
       llm_model_answer_question: '',
+      token_budget_default: 250000,
+      token_budget_period: 'week',
     });
     expect(wrapper.find('[data-test="saved"]').exists()).toBe(true);
   });

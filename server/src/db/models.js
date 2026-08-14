@@ -19,6 +19,9 @@ export function defineModels(sequelize) {
       password_hash: { type: DataTypes.TEXT, allowNull: false },
       is_admin: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       must_change_password: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+      // Token allowance per budget window (migration 021). NULL takes the
+      // configured default; 0 lifts the ceiling for this user alone.
+      token_budget: { type: DataTypes.BIGINT },
     },
     { tableName: 'users', createdAt: 'created_at', updatedAt: false }
   );
@@ -714,6 +717,27 @@ export function defineModels(sequelize) {
     { tableName: 'shares', createdAt: 'created_at', updatedAt: false }
   );
 
+  // One model run and what it spent (migration 021). job_id is a soft
+  // reference: jobs are deleted, the spending stays.
+  const LlmUsage = define(
+    'LlmUsage',
+    {
+      id,
+      user_id: { type: DataTypes.INTEGER },
+      job_id: { type: DataTypes.INTEGER },
+      job_type: { type: DataTypes.TEXT },
+      provider: { type: DataTypes.TEXT, allowNull: false },
+      model: { type: DataTypes.TEXT },
+      input_tokens: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      cache_read_tokens: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      cache_write_tokens: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      output_tokens: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      total_tokens: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      cost_usd: { type: DataTypes.DOUBLE },
+    },
+    { tableName: 'llm_usage', createdAt: 'created_at', updatedAt: false }
+  );
+
   const Job = define(
     'Job',
     {
@@ -889,6 +913,9 @@ export function defineModels(sequelize) {
   Share.belongsTo(User, { foreignKey: 'owner_id', as: 'Owner' });
   Share.belongsTo(User, { foreignKey: 'user_id', as: 'Recipient' });
 
+  LlmUsage.belongsTo(User, { foreignKey: 'user_id' });
+  User.hasMany(LlmUsage, { foreignKey: 'user_id' });
+
   Job.belongsTo(User, { foreignKey: 'user_id' });
   Job.belongsTo(Module, { foreignKey: 'module_id' });
   Job.belongsTo(Question, { foreignKey: 'question_id' });
@@ -940,6 +967,7 @@ export function defineModels(sequelize) {
     Capture,
     CaptureChannel,
     Share,
+    LlmUsage,
     Job,
   };
 }

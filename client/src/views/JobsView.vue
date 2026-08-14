@@ -1,9 +1,14 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import { useJobsStore } from '../stores/jobs.js';
+import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 
 const jobs = useJobsStore();
+// Own token budget, when there is one. A user whose allowance is spent has
+// jobs sitting in the queue for a reason nothing else on the page explains.
+const budget = ref(null);
+const periodNames = { day: '24 hours', week: '7 days', month: '30 days' };
 const error = ref('');
 const retryingAll = ref(false);
 const stoppingAll = ref(false);
@@ -147,6 +152,12 @@ onMounted(async () => {
   try {
     await jobs.fetchJobs();
     await jobs.fetchQueue();
+    // Only a real ceiling is worth a line on the page; a zero limit is the
+    // shipped "no budget" state and says nothing.
+    const status = await api.get('/api/usage/me');
+    if (Number(status?.limit) > 0) {
+      budget.value = { used: 0, remaining: 0, period: 'month', exhausted: false, ...status };
+    }
   } catch (e) {
     error.value = e.message;
   }
@@ -182,6 +193,23 @@ onMounted(async () => {
         </button>
       </div>
     </div>
+  </div>
+
+  <!-- A budget is only worth showing to the user it applies to, and only when
+       one applies at all. Spent is the interesting case: their queued jobs are
+       waiting and nothing else on this page would say so. -->
+  <div v-if="budget" class="panel" :class="{ paused: budget.exhausted }" data-test="budget">
+    <p v-if="budget.exhausted" style="margin: 0 0 0.4rem">
+      <strong>Your token budget is spent</strong> — {{ budget.used.toLocaleString() }} of
+      {{ budget.limit.toLocaleString() }} in the last {{ periodNames[budget.period] || 'window' }}.
+      Jobs already queued wait here and run as the window rolls forward; new work is refused until
+      then. An admin can raise the allowance.
+    </p>
+    <p v-else class="muted" style="margin: 0">
+      Token budget: {{ budget.used.toLocaleString() }} of {{ budget.limit.toLocaleString() }} spent
+      in the last {{ periodNames[budget.period] || 'window' }},
+      {{ budget.remaining.toLocaleString() }} left.
+    </p>
   </div>
 
   <details open class="panel">

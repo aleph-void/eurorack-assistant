@@ -10,6 +10,12 @@ export const CONFIG_DEFAULTS = {
   // Not admin-editable through the config route — the jobs route resumes it.
   queue_paused_until: '',
   queue_paused_reason: '',
+  // Per-user token allowance, and the rolling window it is measured over
+  // (services/budgets.js). 0 is the shipped default and means no ceiling —
+  // an app that starts refusing work the day it is installed would be a
+  // surprise, so the admin turns this on when they want it.
+  token_budget_default: '0',
+  token_budget_period: 'month',
   // Per-job-type model overrides (llm_model_find_manual, ...); blank falls
   // back to the global llm_model.
   ...Object.fromEntries(LLM_JOB_TYPES.map((type) => [`llm_model_${type}`, ''])),
@@ -36,6 +42,16 @@ export async function setConfig(db, updates) {
       const at = new Date(value);
       if (Number.isNaN(at.getTime())) throw new Error(`Invalid queue_paused_until: ${value}`);
       value = at.toISOString();
+    }
+    if (key === 'token_budget_default') {
+      const n = Number(value);
+      if (typeof value === 'boolean' || String(value).trim() === '' || !Number.isInteger(n) || n < 0) {
+        throw new Error('Invalid token_budget_default: must be a whole number of tokens (0 = no limit)');
+      }
+      value = n;
+    }
+    if (key === 'token_budget_period' && !['day', 'week', 'month'].includes(String(value))) {
+      throw new Error(`Invalid token_budget_period: ${value}`);
     }
     if (key === 'import_workers') {
       const n = Number(value);

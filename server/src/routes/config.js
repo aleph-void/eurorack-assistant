@@ -29,6 +29,8 @@ export function configRoutes(db) {
         'llm_provider',
         'llm_model',
         'import_workers',
+        'token_budget_default',
+        'token_budget_period',
         ...LLM_JOB_TYPES.map((type) => `llm_model_${type}`),
       ];
       for (const key of allowed) {
@@ -40,7 +42,7 @@ export function configRoutes(db) {
       const config = await setConfig(db, updates);
       res.json(config);
     } catch (e) {
-      if (/Invalid llm_provider|Invalid import_workers|Unknown config key/.test(e.message)) {
+      if (/^(Invalid|Unknown config key)/.test(e.message)) {
         return res.status(400).json({ error: e.message });
       }
       next(e);

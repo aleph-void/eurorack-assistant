@@ -273,6 +273,24 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
 - **Job privacy**: background jobs (and their live progress) are visible only
   to the user who triggered them (admins see all jobs). Shared module state
   still benefits everyone.
+- **Token budgets**: both provider CLIs report what each run spent, and every
+  run is recorded against the user whose job caused it — including the runs of
+  an attempt that went on to fail, because those tokens were spent too. An
+  admin can set an allowance per user over a rolling window (Configuration page
+  for the default, Users page for one person's), and the Users page shows what
+  everyone has spent. A user who reaches their allowance is told so when they
+  ask for new work; work they had already queued stays in the queue and runs as
+  the window rolls forward, rather than failing. Admins are exempt — the app
+  that raises a budget has to still work when one runs out. The unit is tokens
+  rather than money: only one of the two CLIs reports a cost, and on a
+  subscription login that cost is a list-price comparison rather than a bill.
+  Nothing is limited until an admin sets a budget.
+- **One directory per model run**: every file an agent is allowed to read is
+  copied into a directory made for that one call, and that directory is all it
+  is given. Manuals and captures are stored content-addressed in one flat
+  directory each, so pointing an agent at a file where it lives would hand it
+  every other file beside it — including documents other users uploaded
+  privately. See Security notes.
 - **Out of tokens stops the queue**: when the provider CLI reports that the
   subscription is exhausted, the whole queue is paused rather than every job
   behind it burning three attempts on the same wall. The job that hit it goes
@@ -363,7 +381,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 
 | table | purpose |
 | --- | --- |
-| `users` | accounts; `is_admin` flag |
+| `users` | accounts; `is_admin` flag, and `token_budget` — this user's own token allowance per window (NULL takes the configured default, 0 lifts the ceiling for them) |
 | `modules` | **shared** module records with `manual_status` / `analysis_status` / `panel_status` — the manual is found, analyzed and drawn once, for everyone |
 | `racks` | a user's named racks (unique name per user, `main rack` by default); strictly private to their owner |
 | `rack_modules` | maps racks to the modules in them (per-rack quantity); "deleting" a module only unlinks it, and the same module can sit in many racks |
@@ -400,7 +418,8 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `question_manuals` / `question_answers` / `question_notes` / `question_captures` | the documents the user attached during review: manual PDFs, previous answers, notes, oscilloscope captures |
 | `question_patches` | the patches a question is about — the patch rides along as a document of its cables, settings, normalled connections and signal flow, and the modules it uses go into scope |
 | `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `panel_image`, `extract_manual`, `scope_question`, `answer_question`) with attempts + errors |
-| `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`), job worker count (`import_workers`, default 4), and the queue pause the worker sets when the provider runs out of tokens (`queue_paused_until`, `queue_paused_reason`) |
+| `llm_usage` | one row per CLI invocation: the tokens it spent (fresh input, cached input, cache writes, output), the model that spent them, and the job and user it is billed to. `cost_usd` is filled in where the provider reports one (claude does, codex does not) |
+| `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`), job worker count (`import_workers`, default 4), the per-user token budget and its window (`token_budget_default`, `token_budget_period`), and the queue pause the worker sets when the provider runs out of tokens (`queue_paused_until`, `queue_paused_reason`) |
 
 ## Development
 
@@ -442,6 +461,15 @@ database are all injected fakes (`pg-mem` in-memory Postgres for the server).
   share is the owner's alone: a recipient cannot re-share, edit or delete what
   they were given, and a record somebody else owns and has not shared answers
   404 — the same answer as one that does not exist.
+- A model run only ever sees the documents that call is entitled to. Manuals
+  and captures are content-addressed into one flat directory each, so granting
+  read access where a file lives would grant it to every file beside it —
+  another user's private upload included. `stageDocuments` in
+  `services/llm.js` copies the permitted files into a directory made for that
+  one call, points the CLI at it (`--add-dir` and the working directory for
+  `claude`, `--cd` for `codex`), and removes it afterwards. Note that codex's
+  read-only sandbox is read-only about *writing*: containing what it can read
+  would take a container per job.
 - LLM answers are rendered as markdown sanitized with DOMPurify.
 - An oscilloscope never sees a password: it gets a token only after the user
   approves its short code in an already-authenticated browser session. Device

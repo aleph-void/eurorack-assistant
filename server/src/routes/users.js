@@ -10,8 +10,15 @@ import {
 } from '../auth.js';
 
 function publicUser(user) {
-  const { id, username, is_admin, created_at } = user;
-  return { id, username, is_admin, created_at };
+  const { id, username, is_admin, created_at, token_budget } = user;
+  return {
+    id,
+    username,
+    is_admin,
+    created_at,
+    // BIGINT arrives from postgres as a string; the API says numbers.
+    token_budget: token_budget === null || token_budget === undefined ? null : Number(token_budget),
+  };
 }
 
 export function userRoutes(db) {
@@ -22,10 +29,10 @@ export function userRoutes(db) {
   router.get('/', async (req, res, next) => {
     try {
       const users = await User.findAll({
-        attributes: ['id', 'username', 'is_admin', 'created_at'],
+        attributes: ['id', 'username', 'is_admin', 'created_at', 'token_budget'],
         order: [['id', 'ASC']],
       });
-      res.json(users);
+      res.json(users.map(publicUser));
     } catch (e) {
       next(e);
     }
@@ -103,6 +110,32 @@ export function userRoutes(db) {
       });
       const result = { ok: true, username: user.username };
       res.json(generated ? { ...result, generated_password: generated } : result);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // This user's token allowance per budget window. null hands them back the
+  // configured default; 0 lifts the ceiling for them alone. Admins are exempt
+  // from budgets either way, so setting one on an admin records an intention
+  // and changes nothing.
+  router.put('/:id/budget', async (req, res, next) => {
+    try {
+      const user = await User.findByPk(Number(req.params.id));
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      const raw = req.body?.token_budget;
+      let budget = null;
+      if (raw !== null && raw !== undefined && String(raw).trim() !== '') {
+        const n = Number(raw);
+        if (!Number.isInteger(n) || n < 0) {
+          return res
+            .status(400)
+            .json({ error: 'token_budget must be a whole number of tokens (0 = no limit)' });
+        }
+        budget = n;
+      }
+      await user.update({ token_budget: budget });
+      res.json(publicUser(user));
     } catch (e) {
       next(e);
     }

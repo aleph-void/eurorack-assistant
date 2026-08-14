@@ -9,6 +9,7 @@ import { manualRoutes } from './routes/manuals.js';
 import { importRoutes } from './routes/imports.js';
 import { questionRoutes } from './routes/questions.js';
 import { configRoutes } from './routes/config.js';
+import { usageRoutes } from './routes/usage.js';
 import { jobRoutes } from './routes/jobs.js';
 import { noteRoutes } from './routes/notes.js';
 import { exportRoutes } from './routes/exports.js';
@@ -50,6 +51,7 @@ export function createApp(
   app.use('/api/imports', importRoutes(db));
   app.use('/api/questions', questionRoutes(db));
   app.use('/api/config', configRoutes(db));
+  app.use('/api/usage', usageRoutes(db));
   // The bus lets the route tell every connected user the queue is running
   // again; without one, resuming is simply not announced.
   app.use('/api/jobs', jobRoutes(db, { bus }));

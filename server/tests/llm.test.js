@@ -7,17 +7,20 @@ import {
   CodexBackend,
   createBackend,
   detectQuotaExhaustion,
+  parseClaudeResult,
+  parseCodexUsage,
   parseQuotaResetAt,
   runCli,
+  stageDocuments,
   takeQuotaExhaustion,
   DEFAULT_MODELS,
 } from '../src/services/llm.js';
 
 function captureRun(response = 'ok') {
   const calls = [];
-  const run = async (cmd, args, input) => {
-    calls.push({ cmd, args, input });
-    if (typeof response === 'function') return response({ cmd, args, input });
+  const run = async (cmd, args, input, options = {}) => {
+    calls.push({ cmd, args, input, options });
+    if (typeof response === 'function') return response({ cmd, args, input, options });
     return response;
   };
   run.calls = calls;
@@ -30,8 +33,20 @@ describe('ClaudeBackend', () => {
     const backend = new ClaudeBackend('claude-sonnet-5', { run });
     expect(await backend.completeText('hello')).toBe('the answer');
     expect(run.calls[0].cmd).toBe('claude');
-    expect(run.calls[0].args).toEqual(['-p', '--model', 'claude-sonnet-5']);
+    expect(run.calls[0].args).toEqual([
+      '-p',
+      '--model',
+      'claude-sonnet-5',
+      '--output-format',
+      'json',
+    ]);
     expect(run.calls[0].input).toBe('hello');
+  });
+
+  // A CLI too old to know --output-format prints the answer as plain text.
+  it('takes stdout as the answer when it is not the JSON envelope', async () => {
+    const backend = new ClaudeBackend(null, { run: captureRun('plain text answer') });
+    expect(await backend.completeText('hello')).toBe('plain text answer');
   });
 
   it('defaults the model', () => {
@@ -46,36 +61,135 @@ describe('ClaudeBackend', () => {
     expect(run.calls[0].args).toContain('WebSearch,WebFetch');
   });
 
-  it('passes PDFs via Read tool with --add-dir and inlines text docs', async () => {
-    const run = captureRun();
+  it("gives the model a directory holding only this call's documents", async () => {
+    const store = fs.mkdtempSync(path.join(os.tmpdir(), 'manuals-'));
+    fs.writeFileSync(path.join(store, 'a.pdf'), 'A');
+    fs.writeFileSync(path.join(store, 'b.pdf'), 'B');
+    // Another user's upload, sitting in the same content-addressed directory.
+    fs.writeFileSync(path.join(store, 'someone-elses.pdf'), 'SECRET');
+
+    // The staged directory only exists while the call is in flight, so its
+    // contents are read from inside the run.
+    const run = async (cmd, args, input, options) => {
+      const dir = args[args.indexOf('--add-dir') + 1];
+      run.calls.push({ cmd, args, input, options, jailContents: fs.readdirSync(dir) });
+      return 'ok';
+    };
+    run.calls = [];
     const backend = new ClaudeBackend(null, { run });
     await backend.answerWithDocuments(
       'Q?',
-      ['/data/manuals/a.pdf', '/data/manuals/b.pdf'],
+      [path.join(store, 'a.pdf'), path.join(store, 'b.pdf')],
       [{ name: 'prev.md', text: 'previous answer' }]
     );
-    const { args, input } = run.calls[0];
+
+    const { args, input, options } = run.calls[0];
     expect(args).toContain('Read');
     expect(args.filter((a) => a === '--add-dir')).toHaveLength(1);
-    expect(args).toContain('/data/manuals');
-    expect(input).toContain('/data/manuals/a.pdf');
-    expect(input).toContain('/data/manuals/b.pdf');
+    const jail = args[args.indexOf('--add-dir') + 1];
+    expect(jail).not.toBe(store);
+    expect(options.cwd).toBe(jail);
+    // The prompt names the copies, and the directory holds nothing else — the
+    // upload belonging to someone else stays out of reach.
+    expect(input).toContain(path.join(jail, 'a.pdf'));
+    expect(input).toContain(path.join(jail, 'b.pdf'));
+    expect(input).not.toContain(store);
+    expect(input).not.toContain('someone-elses.pdf');
+    expect(run.calls[0].jailContents.sort()).toEqual(['a.pdf', 'b.pdf']);
     expect(input).toContain('previous answer');
+    fs.rmSync(store, { recursive: true, force: true });
   });
 
-  it('analyzeDocument adds the manual directory', async () => {
-    const run = captureRun();
-    await new ClaudeBackend(null, { run }).analyzeDocument('Analyze', '/data/manuals/a.pdf');
-    expect(run.calls[0].args).toEqual([
-      '-p',
-      '--model',
-      DEFAULT_MODELS.claude,
-      '--allowedTools',
-      'Read',
-      '--add-dir',
-      '/data/manuals',
+  it('removes the staged copies when the call is over', async () => {
+    const store = fs.mkdtempSync(path.join(os.tmpdir(), 'manuals-'));
+    fs.writeFileSync(path.join(store, 'a.pdf'), 'A');
+    let jail = null;
+    const run = async (cmd, args) => {
+      jail = args[args.indexOf('--add-dir') + 1];
+      expect(fs.existsSync(path.join(jail, 'a.pdf'))).toBe(true);
+      return 'ok';
+    };
+    await new ClaudeBackend(null, { run }).analyzeDocument('Analyze', path.join(store, 'a.pdf'));
+    expect(fs.existsSync(jail)).toBe(false);
+    fs.rmSync(store, { recursive: true, force: true });
+  });
+
+  it('deduplicates documents that share a name', async () => {
+    const store = fs.mkdtempSync(path.join(os.tmpdir(), 'manuals-'));
+    fs.mkdirSync(path.join(store, 'one'));
+    fs.mkdirSync(path.join(store, 'two'));
+    fs.writeFileSync(path.join(store, 'one', 'manual.pdf'), '1');
+    fs.writeFileSync(path.join(store, 'two', 'manual.pdf'), '2');
+    const staged = stageDocuments([
+      path.join(store, 'one', 'manual.pdf'),
+      path.join(store, 'two', 'manual.pdf'),
     ]);
-    expect(run.calls[0].input).toContain('/data/manuals/a.pdf');
+    expect(fs.readdirSync(staged.dir).sort()).toEqual(['2-manual.pdf', 'manual.pdf']);
+    expect(fs.readFileSync(staged.paths[1], 'utf-8')).toBe('2');
+    staged.remove();
+    fs.rmSync(store, { recursive: true, force: true });
+  });
+
+  it('reports the tokens a run spent', async () => {
+    const usage = [];
+    const run = captureRun(
+      JSON.stringify({
+        type: 'result',
+        result: 'the answer',
+        total_cost_usd: 0.0165,
+        usage: { input_tokens: 1, output_tokens: 2 },
+        modelUsage: {
+          'claude-opus-5': {
+            inputTokens: 9,
+            outputTokens: 38,
+            cacheReadInputTokens: 18101,
+            cacheCreationInputTokens: 7248,
+            canonicalModel: 'claude-opus-5',
+          },
+        },
+      })
+    );
+    const backend = new ClaudeBackend('claude-opus-5', { run, onUsage: (u) => usage.push(u) });
+    expect(await backend.completeText('hi')).toBe('the answer');
+    expect(usage).toEqual([
+      {
+        provider: 'claude',
+        model: 'claude-opus-5',
+        input_tokens: 9,
+        cache_read_tokens: 18101,
+        cache_write_tokens: 7248,
+        output_tokens: 38,
+        total_tokens: 25396,
+        cost_usd: 0.0165,
+      },
+    ]);
+  });
+
+  it('sums the models a run delegated to, and names the busiest', () => {
+    const { usage } = parseClaudeResult(
+      JSON.stringify({
+        result: 'done',
+        modelUsage: {
+          'claude-haiku-4-5': { inputTokens: 10, outputTokens: 5 },
+          'claude-opus-5': { inputTokens: 20, outputTokens: 50 },
+        },
+      })
+    );
+    expect(usage.model).toBe('claude-opus-5');
+    expect(usage.input_tokens).toBe(30);
+    expect(usage.output_tokens).toBe(55);
+    expect(usage.cost_usd).toBeNull();
+  });
+
+  it('does not fail a run because the accounting sink threw', async () => {
+    const run = captureRun(JSON.stringify({ result: 'ok', usage: { output_tokens: 3 } }));
+    const backend = new ClaudeBackend(null, {
+      run,
+      onUsage: () => {
+        throw new Error('database is down');
+      },
+    });
+    expect(await backend.completeText('hi')).toBe('ok');
   });
 });
 
@@ -96,9 +210,43 @@ describe('CodexBackend', () => {
     expect(await backend.completeText('hi')).toBe('codex answer');
     const { cmd, args } = run.calls[0];
     expect(cmd).toBe('codex');
-    expect(args.slice(0, 5)).toEqual(['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--output-last-message']);
+    expect(args.slice(0, 5)).toEqual([
+      'exec',
+      '--sandbox',
+      'read-only',
+      '--skip-git-repo-check',
+      '--json',
+    ]);
+    expect(args).toContain('--output-last-message');
     expect(args).toContain('-m');
     expect(args).toContain('gpt-5.1-codex');
+    // Working root is the staged directory, not wherever the server runs.
+    expect(args[args.indexOf('--cd') + 1]).toContain('llm-docs-');
+  });
+
+  it('reads the turn total out of the JSONL log', () => {
+    const log = [
+      '{"type":"thread.started","thread_id":"x"}',
+      '{"type":"item.completed","item":{"type":"agent_message","text":"OK"}}',
+      '{"type":"turn.completed","usage":{"input_tokens":13534,"cached_input_tokens":11008,' +
+        '"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}',
+    ].join('\n');
+    // Codex counts cached input inside input_tokens; the cached part is
+    // subtracted back out so "input" means the same thing on both providers.
+    expect(parseCodexUsage(log, 'gpt-5.1-codex')).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.1-codex',
+      input_tokens: 2526,
+      cache_read_tokens: 11008,
+      cache_write_tokens: 0,
+      output_tokens: 5,
+      total_tokens: 13539,
+      cost_usd: null,
+    });
+  });
+
+  it('shrugs off a log with no usage event', () => {
+    expect(parseCodexUsage('not json at all', 'gpt-5.1-codex')).toBeNull();
   });
 
   it('adds --search for research', async () => {

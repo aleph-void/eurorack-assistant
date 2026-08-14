@@ -127,8 +127,10 @@ export async function getSessionUser(db, token) {
     await deleteSession(db, token);
     return null;
   }
-  const { id, username, is_admin, must_change_password } = session.User;
-  return { id, username, is_admin, must_change_password };
+  // token_budget rides along because the budget guard runs on the request
+  // path and would otherwise re-read the user on every call it protects.
+  const { id, username, is_admin, must_change_password, token_budget } = session.User;
+  return { id, username, is_admin, must_change_password, token_budget };
 }
 
 // A user flagged must_change_password is locked out of everything except the

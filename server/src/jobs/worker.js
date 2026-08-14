@@ -23,6 +23,7 @@
 
 import os from 'node:os';
 import { createBackend, detectQuotaExhaustion, takeQuotaExhaustion } from '../services/llm.js';
+import { exhaustedUserIds, recordUsage } from '../services/budgets.js';
 import { manualPath, renderPageToPdf } from '../services/pdf.js';
 import {
   getLlmSettings,
@@ -192,6 +193,10 @@ export function createWorker(db, options = {}) {
     staleJobMs = STALE_JOB_MS,
     jobTimeoutMs = JOB_TIMEOUT_MS,
     quotaPauseMs = QUOTA_PAUSE_MS,
+    // How long the set of out-of-tokens users is reused for (see
+    // heldForBudget). Tests that change a budget and expect the very next
+    // claim to see it set this to 0.
+    budgetCacheMs = 2000,
     workerId = `${os.hostname()}#${process.pid}`,
     backendFactory = createBackend,
     fetchImpl = fetch,
@@ -357,25 +362,80 @@ export function createWorker(db, options = {}) {
     return recorded;
   }
 
+  // Users who have spent their token allowance. Their queued work waits where
+  // it is rather than failing: the window rolls forward on its own, and a job
+  // that was legitimately queued should still run when it does. Logged once
+  // per user per drought so the reason is in the log without being in it a
+  // thousand times.
+  //
+  // The answer is held for a moment rather than recomputed on every claim: a
+  // pool of runners draining a queue asks many times a second, and this
+  // cannot meaningfully change that fast — the window it is measured over is
+  // a day at the shortest. Being a moment stale costs at most one more job's
+  // worth of overspend.
+  const announcedExhausted = new Set();
+  let exhaustedCache = { at: 0, ids: new Set() };
+  async function heldForBudget() {
+    if (Date.now() - exhaustedCache.at < budgetCacheMs) return exhaustedCache.ids;
+    let exhausted;
+    try {
+      exhausted = await exhaustedUserIds(db);
+    } catch (e) {
+      // Budgets are a limit on work, not a prerequisite for it.
+      log(`could not read token budgets: ${e.message}`);
+      return new Set();
+    }
+    for (const userId of exhausted) {
+      if (!announcedExhausted.has(userId)) {
+        announcedExhausted.add(userId);
+        log(`user ${userId} has spent their token budget; their queued jobs wait`);
+      }
+    }
+    for (const userId of [...announcedExhausted]) {
+      if (!exhausted.has(userId)) {
+        announcedExhausted.delete(userId);
+        log(`user ${userId} is inside their token budget again`);
+      }
+    }
+    exhaustedCache = { at: Date.now(), ids: exhausted };
+    return exhausted;
+  }
+
   async function claimNextJob() {
     const { Job } = db.models;
-    // Concurrent workers can race for the same pending row; the guarded
-    // update decides the winner and the loser moves on to the next row.
-    for (;;) {
-      const next = await Job.findOne({ where: { status: 'pending' }, order: [['id', 'ASC']] });
-      if (!next) return null;
-      const now = new Date();
-      const [, claimed] = await Job.update(
-        {
-          status: 'running',
-          attempts: next.attempts + 1,
-          started_at: now,
-          heartbeat_at: now,
-          worker_id: workerId,
-        },
-        { where: { id: next.id, status: 'pending' }, returning: true }
-      );
-      if (claimed[0]) return claimed[0].get({ plain: true });
+    const exhausted = await heldForBudget();
+    // A page of the queue rather than one row: the oldest job might belong to
+    // a user who is out of tokens while the one behind it does not, and the
+    // second one should still run. The page is filtered here rather than in
+    // SQL because "not one of these users, or nobody in particular" is
+    // precisely the OR-inside-AND predicate the test database mis-evaluates.
+    const pageSize = 50;
+    for (let offset = 0; ; offset += pageSize) {
+      const page = await Job.findAll({
+        where: { status: 'pending' },
+        order: [['id', 'ASC']],
+        limit: pageSize,
+        offset,
+      });
+      if (page.length === 0) return null;
+      for (const next of page) {
+        if (next.user_id && exhausted.has(next.user_id)) continue;
+        // Concurrent workers can race for the same pending row; the guarded
+        // update decides the winner and the loser moves on to the next row.
+        const now = new Date();
+        const [, claimed] = await Job.update(
+          {
+            status: 'running',
+            attempts: next.attempts + 1,
+            started_at: now,
+            heartbeat_at: now,
+            worker_id: workerId,
+          },
+          { where: { id: next.id, status: 'pending' }, returning: true }
+        );
+        if (claimed[0]) return claimed[0].get({ plain: true });
+      }
+      if (page.length < pageSize) return null;
     }
   }
 
@@ -717,7 +777,17 @@ export function createWorker(db, options = {}) {
     try {
       const handler = handlers[job.type];
       if (!handler) throw new Error(`Unknown job type: ${job.type}`);
-      const backend = backendFactory(await getLlmSettings(db, job.type));
+      // Every CLI run this job makes is billed to whoever caused the job —
+      // including the runs of an attempt that goes on to fail, because those
+      // tokens were spent too.
+      const backend = backendFactory(await getLlmSettings(db, job.type), {
+        onUsage: (usage) =>
+          recordUsage(db, usage, {
+            userId: owners[0] ?? null,
+            jobId: job.id,
+            jobType: job.type,
+          }),
+      });
       // The handler is raced rather than aborted: it has no cancellation to
       // offer, so the attempt is given up on and the runner freed. Whatever it
       // was waiting for is left to finish and be ignored.

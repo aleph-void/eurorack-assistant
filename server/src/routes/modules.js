@@ -22,6 +22,7 @@ import {
 } from '../services/panelImage.js';
 import { enqueueExtractManual, enqueueModuleJob } from '../jobs/worker.js';
 import { readableIds, removeShares } from '../services/sharing.js';
+import { requireBudget } from '../services/budgets.js';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
@@ -203,7 +204,7 @@ export function moduleRoutes(
   //
   // The jobs chain (find_manual → analyze_manual → panel_image), so filling
   // an early gap fills the later ones behind it without queueing them here.
-  router.post('/reanalyze', async (req, res, next) => {
+  router.post('/reanalyze', requireBudget(db), async (req, res, next) => {
     try {
       const rackWhere = { user_id: req.user.id };
       if (req.body?.rack_id) {
@@ -1201,7 +1202,7 @@ export function moduleRoutes(
   // Like the manual and the analysis, the panel belongs to the shared module
   // record rather than to one user: everyone with this module racked sees the
   // picture, and anyone with it racked may replace it.
-  router.post('/:id/panel', async (req, res, next) => {
+  router.post('/:id/panel', requireBudget(db), async (req, res, next) => {
     try {
       const module = await userModule(req.user.id, req.params.id);
       if (!module) return res.status(404).json({ error: 'Module not found' });
