@@ -44,6 +44,9 @@ const props = defineProps({
   highlight: { type: Array, default: () => [] },
   // Whether markers may be dragged onto the hardware they name.
   editable: { type: Boolean, default: false },
+  // When arranging one component, hide every other marker without changing
+  // the underlying panel data. null leaves the complete panel visible.
+  onlyComponentId: { type: Number, default: null },
 });
 
 const emit = defineEmits(['move']);
@@ -96,6 +99,10 @@ const highlighted = computed(() => new Set(props.highlight));
 
 const markers = computed(() =>
   (props.panel.components ?? [])
+    .filter(
+      (placement) =>
+        props.onlyComponentId === null || placement.component_id === props.onlyComponentId
+    )
     .map((placement) => {
       const held = dragging.value?.id === placement.id ? dragging.value : null;
       const { fx, fy } = held
@@ -111,6 +118,11 @@ const markers = computed(() =>
       };
     })
     .filter(Boolean)
+);
+const markerCountText = computed(() =>
+  props.onlyComponentId === null
+    ? `${markers.value.length} component(s) located on it`
+    : `${markers.value.length} of ${(props.panel.components ?? []).length} component(s) shown`
 );
 
 // What the marker says when you rest on it: which control it is, and what the
@@ -230,7 +242,7 @@ function endDrag() {
     </div>
     <figcaption class="muted">
       <template v-if="panel.source === 'upload'">
-        Panel picture you uploaded — {{ markers.length }} component(s) located on it{{
+        Panel picture you uploaded — {{ markerCountText }}{{
           panel.hp ? `, ${panel.hp}HP wide` : ''
         }}.
       </template>
@@ -239,11 +251,11 @@ function endDrag() {
         <a v-if="panel.source_url" :href="panel.source_url" target="_blank" rel="noreferrer">
           (source)
         </a>
-        — {{ markers.length }} component(s) located on it.
+        — {{ markerCountText }}.
       </template>
       <template v-else>
         No panel image was found, so this is a drawing made from the module's manual —
-        {{ markers.length }} component(s) placed{{ panel.hp ? `, ${panel.hp}HP wide` : '' }}.
+        {{ markerCountText }}{{ panel.hp ? `, ${panel.hp}HP wide` : '' }}.
       </template>
       <template v-if="editable">
         Rest on a marker to see what it does, or drag one onto the hardware it names if it has

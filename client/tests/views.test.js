@@ -859,6 +859,38 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('.marker').attributes('cy')).toBe(String(0.4 * 560));
   });
 
+  it('shows only the selected input or output jack while arranging the panel', async () => {
+    const panel = {
+      source: 'image',
+      url: '/api/panels/abc.png',
+      width: 400,
+      height: 1200,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      components: [
+        { id: 5, component_id: 1, name: 'Signal In', shape: 'jack', x: 0.4, y: 0.8 },
+        { id: 6, component_id: 2, name: 'EOR', shape: 'jack', x: 0.6, y: 0.8 },
+        { id: 7, component_id: 3, name: 'Rise', shape: 'knob', x: 0.5, y: 0.3 },
+      ],
+    };
+    api.get.mockResolvedValue({ ...moduleResponse, panel });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.findAll('.marker')).toHaveLength(3);
+    expect(wrapper.find('[data-test="arrange-jack-1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="arrange-jack-2"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="arrange-jack-3"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="arrange-jack-2"]').trigger('click');
+    expect(wrapper.findAll('.marker')).toHaveLength(1);
+    expect(wrapper.find('[data-test="panel-marker-2"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="panel-marker-1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="panel-arrangement-filter"]').text()).toContain('EOR');
+
+    await wrapper.find('[data-test="panel-show-all"]').trigger('click');
+    expect(wrapper.findAll('.marker')).toHaveLength(3);
+  });
+
   it('puts a marker back where it was when the save fails', async () => {
     const panel = {
       source: 'image',

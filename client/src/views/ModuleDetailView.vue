@@ -437,6 +437,19 @@ const componentError = ref('');
 const componentNotice = ref('');
 const addingComponent = ref(false);
 const addingToType = ref(null);
+const arrangedJackId = ref(null);
+
+const arrangedJack = computed(() =>
+  (module.value?.components || []).find((c) => c.id === arrangedJackId.value) || null
+);
+
+function arrangeJack(c) {
+  arrangedJackId.value = c.id;
+}
+
+function showAllPanelComponents() {
+  arrangedJackId.value = null;
+}
 
 function startEditComponent(c) {
   editingComponentId.value = c.id;
@@ -454,6 +467,13 @@ async function saveComponent(c) {
       group_label: editGroup.value,
       port_kind: editPortKind.value,
     });
+    if (
+      arrangedJackId.value === c.id &&
+      editType.value !== 'input_jack' &&
+      editType.value !== 'output_jack'
+    ) {
+      arrangedJackId.value = null;
+    }
     editingComponentId.value = null;
     await load();
   } catch (e) {
@@ -516,6 +536,7 @@ async function removeComponent(c) {
   try {
     await api.delete(`/api/modules/${props.id}/components/${c.id}`);
     if (editingComponentId.value === c.id) editingComponentId.value = null;
+    if (arrangedJackId.value === c.id) arrangedJackId.value = null;
     await load();
   } catch (e) {
     componentError.value = e.message;
@@ -824,6 +845,7 @@ onMounted(load);
 watch(() => props.id, () => {
   panelHp.value = '';
   panelHpDirty.value = false;
+  arrangedJackId.value = null;
   load();
 });
 </script>
@@ -866,7 +888,19 @@ watch(() => props.id, () => {
         </span>
       </summary>
       <div class="panel-body">
-        <ModulePanel v-if="module.panel" :panel="module.panel" editable @move="movePanelMarker" />
+        <ModulePanel
+          v-if="module.panel"
+          :panel="module.panel"
+          :only-component-id="arrangedJackId"
+          editable
+          @move="movePanelMarker"
+        />
+        <div v-if="arrangedJack" class="panel-arrangement-filter" data-test="panel-arrangement-filter">
+          <span>Arranging only <strong>{{ arrangedJack.name }}</strong>.</span>
+          <button type="button" class="secondary" data-test="panel-show-all" @click="showAllPanelComponents">
+            Show all components
+          </button>
+        </div>
         <p v-if="panelStatus" class="muted" data-test="panel-status">{{ panelStatus }}</p>
         <p v-else class="muted" data-test="no-panel">
           No panel picture yet — the app builds one once the manual has been analyzed, or you can
@@ -1859,6 +1893,16 @@ watch(() => props.id, () => {
                     </button>
                   </div>
                   <div v-else class="component-row-actions">
+                    <button
+                      v-if="group.type === 'input_jack' || group.type === 'output_jack'"
+                      type="button"
+                      class="secondary"
+                      :class="{ selected: arrangedJackId === c.id }"
+                      :data-test="`arrange-jack-${c.id}`"
+                      @click="arrangeJack(c)"
+                    >
+                      {{ arrangedJackId === c.id ? 'Arranging' : 'Arrange' }}
+                    </button>
                     <button
                       :data-test="`edit-component-${c.id}`"
                       @click="startEditComponent(c)"
