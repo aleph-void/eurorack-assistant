@@ -253,6 +253,25 @@ describe('RacksView', () => {
     expect(api.post).toHaveBeenCalledWith('/api/racks', { name: 'studio' });
   });
 
+  it('renders placed modules as panel images inside an organized rack row', async () => {
+    api.get.mockImplementation((path) => {
+      if (path === '/api/racks') return Promise.resolve(racksResponse);
+      return Promise.resolve({
+        id: 1,
+        name: 'main rack',
+        modules: [{ id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, quantity: 1 }],
+        rows: [{ id: 9, unit: 3, hp: 84, modules: [{ module_id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, panel: { url: '/api/panels/arp.svg' } }] }],
+      });
+    });
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="organize-1"]').trigger('click');
+    await flushPromises();
+    const row = wrapper.find('[data-test="rack-row-0"]');
+    expect(row.find('img').attributes('src')).toBe('/api/panels/arp.svg');
+    expect(row.find('.placed-module').attributes('style')).toContain('--module-hp: 2');
+  });
+
   it('renames a rack', async () => {
     api.get.mockResolvedValue(racksResponse);
     api.put.mockResolvedValue({ id: 2, name: 'live case', module_count: 1 });

@@ -73,6 +73,11 @@ describe('racks API', () => {
     const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");
     const module = await insertModule(db, users[0].id, { manufacturer: '2hp', name: 'ARP' });
     await db.query('UPDATE modules SET hp = 2 WHERE id = $1', [module.id]);
+    await db.query(
+      `INSERT INTO module_panels (module_id, image_hash, image_ext, width, height)
+       VALUES ($1, 'arp-panel', 'svg', 80, 400)`,
+      [module.id]
+    );
     const rackId = module.rack_id;
 
     const saved = await request(app)
@@ -86,7 +91,7 @@ describe('racks API', () => {
       });
     expect(saved.status).toBe(200);
     expect(saved.body.rows).toMatchObject([
-      { unit: 3, hp: 84, modules: [{ module_id: module.id, hp: 2 }] },
+      { unit: 3, hp: 84, modules: [{ module_id: module.id, hp: 2, panel: { url: '/api/panels/arp-panel.svg' } }] },
       { unit: 1, hp: 104, modules: [] },
     ]);
 
