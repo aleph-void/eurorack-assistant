@@ -1368,10 +1368,10 @@ describe('JobsView', () => {
     const wrapper = mount(JobsView, { global: testGlobal() });
     await flushPromises();
     expect(wrapper.find('[data-test="job-table"]').text()).toContain('Make Noise Maths');
+    expect(wrapper.find('[data-test="retry-all"]').text()).toContain('Retry all failed (1)');
     await wrapper.find('[data-test="retry-1"]').trigger('click');
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith('/api/jobs/1/retry');
-    // A lone failure does not warrant the bulk button.
     expect(wrapper.find('[data-test="retry-all"]').exists()).toBe(false);
   });
 
@@ -1395,10 +1395,11 @@ describe('JobsView', () => {
     expect(wrapper.find('[data-test="feed"]').text()).toContain('manual saved:');
   });
 
-  it('offers Retry All once more than one job has failed', async () => {
+  it('retries all failed jobs, but not stalled jobs', async () => {
     api.get.mockResolvedValue([
       { id: 1, type: 'find_manual', status: 'failed', attempts: 3, error: 'No manual PDF found' },
       { id: 2, type: 'export_rack', status: 'complete', attempts: 1, rack_name: 'main rack' },
+      { id: 4, type: 'analyze_manual', status: 'running', stalled: true, attempts: 1 },
       { id: 3, type: 'ask_question', status: 'failed', attempts: 2, error: 'timeout' },
     ]);
     api.post.mockImplementation(async (url) => ({
@@ -1408,6 +1409,7 @@ describe('JobsView', () => {
     }));
     const wrapper = mount(JobsView, { global: testGlobal() });
     await flushPromises();
+    expect(wrapper.find('[data-test="retry-all"]').text()).toContain('Retry all failed (2)');
     await wrapper.find('[data-test="retry-all"]').trigger('click');
     await flushPromises();
     expect(api.post.mock.calls.map((c) => c[0])).toEqual([

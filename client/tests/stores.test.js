@@ -170,6 +170,7 @@ describe('jobs store', () => {
     jobs.jobs = [
       { id: 1, status: 'failed', error: 'boom', type: 'find_manual' },
       { id: 2, status: 'complete', type: 'export_rack' },
+      { id: 4, status: 'running', stalled: true, type: 'analyze_manual' },
       { id: 3, status: 'failed', error: 'nope', type: 'ask_question' },
     ];
     await jobs.retryAll();
@@ -177,7 +178,7 @@ describe('jobs store', () => {
       '/api/jobs/1/retry',
       '/api/jobs/3/retry',
     ]);
-    expect(jobs.jobs.map((j) => j.status)).toEqual(['pending', 'complete', 'pending']);
+    expect(jobs.jobs.map((j) => j.status)).toEqual(['pending', 'complete', 'running', 'pending']);
   });
 
   it('retryAll keeps going past a rejected job and reports it', async () => {

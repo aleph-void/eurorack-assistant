@@ -241,9 +241,8 @@ onMounted(async () => {
   </details>
 
   <div class="panel">
-    <!-- Only worth offering once a single Retry click is not enough. -->
-    <div v-if="jobs.retryableJobs.length > 1" class="row" style="align-items: baseline">
-      <p class="muted" style="margin: 0">{{ jobs.retryableJobs.length }} jobs need retrying.</p>
+    <div v-if="jobs.failedJobs.length > 0" class="row" style="align-items: baseline">
+      <p class="muted" style="margin: 0">{{ jobs.failedJobs.length }} failed job(s) can be retried.</p>
       <div class="shrink">
         <button
           class="secondary"
@@ -252,7 +251,7 @@ onMounted(async () => {
           data-test="retry-all"
           @click="retryAll"
         >
-          {{ retryingAll ? 'Retrying…' : 'Retry All' }}
+          {{ retryingAll ? 'Retrying…' : `Retry all failed (${jobs.failedJobs.length})` }}
         </button>
       </div>
     </div>
