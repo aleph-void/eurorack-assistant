@@ -57,7 +57,7 @@ describe('modules API', () => {
     });
   });
 
-  it('lets a racked user add and remove a component', async () => {
+  it('lets a racked user add and remove a jack with its panel marker', async () => {
     const { app, db, aliceCookie } = await createTestApp();
     const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");
     const module = await insertModule(db, users[0].id, { manufacturer: '2hp', name: 'ARP' });
@@ -70,20 +70,38 @@ describe('modules API', () => {
     const created = await request(app)
       .post(`/api/modules/${module.id}/components`)
       .set('Cookie', aliceCookie)
-      .send({ name: 'ROOT', type: 'knob' });
+      .send({ name: 'CLOCK OUT', type: 'output_jack' });
     expect(created.status).toBe(201);
-    expect(created.body).toMatchObject({ name: 'ROOT', type: 'knob' });
+    expect(created.body).toMatchObject({ name: 'CLOCK OUT', type: 'output_jack' });
     expect(created.body.panel_placement_id).not.toBeNull();
     expect(
       (await db.query('SELECT component_id FROM module_panel_components WHERE id = $1', [created.body.panel_placement_id]))
         .rows
     ).toEqual([{ component_id: created.body.id }]);
+    const withJack = await request(app)
+      .get(`/api/modules/${module.id}`)
+      .set('Cookie', aliceCookie);
+    expect(withJack.body.components).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: created.body.id, name: 'CLOCK OUT', type: 'output_jack' }),
+      ])
+    );
+    expect(withJack.body.panel.components).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ component_id: created.body.id, name: 'CLOCK OUT', shape: 'jack' }),
+      ])
+    );
 
     const removed = await request(app)
       .delete(`/api/modules/${module.id}/components/${created.body.id}`)
       .set('Cookie', aliceCookie);
     expect(removed.status).toBe(200);
     expect((await db.query('SELECT * FROM module_components WHERE id = $1', [created.body.id])).rows).toEqual([]);
+    const withoutJack = await request(app)
+      .get(`/api/modules/${module.id}`)
+      .set('Cookie', aliceCookie);
+    expect(withoutJack.body.components.some((c) => c.id === created.body.id)).toBe(false);
+    expect(withoutJack.body.panel.components.some((c) => c.component_id === created.body.id)).toBe(false);
   });
 
   it('manually adds normalled connections, deriving the kind from the source', async () => {

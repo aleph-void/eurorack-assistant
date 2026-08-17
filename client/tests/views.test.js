@@ -377,6 +377,72 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="group-knob"]').text()).toContain('Rise');
   });
 
+  it('adds and removes controls while refreshing component lists and panel markers', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    let detail = {
+      ...moduleResponse,
+      components: [...moduleResponse.components],
+      panel: {
+        source: 'image',
+        url: '/api/panels/abc.png',
+        width: 400,
+        height: 1200,
+        crop: { x: 0, y: 0, w: 1, h: 1 },
+        components: [
+          { id: 5, component_id: 1, name: 'Signal In', shape: 'jack', x: 0.5, y: 0.9 },
+        ],
+      },
+    };
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/modules/1' ? structuredClone(detail) : [])
+    );
+    api.post.mockImplementation(async () => {
+      const component = { id: 4, type: 'knob', name: 'FREQUENCY', description: null };
+      detail.components.push(component);
+      detail.panel.components.push({
+        id: 6,
+        component_id: 4,
+        name: 'FREQUENCY',
+        shape: 'knob',
+        x: 0.5,
+        y: 0.8,
+      });
+      return { ...component, panel_placement_id: 6 };
+    });
+    api.delete.mockImplementation(async () => {
+      detail.components = detail.components.filter((c) => c.id !== 4);
+      detail.panel.components = detail.panel.components.filter((c) => c.component_id !== 4);
+      return { ok: true };
+    });
+
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="component-editor"] .summary-count').text()).toBe('3');
+    expect(wrapper.find('[data-test="component-type"]').text()).toContain('Knob');
+    expect(wrapper.find('[data-test="component-type"]').text()).toContain('Toggle');
+
+    await wrapper.find('[data-test="component-name"]').setValue('FREQUENCY');
+    await wrapper.find('[data-test="component-type"]').setValue('knob');
+    await wrapper.find('[data-test="component-editor"] form').trigger('submit');
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/components', {
+      name: 'FREQUENCY',
+      type: 'knob',
+    });
+    expect(wrapper.find('[data-test="group-knob"]').text()).toContain('FREQUENCY');
+    expect(wrapper.find('[data-test="panel-marker-4"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="component-editor"] .summary-count').text()).toBe('4');
+
+    await wrapper.find('[data-test="remove-component-4"]').trigger('click');
+    await flushPromises();
+
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/components/4');
+    expect(wrapper.find('[data-test="group-knob"]').text()).not.toContain('FREQUENCY');
+    expect(wrapper.find('[data-test="panel-marker-4"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="component-editor"] .summary-count').text()).toBe('3');
+  });
+
   it('links to the next module in the current rack and stops at the last one', async () => {
     currentRouteQuery = { rack: '1' };
     const list = [
@@ -686,6 +752,26 @@ describe('ModuleDetailView', () => {
       data_base64: expect.any(String),
       hp: '20',
     });
+  });
+
+  it('prepopulates the panel import width from the analyzed module HP', async () => {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/modules/1' ? { ...moduleResponse, hp: 20 } : [])
+    );
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="panel-hp"]').element.value).toBe('20');
+
+    // Moving to another module replaces an in-progress override with that
+    // module's own analyzed width rather than carrying it across modules.
+    await wrapper.find('[data-test="panel-hp"]').setValue('18');
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/modules/2' ? { ...moduleResponse, id: 2, hp: 12 } : [])
+    );
+    await wrapper.setProps({ id: '2' });
+    await flushPromises();
+    expect(wrapper.find('[data-test="panel-hp"]').element.value).toBe('12');
   });
 
   it('downloads a front-panel picture from a URL, with the width when one is given', async () => {

@@ -141,6 +141,10 @@ const jacks = computed(() => patchableComponents.value.filter((c) => c.type.ends
 const ownJacks = computed(
   () => module.value?.components?.filter((c) => c.type.endsWith('_jack')) || []
 );
+const MANUALLY_EDITABLE_TYPES = ['input_jack', 'output_jack', 'knob', 'toggle'];
+const manuallyEditableComponents = computed(() =>
+  (module.value?.components || []).filter((c) => MANUALLY_EDITABLE_TYPES.includes(c.type))
+);
 const normValid = computed(() => {
   if (!normTarget.value || !normSource.value) return false;
   if (normConditionControl.value && !normConditionValue.value.trim()) return false;
@@ -425,6 +429,11 @@ const editType = ref('');
 const editGroup = ref('');
 const editPortKind = ref('');
 const editError = ref('');
+const componentNameDraft = ref('');
+const componentTypeDraft = ref('input_jack');
+const componentError = ref('');
+const componentNotice = ref('');
+const addingComponent = ref(false);
 
 function startEditComponent(c) {
   editingComponentId.value = c.id;
@@ -446,6 +455,50 @@ async function saveComponent(c) {
     await load();
   } catch (e) {
     editError.value = e.message;
+  }
+}
+
+// Manual analysis is only a starting inventory. Missing patch points and
+// controls can be added here, and the API gives each one a panel placement
+// immediately when a panel exists so diagrams can use it on refresh.
+async function addComponent() {
+  componentError.value = '';
+  componentNotice.value = '';
+  addingComponent.value = true;
+  try {
+    const component = await api.post(`/api/modules/${props.id}/components`, {
+      name: componentNameDraft.value.trim(),
+      type: componentTypeDraft.value,
+    });
+    componentNameDraft.value = '';
+    if (component.panel_placement_id) {
+      componentNotice.value =
+        'Panel marker added — drag it onto the correct position if needed.';
+    }
+    await load();
+  } catch (e) {
+    componentError.value = e.message;
+  } finally {
+    addingComponent.value = false;
+  }
+}
+
+async function removeComponent(c) {
+  const ok = await dialog.confirm({
+    title: 'Remove component',
+    message: `Remove ${c.name} from this module? Its panel marker and related signal-path data will also be removed.`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
+  componentError.value = '';
+  componentNotice.value = '';
+  try {
+    await api.delete(`/api/modules/${props.id}/components/${c.id}`);
+    if (editingComponentId.value === c.id) editingComponentId.value = null;
+    await load();
+  } catch (e) {
+    componentError.value = e.message;
   }
 }
 
@@ -545,7 +598,13 @@ function voltageRange(c) {
 
 async function load() {
   try {
-    module.value = await api.get(`/api/modules/${props.id}`);
+    const loaded = await api.get(`/api/modules/${props.id}`);
+    module.value = loaded;
+    // The width beside panel import is an override, but the most useful
+    // starting value is what manual analysis (or a previous import) already
+    // established for the module. Do not wipe out an edit merely because an
+    // unrelated action refreshed the detail page.
+    if (!panelHpDirty.value) panelHp.value = loaded.hp == null ? '' : String(loaded.hp);
   } catch (e) {
     error.value = e.message;
   }
@@ -573,6 +632,7 @@ function fileToBase64(file) {
 // one replaces it for good: the panel job stops researching and instead
 // locates this module's components on the picture supplied here.
 const panelHp = ref('');
+const panelHpDirty = ref(false);
 const panelUrl = ref('');
 const panelError = ref('');
 const panelUploading = ref(false);
@@ -590,7 +650,7 @@ async function uploadPanel(file) {
     const data_base64 = await fileToBase64(file);
     const body = panelHpField({ filename: file.name, data_base64 });
     await api.post(`/api/modules/${props.id}/panel`, body);
-    panelHp.value = '';
+    panelHpDirty.value = false;
     await load();
   } catch (e) {
     panelError.value = e.message;
@@ -607,7 +667,7 @@ async function downloadPanel() {
   try {
     await api.post(`/api/modules/${props.id}/panel`, panelHpField({ url }));
     panelUrl.value = '';
-    panelHp.value = '';
+    panelHpDirty.value = false;
     await load();
   } catch (e) {
     panelError.value = e.message;
@@ -741,7 +801,11 @@ async function detachNote(note) {
 
 defineExpose({ uploadDocument });
 onMounted(load);
-watch(() => props.id, load);
+watch(() => props.id, () => {
+  panelHp.value = '';
+  panelHpDirty.value = false;
+  load();
+});
 </script>
 
 <template>
@@ -804,6 +868,7 @@ watch(() => props.id, load);
             style="max-width: 10rem"
             placeholder="Width in HP (optional)"
             data-test="panel-hp"
+            @input="panelHpDirty = true"
           />
           <input
             id="panel-upload"
@@ -850,6 +915,62 @@ watch(() => props.id, load);
       </summary>
       <div class="panel-body">
         <p style="white-space: pre-wrap">{{ module.summary }}</p>
+      </div>
+    </details>
+
+    <details open class="panel" data-test="component-editor">
+      <summary>
+        <h2>Jacks and controls</h2>
+        <span class="summary-count">{{ manuallyEditableComponents.length }}</span>
+      </summary>
+      <div class="panel-body">
+        <p class="muted">
+          Add an input, output, knob or toggle the manual analysis missed. It appears in the
+          component lists and gets a marker on the front panel, which can be dragged to the correct
+          position.
+        </p>
+        <form @submit.prevent="addComponent">
+          <div class="row" style="align-items: end">
+            <div style="flex: 2">
+              <label for="component-name">Component name</label>
+              <input
+                id="component-name"
+                v-model="componentNameDraft"
+                placeholder="e.g. CLOCK IN or FREQUENCY"
+                data-test="component-name"
+              />
+            </div>
+            <div>
+              <label for="component-type">Type</label>
+              <select
+                id="component-type"
+                v-model="componentTypeDraft"
+                data-test="component-type"
+              >
+                <option value="input_jack">Input</option>
+                <option value="output_jack">Output</option>
+                <option value="knob">Knob</option>
+                <option value="toggle">Toggle</option>
+              </select>
+            </div>
+            <div class="shrink">
+              <button
+                type="submit"
+                style="margin: 0"
+                :disabled="addingComponent || !componentNameDraft.trim()"
+                data-test="component-add"
+              >
+                Add component
+              </button>
+            </div>
+          </div>
+        </form>
+        <p v-if="componentError" class="error" data-test="component-error">
+          {{ componentError }}
+        </p>
+        <p v-if="componentNotice" class="muted" data-test="component-notice">
+          {{ componentNotice }}
+        </p>
       </div>
     </details>
 
@@ -1732,6 +1853,15 @@ watch(() => props.id, load);
                     @click="startEditComponent(c)"
                   >
                     Edit
+                  </button>
+                  <button
+                    v-if="MANUALLY_EDITABLE_TYPES.includes(group.type)"
+                    class="danger"
+                    style="margin: 0 0 0 0.4rem"
+                    :data-test="`remove-component-${c.id}`"
+                    @click="removeComponent(c)"
+                  >
+                    Remove
                   </button>
                 </td>
               </tr>
