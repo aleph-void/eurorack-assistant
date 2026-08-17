@@ -160,7 +160,7 @@ describe('fetchModulargridRack', () => {
 });
 
 describe('importModules', () => {
-  it('creates new module rows and increments the rack quantity for duplicates', async () => {
+  it('creates new module rows and replaces the rack quantity on re-import', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u1' });
 
@@ -179,13 +179,15 @@ describe('importModules', () => {
     expect(second.rack.id).toBe(first.rack.id);
     expect(second.results[0].created).toBe(false);
     expect(second.results[0].added).toBe(false);
-    expect(second.results[0].quantity).toBe(3);
+    expect(second.results[0].quantity).toBe(2);
     expect(second.results[0].module.id).toBe(first.results[0].module.id);
 
     const { rows: modules } = await db.query('SELECT * FROM modules');
     expect(modules).toHaveLength(1);
     const { rows: racks } = await db.query('SELECT * FROM racks');
     expect(racks).toHaveLength(1);
+    const { rows: mappings } = await db.query('SELECT quantity FROM rack_modules');
+    expect(mappings).toEqual([{ quantity: 2 }]);
   });
 
   it('shares one module record between users, with per-rack quantities', async () => {

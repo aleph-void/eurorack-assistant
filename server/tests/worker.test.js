@@ -156,7 +156,7 @@ describe('worker', () => {
     const { rows: modules } = await db.query('SELECT * FROM modules');
     expect(modules).toHaveLength(1);
     const { rows: mappings } = await db.query('SELECT quantity FROM rack_modules');
-    expect(mappings[0].quantity).toBe(2);
+    expect(mappings[0].quantity).toBe(1);
     const { rows: finds } = await db.query("SELECT * FROM jobs WHERE type = 'find_manual'");
     expect(finds).toHaveLength(1);
   });
