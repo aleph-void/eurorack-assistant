@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import { useAuthStore } from '../stores/auth.js';
@@ -9,6 +10,7 @@ import ShareButton from '../components/ShareButton.vue';
 const props = defineProps({ id: { type: String, required: true } });
 
 const auth = useAuthStore();
+const route = useRoute();
 const module = ref(null);
 const error = ref('');
 const uploadError = ref('');
@@ -342,6 +344,34 @@ async function removePair(pair) {
 const expanderTarget = ref('');
 const expanderError = ref('');
 const rackModules = ref([]);
+
+// Keep detail-page navigation in the rack the user came from. A direct visit
+// has no rack in its URL, so use the module's first rack as a stable default.
+const navigationRackId = computed(() => {
+  const requested = Number(route.query.rack);
+  if (requested && module.value?.racks?.some((rack) => rack.id === requested)) return requested;
+  return module.value?.racks?.[0]?.id ?? null;
+});
+const modulesInNavigationRack = computed(() => {
+  if (!navigationRackId.value) return [];
+  return rackModules.value.filter((candidate) =>
+    candidate.racks?.some((rack) => rack.id === navigationRackId.value)
+  );
+});
+const nextModule = computed(() => {
+  const index = modulesInNavigationRack.value.findIndex(
+    (candidate) => candidate.id === Number(props.id)
+  );
+  return index < 0 ? null : modulesInNavigationRack.value[index + 1] ?? null;
+});
+const modulesHref = computed(() =>
+  navigationRackId.value ? `/modules?rack=${navigationRackId.value}` : '/modules'
+);
+const nextModuleHref = computed(() =>
+  nextModule.value
+    ? `/modules/${nextModule.value.id}?rack=${navigationRackId.value}`
+    : null
+);
 
 const expanderCandidates = computed(() =>
   rackModules.value.filter(
@@ -689,10 +719,16 @@ async function detachNote(note) {
 
 defineExpose({ uploadDocument });
 onMounted(load);
+watch(() => props.id, load);
 </script>
 
 <template>
-  <p><RouterLink to="/modules">← All modules</RouterLink></p>
+  <p class="row">
+    <RouterLink :to="modulesHref">← All modules</RouterLink>
+    <RouterLink v-if="nextModule" :to="nextModuleHref" data-test="next-module">
+      Next Module →
+    </RouterLink>
+  </p>
   <p v-if="error" class="error">{{ error }}</p>
   <template v-if="module">
     <h1>{{ module.manufacturer }} {{ module.name }}</h1>

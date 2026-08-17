@@ -103,6 +103,7 @@ describe('ModulesView', () => {
     expect(row.text()).toContain('main rack');
     expect(row.text()).toContain('found');
     expect(row.text()).toContain('complete');
+    expect(row.find('a').attributes('to')).toBe('/modules/1?rack=1');
   });
 
   it('shows the empty state', async () => {
@@ -374,6 +375,29 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="group-input_jack"]').text()).toContain('-10V … 10V');
     expect(wrapper.find('[data-test="group-output_jack"]').text()).toContain('unipolar');
     expect(wrapper.find('[data-test="group-knob"]').text()).toContain('Rise');
+  });
+
+  it('links to the next module in the current rack and stops at the last one', async () => {
+    currentRouteQuery = { rack: '1' };
+    const list = [
+      { id: 1, manufacturer: 'Make Noise', name: 'Maths', racks: [{ id: 1 }] },
+      { id: 2, manufacturer: 'Mutable Instruments', name: 'Rings', racks: [{ id: 1 }] },
+      { id: 3, manufacturer: 'Xaoc', name: 'Batumi', racks: [{ id: 2 }] },
+    ];
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/modules/1' ? moduleResponse : list)
+    );
+
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="next-module"]').attributes('to')).toBe('/modules/2?rack=1');
+
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/modules/2' ? { ...moduleResponse, id: 2 } : list)
+    );
+    await wrapper.setProps({ id: '2' });
+    await flushPromises();
+    expect(wrapper.find('[data-test="next-module"]').exists()).toBe(false);
   });
 
   it('links a document with extracted text to the reader, and says so when there is none', async () => {

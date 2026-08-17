@@ -13,6 +13,7 @@ import {
 import { deleteModulesDeep } from '../services/moduleDeletion.js';
 import { refreshModuleLinks, unlinkedExpanderHints } from '../services/moduleLinks.js';
 import { MAX_IMAGE_BYTES, MIN_PANEL_PIXELS, saveImage, sniffImage } from '../services/image.js';
+import { panelCrop, readPixels } from '../services/panelPixels.js';
 import {
   deletePanelImageIfOrphaned,
   fillMissingPlacements,
@@ -1329,6 +1330,19 @@ export function moduleRoutes(
       if (hp !== null) await Module.update({ hp }, { where: { id: module.id } });
       const width = hp ?? module.hp ?? null;
 
+      // Crop the blank backdrop as part of accepting the upload, rather than
+      // waiting for the component-mapping job to do it later. Some uploads do
+      // not queue that job at all (there are no analyzed components yet), and
+      // even when they do, the user should see the panel they just supplied
+      // without a temporary white/transparent frame around it. Keep the
+      // original bytes: the client already renders a panel through this crop,
+      // which avoids lossy re-encoding and preserves animated image formats.
+      const pixels = await readPixels(data);
+      const crop = pixels ? panelCrop(pixels, { hp: width }) : null;
+      const uploadCrop = crop
+        ? { crop_x: crop.x, crop_y: crop.y, crop_w: crop.w, crop_h: crop.h }
+        : { ...FULL_CROP };
+
       const previous = await ModulePanel.findOne({ where: { module_id: module.id } });
       const hash = saveImage(panelsDir, data, info.ext);
       await savePanel(
@@ -1341,7 +1355,7 @@ export function moduleRoutes(
           image_ext: info.ext,
           width: info.width,
           height: info.height,
-          ...FULL_CROP,
+          ...uploadCrop,
           hp: width,
           description: `Uploaded panel image (${String(filename).slice(0, 120)}).`,
         },

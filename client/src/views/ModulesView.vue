@@ -64,6 +64,10 @@ function rackNames(module) {
   return (module.racks || []).map((r) => r.name).join(', ');
 }
 
+function moduleHref(module, rack) {
+  return rack ? `/modules/${module.id}?rack=${rack.id}` : `/modules/${module.id}`;
+}
+
 async function remove(module) {
   const where = currentRack.value ? `from rack '${currentRack.value.name}'` : 'from all your racks';
   const ok = await dialog.confirm({
@@ -326,7 +330,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
               <tr :data-test="`module-${module.id}`">
                 <td>{{ module.manufacturer }}</td>
                 <td>
-                  <RouterLink :to="`/modules/${module.id}`">{{ module.name }}</RouterLink>
+                  <RouterLink :to="moduleHref(module, group.rack)">{{ module.name }}</RouterLink>
                 </td>
                 <td>{{ module.quantity }}</td>
                 <td>{{ module.hp ? `${module.hp}HP` : '—' }}</td>

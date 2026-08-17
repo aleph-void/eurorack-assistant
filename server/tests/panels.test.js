@@ -1232,6 +1232,49 @@ describe('uploading your own panel image', () => {
     expect(job.user_id).toBe(alice.id);
   });
 
+  it('trims a blank surround as soon as the panel is uploaded', async () => {
+    const module = await moduleWithComponents();
+    const sharp = await loadSharp();
+    const bordered = await sharp({
+      create: {
+        width: 160,
+        height: 400,
+        channels: 3,
+        background: '#ffffff',
+      },
+    })
+      .composite([
+        {
+          input: {
+            create: {
+              width: 96,
+              height: 300,
+              channels: 3,
+              background: '#222222',
+            },
+          },
+          left: 32,
+          top: 50,
+        },
+      ])
+      .png()
+      .toBuffer();
+
+    const res = await upload(module.id, {
+      filename: 'panel-with-border.png',
+      data_base64: bordered.toString('base64'),
+      hp: 8,
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.panel.width).toBe(160);
+    expect(res.body.panel.height).toBe(400);
+    expect(res.body.panel.crop.x).toBeCloseTo(32 / 160);
+    expect(res.body.panel.crop.y).toBeCloseTo(50 / 400);
+    expect(res.body.panel.crop.w).toBeCloseTo(96 / 160);
+    expect(res.body.panel.crop.h).toBeCloseTo(300 / 400);
+  });
+
   // The whole point of the upload: the components end up on the user's own
   // picture, at the positions the LLM reads off it.
   it('maps the components onto the uploaded image when the job runs', async () => {
