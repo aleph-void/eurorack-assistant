@@ -1420,15 +1420,64 @@ describe('uploading your own panel image', () => {
     ).toBe(401);
   });
 
-  it('queues nothing for a module with no components to place', async () => {
-    const module = await insertModule(ctx.db, alice.id, { name: 'Unanalyzed' });
+  it('analyzes an existing manual before mapping an imported panel with no components', async () => {
+    const module = await insertModule(ctx.db, alice.id, {
+      name: 'Unanalyzed',
+      manual_hash: PDF_HASH,
+      analysis_status: 'pending',
+    });
+    fs.writeFileSync(path.join(ctx.manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
     const res = await upload(module.id, {
       filename: 'p.png',
       data_base64: PANEL_PNG.toString('base64'),
     });
     expect(res.status).toBe(201);
-    expect(res.body.job_id).toBe(null);
-    expect(await ctx.db.models.Job.count()).toBe(0);
+    const analysisJob = await ctx.db.models.Job.findByPk(res.body.job_id);
+    expect(analysisJob.type).toBe('analyze_manual');
+
+    const backend = fakeBackend({
+      analyzeDocument: JSON.stringify({
+        summary: 'A VCO.',
+        components: COMPONENTS.map((c) => ({ ...c, description: null })),
+      }),
+      analyzeImage: JSON.stringify({
+        is_panel: true,
+        panel: { x: 0, y: 0, w: 1, h: 1 },
+        components: COMPONENTS.map((c, i) => ({
+          name: c.name,
+          x: 0.5,
+          y: 0.15 * (i + 1),
+        })),
+      }),
+    });
+    const worker = createWorker(ctx.db, {
+      manualsDir: ctx.manualsDir,
+      panelsDir: ctx.panelsDir,
+      backendFactory: () => backend,
+      fetchImpl: fakeFetch({}),
+      log: () => {},
+    });
+
+    expect((await worker.tick()).type).toBe('analyze_manual');
+    expect((await worker.tick()).type).toBe('panel_image');
+    const panel = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    expect(panel.source).toBe('upload');
+    expect(
+      await ctx.db.models.ModulePanelComponent.count({ where: { panel_id: panel.id } })
+    ).toBe(COMPONENTS.length);
+  });
+
+  it('starts manual discovery when an imported panel has no components or manual', async () => {
+    const module = await insertModule(ctx.db, alice.id, { name: 'Unknown' });
+    const res = await upload(module.id, {
+      url: 'https://cdn.example.com/a110-front.png',
+    });
+    expect(res.status).toBe(201);
+    const job = await ctx.db.models.Job.findByPk(res.body.job_id);
+    expect(job.type).toBe('find_manual');
+    const after = await ctx.db.models.Module.findByPk(module.id);
+    expect(after.manual_status).toBe('pending');
+    expect(after.analysis_status).toBe('pending');
   });
 
   it('removes an uploaded panel and queues a replacement', async () => {

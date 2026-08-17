@@ -1415,10 +1415,28 @@ export function moduleRoutes(
       }
 
       // Locating the components on it is LLM work, so it goes to the queue.
-      // A module with no components analyzed yet has nothing to place; its
-      // picture simply stays unmarked until the analysis runs.
+      // If the component list does not exist yet, enter the chained pipeline
+      // one step earlier: analyze the shared manual first, or find that manual
+      // first when the module has none. A successful analysis queues the panel
+      // job itself, which then sees and keeps this user-supplied image.
       const components = await ModuleComponent.count({ where: { module_id: module.id } });
-      const queued = components > 0 && (await enqueueModuleJob(db, 'panel_image', module, req.user.id));
+      let jobType = 'panel_image';
+      if (components === 0) {
+        const manual = await Manual.findOne({
+          where: { module_id: module.id, user_id: null },
+          attributes: ['id'],
+        });
+        jobType = manual ? 'analyze_manual' : 'find_manual';
+      }
+      const queued = await enqueueModuleJob(db, jobType, module, req.user.id);
+      if (queued && jobType === 'analyze_manual') {
+        await Module.update({ analysis_status: 'pending' }, { where: { id: module.id } });
+      } else if (queued && jobType === 'find_manual') {
+        await Module.update(
+          { manual_status: 'pending', analysis_status: 'pending' },
+          { where: { id: module.id } }
+        );
+      }
       const panels = await loadPanels(db, [module.id]);
       res.status(201).json({ panel: panels.get(module.id) ?? null, job_id: queued ? queued.id : null });
     } catch (e) {
