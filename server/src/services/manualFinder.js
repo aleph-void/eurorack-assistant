@@ -30,15 +30,21 @@ Task: find the OFFICIAL user manual PDF for this module on the internet.
    use rack-planning sites such as ModularGrid as a source.
 3. Also find the module's public product web page: the manufacturer's own page
    for it, or failing that a retailer's product page.
+4. Independently find the page for this exact module on perfectcircuit.com.
+   This retailer often has a useful jack-by-jack feature description even when
+   the manufacturer has not published a manual.
 
 Respond with ONLY a JSON object, no prose and no code fences, shaped exactly like:
 
-{"manufacturer": "...", "module": "...", "pdf_urls": ["https://..."], "product_page_url": "https://..."}
+{"manufacturer": "...", "module": "...", "pdf_urls": ["https://..."], "product_page_url": "https://...", "perfect_circuit_url": "https://www.perfectcircuit.com/..."}
 
 Rules:
 - "pdf_urls": up to 3 candidate direct-download PDF URLs, best first.
   Use [] if you cannot find any PDF manual.
 - "product_page_url": use null if you cannot find a product page.
+- "perfect_circuit_url": use the matching product page on perfectcircuit.com
+  only. Verify that both manufacturer and module match; use null if Perfect
+  Circuit has no page for it. Do not return a search-results or category URL.
 - Use the manufacturer's and module's official spelling/capitalization.
 `;
 
@@ -49,10 +55,52 @@ export async function researchModule(backend, line) {
   info.manufacturer = String(info.manufacturer || '').trim();
   info.module = String(info.module || '').trim();
   info.product_page_url = info.product_page_url ? String(info.product_page_url).trim() : null;
+  info.perfect_circuit_url = normalizePerfectCircuitUrl(info.perfect_circuit_url);
   if (!info.manufacturer || !info.module) {
     throw new Error(`LLM response missing manufacturer/module: ${JSON.stringify(info)}`);
   }
   return info;
+}
+
+export function normalizePerfectCircuitUrl(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(String(value).trim());
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    if (url.protocol !== 'https:' || host !== 'perfectcircuit.com' || url.pathname === '/') {
+      return null;
+    }
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+async function renderCompanionProductPage(info, manualsDir, deps = {}) {
+  const { log = () => {}, renderImpl = renderPageToPdf } = deps;
+  const url = normalizePerfectCircuitUrl(info.perfect_circuit_url);
+  let primaryIsPerfectCircuit = false;
+  try {
+    primaryIsPerfectCircuit =
+      new URL(info.product_page_url).hostname.toLowerCase().replace(/^www\./, '') ===
+      'perfectcircuit.com';
+  } catch {
+    // A missing/invalid primary URL is handled by the normal acquisition path.
+  }
+  if (!url || primaryIsPerfectCircuit) return null;
+  const originalName = safeManualName(
+    info.manufacturer,
+    info.module,
+    'Perfect_Circuit_Product_Page'
+  );
+  const tmp = path.join(manualsDir, `download_${originalName}`);
+  log(`rendering companion Perfect Circuit product page: ${url}`);
+  if (!(await renderImpl(url, tmp, { log }))) return null;
+  const hash = sha256File(tmp);
+  const dest = manualPath(manualsDir, hash);
+  if (fs.existsSync(dest)) fs.rmSync(tmp, { force: true });
+  else fs.renameSync(tmp, dest);
+  return { hash, originalName };
 }
 
 // Search the archive.org item library for a PDF matching the query.
@@ -206,6 +254,7 @@ export async function findManualForModule(db, backend, module, manualsDir, deps 
       module: module.name,
       pdf_urls: [],
       product_page_url: null,
+      perfect_circuit_url: null,
     };
   }
 
@@ -246,19 +295,29 @@ export async function findManualForModule(db, backend, module, manualsDir, deps 
       info.module,
       kind === 'product_page' ? 'Product_Page' : 'Manual'
     );
+    const companion =
+      kind === 'product_page'
+        ? await renderCompanionProductPage(info, manualsDir, { log, renderImpl })
+        : null;
     // A rendered product page produces different bytes on every run, so the
     // content-hash dedupe that makes re-runs a no-op for real manuals cannot
     // collapse renders. Instead, any earlier rendered stand-in for this module
     // (recognized by its _Product_Page.pdf name) with different content is
     // superseded by this acquisition — a fresh render, or a real manual that
     // has since turned up.
-    const staleRenders = await Manual.findAll({
+    const previousRenders = await Manual.findAll({
       where: {
         module_id: module.id,
         user_id: null,
         original_name: { [Op.like]: '%_Product_Page.pdf' },
-        hash: { [Op.ne]: hash },
       },
+    });
+    const currentHashes = new Set([hash, companion?.hash].filter(Boolean));
+    const staleRenders = previousRenders.filter((m) => {
+      if (currentHashes.has(m.hash)) return false;
+      if (kind === 'manual') return true;
+      if (m.original_name === originalName) return true;
+      return companion && m.original_name === companion.originalName;
     });
     // Recording the document and flipping the module's status commit
     // together. A document with this content already recorded for the module
@@ -285,6 +344,24 @@ export async function findManualForModule(db, backend, module, manualsDir, deps 
           },
           { transaction }
         );
+      }
+      if (companion) {
+        const existingCompanion = await Manual.findOne({
+          where: { module_id: module.id, user_id: null, hash: companion.hash },
+          transaction,
+        });
+        if (!existingCompanion) {
+          await Manual.create(
+            {
+              module_id: module.id,
+              user_id: null,
+              hash: companion.hash,
+              original_name: companion.originalName,
+              source: 'found',
+            },
+            { transaction }
+          );
+        }
       }
       await Module.update(
         { manual_status: 'found' },

@@ -565,12 +565,17 @@ export function createWorker(db, options = {}) {
     // The searchable text of the document that was just saved. Independent of
     // the analysis — it needs no model and reads nothing the analysis writes —
     // so the two run alongside each other rather than in a chain.
-    const saved = await db.models.Manual.findOne({
-      where: { module_id: module.id, user_id: null, hash },
+    const saved = await db.models.Manual.findAll({
+      where: { module_id: module.id, user_id: null },
       order: [['id', 'ASC']],
     });
-    if (saved && (await enqueueExtractManual(db, saved, job.user_id))) {
-      progress('queued manual text extraction');
+    for (const document of saved) {
+      const extracted = await db.models.ManualDocument.findOne({
+        where: { manual_id: document.id },
+      });
+      if (!extracted && (await enqueueExtractManual(db, document, job.user_id))) {
+        progress(`queued text extraction: ${document.original_name || `${document.hash}.pdf`}`);
+      }
     }
   }
 
@@ -613,23 +618,38 @@ export function createWorker(db, options = {}) {
     if (!record) throw new Error(`Module ${job.module_id} no longer exists`);
     const module = record.get({ plain: true });
     // The shared auto-found manual is what gets analyzed.
-    const manual = await Manual.findOne({
+    const manuals = await Manual.findAll({
       where: { module_id: module.id, user_id: null },
       order: [['id', 'ASC']],
     });
+    const manual = manuals.find(
+      (m) => !/_Perfect_Circuit_Product_Page\.pdf$/i.test(m.original_name || '')
+    );
     if (!manual) {
       throw new Error(`Module ${module.manufacturer} ${module.name} has no manual to analyze`);
     }
+    const productPage = /_Product_Page\.pdf$/i.test(manual.original_name || '');
+    const analysisManuals = productPage
+      ? [
+          manual,
+          ...manuals.filter((m) =>
+            /_Perfect_Circuit_Product_Page\.pdf$/i.test(m.original_name || '')
+          ),
+        ]
+      : [manual];
     await Module.update({ analysis_status: 'analyzing' }, { where: { id: module.id } });
-    progress(`analyzing manual: ${manual.original_name || `${manual.hash}.pdf`}`);
+    progress(
+      `analyzing ${analysisManuals.length} document(s): ` +
+        analysisManuals.map((m) => m.original_name || `${m.hash}.pdf`).join(', ')
+    );
     let analyzed = 0;
     try {
       const { components } = await analyzeManualForModule(
         db,
         backend,
         module,
-        manualPath(manualsDir, manual.hash),
-        { productPage: /_Product_Page\.pdf$/i.test(manual.original_name || '') }
+        analysisManuals.map((m) => manualPath(manualsDir, m.hash)),
+        { productPage }
       );
       analyzed = components.length;
       progress(`analysis complete: ${components.length} component(s) found`);

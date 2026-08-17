@@ -47,11 +47,13 @@ export const PORT_KINDS = [
 export const BREAK_MODES = ['cable_in', 'cable_out'];
 
 const PRODUCT_PAGE_JACK_GUIDANCE = `
-This PDF is a rendered PRODUCT PAGE, not a user manual. Product-page prose
-often names features without giving a numbered panel tour. For JACKS ONLY,
-also inspect every front-panel image, diagram, caption, specification and
-signal-flow statement in the PDF and infer the most likely inventory and
-direction:
+The attached PDFs are rendered PRODUCT PAGES, not a user manual. One is the
+maker's (or best available) page and the other, when available, is Perfect
+Circuit's page. Reconcile evidence from both and do not duplicate a physical
+jack merely because both pages mention it. Product-page prose often names
+features without giving a numbered panel tour. For JACKS ONLY, also inspect
+every front-panel image, diagram, caption, specification and signal-flow
+statement in either PDF and infer the most likely inventory and direction:
 - Treat every visible 3.5mm patch socket as a jack even when the prose never
   enumerates it. Use its printed panel label as the name, keeping channel
   numbers and L/R suffixes that distinguish repeated sockets.
@@ -742,13 +744,15 @@ export async function analyzeManualForModule(
   db,
   backend,
   module,
-  manualPath,
+  manualPaths,
   { productPage = false } = {}
 ) {
-  const response = await backend.analyzeDocument(
-    ANALYSIS_TEMPLATE(module.manufacturer, module.name, { productPage }),
-    manualPath
-  );
+  const paths = Array.isArray(manualPaths) ? manualPaths : [manualPaths];
+  const prompt = ANALYSIS_TEMPLATE(module.manufacturer, module.name, { productPage });
+  const response =
+    paths.length > 1
+      ? await backend.analyzeDocuments(prompt, paths)
+      : await backend.analyzeDocument(prompt, paths[0]);
   const parsed = extractJsonObject(response);
   const summary = String(parsed.summary || '').trim();
   // The panel width, where the manual states it. This is the module's own

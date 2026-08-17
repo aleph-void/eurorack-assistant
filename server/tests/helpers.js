@@ -343,6 +343,7 @@ export function fakeBackend(responses = {}) {
     completeTextWithSearch: [],
     answerWithDocuments: [],
     analyzeDocument: [],
+    analyzeDocuments: [],
     analyzeImage: [],
   };
   const respond = (value, args) => {
@@ -367,6 +368,10 @@ export function fakeBackend(responses = {}) {
     analyzeDocument(...args) {
       calls.analyzeDocument.push(args);
       return respond(responses.analyzeDocument, args);
+    },
+    analyzeDocuments(...args) {
+      calls.analyzeDocuments.push(args);
+      return respond(responses.analyzeDocuments ?? responses.analyzeDocument, args);
     },
     analyzeImage(...args) {
       calls.analyzeImage.push(args);

@@ -486,6 +486,15 @@ describe('worker', () => {
       { original_name: 'Make_Noise_Maths_Product_Page.pdf' },
       { where: { module_id: module.id } }
     );
+    const companionHash = 'f'.repeat(64);
+    fs.writeFileSync(path.join(manualsDir, `${companionHash}.pdf`), PDF_BYTES);
+    await db.models.Manual.create({
+      module_id: module.id,
+      user_id: null,
+      hash: companionHash,
+      original_name: 'Make_Noise_Maths_Perfect_Circuit_Product_Page.pdf',
+      source: 'found',
+    });
     await enqueue(db, 'analyze_manual', { module_id: module.id });
     const backend = fakeBackend({
       analyzeDocument:
@@ -495,8 +504,10 @@ describe('worker', () => {
     const done = await makeWorker(db, backend).tick();
 
     expect(done.status).toBe('complete');
-    expect(backend.calls.analyzeDocument[0][0]).toContain('rendered PRODUCT PAGE');
-    expect(backend.calls.analyzeDocument[0][0]).toContain('For JACKS ONLY');
+    expect(backend.calls.analyzeDocument).toHaveLength(0);
+    expect(backend.calls.analyzeDocuments[0][0]).toContain('rendered PRODUCT PAGES');
+    expect(backend.calls.analyzeDocuments[0][0]).toContain('For JACKS ONLY');
+    expect(backend.calls.analyzeDocuments[0][1]).toHaveLength(2);
   });
 
   it('processes a scope_question job and leaves the question awaiting review', async () => {

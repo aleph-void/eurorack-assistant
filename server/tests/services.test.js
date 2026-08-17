@@ -114,10 +114,14 @@ describe('researchModule', () => {
         module: 'Maths',
         pdf_urls: 'https://makenoise.com/maths.pdf',
         product_page_url: null,
+        perfect_circuit_url: 'https://www.perfectcircuit.com/make-noise-maths.html',
       }),
     });
     const info = await researchModule(backend, 'Make Noise,Maths');
     expect(info.pdf_urls).toEqual(['https://makenoise.com/maths.pdf']);
+    expect(info.perfect_circuit_url).toBe(
+      'https://www.perfectcircuit.com/make-noise-maths.html'
+    );
     expect(backend.calls.completeTextWithSearch[0][0]).toContain('Make Noise,Maths');
   });
 
@@ -267,6 +271,7 @@ describe('findManualForModule', () => {
         module: 'Maths',
         pdf_urls: ['https://dead.example.com/maths.pdf'],
         product_page_url: 'https://makenoise.com/maths',
+        perfect_circuit_url: 'https://www.perfectcircuit.com/make-noise-maths.html',
       }),
     });
     const fetchImpl = fakeFetch({
@@ -274,22 +279,32 @@ describe('findManualForModule', () => {
       // No archived copy of the dead manual URL either.
       'archive.org/wayback/available': { json: {} },
     });
-    const renderImpl = fakeRender({ 'makenoise.com/maths': RENDER_A });
+    const renderImpl = fakeRender({
+      'makenoise.com/maths': RENDER_A,
+      'perfectcircuit.com/make-noise-maths': RENDER_B,
+    });
 
     const hash = await findManualForModule(db, backend, module, manualsDir, {
       fetchImpl,
       renderImpl,
     });
     expect(hash).toBe(RENDER_A_HASH);
-    expect(renderImpl.calls).toEqual(['https://makenoise.com/maths']);
+    expect(renderImpl.calls).toEqual([
+      'https://makenoise.com/maths',
+      'https://www.perfectcircuit.com/make-noise-maths.html',
+    ]);
     // The render satisfied the job, so the archive.org item library was
     // never consulted.
     expect(fetchImpl.requested.some((u) => u.includes('advancedsearch'))).toBe(false);
 
     const { rows } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [module.id]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].original_name).toBe('Make_Noise_Maths_Product_Page.pdf');
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.original_name).sort()).toEqual([
+      'Make_Noise_Maths_Perfect_Circuit_Product_Page.pdf',
+      'Make_Noise_Maths_Product_Page.pdf',
+    ]);
     expect(fs.existsSync(path.join(manualsDir, `${hash}.pdf`))).toBe(true);
+    expect(fs.existsSync(path.join(manualsDir, `${RENDER_B_HASH}.pdf`))).toBe(true);
   });
 
   it('renders the product page when the manual URL serves a corrupt PDF', async () => {
@@ -877,7 +892,7 @@ describe('analyzeManualForModule', () => {
     const productPage = ANALYSIS_TEMPLATE('Make Noise', 'Maths', { productPage: true });
 
     expect(manual).not.toContain('For JACKS ONLY');
-    expect(productPage).toContain('rendered PRODUCT PAGE');
+    expect(productPage).toContain('rendered PRODUCT PAGES');
     expect(productPage).toContain('Treat every visible 3.5mm patch socket as a jack');
     expect(productPage).toContain('CV, FM, V/OCT, GATE, TRIG, CLOCK, RESET and SYNC');
     expect(productPage).toContain('extra visual inference applies only');

@@ -433,11 +433,18 @@ export class ClaudeBackend {
 
   // Analyze a single local PDF (used for manual analysis).
   analyzeDocument(prompt, pdfPath) {
+    return this.analyzeDocuments(prompt, [pdfPath]);
+  }
+
+  // Analyze related PDFs together. Product-page fallbacks use the maker's
+  // page plus Perfect Circuit's page so one model pass can reconcile them.
+  analyzeDocuments(prompt, pdfPaths) {
     return this._run(
-      [pdfPath],
+      pdfPaths,
       ['--allowedTools', 'Read'],
-      ([staged]) =>
-        `${prompt}\n\nRead the following manual PDF and base the output on it:\n- ${staged}\n`
+      (staged) =>
+        `${prompt}\n\nRead all of the following module-document PDFs and base the output on them:\n` +
+        `${staged.map((file) => `- ${file}`).join('\n')}\n`
     );
   }
 
@@ -545,12 +552,17 @@ export class CodexBackend {
   }
 
   analyzeDocument(prompt, pdfPath) {
+    return this.analyzeDocuments(prompt, [pdfPath]);
+  }
+
+  analyzeDocuments(prompt, pdfPaths) {
     return this._run(
-      [pdfPath],
+      pdfPaths,
       [],
-      ([staged]) =>
-        `${prompt}\n\nRead the following manual PDF and base the output on it ` +
-        `(extract its text with a tool such as pdftotext if needed):\n- ${staged}\n`
+      (staged) =>
+        `${prompt}\n\nRead all of the following module-document PDFs and base the output on them ` +
+        `(extract their text with a tool such as pdftotext if needed):\n` +
+        `${staged.map((file) => `- ${file}`).join('\n')}\n`
     );
   }
 
