@@ -510,6 +510,66 @@ describe('worker', () => {
     expect(backend.calls.analyzeDocuments[0][1]).toHaveLength(2);
   });
 
+  it('includes only the requesting user\'s uploaded Perfect Circuit document with a product page', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const other = await createUser(db, { username: 'other' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, {
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+    });
+    await db.models.Manual.update(
+      { original_name: 'Make_Noise_Maths_Product_Page.pdf' },
+      { where: { module_id: module.id, user_id: null } }
+    );
+    const ownHash = 'a'.repeat(64);
+    const otherHash = 'b'.repeat(64);
+    const notesHash = 'c'.repeat(64);
+    for (const hash of [ownHash, otherHash, notesHash]) {
+      fs.writeFileSync(path.join(manualsDir, `${hash}.pdf`), PDF_BYTES);
+    }
+    await db.models.Manual.bulkCreate([
+      {
+        module_id: module.id,
+        user_id: user.id,
+        hash: ownHash,
+        name: 'Perfect Circuit',
+        original_name: 'maths-product-page.pdf',
+        source: 'upload',
+      },
+      {
+        module_id: module.id,
+        user_id: other.id,
+        hash: otherHash,
+        name: 'Perfect_Circuit',
+        original_name: 'private.pdf',
+        source: 'upload',
+      },
+      {
+        module_id: module.id,
+        user_id: user.id,
+        hash: notesHash,
+        name: 'notes',
+        original_name: 'notes.pdf',
+        source: 'upload',
+      },
+    ]);
+    await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
+    const backend = fakeBackend({
+      analyzeDocument:
+        '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
+    });
+
+    expect((await makeWorker(db, backend).tick()).status).toBe('complete');
+
+    const submitted = backend.calls.analyzeDocuments[0][1];
+    expect(submitted).toEqual([
+      path.join(manualsDir, `${PDF_HASH}.pdf`),
+      path.join(manualsDir, `${ownHash}.pdf`),
+    ]);
+  });
+
   it('processes a scope_question job and leaves the question awaiting review', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });

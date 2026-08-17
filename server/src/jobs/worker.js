@@ -76,6 +76,14 @@ export const attemptTimeoutMs = (baseMs, attempts) => baseMs * Math.max(1, attem
 // short enough that the queue comes back on its own.
 export const QUOTA_PAUSE_MS = 60 * 60 * 1000;
 
+// User uploads have a free-form display name and retain their original file
+// name. Accept either spelling style people naturally use for a saved
+// Perfect Circuit page ("Perfect Circuit", "Perfect_Circuit", or a hyphen).
+export function isPerfectCircuitDocument(document) {
+  const label = `${document?.name || ''} ${document?.original_name || ''}`;
+  return /(?:^|[^a-z])perfect[\s_-]*circuit(?:[^a-z]|$)/i.test(label);
+}
+
 // Timestamp of the last sign of life from whoever holds a running job. Rows
 // claimed before leases existed have no heartbeat, so fall back to updated_at.
 export function lastSeenAt(job) {
@@ -629,14 +637,32 @@ export function createWorker(db, options = {}) {
       throw new Error(`Module ${module.manufacturer} ${module.name} has no manual to analyze`);
     }
     const productPage = /_Product_Page\.pdf$/i.test(manual.original_name || '');
-    const analysisManuals = productPage
+    const suppliedPerfectCircuit =
+      productPage && job.user_id
+        ? (
+            await Manual.findAll({
+              where: { module_id: module.id, user_id: job.user_id, source: 'upload' },
+              order: [['id', 'ASC']],
+            })
+          ).filter(isPerfectCircuitDocument)
+        : [];
+    const candidates = productPage
       ? [
           manual,
           ...manuals.filter((m) =>
             /_Perfect_Circuit_Product_Page\.pdf$/i.test(m.original_name || '')
           ),
+          ...suppliedPerfectCircuit,
         ]
       : [manual];
+    // The uploaded file may be byte-for-byte identical to the auto-rendered
+    // companion. Submit it once while still preferring the shared record.
+    const seenAnalysisHashes = new Set();
+    const analysisManuals = candidates.filter((m) => {
+      if (seenAnalysisHashes.has(m.hash)) return false;
+      seenAnalysisHashes.add(m.hash);
+      return true;
+    });
     await Module.update({ analysis_status: 'analyzing' }, { where: { id: module.id } });
     progress(
       `analyzing ${analysisManuals.length} document(s): ` +
