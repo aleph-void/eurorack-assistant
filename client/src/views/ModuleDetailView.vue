@@ -444,6 +444,10 @@ const arrangedJack = computed(() =>
 );
 
 async function arrangeJack(c) {
+  if (arrangedJackId.value === c.id) {
+    arrangedJackId.value = null;
+    return;
+  }
   componentError.value = '';
   componentTypeDraft.value = c.type;
   try {

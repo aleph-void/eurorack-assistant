@@ -887,6 +887,12 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="panel-marker-1"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="panel-arrangement-filter"]').text()).toContain('EOR');
 
+    // The active Arranging button is itself a toggle back to the full panel.
+    await wrapper.find('[data-test="arrange-jack-2"]').trigger('click');
+    expect(wrapper.findAll('.marker')).toHaveLength(3);
+
+    await wrapper.find('[data-test="arrange-jack-2"]').trigger('click');
+    expect(wrapper.findAll('.marker')).toHaveLength(1);
     await wrapper.find('[data-test="panel-show-all"]').trigger('click');
     expect(wrapper.findAll('.marker')).toHaveLength(3);
   });
