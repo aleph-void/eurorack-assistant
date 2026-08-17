@@ -189,6 +189,7 @@ async function dropIntoAvailable() {
     Racks group the modules in your systems. Deleting a rack deletes the modules in it — a module
     survives only if it is still in another rack.
   </p>
+  <p class="muted">Choose <strong>Organize rack</strong> to arrange its physical 3U and 1U rows.</p>
   <p v-if="error" class="error" data-test="error">{{ error }}</p>
   <p v-if="notice" class="success" data-test="notice">{{ notice }}</p>
   <p v-if="loading" class="muted">Loading…</p>
@@ -199,6 +200,7 @@ async function dropIntoAvailable() {
           <tr>
             <th>Name</th>
             <th>Modules</th>
+            <th>Layout</th>
             <th></th>
           </tr>
         </thead>
@@ -228,6 +230,16 @@ async function dropIntoAvailable() {
             </td>
             <td>{{ rack.module_count }}</td>
             <td>
+              <button
+                class="secondary"
+                style="margin: 0"
+                :data-test="`organize-${rack.id}`"
+                @click="openOrganizer(rack)"
+              >
+                {{ organizingRackId === rack.id ? 'Close organizer' : 'Organize rack' }}
+              </button>
+            </td>
+            <td>
               <ShareButton type="rack" :id="rack.id" :label="rack.name" small />
               <button
                 v-if="renamingId !== rack.id"
@@ -245,14 +257,6 @@ async function dropIntoAvailable() {
                 @click="exportRack(rack)"
               >
                 Export Rack
-              </button>
-              <button
-                class="secondary"
-                style="margin: 0 0.4rem 0 0"
-                :data-test="`organize-${rack.id}`"
-                @click="openOrganizer(rack)"
-              >
-                {{ organizingRackId === rack.id ? 'Close organizer' : 'Organize' }}
               </button>
               <button class="danger" style="margin: 0" :data-test="`delete-${rack.id}`" @click="remove(rack)">
                 Delete
@@ -302,7 +306,8 @@ async function dropIntoAvailable() {
             :data-test="`available-module-${module.id}-${index}`"
             @dragstart="startDrag(module)"
           >
-            {{ module.manufacturer }} {{ module.name }} <span>{{ module.hp ? `${module.hp}HP` : 'HP unknown' }}</span>
+            <img v-if="module.panel" class="module-panel-thumb" :src="module.panel.url" :alt="`${module.manufacturer} ${module.name}`" />
+            <span>{{ module.manufacturer }} {{ module.name }} <em>{{ module.hp ? `${module.hp}HP` : 'HP unknown' }}</em></span>
           </button>
         </div>
       </div>
@@ -330,7 +335,8 @@ async function dropIntoAvailable() {
             type="button"
             @dragstart="startDrag(module, rowIndex)"
           >
-            {{ module.manufacturer }} {{ module.name }} · {{ module.hp }}HP
+            <img v-if="module.panel" class="module-panel-face" :src="module.panel.url" :alt="`${module.manufacturer} ${module.name}`" />
+            <span>{{ module.manufacturer }} {{ module.name }} · {{ module.hp }}HP</span>
           </button>
           <span v-if="row.modules.length === 0" class="muted">Drop modules here</span>
         </div>
@@ -344,8 +350,11 @@ async function dropIntoAvailable() {
 .available-modules, .rack-row-slots { min-height: 3.5rem; border: 1px dashed var(--border-strong); border-radius: 7px; padding: 0.6rem; }
 .available-modules { margin: 1rem 0; }
 .module-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.module-chip, .placed-module { margin: 0; cursor: grab; text-align: left; }
+.module-chip, .placed-module { margin: 0; cursor: grab; text-align: left; display: inline-flex; flex-direction: column; gap: 0.25rem; }
 .module-chip span { color: var(--muted); }
+.module-chip em { font-style: normal; }
+.module-panel-thumb { width: 3rem; height: 5rem; object-fit: contain; object-position: center; }
+.module-panel-face { width: min(100%, 8rem); height: 12rem; object-fit: contain; object-position: center; }
 .rack-row { margin: 0.8rem 0; }
 .rack-row-meta { display: flex; align-items: end; gap: 0.7rem; margin-bottom: 0.35rem; }
 .rack-row-meta label { display: grid; gap: 0.15rem; font-size: 0.85rem; }

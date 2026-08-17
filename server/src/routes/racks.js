@@ -4,6 +4,7 @@ import { findRackByName } from '../services/racks.js';
 import { deleteModulesDeep } from '../services/moduleDeletion.js';
 import { readableResource, removeShares } from '../services/sharing.js';
 import { enqueueJob } from '../jobs/worker.js';
+import { loadPanels } from '../services/panelImage.js';
 
 // A user's racks. Every route operates on the requesting user's racks only —
 // racks (and their module lists) are never visible to other users.
@@ -30,7 +31,7 @@ export function rackRoutes(
     updated_at: rack.updated_at,
   });
 
-  async function layoutJson(rack, mappings) {
+  async function layoutJson(rack, mappings, panels = new Map()) {
     const rows = await RackRow.findAll({ where: { rack_id: rack.id }, order: [['position', 'ASC'], ['id', 'ASC']] });
     const placements = rows.length
       ? await RackRowModule.findAll({ where: { row_id: rows.map((row) => row.id) }, order: [['position', 'ASC'], ['id', 'ASC']] })
@@ -48,7 +49,15 @@ export function rackRoutes(
         .map((placement) => {
           const module = modules.get(placement.module_id);
           return module
-            ? { id: placement.id, module_id: module.id, manufacturer: module.manufacturer, name: module.name, hp: module.hp, position: placement.position }
+            ? {
+                id: placement.id,
+                module_id: module.id,
+                manufacturer: module.manufacturer,
+                name: module.name,
+                hp: module.hp,
+                panel: panels.get(module.id) ?? null,
+                position: placement.position,
+              }
             : null;
         })
         .filter(Boolean),
@@ -94,6 +103,7 @@ export function rackRoutes(
         ],
       });
       const owner = found.shared ? await User.findByPk(rack.user_id) : null;
+      const panels = await loadPanels(db, mappings.map((mapping) => mapping.module_id));
       res.json({
         ...rackJson(rack, mappings.length),
         shared: found.shared,
@@ -105,10 +115,11 @@ export function rackRoutes(
             manufacturer: rm.Module.manufacturer,
             name: rm.Module.name,
             hp: rm.Module.hp,
+            panel: panels.get(rm.Module.id) ?? null,
             summary: rm.Module.summary,
             quantity: rm.quantity,
           })),
-        rows: await layoutJson(rack, mappings),
+        rows: await layoutJson(rack, mappings, panels),
       });
     } catch (e) {
       next(e);
@@ -203,7 +214,8 @@ export function rackRoutes(
           }
         }
       });
-      res.json({ rows: await layoutJson(rack, mappings) });
+      const panels = await loadPanels(db, mappings.map((mapping) => mapping.module_id));
+      res.json({ rows: await layoutJson(rack, mappings, panels) });
     } catch (e) {
       if (e.message?.includes('placed module') || e.message?.includes('needs an HP') || e.message?.includes('more times')) {
         return res.status(400).json({ error: e.message });
