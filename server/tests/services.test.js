@@ -871,6 +871,17 @@ describe('analyzeManualForModule', () => {
       expect(prompt).toContain(term);
     }
   });
+
+  it('adds panel-based jack inference only for rendered product pages', () => {
+    const manual = ANALYSIS_TEMPLATE('Make Noise', 'Maths');
+    const productPage = ANALYSIS_TEMPLATE('Make Noise', 'Maths', { productPage: true });
+
+    expect(manual).not.toContain('For JACKS ONLY');
+    expect(productPage).toContain('rendered PRODUCT PAGE');
+    expect(productPage).toContain('Treat every visible 3.5mm patch socket as a jack');
+    expect(productPage).toContain('CV, FM, V/OCT, GATE, TRIG, CLOCK, RESET and SYNC');
+    expect(productPage).toContain('extra visual inference applies only');
+  });
 });
 
 describe('determineScope', () => {

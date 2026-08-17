@@ -628,7 +628,8 @@ export function createWorker(db, options = {}) {
         db,
         backend,
         module,
-        manualPath(manualsDir, manual.hash)
+        manualPath(manualsDir, manual.hash),
+        { productPage: /_Product_Page\.pdf$/i.test(manual.original_name || '') }
       );
       analyzed = components.length;
       progress(`analysis complete: ${components.length} component(s) found`);

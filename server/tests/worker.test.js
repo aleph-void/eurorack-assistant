@@ -474,6 +474,31 @@ describe('worker', () => {
     expect(rows).toHaveLength(1);
   });
 
+  it('uses product-page jack inference for a rendered stand-in', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, {
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+    });
+    await db.models.Manual.update(
+      { original_name: 'Make_Noise_Maths_Product_Page.pdf' },
+      { where: { module_id: module.id } }
+    );
+    await enqueue(db, 'analyze_manual', { module_id: module.id });
+    const backend = fakeBackend({
+      analyzeDocument:
+        '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
+    });
+
+    const done = await makeWorker(db, backend).tick();
+
+    expect(done.status).toBe('complete');
+    expect(backend.calls.analyzeDocument[0][0]).toContain('rendered PRODUCT PAGE');
+    expect(backend.calls.analyzeDocument[0][0]).toContain('For JACKS ONLY');
+  });
+
   it('processes a scope_question job and leaves the question awaiting review', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });

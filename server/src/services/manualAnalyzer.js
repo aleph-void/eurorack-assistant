@@ -46,8 +46,37 @@ export const PORT_KINDS = [
 // jack, or by one leaving it (an output normalled to another output).
 export const BREAK_MODES = ['cable_in', 'cable_out'];
 
-export const ANALYSIS_TEMPLATE = (manufacturer, name) => `You are a eurorack modular synthesizer expert. Analyze the attached user manual
+const PRODUCT_PAGE_JACK_GUIDANCE = `
+This PDF is a rendered PRODUCT PAGE, not a user manual. Product-page prose
+often names features without giving a numbered panel tour. For JACKS ONLY,
+also inspect every front-panel image, diagram, caption, specification and
+signal-flow statement in the PDF and infer the most likely inventory and
+direction:
+- Treat every visible 3.5mm patch socket as a jack even when the prose never
+  enumerates it. Use its printed panel label as the name, keeping channel
+  numbers and L/R suffixes that distinguish repeated sockets.
+- Classify explicit IN/INPUT, CV, FM, V/OCT, GATE, TRIG, CLOCK, RESET and SYNC
+  destinations as "input_jack"; classify OUT/OUTPUT, waveform, EOC/EOR and
+  monitor/source sockets as "output_jack". Printed arrows and an INPUTS or
+  OUTPUTS section heading override these naming conventions.
+- Use the product copy's signal-flow language to resolve terse or ambiguous
+  labels: a signal that controls, clocks, triggers or enters a function is an
+  input; a signal the module generates, emits or makes available is an output.
+  Use "bidirectional_jack" only when the page actually indicates either-way
+  use, a passive mult, or an interchangeable connection.
+- Do not invent a jack that is neither visible nor supported by the product
+  copy. If a visible socket's direction truly cannot be resolved from its
+  label, grouping, arrows or prose, omit it instead of assigning a random
+  direction.
+
+This extra visual inference applies only to input/output/bidirectional jacks.
+For knobs, buttons, switches and every other non-jack component, keep the
+normal rule below: list it only when the document describes it.
+`;
+
+export const ANALYSIS_TEMPLATE = (manufacturer, name, { productPage = false } = {}) => `You are a eurorack modular synthesizer expert. Analyze the attached ${productPage ? 'rendered product page' : 'user manual'}
 for the module "${manufacturer} ${name}" and produce a structured description.
+${productPage ? PRODUCT_PAGE_JACK_GUIDANCE : ''}
 
 Many manuals cover more than one panel — a host module together with its
 expander, or a family of related modules. This description is for
@@ -709,9 +738,15 @@ export function resolveNormalizations(normalizations, components) {
 
 // Analyze one module's manual and persist summary + components +
 // normalizations.
-export async function analyzeManualForModule(db, backend, module, manualPath) {
+export async function analyzeManualForModule(
+  db,
+  backend,
+  module,
+  manualPath,
+  { productPage = false } = {}
+) {
   const response = await backend.analyzeDocument(
-    ANALYSIS_TEMPLATE(module.manufacturer, module.name),
+    ANALYSIS_TEMPLATE(module.manufacturer, module.name, { productPage }),
     manualPath
   );
   const parsed = extractJsonObject(response);
