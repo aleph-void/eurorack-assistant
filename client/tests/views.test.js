@@ -891,6 +891,37 @@ describe('ModuleDetailView', () => {
     expect(wrapper.findAll('.marker')).toHaveLength(3);
   });
 
+  it('creates a panel marker when arranging an analyzed jack the image mapper missed', async () => {
+    const panel = {
+      source: 'image',
+      url: '/api/panels/abc.png',
+      width: 400,
+      height: 1200,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      components: [
+        { id: 6, component_id: 2, name: 'EOR', shape: 'jack', x: 0.6, y: 0.8 },
+      ],
+    };
+    const repairedPanel = {
+      ...panel,
+      components: [
+        ...panel.components,
+        { id: 8, component_id: 1, name: 'Signal In', shape: 'jack', x: 0.5, y: 0.9 },
+      ],
+    };
+    api.get.mockResolvedValue({ ...moduleResponse, panel });
+    api.post.mockResolvedValue({ panel: repairedPanel, placement_id: 8 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="arrange-jack-1"]').trigger('click');
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/panel/components', { component_id: 1 });
+    expect(wrapper.findAll('.marker')).toHaveLength(1);
+    expect(wrapper.find('[data-test="panel-marker-1"]').exists()).toBe(true);
+  });
+
   it('puts a marker back where it was when the save fails', async () => {
     const panel = {
       source: 'image',

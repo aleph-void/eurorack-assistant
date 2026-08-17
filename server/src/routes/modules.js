@@ -1444,6 +1444,55 @@ export function moduleRoutes(
     }
   });
 
+  // Give an analyzed component the panel marker the image-mapping pass missed.
+  // Body: { component_id }. The marker starts in the same free-space layout as
+  // a hand-added component and can immediately be dragged onto the hardware.
+  router.post('/:id/panel/components', async (req, res, next) => {
+    try {
+      const module = await userModule(req.user.id, req.params.id);
+      if (!module) return res.status(404).json({ error: 'Module not found' });
+      const panel = await ModulePanel.findOne({ where: { module_id: module.id } });
+      if (!panel) return res.status(404).json({ error: 'Module has no panel' });
+      const component = await ModuleComponent.findOne({
+        where: { id: Number(req.body?.component_id) || 0, module_id: module.id },
+      });
+      if (!component) return res.status(404).json({ error: 'Component not found' });
+
+      let placement = await ModulePanelComponent.findOne({
+        where: { panel_id: panel.id, component_id: component.id },
+      });
+      let created = false;
+      if (!placement) {
+        const [existing, components] = await Promise.all([
+          ModulePanelComponent.findAll({ where: { panel_id: panel.id } }),
+          ModuleComponent.findAll({ where: { module_id: module.id } }),
+        ]);
+        const planned = fillMissingPlacements(
+          existing.map((row) => row.get({ plain: true })),
+          components.map((row) => row.get({ plain: true }))
+        ).find((row) => row.component_id === component.id);
+        placement = await ModulePanelComponent.create({
+          panel_id: panel.id,
+          component_id: component.id,
+          name: component.name,
+          shape: planned?.shape ?? 'other',
+          x: planned?.x ?? 0.5,
+          y: planned?.y ?? 0.5,
+          w: planned?.w ?? 0.06,
+          h: planned?.h ?? 0.06,
+        });
+        created = true;
+      }
+      const panels = await loadPanels(db, [module.id]);
+      res.status(created ? 201 : 200).json({
+        panel: panels.get(module.id) ?? null,
+        placement_id: placement.id,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // Move one marker on the panel. Body: { x, y } as fractions of the whole
   // image, the same numbers the panel job stores.
   //

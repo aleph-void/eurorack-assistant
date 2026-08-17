@@ -104,6 +104,39 @@ describe('modules API', () => {
     expect(withoutJack.body.panel.components.some((c) => c.component_id === created.body.id)).toBe(false);
   });
 
+  it('adds a missing panel marker for an existing analyzed jack', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, users[0].id, { manufacturer: '2hp', name: 'ARP' });
+    const { rows: components } = await db.query(
+      `INSERT INTO module_components (module_id, type, name, polarity)
+       VALUES ($1, 'input_jack', 'FM IN', 'bipolar') RETURNING id`,
+      [module.id]
+    );
+    await db.query(
+      `INSERT INTO module_panels (module_id, image_hash, image_ext, width, height)
+       VALUES ($1, 'test-panel', 'svg', 100, 500)`,
+      [module.id]
+    );
+
+    const created = await request(app)
+      .post(`/api/modules/${module.id}/panel/components`)
+      .set('Cookie', aliceCookie)
+      .send({ component_id: components[0].id });
+
+    expect(created.status).toBe(201);
+    expect(created.body.panel.components).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: created.body.placement_id,
+          component_id: components[0].id,
+          name: 'FM IN',
+          shape: 'jack',
+        }),
+      ])
+    );
+  });
+
   it('manually adds normalled connections, deriving the kind from the source', async () => {
     const { app, db, aliceCookie } = await createTestApp();
     const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");

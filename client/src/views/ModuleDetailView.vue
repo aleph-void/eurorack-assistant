@@ -443,8 +443,23 @@ const arrangedJack = computed(() =>
   (module.value?.components || []).find((c) => c.id === arrangedJackId.value) || null
 );
 
-function arrangeJack(c) {
-  arrangedJackId.value = c.id;
+async function arrangeJack(c) {
+  componentError.value = '';
+  componentTypeDraft.value = c.type;
+  try {
+    const placed = (module.value?.panel?.components || []).some(
+      (placement) => placement.component_id === c.id
+    );
+    if (module.value?.panel && !placed) {
+      const { panel } = await api.post(`/api/modules/${props.id}/panel/components`, {
+        component_id: c.id,
+      });
+      if (panel && module.value) module.value = { ...module.value, panel };
+    }
+    arrangedJackId.value = c.id;
+  } catch (e) {
+    componentError.value = e.message;
+  }
 }
 
 function showAllPanelComponents() {
