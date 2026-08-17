@@ -380,7 +380,7 @@ const bindingText = computed(() =>
 </script>
 
 <template>
-  <details class="panel" data-test="voice">
+  <details open class="panel" data-test="voice">
     <summary>
       <h2>Patch by voice</h2>
       <span class="summary-count">{{ statusText }}</span>
@@ -390,6 +390,8 @@ const bindingText = computed(() =>
         Say the cable the way you would say it to someone stood next to the case — "connect make
         noise maths out one to 2hp div clock in". Both ends are matched against the jacks in this
         patch, and a tone tells you whether it went in, so you never have to look over here.
+        Enable Voice patching below, allow microphone access when your browser asks, then choose how
+        you want to activate it.
       </p>
 
       <div class="row">

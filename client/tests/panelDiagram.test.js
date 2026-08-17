@@ -277,6 +277,7 @@ describe('PatchDiagram', () => {
     source[0].panel.components.push({ component_id: 9, name: 'Rise', shape: 'knob', x: 0.5, y: 0.5, w: 0.06, h: 0.06 });
     const layout = layoutDiagram(source);
     const wrapper = mountDiagram({ modules: source, cables: [], interactive: true });
+    await wrapper.find('[data-test="diagram-show-all"]').setValue(true);
     const svg = wrapper.find('[data-test="diagram-svg"]');
     Object.defineProperty(svg.element, 'getBoundingClientRect', {
       value: () => ({ left: 0, top: 0, width: layout.width, height: layout.height }),

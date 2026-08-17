@@ -71,7 +71,7 @@ const spareHeight = (count) =>
 // Lay the modules out left to right, wrapping into rows. Returns the placed
 // panels (in diagram coordinates), the anchor point of every jack, and the
 // size of the whole drawing.
-export function layoutDiagram(modules, { height = PANEL_HEIGHT, maxRowWidth = MAX_ROW_WIDTH } = {}) {
+export function layoutDiagram(modules, { height = PANEL_HEIGHT, maxRowWidth = MAX_ROW_WIDTH, rowStarts = [] } = {}) {
   const panels = [];
   const anchors = new Map(); // `${patch_module_id}:${component_id}` -> point
   let rowStart = 0;
@@ -88,9 +88,9 @@ export function layoutDiagram(modules, { height = PANEL_HEIGHT, maxRowWidth = MA
     rowSpare = 0;
   };
 
-  for (const pm of modules) {
+  for (const [moduleIndex, pm] of modules.entries()) {
     const width = panelWidth(pm, height);
-    if (x > MARGIN && x + width > maxRowWidth) closeRow();
+    if ((x > MARGIN && rowStarts.includes(moduleIndex)) || (x > MARGIN && x + width > maxRowWidth)) closeRow();
     // Jacks with no place on the panel go in a strip under it — but a module
     // with no panel at all has no picture to be off, so its jacks are drawn
     // inside its placeholder and cost the row no extra height.

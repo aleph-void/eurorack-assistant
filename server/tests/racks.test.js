@@ -68,6 +68,37 @@ describe('racks API', () => {
     ).toBe(400);
   });
 
+  it('stores 3U and 1U row layouts, bounded by each row’s HP', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, users[0].id, { manufacturer: '2hp', name: 'ARP' });
+    await db.query('UPDATE modules SET hp = 2 WHERE id = $1', [module.id]);
+    const rackId = module.rack_id;
+
+    const saved = await request(app)
+      .put(`/api/racks/${rackId}/layout`)
+      .set('Cookie', aliceCookie)
+      .send({
+        rows: [
+          { unit: 3, hp: 84, modules: [{ module_id: module.id }] },
+          { unit: 1, hp: 104, modules: [] },
+        ],
+      });
+    expect(saved.status).toBe(200);
+    expect(saved.body.rows).toMatchObject([
+      { unit: 3, hp: 84, modules: [{ module_id: module.id, hp: 2 }] },
+      { unit: 1, hp: 104, modules: [] },
+    ]);
+
+    const detail = await request(app).get(`/api/racks/${rackId}`).set('Cookie', aliceCookie);
+    expect(detail.body.rows.map((row) => row.unit)).toEqual([3, 1]);
+    const overfull = await request(app)
+      .put(`/api/racks/${rackId}/layout`)
+      .set('Cookie', aliceCookie)
+      .send({ rows: [{ unit: 3, hp: 1, modules: [{ module_id: module.id }] }] });
+    expect(overfull.status).toBe(400);
+  });
+
   it('never exposes or mutates another user’s racks', async () => {
     const { app, db, aliceCookie, adminCookie } = await createTestApp();
     const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");

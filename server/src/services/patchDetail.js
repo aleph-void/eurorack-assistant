@@ -63,7 +63,7 @@ export const cableJson = (c) => ({
   alt_group: c.alt_group ?? null,
 });
 
-export const moduleJson = (pm, { live, components, panel = null }) => ({
+export const moduleJson = (pm, { live, components, panel = null, hp = null }) => ({
   id: pm.id,
   module_id: pm.module_id,
   manufacturer: pm.manufacturer,
@@ -81,6 +81,7 @@ export const moduleJson = (pm, { live, components, panel = null }) => ({
   // be drawn as panels and cables. null for gear with no analyzed panel; the
   // diagram falls back to a plain outline for those.
   panel,
+  hp,
 });
 
 // Everything the patch is made of, resolved: the snapshot instances with
@@ -96,6 +97,8 @@ const {
   ComponentSwitchStep,
   ComponentPair,
   ModuleExpander,
+  RackRow,
+  RackRowModule,
   PatchModule,
   PatchCable,
   PatchSetting,
@@ -282,6 +285,33 @@ const {
   });
 
   const panels = await loadPanels(db, [...liveIds]);
+  const rackRows = patch.rack_id
+    ? await RackRow.findAll({ where: { rack_id: patch.rack_id }, order: [['position', 'ASC'], ['id', 'ASC']] })
+    : [];
+  const rowPlacements = rackRows.length
+    ? await RackRowModule.findAll({ where: { row_id: rackRows.map((row) => row.id) }, order: [['position', 'ASC'], ['id', 'ASC']] })
+    : [];
+  // Rack placements identify a module model, while a patch snapshots physical
+  // instances. Assign each placed copy to the next matching snapshot instance.
+  const instancesByModule = new Map();
+  for (const pm of patchModules) {
+    if (!instancesByModule.has(pm.module_id)) instancesByModule.set(pm.module_id, []);
+    instancesByModule.get(pm.module_id).push(pm.id);
+  }
+  const usedInstances = new Set();
+  const rack_layout = rackRows.map((row) => ({
+    id: row.id,
+    unit: row.unit,
+    hp: row.hp,
+    modules: rowPlacements
+      .filter((placement) => placement.row_id === row.id)
+      .map((placement) => {
+        const instance = (instancesByModule.get(placement.module_id) ?? []).find((id) => !usedInstances.has(id));
+        if (instance) usedInstances.add(instance);
+        return instance ?? null;
+      })
+      .filter(Boolean),
+  }));
 
   return {
     patchModules,
@@ -293,6 +323,7 @@ const {
           live: pm.module_id !== null && liveIds.has(pm.module_id),
           components: topology.jacksByPatchModule.get(pm.id) ?? [],
           panel: panels.get(pm.module_id) ?? null,
+          hp: liveModules.find((module) => module.id === pm.module_id)?.hp ?? null,
         })
       ),
       groups: groups.map((g) => ({
@@ -322,6 +353,7 @@ const {
       // mults, normals, switches, expanders and bridges to everywhere it
       // ends up.
       flow: buildSignalFlow(topology),
+      rack_layout,
     },
   };
 }

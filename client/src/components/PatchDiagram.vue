@@ -25,6 +25,9 @@ const props = defineProps({
   // The patch editor can connect a physical output to a physical input by
   // dragging between their markers. Read-only diagrams keep their old view.
   interactive: { type: Boolean, default: false },
+  // Saved physical rack rows, expressed as patch-module ids. When present,
+  // they determine the diagram's row breaks and instance order.
+  rackRows: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['connect']);
 
@@ -39,11 +42,33 @@ const label = (pm) =>
 // A patch with no cables yet uses no modules, and drawing the whole rack in
 // that case buries the diagram in panels the patch has nothing to do with —
 // so an unpatched patch draws nothing until 'show every module' is ticked.
-const shown = computed(() =>
-  showAll.value || props.interactive ? props.modules : usedModules(props.modules, props.cables)
+const visibleModules = computed(() =>
+  showAll.value ? props.modules : usedModules(props.modules, props.cables)
 );
+const organized = computed(() => {
+  if (!props.rackRows.length) return { modules: visibleModules.value, rowStarts: [] };
+  const byId = new Map(props.modules.map((module) => [module.id, module]));
+  const visible = new Set(visibleModules.value.map((module) => module.id));
+  const picked = new Set();
+  const modules = [];
+  const rowStarts = [];
+  for (const row of props.rackRows) {
+    const rowModules = (row.modules || []).map((id) => byId.get(id)).filter((module) => module && visible.has(module.id));
+    if (!rowModules.length) continue;
+    rowStarts.push(modules.length);
+    rowModules.forEach((module) => picked.add(module.id));
+    modules.push(...rowModules);
+  }
+  // A patch is a snapshot; modules added after arranging the rack remain
+  // visible below the organized rows rather than vanishing from the patch.
+  const unplaced = visibleModules.value.filter((module) => !picked.has(module.id));
+  if (unplaced.length && modules.length) rowStarts.push(modules.length);
+  modules.push(...unplaced);
+  return { modules, rowStarts };
+});
+const shown = computed(() => organized.value.modules);
 
-const diagram = computed(() => layoutDiagram(shown.value, { height: PANEL_HEIGHT }));
+const diagram = computed(() => layoutDiagram(shown.value, { height: PANEL_HEIGHT, rowStarts: organized.value.rowStarts }));
 
 const anchorFor = (patchModuleId, componentId) =>
   componentId === null || componentId === undefined

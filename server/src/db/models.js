@@ -169,6 +169,29 @@ export function defineModels(sequelize) {
     { tableName: 'rack_modules', createdAt: 'created_at', updatedAt: false }
   );
 
+  const RackRow = define(
+    'RackRow',
+    {
+      id,
+      rack_id: { type: DataTypes.INTEGER, allowNull: false },
+      unit: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 3 },
+      hp: { type: DataTypes.REAL, allowNull: false },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'rack_rows', createdAt: 'created_at', updatedAt: false }
+  );
+
+  const RackRowModule = define(
+    'RackRowModule',
+    {
+      id,
+      row_id: { type: DataTypes.INTEGER, allowNull: false },
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'rack_row_modules', createdAt: 'created_at', updatedAt: false }
+  );
+
   const ModuleComponent = define(
     'ModuleComponent',
     {
@@ -773,6 +796,12 @@ export function defineModels(sequelize) {
   RackModule.belongsTo(Rack, { foreignKey: 'rack_id' });
   Module.hasMany(RackModule, { foreignKey: 'module_id' });
   RackModule.belongsTo(Module, { foreignKey: 'module_id' });
+  Rack.hasMany(RackRow, { foreignKey: 'rack_id' });
+  RackRow.belongsTo(Rack, { foreignKey: 'rack_id' });
+  RackRow.hasMany(RackRowModule, { foreignKey: 'row_id' });
+  RackRowModule.belongsTo(RackRow, { foreignKey: 'row_id' });
+  Module.hasMany(RackRowModule, { foreignKey: 'module_id' });
+  RackRowModule.belongsTo(Module, { foreignKey: 'module_id' });
 
   Module.hasMany(Manual, { foreignKey: 'module_id' });
   Manual.belongsTo(Module, { foreignKey: 'module_id' });
@@ -929,6 +958,8 @@ export function defineModels(sequelize) {
     ManualDocument,
     Rack,
     RackModule,
+    RackRow,
+    RackRowModule,
     ModuleComponent,
     ModulePanel,
     ModulePanelComponent,

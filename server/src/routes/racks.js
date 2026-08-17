@@ -14,7 +14,7 @@ export function rackRoutes(
     panelsDir = process.env.PANELS_DIR || '/data/panels',
   } = {}
 ) {
-  const { Rack, RackModule, Module, User, Job } = db.models;
+  const { Rack, RackModule, RackRow, RackRowModule, Module, User, Job } = db.models;
   const router = Router();
   router.use(requireAuth(db));
 
@@ -29,6 +29,31 @@ export function rackRoutes(
     created_at: rack.created_at,
     updated_at: rack.updated_at,
   });
+
+  async function layoutJson(rack, mappings) {
+    const rows = await RackRow.findAll({ where: { rack_id: rack.id }, order: [['position', 'ASC'], ['id', 'ASC']] });
+    const placements = rows.length
+      ? await RackRowModule.findAll({ where: { row_id: rows.map((row) => row.id) }, order: [['position', 'ASC'], ['id', 'ASC']] })
+      : [];
+    const modules = new Map(
+      mappings.filter((mapping) => mapping.Module).map((mapping) => [mapping.module_id, mapping.Module])
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      unit: row.unit,
+      hp: row.hp,
+      position: row.position,
+      modules: placements
+        .filter((placement) => placement.row_id === row.id)
+        .map((placement) => {
+          const module = modules.get(placement.module_id);
+          return module
+            ? { id: placement.id, module_id: module.id, manufacturer: module.manufacturer, name: module.name, hp: module.hp, position: placement.position }
+            : null;
+        })
+        .filter(Boolean),
+    }));
+  }
 
   router.get('/', async (req, res, next) => {
     try {
@@ -83,6 +108,7 @@ export function rackRoutes(
             summary: rm.Module.summary,
             quantity: rm.quantity,
           })),
+        rows: await layoutJson(rack, mappings),
       });
     } catch (e) {
       next(e);
@@ -119,6 +145,69 @@ export function rackRoutes(
       const moduleCount = await RackModule.count({ where: { rack_id: rack.id } });
       res.json(rackJson(rack, moduleCount));
     } catch (e) {
+      next(e);
+    }
+  });
+
+  // Replace the physical layout of a rack. Rack modules remain the inventory;
+  // every placement here consumes one copy from that inventory.
+  // Body: { rows: [{ unit: 1|3, hp, modules: [{ module_id }] }] }
+  router.put('/:id/layout', async (req, res, next) => {
+    try {
+      const rack = await ownRack(req.user.id, req.params.id);
+      if (!rack) return res.status(404).json({ error: 'Rack not found' });
+      const rows = req.body?.rows;
+      if (!Array.isArray(rows) || rows.length > 24) {
+        return res.status(400).json({ error: 'rows must be a list of at most 24 rows' });
+      }
+      const mappings = await RackModule.findAll({ where: { rack_id: rack.id }, include: Module });
+      const inventory = new Map(mappings.map((mapping) => [mapping.module_id, mapping.quantity]));
+      const modules = new Map(mappings.filter((mapping) => mapping.Module).map((mapping) => [mapping.module_id, mapping.Module]));
+      const placed = new Map();
+      const normalized = [];
+      for (let index = 0; index < rows.length; index += 1) {
+        const raw = rows[index] || {};
+        const unit = Number(raw.unit);
+        const hp = Number(raw.hp);
+        if (unit !== 1 && unit !== 3) return res.status(400).json({ error: 'row unit must be 1 or 3' });
+        if (!Number.isFinite(hp) || hp <= 0 || hp > 504) {
+          return res.status(400).json({ error: 'row hp must be between 1 and 504' });
+        }
+        if (!Array.isArray(raw.modules) || raw.modules.length > 128) {
+          return res.status(400).json({ error: 'row modules must be a list of at most 128 modules' });
+        }
+        let used = 0;
+        const rowModules = raw.modules.map((item) => {
+          const moduleId = Number(item?.module_id);
+          const module = modules.get(moduleId);
+          if (!module) throw new Error('A placed module is not in this rack');
+          const moduleHp = Number(module.hp);
+          if (!Number.isFinite(moduleHp) || moduleHp <= 0) {
+            throw new Error(`${module.manufacturer} ${module.name} needs an HP width before it can be placed`);
+          }
+          const count = (placed.get(moduleId) ?? 0) + 1;
+          if (count > (inventory.get(moduleId) ?? 0)) throw new Error('A module is placed more times than this rack contains it');
+          placed.set(moduleId, count);
+          used += moduleHp;
+          return { module_id: moduleId };
+        });
+        if (used > hp + 0.001) return res.status(400).json({ error: `row ${index + 1} exceeds its ${hp}HP capacity` });
+        normalized.push({ unit, hp, modules: rowModules.map((module, position) => ({ ...module, position })) });
+      }
+      await db.sequelize.transaction(async (transaction) => {
+        await RackRow.destroy({ where: { rack_id: rack.id }, transaction });
+        for (const [position, row] of normalized.entries()) {
+          const created = await RackRow.create({ rack_id: rack.id, unit: row.unit, hp: row.hp, position }, { transaction });
+          if (row.modules.length) {
+            await RackRowModule.bulkCreate(row.modules.map((module) => ({ ...module, row_id: created.id })), { transaction });
+          }
+        }
+      });
+      res.json({ rows: await layoutJson(rack, mappings) });
+    } catch (e) {
+      if (e.message?.includes('placed module') || e.message?.includes('needs an HP') || e.message?.includes('more times')) {
+        return res.status(400).json({ error: e.message });
+      }
       next(e);
     }
   });

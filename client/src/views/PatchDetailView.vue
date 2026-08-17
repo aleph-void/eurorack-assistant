@@ -861,6 +861,7 @@ onMounted(async () => {
       :modules="modules"
       :cables="patch.cables"
       :label-for="moduleLabel"
+      :rack-rows="patch.rack_layout"
       interactive
       @connect="connectDiagramCable"
     />
