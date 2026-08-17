@@ -417,13 +417,15 @@ describe('ModuleDetailView', () => {
 
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
-    expect(wrapper.find('[data-test="component-editor"] .summary-count').text()).toBe('3');
-    expect(wrapper.find('[data-test="component-type"]').text()).toContain('Knob');
-    expect(wrapper.find('[data-test="component-type"]').text()).toContain('Toggle');
+    expect(wrapper.find('[data-test="add-new-input_jack"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="add-new-output_jack"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="add-new-knob"]').exists()).toBe(true);
+    // Empty supported groups stay visible so their first component can be added.
+    expect(wrapper.find('[data-test="add-new-toggle"]').exists()).toBe(true);
 
+    await wrapper.find('[data-test="add-new-knob"]').trigger('click');
     await wrapper.find('[data-test="component-name"]').setValue('FREQUENCY');
-    await wrapper.find('[data-test="component-type"]').setValue('knob');
-    await wrapper.find('[data-test="component-editor"] form').trigger('submit');
+    await wrapper.find('[data-test="add-form-knob"]').trigger('submit');
     await flushPromises();
 
     expect(api.post).toHaveBeenCalledWith('/api/modules/1/components', {
@@ -432,7 +434,7 @@ describe('ModuleDetailView', () => {
     });
     expect(wrapper.find('[data-test="group-knob"]').text()).toContain('FREQUENCY');
     expect(wrapper.find('[data-test="panel-marker-4"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="component-editor"] .summary-count').text()).toBe('4');
+    expect(wrapper.find('[data-test="group-knob"] .summary-count').text()).toBe('2');
 
     await wrapper.find('[data-test="remove-component-4"]').trigger('click');
     await flushPromises();
@@ -440,7 +442,7 @@ describe('ModuleDetailView', () => {
     expect(api.delete).toHaveBeenCalledWith('/api/modules/1/components/4');
     expect(wrapper.find('[data-test="group-knob"]').text()).not.toContain('FREQUENCY');
     expect(wrapper.find('[data-test="panel-marker-4"]').exists()).toBe(false);
-    expect(wrapper.find('[data-test="component-editor"] .summary-count').text()).toBe('3');
+    expect(wrapper.find('[data-test="group-knob"] .summary-count').text()).toBe('1');
   });
 
   it('links to the next module in the current rack and stops at the last one', async () => {

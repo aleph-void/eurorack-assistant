@@ -375,6 +375,48 @@ details.panel > .panel-body > :first-child {
   white-space: nowrap;
 }
 
+/* Component groups expose creation from their heading. Keep this compact so
+   the action remains visible beside the count even when the section is shut. */
+.group-add-button {
+  margin: 0 0 0 0.25rem;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.82rem;
+}
+
+.component-add-form {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+}
+.component-add-form label {
+  margin-top: 0;
+}
+.component-add-row,
+.component-row-actions,
+.component-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: nowrap;
+}
+.component-add-row input {
+  min-width: 12rem;
+}
+.component-add-row button,
+.component-row-actions button,
+.component-edit-actions button {
+  margin: 0;
+}
+.component-actions-cell {
+  width: 1%;
+  white-space: nowrap;
+}
+.component-edit-actions {
+  flex-wrap: wrap;
+}
+
 details.expander {
   margin: 0.5rem 0 0.9rem;
   border: 1px solid var(--border);

@@ -35,6 +35,7 @@ const TYPE_LABELS = {
   display: 'Displays',
   other: 'Other',
 };
+const MANUALLY_EDITABLE_TYPES = ['input_jack', 'output_jack', 'knob', 'toggle'];
 
 const grouped = computed(() => {
   if (!module.value?.components) return [];
@@ -42,6 +43,11 @@ const grouped = computed(() => {
   for (const c of module.value.components) {
     if (!groups.has(c.type)) groups.set(c.type, []);
     groups.get(c.type).push(c);
+  }
+  // These four groups are also manual entry points. Keep them visible even
+  // when empty so a missing type can be added without already having one.
+  for (const type of MANUALLY_EDITABLE_TYPES) {
+    if (!groups.has(type)) groups.set(type, []);
   }
   return [...groups.entries()].map(([type, components]) => ({
     type,
@@ -140,10 +146,6 @@ const inputJacks = computed(
 const jacks = computed(() => patchableComponents.value.filter((c) => c.type.endsWith('_jack')));
 const ownJacks = computed(
   () => module.value?.components?.filter((c) => c.type.endsWith('_jack')) || []
-);
-const MANUALLY_EDITABLE_TYPES = ['input_jack', 'output_jack', 'knob', 'toggle'];
-const manuallyEditableComponents = computed(() =>
-  (module.value?.components || []).filter((c) => MANUALLY_EDITABLE_TYPES.includes(c.type))
 );
 const normValid = computed(() => {
   if (!normTarget.value || !normSource.value) return false;
@@ -434,6 +436,7 @@ const componentTypeDraft = ref('input_jack');
 const componentError = ref('');
 const componentNotice = ref('');
 const addingComponent = ref(false);
+const addingToType = ref(null);
 
 function startEditComponent(c) {
   editingComponentId.value = c.id;
@@ -471,6 +474,7 @@ async function addComponent() {
       type: componentTypeDraft.value,
     });
     componentNameDraft.value = '';
+    addingToType.value = null;
     if (component.panel_placement_id) {
       componentNotice.value =
         'Panel marker added — drag it onto the correct position if needed.';
@@ -483,6 +487,21 @@ async function addComponent() {
   }
 }
 
+function startAddingComponent(type, event) {
+  componentTypeDraft.value = type;
+  componentNameDraft.value = '';
+  componentError.value = '';
+  componentNotice.value = '';
+  addingToType.value = type;
+  const details = event?.currentTarget?.closest('details');
+  if (details) details.open = true;
+}
+
+function cancelAddingComponent() {
+  componentNameDraft.value = '';
+  addingToType.value = null;
+}
+
 async function removeComponent(c) {
   const ok = await dialog.confirm({
     title: 'Remove component',
@@ -491,6 +510,7 @@ async function removeComponent(c) {
     danger: true,
   });
   if (!ok) return;
+  componentTypeDraft.value = c.type;
   componentError.value = '';
   componentNotice.value = '';
   try {
@@ -915,62 +935,6 @@ watch(() => props.id, () => {
       </summary>
       <div class="panel-body">
         <p style="white-space: pre-wrap">{{ module.summary }}</p>
-      </div>
-    </details>
-
-    <details open class="panel" data-test="component-editor">
-      <summary>
-        <h2>Jacks and controls</h2>
-        <span class="summary-count">{{ manuallyEditableComponents.length }}</span>
-      </summary>
-      <div class="panel-body">
-        <p class="muted">
-          Add an input, output, knob or toggle the manual analysis missed. It appears in the
-          component lists and gets a marker on the front panel, which can be dragged to the correct
-          position.
-        </p>
-        <form @submit.prevent="addComponent">
-          <div class="row" style="align-items: end">
-            <div style="flex: 2">
-              <label for="component-name">Component name</label>
-              <input
-                id="component-name"
-                v-model="componentNameDraft"
-                placeholder="e.g. CLOCK IN or FREQUENCY"
-                data-test="component-name"
-              />
-            </div>
-            <div>
-              <label for="component-type">Type</label>
-              <select
-                id="component-type"
-                v-model="componentTypeDraft"
-                data-test="component-type"
-              >
-                <option value="input_jack">Input</option>
-                <option value="output_jack">Output</option>
-                <option value="knob">Knob</option>
-                <option value="toggle">Toggle</option>
-              </select>
-            </div>
-            <div class="shrink">
-              <button
-                type="submit"
-                style="margin: 0"
-                :disabled="addingComponent || !componentNameDraft.trim()"
-                data-test="component-add"
-              >
-                Add component
-              </button>
-            </div>
-          </div>
-        </form>
-        <p v-if="componentError" class="error" data-test="component-error">
-          {{ componentError }}
-        </p>
-        <p v-if="componentNotice" class="muted" data-test="component-notice">
-          {{ componentNotice }}
-        </p>
       </div>
     </details>
 
@@ -1785,9 +1749,57 @@ watch(() => props.id, () => {
       <summary>
         <h2>{{ group.label }}</h2>
         <span class="summary-count">{{ group.components.length }}</span>
+        <button
+          v-if="MANUALLY_EDITABLE_TYPES.includes(group.type)"
+          type="button"
+          class="secondary group-add-button"
+          :data-test="`add-new-${group.type}`"
+          @click.prevent.stop="startAddingComponent(group.type, $event)"
+        >
+          + Add new
+        </button>
       </summary>
       <div class="panel-body">
-        <div class="table-wrap">
+        <form
+          v-if="addingToType === group.type"
+          class="component-add-form"
+          :data-test="`add-form-${group.type}`"
+          @submit.prevent="addComponent"
+        >
+          <label :for="`new-component-${group.type}`">New {{ group.label.toLowerCase().replace(/s$/, '') }} name</label>
+          <div class="component-add-row">
+            <input
+              :id="`new-component-${group.type}`"
+              v-model="componentNameDraft"
+              placeholder="Component name"
+              data-test="component-name"
+              autofocus
+            />
+            <button
+              type="submit"
+              :disabled="addingComponent || !componentNameDraft.trim()"
+              data-test="component-add"
+            >
+              Add
+            </button>
+            <button type="button" class="secondary" @click="cancelAddingComponent">Cancel</button>
+          </div>
+        </form>
+        <p
+          v-if="componentError && componentTypeDraft === group.type"
+          class="error"
+          data-test="component-error"
+        >
+          {{ componentError }}
+        </p>
+        <p
+          v-if="componentNotice && componentTypeDraft === group.type"
+          class="muted"
+          data-test="component-notice"
+        >
+          {{ componentNotice }}
+        </p>
+        <div v-if="group.components.length" class="table-wrap">
           <table>
             <thead>
               <tr>
@@ -1812,8 +1824,8 @@ watch(() => props.id, () => {
                 <td v-if="group.type === 'bidirectional_jack'">{{ c.group_label || '—' }}</td>
                 <td v-if="group.type === 'output_jack'">{{ outputSignalSource(c) }}</td>
                 <td v-if="!group.type.endsWith('_jack')">{{ valueSummary(c) }}</td>
-                <td>
-                  <template v-if="editingComponentId === c.id">
+                <td class="component-actions-cell">
+                  <div v-if="editingComponentId === c.id" class="component-edit-actions">
                     <select v-model="editType" :data-test="`edit-type-${c.id}`" style="width: auto">
                       <option v-for="t in COMPONENT_TYPES" :key="t" :value="t">{{ t }}</option>
                     </select>
@@ -1845,29 +1857,31 @@ watch(() => props.id, () => {
                     <button style="margin: 0 0 0 0.4rem" @click="editingComponentId = null">
                       Cancel
                     </button>
-                  </template>
-                  <button
-                    v-else
-                    style="margin: 0"
-                    :data-test="`edit-component-${c.id}`"
-                    @click="startEditComponent(c)"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    v-if="MANUALLY_EDITABLE_TYPES.includes(group.type)"
-                    class="danger"
-                    style="margin: 0 0 0 0.4rem"
-                    :data-test="`remove-component-${c.id}`"
-                    @click="removeComponent(c)"
-                  >
-                    Remove
-                  </button>
+                  </div>
+                  <div v-else class="component-row-actions">
+                    <button
+                      :data-test="`edit-component-${c.id}`"
+                      @click="startEditComponent(c)"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      v-if="MANUALLY_EDITABLE_TYPES.includes(group.type)"
+                      class="danger"
+                      :data-test="`remove-component-${c.id}`"
+                      @click="removeComponent(c)"
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
+        <p v-else-if="addingToType !== group.type" class="muted">
+          No {{ group.label.toLowerCase() }} yet.
+        </p>
         <p
           v-if="editError && group.components.some((c) => c.id === editingComponentId)"
           class="error"
