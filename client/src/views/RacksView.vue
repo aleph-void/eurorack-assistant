@@ -326,17 +326,19 @@ async function dropIntoAvailable() {
           <span class="muted">{{ rowUsed(row) }} / {{ row.hp }}HP</span>
           <button class="danger" style="margin: 0 0 0 auto" :disabled="layoutBusy" @click="removeRow(rowIndex)">Remove row</button>
         </div>
-        <div class="rack-row-slots" @dragover.prevent @drop="dropIntoRow(rowIndex)">
+        <div class="rack-row-slots" :class="`unit-${row.unit}`" @dragover.prevent @drop="dropIntoRow(rowIndex)">
           <button
             v-for="(module, index) in row.modules"
             :key="`${module.module_id}-${index}`"
             class="placed-module"
             draggable="true"
             type="button"
+            :title="`${module.manufacturer} ${module.name} — ${module.hp}HP`"
+            :style="{ '--module-hp': Math.max(2, Number(module.hp) || 4) }"
             @dragstart="startDrag(module, rowIndex)"
           >
-            <img v-if="module.panel" class="module-panel-face" :src="module.panel.url" :alt="`${module.manufacturer} ${module.name}`" />
-            <span>{{ module.manufacturer }} {{ module.name }} · {{ module.hp }}HP</span>
+            <img v-if="module.panel" :src="module.panel.url" :alt="`${module.manufacturer} ${module.name}`" />
+            <span v-else class="panel-fallback">{{ module.manufacturer }}<br />{{ module.name }}<br />{{ module.hp }}HP</span>
           </button>
           <span v-if="row.modules.length === 0" class="muted">Drop modules here</span>
         </div>
@@ -347,17 +349,20 @@ async function dropIntoAvailable() {
 
 <style scoped>
 .rack-organizer { margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1rem; }
-.available-modules, .rack-row-slots { min-height: 3.5rem; border: 1px dashed var(--border-strong); border-radius: 7px; padding: 0.6rem; }
+.available-modules { min-height: 3.5rem; border: 1px dashed var(--border-strong); border-radius: 7px; padding: 0.6rem; }
 .available-modules { margin: 1rem 0; }
 .module-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.module-chip, .placed-module { margin: 0; cursor: grab; text-align: left; display: inline-flex; flex-direction: column; gap: 0.25rem; }
+.module-chip { margin: 0; cursor: grab; text-align: left; display: inline-flex; flex-direction: column; gap: 0.25rem; }
 .module-chip span { color: var(--muted); }
 .module-chip em { font-style: normal; }
 .module-panel-thumb { width: 3rem; height: 5rem; object-fit: contain; object-position: center; }
-.module-panel-face { width: min(100%, 8rem); height: 12rem; object-fit: contain; object-position: center; }
+.rack-row-slots { display: flex; align-items: stretch; gap: 2px; overflow-x: auto; padding: 0.35rem; background: #15151b; border: 2px solid var(--border-strong); border-radius: 5px; min-height: 13rem; }
+.rack-row-slots.unit-1 { min-height: 4.8rem; }
+.placed-module { flex: 0 0 calc(var(--module-hp) * 0.95rem); width: calc(var(--module-hp) * 0.95rem); margin: 0; padding: 0; border: 0; border-radius: 0; cursor: grab; overflow: hidden; background: #25252d; }
+.placed-module img { display: block; width: 100%; height: 100%; object-fit: fill; }
+.panel-fallback { display: grid; place-items: center; height: 100%; padding: 0.2rem; font-size: 0.7rem; text-align: center; color: var(--muted); }
 .rack-row { margin: 0.8rem 0; }
 .rack-row-meta { display: flex; align-items: end; gap: 0.7rem; margin-bottom: 0.35rem; }
 .rack-row-meta label { display: grid; gap: 0.15rem; font-size: 0.85rem; }
 .rack-row-meta input, .rack-row-meta select { width: 6rem; margin: 0; }
-.rack-row-slots { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }
 </style>
