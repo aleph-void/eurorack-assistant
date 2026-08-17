@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useJobsStore } from '../stores/jobs.js';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
@@ -15,6 +15,18 @@ const stoppingAll = ref(false);
 const deletingAll = ref(false);
 const removingCancelled = ref(false);
 const resuming = ref(false);
+const feed = ref(null);
+
+// The store prepends new events. Without resetting the viewport, a feed that
+// is receiving updates while it is scrolled can stop between rows, leaving a
+// clipped line at the top (and hiding the newest progress above it).
+watch(
+  () => jobs.feed[0],
+  async () => {
+    await nextTick();
+    if (feed.value) feed.value.scrollTop = 0;
+  }
+);
 
 // When the paused queue starts again by itself, in the reader's own clock.
 const resumesAt = computed(() => {
@@ -217,8 +229,8 @@ onMounted(async () => {
       <h2>Live progress</h2>
     </summary>
     <div class="panel-body">
-      <div class="feed" data-test="feed">
-        <div v-for="(line, i) in jobs.feed" :key="i">
+      <div ref="feed" class="feed" data-test="feed">
+        <div v-for="(line, i) in jobs.feed" :key="i" class="feed-line">
           <span class="muted">[job {{ line.jobId }} · {{ line.type }}]</span> {{ line.message }}
         </div>
         <div v-if="jobs.feed.length === 0" class="muted">

@@ -1375,6 +1375,26 @@ describe('JobsView', () => {
     expect(wrapper.find('[data-test="retry-all"]').exists()).toBe(false);
   });
 
+  it('keeps the newest live progress line fully visible', async () => {
+    api.get.mockResolvedValue([]);
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+    const feed = wrapper.find('[data-test="feed"]').element;
+    feed.scrollTop = 48;
+
+    useJobsStore().applyEvent({
+      kind: 'job',
+      event: 'progress',
+      at: '2026-08-17T13:05:00Z',
+      job: { id: 26, type: 'find_manual' },
+      message: 'manual saved: a-very-long-file-name-that-should-wrap-inside-the-live-feed.pdf',
+    });
+    await flushPromises();
+
+    expect(feed.scrollTop).toBe(0);
+    expect(wrapper.find('[data-test="feed"]').text()).toContain('manual saved:');
+  });
+
   it('offers Retry All once more than one job has failed', async () => {
     api.get.mockResolvedValue([
       { id: 1, type: 'find_manual', status: 'failed', attempts: 3, error: 'No manual PDF found' },
