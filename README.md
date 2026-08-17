@@ -128,8 +128,9 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   job counts how many of its model calls came back readable, and if none did it
   fails instead, leaving the panel the module already has exactly where it is.
 
-  You can also **upload your own panel picture** from the module page (PNG,
-  JPEG, GIF or WebP). An uploaded panel replaces whatever the module had and is
+  You can also **supply your own panel picture** from the module page, either
+  by uploading a PNG, JPEG, GIF or WebP file or by entering a direct image URL.
+  A user-supplied panel replaces whatever the module had and is
   never replaced by research afterwards: the `panel_image` job is queued to
   locate this module's components on your picture instead, which is also what
   puts the markers back after a re-analysis. Remove it and the module goes back

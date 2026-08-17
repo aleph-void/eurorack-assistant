@@ -569,22 +569,44 @@ function fileToBase64(file) {
 
 // ---- front panel ----
 // The app finds or draws a panel by itself, but the picture it ends up with
-// can be the wrong module, or a diagram where a photograph exists. Uploading
+// can be the wrong module, or a diagram where a photograph exists. Supplying
 // one replaces it for good: the panel job stops researching and instead
 // locates this module's components on the picture supplied here.
 const panelHp = ref('');
+const panelUrl = ref('');
 const panelError = ref('');
 const panelUploading = ref(false);
+
+function panelHpField(body) {
+  const hp = panelHp.value.trim();
+  if (hp) body.hp = hp;
+  return body;
+}
 
 async function uploadPanel(file) {
   panelError.value = '';
   panelUploading.value = true;
   try {
     const data_base64 = await fileToBase64(file);
-    const body = { filename: file.name, data_base64 };
-    const hp = panelHp.value.trim();
-    if (hp) body.hp = hp;
+    const body = panelHpField({ filename: file.name, data_base64 });
     await api.post(`/api/modules/${props.id}/panel`, body);
+    panelHp.value = '';
+    await load();
+  } catch (e) {
+    panelError.value = e.message;
+  } finally {
+    panelUploading.value = false;
+  }
+}
+
+async function downloadPanel() {
+  const url = panelUrl.value.trim();
+  if (!url) return;
+  panelError.value = '';
+  panelUploading.value = true;
+  try {
+    await api.post(`/api/modules/${props.id}/panel`, panelHpField({ url }));
+    panelUrl.value = '';
     panelHp.value = '';
     await load();
   } catch (e) {
@@ -768,12 +790,12 @@ watch(() => props.id, load);
         </p>
 
         <label for="panel-upload">
-          Upload your own panel picture (PNG, JPEG, GIF or WebP, up to 12MB)
+          Supply your own panel picture (PNG, JPEG, GIF or WebP, up to 12MB)
         </label>
         <p class="muted" style="margin-top: 0">
-          A straight-on shot of the front plate works best. The components are located on it in the
-          background, so the markers appear once that job finishes. Everyone with this module in a
-          rack sees the picture you upload.
+          Upload a file or enter a direct image URL. A straight-on shot of the front plate works
+          best. The components are located on it in the background, so the markers appear once that
+          job finishes. Everyone with this module in a rack sees the picture you supply.
         </p>
         <div class="row">
           <input
@@ -791,13 +813,31 @@ watch(() => props.id, load);
             :disabled="panelUploading"
             @change="onPanelChosen"
           />
+          <input
+            v-model="panelUrl"
+            type="url"
+            style="min-width: min(28rem, 100%)"
+            placeholder="https://example.com/panel.png"
+            aria-label="Panel image URL"
+            data-test="panel-url"
+            :disabled="panelUploading"
+            @keyup.enter="downloadPanel"
+          />
+          <button
+            type="button"
+            data-test="panel-url-submit"
+            :disabled="panelUploading || !panelUrl.trim()"
+            @click="downloadPanel"
+          >
+            Download from URL
+          </button>
           <button
             v-if="module.panel?.source === 'upload'"
             class="danger"
             data-test="remove-panel"
             @click="removePanel"
           >
-            Remove uploaded picture
+            Remove supplied picture
           </button>
         </div>
         <p v-if="panelError" class="error" data-test="panel-error">{{ panelError }}</p>

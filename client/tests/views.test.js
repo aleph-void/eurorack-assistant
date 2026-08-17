@@ -688,6 +688,23 @@ describe('ModuleDetailView', () => {
     });
   });
 
+  it('downloads a front-panel picture from a URL, with the width when one is given', async () => {
+    api.get.mockResolvedValue(moduleResponse);
+    api.post.mockResolvedValue({ panel: null, job_id: 7 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="panel-hp"]').setValue('12');
+    await wrapper.find('[data-test="panel-url"]').setValue(' https://example.com/maths.png ');
+    await wrapper.find('[data-test="panel-url-submit"]').trigger('click');
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/panel', {
+      url: 'https://example.com/maths.png',
+      hp: '12',
+    });
+  });
+
   it('shows the uploaded panel and removes it once confirmed', async () => {
     vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     api.get.mockResolvedValue({

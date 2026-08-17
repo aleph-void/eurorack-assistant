@@ -12,7 +12,13 @@ import {
 } from '../services/manualAnalyzer.js';
 import { deleteModulesDeep } from '../services/moduleDeletion.js';
 import { refreshModuleLinks, unlinkedExpanderHints } from '../services/moduleLinks.js';
-import { MAX_IMAGE_BYTES, MIN_PANEL_PIXELS, saveImage, sniffImage } from '../services/image.js';
+import {
+  downloadImage,
+  MAX_IMAGE_BYTES,
+  MIN_PANEL_PIXELS,
+  saveImage,
+  sniffImage,
+} from '../services/image.js';
 import { panelCrop, readPixels } from '../services/panelPixels.js';
 import {
   deletePanelImageIfOrphaned,
@@ -33,6 +39,7 @@ export function moduleRoutes(
   {
     manualsDir = process.env.MANUALS_DIR || '/data/manuals',
     panelsDir = process.env.PANELS_DIR || '/data/panels',
+    fetchImpl = fetch,
   } = {}
 ) {
   const {
@@ -1271,11 +1278,11 @@ export function moduleRoutes(
   });
 
   // Supply your own front-panel picture for this module. Body:
-  // { filename, data_base64, hp? }.
+  // { filename, data_base64, hp? }, or { url, hp? }.
   //
   // The panel job researches an image and, failing that, draws one from the
   // manual — but a photograph you took of the module in your own rack, or the
-  // press shot you know is the right one, beats both. An uploaded panel
+  // press shot you know is the right one, beats both. A user-supplied panel
   // replaces whatever panel the module had and is never replaced by research
   // afterwards; the job only re-locates the components on it (see
   // services/panelImage.js), which is what draws the markers on and what puts
@@ -1290,17 +1297,57 @@ export function moduleRoutes(
       if (!module) return res.status(404).json({ error: 'Module not found' });
 
       const { filename, data_base64: dataBase64 } = req.body || {};
-      if (!filename || !dataBase64) {
-        return res.status(400).json({ error: 'filename and data_base64 are required' });
+      const rawUrl = String(req.body?.url ?? '').trim();
+      const hasFileFields = Boolean(filename || dataBase64);
+      if (rawUrl && hasFileFields) {
+        return res
+          .status(400)
+          .json({ error: 'supply either a panel URL or an uploaded file, not both' });
       }
+
       let data;
-      try {
-        data = Buffer.from(String(dataBase64), 'base64');
-      } catch {
-        return res.status(400).json({ error: 'data_base64 is not valid base64' });
-      }
-      if (data.length === 0 || data.length > MAX_IMAGE_BYTES) {
-        return res.status(400).json({ error: 'image is empty or larger than 12MB' });
+      let info;
+      let sourceUrl = null;
+      let description;
+      if (rawUrl) {
+        let parsed;
+        try {
+          parsed = new URL(rawUrl);
+        } catch {
+          return res.status(400).json({ error: 'panel URL is not valid' });
+        }
+        if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+          return res.status(400).json({ error: 'panel URL must be an HTTP or HTTPS URL' });
+        }
+        if (rawUrl.length > 2048) {
+          return res.status(400).json({ error: 'panel URL is too long' });
+        }
+        const downloaded = await downloadImage(parsed.href, { fetchImpl });
+        if (!downloaded) {
+          return res.status(400).json({
+            error: 'could not download a PNG, JPEG, GIF or WebP panel image from that URL',
+          });
+        }
+        data = downloaded.buffer;
+        info = downloaded;
+        sourceUrl = parsed.href;
+        description = `Panel image supplied by URL (${parsed.href.slice(0, 240)}).`;
+      } else {
+        if (!filename || !dataBase64) {
+          return res.status(400).json({
+            error: 'url or filename and data_base64 are required',
+          });
+        }
+        try {
+          data = Buffer.from(String(dataBase64), 'base64');
+        } catch {
+          return res.status(400).json({ error: 'data_base64 is not valid base64' });
+        }
+        if (data.length === 0 || data.length > MAX_IMAGE_BYTES) {
+          return res.status(400).json({ error: 'image is empty or larger than 12MB' });
+        }
+        info = sniffImage(data);
+        description = `Uploaded panel image (${String(filename).slice(0, 120)}).`;
       }
 
       // What the file IS decides whether it is accepted, not what it is
@@ -1308,7 +1355,6 @@ export function moduleRoutes(
       // held to exactly the standard a found one is. SVG is not among the
       // formats — a document that can carry script is not something this app
       // hosts on behalf of a user (services/image.js).
-      const info = sniffImage(data);
       if (!info) {
         return res.status(400).json({ error: 'not a PNG, JPEG, GIF or WebP image' });
       }
@@ -1350,14 +1396,14 @@ export function moduleRoutes(
         { ...module, hp: width },
         {
           source: 'upload',
-          source_url: null,
+          source_url: sourceUrl,
           image_hash: hash,
           image_ext: info.ext,
           width: info.width,
           height: info.height,
           ...uploadCrop,
           hp: width,
-          description: `Uploaded panel image (${String(filename).slice(0, 120)}).`,
+          description,
         },
         // The markers come from the panel job below: where a component sits
         // on a picture the server has never seen is not something this

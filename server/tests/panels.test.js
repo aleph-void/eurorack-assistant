@@ -1181,8 +1181,13 @@ describe('filling in what modules are missing', () => {
 describe('uploading your own panel image', () => {
   let ctx;
   let alice;
+  let panelFetch;
   beforeEach(async () => {
-    ctx = await createTestApp();
+    panelFetch = fakeFetch({
+      'cdn.example.com/a110-front.png': { body: PANEL_PNG },
+      'cdn.example.com/not-an-image.png': { body: PDF_BYTES },
+    });
+    ctx = await createTestApp({ fetchImpl: panelFetch });
     alice = await ctx.db.models.User.findOne({ where: { username: 'alice' } });
   });
 
@@ -1275,6 +1280,24 @@ describe('uploading your own panel image', () => {
     expect(res.body.panel.crop.h).toBeCloseTo(300 / 400);
   });
 
+  it('downloads a panel from a URL and treats it like a user-supplied image', async () => {
+    const module = await moduleWithComponents();
+    const url = 'https://cdn.example.com/a110-front.png';
+    const res = await upload(module.id, { url, hp: 8 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.panel.source).toBe('upload');
+    expect(res.body.panel.source_url).toBe(url);
+    expect(res.body.panel.width).toBe(400);
+    expect(res.body.panel.height).toBe(1200);
+    expect(res.body.panel.hp).toBe(8);
+    expect(res.body.job_id).toBeGreaterThan(0);
+    expect(panelFetch.requested).toEqual([url]);
+
+    const panel = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    expect(fs.existsSync(panelPath(ctx.panelsDir, panel.image_hash, 'png'))).toBe(true);
+  });
+
   // The whole point of the upload: the components end up on the user's own
   // picture, at the positions the LLM reads off it.
   it('maps the components onto the uploaded image when the job runs', async () => {
@@ -1363,6 +1386,22 @@ describe('uploading your own panel image', () => {
         filename: 'p.png',
         data_base64: PANEL_PNG.toString('base64'),
         hp: 'wide',
+      })).status
+    ).toBe(400);
+    expect(await ctx.db.models.ModulePanel.count()).toBe(0);
+  });
+
+  it('rejects invalid panel URLs and ambiguous upload sources', async () => {
+    const module = await moduleWithComponents();
+    expect((await upload(module.id, { url: 'file:///tmp/panel.png' })).status).toBe(400);
+    expect(
+      (await upload(module.id, { url: 'https://cdn.example.com/not-an-image.png' })).status
+    ).toBe(400);
+    expect(
+      (await upload(module.id, {
+        url: 'https://cdn.example.com/a110-front.png',
+        filename: 'also-uploaded.png',
+        data_base64: PANEL_PNG.toString('base64'),
       })).status
     ).toBe(400);
     expect(await ctx.db.models.ModulePanel.count()).toBe(0);
