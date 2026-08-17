@@ -67,7 +67,7 @@ describe('exporting a patch', () => {
     expect(res.headers['content-disposition']).toContain('Krell.patch.json');
 
     const doc = JSON.parse(res.text);
-    expect(doc).toMatchObject({ format: 'eurorack-assistant.patch', version: 1 });
+    expect(doc).toMatchObject({ format: 'eurorack-assistant.patch', version: 2 });
     expect(doc.patch).toMatchObject({
       name: 'Krell',
       description: 'the good one',
@@ -78,11 +78,13 @@ describe('exporting a patch', () => {
     // means something in this database.
     const [cable] = doc.patch.cables;
     expect(cable.from.jack).toBe('EOR');
+    expect(cable.from.type).toBe('output_jack');
     expect(cable.to.jack).toBe('CH1 IN');
+    expect(cable.to.type).toBe('input_jack');
     expect(cable.note).toBe('slowly');
     expect(doc.patch.modules.some((m) => m.ref === cable.from.module)).toBe(true);
     expect(doc.patch.settings).toEqual([
-      { module: cable.from.module, control: 'RISE', value: '2 o’clock' },
+      { module: cable.from.module, control: 'RISE', type: 'knob', value: '2 o’clock' },
     ]);
     expect(JSON.stringify(doc)).not.toContain('module_id');
   });
@@ -128,6 +130,33 @@ describe('importing a patch', () => {
     // ...and it points at the instances of the NEW patch, not the old one.
     const instanceIds = detail.body.modules.map((m) => m.id);
     expect(instanceIds).toContain(cable.from_patch_module_id);
+  });
+
+  it('resolves identically named components by their exported type', async () => {
+    const { app, aliceCookie, db, maths, rackId } = await withPatch();
+    const { rows: components } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES
+       ($1, 'input_jack', 'ROOT'), ($1, 'knob', 'ROOT') RETURNING id, type`,
+      [maths.id]
+    );
+    const knob = components.find((c) => c.type === 'knob');
+
+    const res = await importPatch(app, aliceCookie, {
+      rack_id: rackId,
+      document: {
+        modules: [{ ref: 1, manufacturer: 'Make Noise', module_name: 'Maths' }],
+        settings: [{ module: 1, control: 'ROOT', type: 'knob', value: 'noon' }],
+      },
+    });
+
+    expect(res.status).toBe(201);
+    const detail = await request(app).get(`/api/patches/${res.body.id}`).set('Cookie', aliceCookie);
+    expect(detail.body.settings).toHaveLength(1);
+    expect(detail.body.settings[0]).toMatchObject({
+      component_id: knob.id,
+      component_name: 'ROOT',
+      value: 'noon',
+    });
   });
 
   // The whole point of a file: it lands in an account that is not the one it

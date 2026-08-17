@@ -15,6 +15,7 @@ import { refreshModuleLinks, unlinkedExpanderHints } from '../services/moduleLin
 import { MAX_IMAGE_BYTES, MIN_PANEL_PIXELS, saveImage, sniffImage } from '../services/image.js';
 import {
   deletePanelImageIfOrphaned,
+  fillMissingPlacements,
   FULL_CROP,
   loadPanels,
   normalizeHp,
@@ -1084,6 +1085,86 @@ export function moduleRoutes(
     if (!component) return { error: 'Component not found' };
     return { module, component };
   }
+
+  // A manual analysis is a useful starting inventory, not a locked one.
+  // Users can add a missing control or remove a spurious one without waiting
+  // for another analysis (which would overwrite their correction anyway).
+  // Body: { name, type, description? }
+  router.post('/:id/components', async (req, res, next) => {
+    try {
+      const module = await userModule(req.user.id, req.params.id);
+      if (!module) return res.status(404).json({ error: 'Module not found' });
+      const name = String(req.body?.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'name is required' });
+      const type = String(req.body?.type || '').trim().toLowerCase();
+      if (!COMPONENT_TYPES.includes(type)) {
+        return res.status(400).json({ error: `type must be one of: ${COMPONENT_TYPES.join(', ')}` });
+      }
+      const component = await ModuleComponent.create({
+        module_id: module.id,
+        name,
+        type,
+        description: String(req.body?.description || '').trim() || null,
+      });
+      // A hand-added component should be usable on an existing panel straight
+      // away. Put a temporary marker in the same free-space layout used for
+      // components the panel analysis missed; it can then be dragged onto the
+      // real hardware from the module page.
+      const panel = await ModulePanel.findOne({ where: { module_id: module.id } });
+      let placement = null;
+      if (panel) {
+        const [existing, components] = await Promise.all([
+          ModulePanelComponent.findAll({ where: { panel_id: panel.id } }),
+          ModuleComponent.findAll({ where: { module_id: module.id } }),
+        ]);
+        const planned = fillMissingPlacements(
+          existing.map((row) => row.get({ plain: true })),
+          components.map((row) => row.get({ plain: true }))
+        ).find((row) => row.component_id === component.id);
+        if (planned) {
+          placement = await ModulePanelComponent.create({
+            panel_id: panel.id,
+            component_id: component.id,
+            name: component.name,
+            shape: planned.shape,
+            x: planned.x,
+            y: planned.y,
+            w: planned.w,
+            h: planned.h,
+          });
+        }
+      }
+      res.status(201).json({
+        id: component.id,
+        type: component.type,
+        name: component.name,
+        description: component.description,
+        voltage_min: component.voltage_min,
+        voltage_max: component.voltage_max,
+        polarity: component.polarity,
+        group_label: component.group_label,
+        port_kind: component.port_kind,
+        panel_placement_id: placement?.id ?? null,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.delete('/:id/components/:componentId', async (req, res, next) => {
+    try {
+      const { error, component } = await ownComponent(
+        req.user.id,
+        req.params.id,
+        req.params.componentId
+      );
+      if (error) return res.status(404).json({ error });
+      await component.destroy();
+      res.json({ ok: true });
+    } catch (e) {
+      next(e);
+    }
+  });
 
   // A duplicate value row: a second 'min'/'max' for the component, or an
   // 'enum' repeating an existing label (case-insensitively).

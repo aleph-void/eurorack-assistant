@@ -354,6 +354,19 @@ async function addCable() {
   }
 }
 
+// The panel diagram only emits physical output → input gestures. Keep the
+// write here alongside every other cable creator so errors land in the same
+// visible place and the diagram refreshes from the server's canonical state.
+async function connectDiagramCable(ends) {
+  cableError.value = '';
+  try {
+    await api.post(`/api/patches/${props.id}/cables`, ends);
+    await load();
+  } catch (e) {
+    cableError.value = e.message;
+  }
+}
+
 async function removeCable(cable) {
   cableError.value = '';
   try {
@@ -844,7 +857,13 @@ onMounted(async () => {
     </p>
     <p v-if="patch.description" style="white-space: pre-wrap">{{ patch.description }}</p>
 
-    <PatchDiagram :modules="modules" :cables="patch.cables" :label-for="moduleLabel" />
+    <PatchDiagram
+      :modules="modules"
+      :cables="patch.cables"
+      :label-for="moduleLabel"
+      interactive
+      @connect="connectDiagramCable"
+    />
 
     <VoicePatchPanel
       :patch-id="props.id"

@@ -13,6 +13,23 @@ const selectedRack = ref(route.query.rack ? Number(route.query.rack) : '');
 const error = ref('');
 const loading = ref(true);
 const jobs = useJobsStore();
+const COMPONENT_TYPES = [
+  'input_jack',
+  'output_jack',
+  'bidirectional_jack',
+  'knob',
+  'slider',
+  'button',
+  'toggle',
+  'switch',
+  'display',
+  'other',
+];
+const expandedComponents = ref({});
+const moduleComponents = ref({});
+const componentDrafts = ref({});
+const componentError = ref({});
+const componentNotice = ref({});
 
 const currentRack = computed(() => racks.value.find((r) => r.id === selectedRack.value) || null);
 const otherRacks = computed(() => racks.value.filter((r) => r.id !== selectedRack.value));
@@ -65,6 +82,75 @@ async function remove(module) {
     modules.value = modules.value.filter((m) => m.id !== module.id);
   } catch (e) {
     error.value = e.message;
+  }
+}
+
+async function toggleComponents(module) {
+  if (expandedComponents.value[module.id]) {
+    expandedComponents.value = { ...expandedComponents.value, [module.id]: false };
+    return;
+  }
+  error.value = '';
+  componentError.value = { ...componentError.value, [module.id]: '' };
+  componentNotice.value = { ...componentNotice.value, [module.id]: '' };
+  try {
+    const detail = await api.get(`/api/modules/${module.id}`);
+    moduleComponents.value = { ...moduleComponents.value, [module.id]: detail.components || [] };
+    componentDrafts.value = {
+      ...componentDrafts.value,
+      [module.id]: componentDrafts.value[module.id] || { name: '', type: 'input_jack' },
+    };
+    expandedComponents.value = { ...expandedComponents.value, [module.id]: true };
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
+async function addComponent(module) {
+  const draft = componentDrafts.value[module.id] || {};
+  componentError.value = { ...componentError.value, [module.id]: '' };
+  componentNotice.value = { ...componentNotice.value, [module.id]: '' };
+  try {
+    const component = await api.post(`/api/modules/${module.id}/components`, {
+      name: draft.name,
+      type: draft.type,
+    });
+    moduleComponents.value = {
+      ...moduleComponents.value,
+      [module.id]: [...(moduleComponents.value[module.id] || []), component],
+    };
+    componentDrafts.value = {
+      ...componentDrafts.value,
+      [module.id]: { name: '', type: draft.type },
+    };
+    if (component.panel_placement_id) {
+      componentNotice.value = {
+        ...componentNotice.value,
+        [module.id]: 'A panel marker was added. Open the module to drag it onto the hardware.',
+      };
+    }
+  } catch (e) {
+    componentError.value = { ...componentError.value, [module.id]: e.message };
+  }
+}
+
+async function removeComponent(module, component) {
+  const ok = await dialog.confirm({
+    title: 'Remove component',
+    message: `Remove ${component.name} (${component.type}) from ${module.manufacturer} ${module.name}?`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
+  componentError.value = { ...componentError.value, [module.id]: '' };
+  try {
+    await api.delete(`/api/modules/${module.id}/components/${component.id}`);
+    moduleComponents.value = {
+      ...moduleComponents.value,
+      [module.id]: (moduleComponents.value[module.id] || []).filter((c) => c.id !== component.id),
+    };
+  } catch (e) {
+    componentError.value = { ...componentError.value, [module.id]: e.message };
   }
 }
 
@@ -236,11 +322,8 @@ onUnmounted(() => clearTimeout(refreshTimer));
               </tr>
             </thead>
             <tbody>
-              <tr
-                v-for="module in group.modules"
-                :key="module.id"
-                :data-test="`module-${module.id}`"
-              >
+              <template v-for="module in group.modules" :key="module.id">
+              <tr :data-test="`module-${module.id}`">
                 <td>{{ module.manufacturer }}</td>
                 <td>
                   <RouterLink :to="`/modules/${module.id}`">{{ module.name }}</RouterLink>
@@ -256,6 +339,14 @@ onUnmounted(() => clearTimeout(refreshTimer));
                   <span class="badge" :class="module.panel_status">{{ module.panel_status }}</span>
                 </td>
                 <td>
+                  <button
+                    class="secondary"
+                    style="margin: 0 0.4rem 0 0"
+                    :data-test="`components-${module.id}`"
+                    @click="toggleComponents(module)"
+                  >
+                    {{ expandedComponents[module.id] ? 'Hide components' : 'Components' }}
+                  </button>
                   <select
                     v-if="currentRack && otherRacks.length > 0"
                     style="width: auto; margin: 0 0.4rem 0 0"
@@ -270,6 +361,59 @@ onUnmounted(() => clearTimeout(refreshTimer));
                   <button class="danger" style="margin: 0" @click="remove(module)">Delete</button>
                 </td>
               </tr>
+              <tr v-if="expandedComponents[module.id]" :data-test="`component-editor-${module.id}`">
+                <td :colspan="currentRack ? 8 : 9">
+                  <div class="row" style="align-items: end">
+                    <div style="flex: 2">
+                      <label :for="`component-name-${module.id}`">Component name</label>
+                      <input
+                        :id="`component-name-${module.id}`"
+                        v-model="componentDrafts[module.id].name"
+                        :data-test="`component-name-${module.id}`"
+                        placeholder="e.g. ROOT"
+                        @keyup.enter="addComponent(module)"
+                      />
+                    </div>
+                    <div>
+                      <label :for="`component-type-${module.id}`">Type</label>
+                      <select
+                        :id="`component-type-${module.id}`"
+                        v-model="componentDrafts[module.id].type"
+                        :data-test="`component-type-${module.id}`"
+                      >
+                        <option v-for="type in COMPONENT_TYPES" :key="type" :value="type">{{ type }}</option>
+                      </select>
+                    </div>
+                    <div class="shrink">
+                      <button
+                        style="margin: 0"
+                        :disabled="!componentDrafts[module.id].name.trim()"
+                        :data-test="`add-component-${module.id}`"
+                        @click="addComponent(module)"
+                      >
+                        Add component
+                      </button>
+                    </div>
+                  </div>
+                  <p v-if="componentError[module.id]" class="error">{{ componentError[module.id] }}</p>
+                  <p v-if="componentNotice[module.id]" class="muted">{{ componentNotice[module.id] }}</p>
+                  <ul v-if="moduleComponents[module.id]?.length" class="component-list">
+                    <li v-for="component in moduleComponents[module.id]" :key="component.id">
+                      <span>{{ component.name }} <span class="muted">({{ component.type }})</span></span>
+                      <button
+                        class="danger"
+                        style="margin: 0"
+                        :data-test="`remove-component-${component.id}`"
+                        @click="removeComponent(module, component)"
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  </ul>
+                  <p v-else class="muted">No components yet.</p>
+                </td>
+              </tr>
+              </template>
             </tbody>
           </table>
         </div>

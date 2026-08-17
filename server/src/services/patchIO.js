@@ -15,7 +15,7 @@
 // is what makes a patch from a stranger's rack render at all.
 
 export const PATCH_FORMAT = 'eurorack-assistant.patch';
-export const PATCH_FORMAT_VERSION = 1;
+export const PATCH_FORMAT_VERSION = 2;
 
 // A document arrives from outside. These are what stop a hand-written one from
 // asking the server to write a million rows.
@@ -47,6 +47,7 @@ export async function exportPatchDocument(db, patch) {
     PatchModulePort,
     PatchModuleLink,
     PatchModuleLinkJack,
+    ModuleComponent,
   } = db.models;
   const where = { patch_id: patch.id };
   const [modules, cables, settings, groups, links] = await Promise.all([
@@ -68,6 +69,18 @@ export async function exportPatchDocument(db, patch) {
         order: [['id', 'ASC']],
       })
     : [];
+  const componentIds = [
+    ...cables.flatMap((c) => [c.from_component_id, c.to_component_id]),
+    ...settings.map((s) => s.component_id),
+    ...jacks.flatMap((j) => [j.a_component_id, j.b_component_id]),
+  ].filter((id) => id != null);
+  const components = componentIds.length
+    ? await ModuleComponent.findAll({
+        where: { id: [...new Set(componentIds)] },
+        attributes: ['id', 'type'],
+      })
+    : [];
+  const componentType = new Map(components.map((c) => [c.id, c.type]));
 
   // Instances are numbered from 1 in the order they appear; everything that
   // refers to an instance refers to that number.
@@ -107,8 +120,16 @@ export async function exportPatchDocument(db, patch) {
           })),
       })),
       cables: cables.map((c) => ({
-        from: { module: refs.get(c.from_patch_module_id) ?? null, jack: c.from_component_name },
-        to: { module: refs.get(c.to_patch_module_id) ?? null, jack: c.to_component_name },
+        from: {
+          module: refs.get(c.from_patch_module_id) ?? null,
+          jack: c.from_component_name,
+          type: componentType.get(c.from_component_id) ?? null,
+        },
+        to: {
+          module: refs.get(c.to_patch_module_id) ?? null,
+          jack: c.to_component_name,
+          type: componentType.get(c.to_component_id) ?? null,
+        },
         note: c.note ?? null,
         optional: Boolean(c.optional),
         stacked: Boolean(c.stacked),
@@ -117,6 +138,7 @@ export async function exportPatchDocument(db, patch) {
       settings: settings.map((s) => ({
         module: refs.get(s.patch_module_id) ?? null,
         control: s.component_name,
+        type: componentType.get(s.component_id) ?? null,
         value: s.value,
       })),
       links: links.map((l) => ({
@@ -126,7 +148,12 @@ export async function exportPatchDocument(db, patch) {
         description: l.description ?? null,
         jacks: jacks
           .filter((j) => j.link_id === l.id)
-          .map((j) => ({ a: j.a_component_name, b: j.b_component_name })),
+          .map((j) => ({
+            a: j.a_component_name,
+            a_type: componentType.get(j.a_component_id) ?? null,
+            b: j.b_component_name,
+            b_type: componentType.get(j.b_component_id) ?? null,
+          })),
       })),
     },
   };
@@ -178,6 +205,13 @@ const integer = (value, fallback = 0) => {
   const n = Number(value);
   return Number.isInteger(n) ? n : fallback;
 };
+
+function componentType(value, label, { jack = false } = {}) {
+  const type = text(value, label, { required: false });
+  if (type === null) return null;
+  if (jack && !JACK_TYPES.includes(type)) fail(`${label} must be one of ${JACK_TYPES.join(', ')}`);
+  return type;
+}
 
 // The document, checked into a shape the writer below can trust. Kept apart
 // from the writing so a bad file is rejected before anything is created.
@@ -243,7 +277,11 @@ export function parsePatchDocument(input) {
     if (!isObject(value)) fail(`${label} must be an object`);
     const ref = integer(value.module, -1);
     if (!seenRefs.has(ref)) fail(`${label} refers to module ${value.module}, which is not in the file`);
-    return { module: ref, jack: text(value.jack ?? value.component, `${label} jack`) };
+    return {
+      module: ref,
+      jack: text(value.jack ?? value.component, `${label} jack`),
+      type: componentType(value.type, `${label} type`, { jack: true }),
+    };
   };
 
   const cables = list(body.cables, 'cables', LIMITS.cables).map((c, at) => {
@@ -265,6 +303,7 @@ export function parsePatchDocument(input) {
     return {
       module: ref,
       control: text(s.control ?? s.component, `setting ${at + 1} control`),
+      type: componentType(s.type, `setting ${at + 1} type`),
       value: text(s.value, `setting ${at + 1} value`, { max: LIMITS.body }),
     };
   });
@@ -286,7 +325,12 @@ export function parsePatchDocument(input) {
       description: text(l.description, 'link description', { required: false }),
       jacks: list(l.jacks, `link ${at + 1} jacks`, LIMITS.jacks).map((j) => {
         if (!isObject(j)) fail('every linked jack must be an object');
-        return { a: text(j.a, 'linked jack name'), b: text(j.b, 'linked jack name') };
+        return {
+          a: text(j.a, 'linked jack name'),
+          a_type: componentType(j.a_type, 'linked jack type', { jack: true }),
+          b: text(j.b, 'linked jack name'),
+          b_type: componentType(j.b_type, 'linked jack type', { jack: true }),
+        };
       }),
     };
   });
@@ -332,17 +376,19 @@ async function resolveModules(db, userId, documentModules) {
   const components = moduleIds.length
     ? await ModuleComponent.findAll({
         where: { module_id: moduleIds },
-        attributes: ['id', 'module_id', 'name'],
+        attributes: ['id', 'module_id', 'name', 'type'],
       })
     : [];
   const componentsByModule = new Map();
   for (const c of components) {
     if (!componentsByModule.has(c.module_id)) componentsByModule.set(c.module_id, new Map());
-    // First writer wins, so a module with two identically named jacks
-    // resolves to the first rather than the last.
     const names = componentsByModule.get(c.module_id);
     const lower = c.name.trim().toLowerCase();
+    // A label can identify several physical controls. Type makes the identity
+    // unambiguous in new patch files; the name-only entry preserves imports of
+    // files written before types were included.
     if (!names.has(lower)) names.set(lower, c.id);
+    names.set(`${lower}\u0000${c.type}`, c.id);
   }
 
   return documentModules.map((m) => {
@@ -429,11 +475,11 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
     // all when the name matches neither — in which case the name alone is what
     // the patch shows, which is exactly what it does for a module that was
     // deleted underneath it.
-    const jackId = (ref, jackName) => {
+    const jackId = (ref, jackName, type = null) => {
       const lower = String(jackName ?? '').trim().toLowerCase();
       const m = byRef.get(ref);
       if (!m) return null;
-      if (m.module_id !== null) return m.components.get(lower) ?? null;
+      if (m.module_id !== null) return m.components.get(type ? `${lower}\u0000${type}` : lower) ?? null;
       return portIds.get(ref)?.get(lower) ?? null;
     };
 
@@ -442,10 +488,10 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
         {
           patch_id: patch.id,
           from_patch_module_id: rowIds.get(c.from.module),
-          from_component_id: jackId(c.from.module, c.from.jack),
+          from_component_id: jackId(c.from.module, c.from.jack, c.from.type),
           from_component_name: c.from.jack,
           to_patch_module_id: rowIds.get(c.to.module),
-          to_component_id: jackId(c.to.module, c.to.jack),
+          to_component_id: jackId(c.to.module, c.to.jack, c.to.type),
           to_component_name: c.to.jack,
           note: c.note,
           optional: c.optional,
@@ -461,7 +507,7 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
         {
           patch_id: patch.id,
           patch_module_id: rowIds.get(s.module),
-          component_id: jackId(s.module, s.control),
+          component_id: jackId(s.module, s.control, s.type),
           component_name: s.control,
           value: s.value,
         },
@@ -484,9 +530,9 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
         await PatchModuleLinkJack.create(
           {
             link_id: created.id,
-            a_component_id: jackId(l.a, j.a),
+            a_component_id: jackId(l.a, j.a, j.a_type),
             a_component_name: j.a,
-            b_component_id: jackId(l.b, j.b),
+            b_component_id: jackId(l.b, j.b, j.b_type),
             b_component_name: j.b,
           },
           { transaction }

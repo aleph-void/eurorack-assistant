@@ -22,7 +22,11 @@ const props = defineProps({
   cables: { type: Array, default: () => [] },
   // How the parent names an instance ("Make Noise Maths #2 (ghost layer)").
   labelFor: { type: Function, default: null },
+  // The patch editor can connect a physical output to a physical input by
+  // dragging between their markers. Read-only diagrams keep their old view.
+  interactive: { type: Boolean, default: false },
 });
+const emit = defineEmits(['connect']);
 
 // A patch snapshots the whole rack, so by default only the modules it
 // actually uses are drawn — the rest would bury them.
@@ -36,7 +40,7 @@ const label = (pm) =>
 // that case buries the diagram in panels the patch has nothing to do with —
 // so an unpatched patch draws nothing until 'show every module' is ticked.
 const shown = computed(() =>
-  showAll.value ? props.modules : usedModules(props.modules, props.cables)
+  showAll.value || props.interactive ? props.modules : usedModules(props.modules, props.cables)
 );
 
 const diagram = computed(() => layoutDiagram(shown.value, { height: PANEL_HEIGHT }));
@@ -100,7 +104,68 @@ const spareLabels = computed(() =>
   )
 );
 
-const allAnchors = computed(() => [...diagram.value.anchors.entries()].map(([key, a]) => ({ key, ...a })));
+const componentAt = (patchModuleId, componentId) =>
+  props.modules.find((pm) => pm.id === patchModuleId)?.components.find((c) => c.id === componentId) ?? null;
+
+const allAnchors = computed(() =>
+  [...diagram.value.anchors.entries()].map(([key, anchor]) => {
+    const [patchModuleId, componentId] = key.split(':').map(Number);
+    const component = componentAt(patchModuleId, componentId);
+    return { key, patchModuleId, componentId, component, ...anchor };
+  })
+);
+const outputs = computed(() => allAnchors.value.filter((a) => a.component?.type === 'output_jack'));
+const inputs = computed(() => allAnchors.value.filter((a) => a.component?.type === 'input_jack'));
+
+const svg = ref(null);
+const dragging = ref(null);
+
+function pointAt(event) {
+  const box = svg.value?.getBoundingClientRect();
+  if (!box?.width || !box?.height) return null;
+  return {
+    x: ((event.clientX - box.left) / box.width) * diagram.value.width,
+    y: ((event.clientY - box.top) / box.height) * diagram.value.height,
+  };
+}
+
+function startCable(anchor, event) {
+  if (!props.interactive) return;
+  const point = pointAt(event);
+  if (!point) return;
+  event.preventDefault();
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+  dragging.value = { source: anchor, point };
+}
+
+function moveCable(event) {
+  if (!dragging.value) return;
+  const point = pointAt(event);
+  if (point) dragging.value = { ...dragging.value, point };
+}
+
+function finishCable(event) {
+  if (!dragging.value) return;
+  const point = pointAt(event);
+  const source = dragging.value.source;
+  dragging.value = null;
+  if (!point) return;
+  // The SVG has a fixed coordinate system but a responsive display size. A
+  // 14px target feels the same at every zoom level.
+  const radius = (14 / (svg.value?.getBoundingClientRect().width || 1)) * diagram.value.width;
+  const target = inputs.value.find((input) => Math.hypot(input.x - point.x, input.y - point.y) <= radius);
+  if (!target) return;
+  emit('connect', {
+    from_patch_module_id: source.patchModuleId,
+    from_component_id: source.componentId,
+    to_patch_module_id: target.patchModuleId,
+    to_component_id: target.componentId,
+  });
+}
+
+const draftCable = computed(() =>
+  dragging.value ? cablePath(dragging.value.source, dragging.value.point, drawn.value.length) : null
+);
 </script>
 
 <template>
@@ -133,6 +198,10 @@ const allAnchors = computed(() => [...diagram.value.anchors.entries()].map(([key
             :viewBox="`0 0 ${diagram.width} ${diagram.height}`"
             :style="{ width: '100%', maxWidth: `${diagram.width}px` }"
             data-test="diagram-svg"
+            ref="svg"
+            @pointermove="moveCable"
+            @pointerup="finishCable"
+            @pointercancel="dragging = null"
           >
             <!-- One panel per module instance: the image, cropped to the
                  front plate, with the module's name above it. -->
@@ -196,9 +265,14 @@ const allAnchors = computed(() => [...diagram.value.anchors.entries()].map(([key
               :cy="a.y"
               r="6"
               class="jack-marker"
+              :class="{ output: a.component?.type === 'output_jack', input: a.component?.type === 'input_jack' }"
+              :data-test="`diagram-jack-${a.patchModuleId}-${a.componentId}`"
+              @pointerdown="a.component?.type === 'output_jack' && startCable(a, $event)"
             >
-              <title>{{ a.name }}</title>
+              <title>{{ a.name }}{{ a.component ? ` (${a.component.type})` : '' }}</title>
             </circle>
+
+            <path v-if="draftCable" :d="draftCable" class="cable draft-cable" />
 
             <!-- Jacks with no place on the picture sit below the panel and
                  say what they are. -->
@@ -251,6 +325,10 @@ const allAnchors = computed(() => [...diagram.value.anchors.entries()].map(([key
           {{ undrawn === 1 ? 'it' : 'them' }} is a connection point with no place on a panel.
         </p>
         <p class="muted" style="font-size: 0.85rem">
+          <template v-if="interactive">
+            Drag a blue output marker to a green input marker to patch it. Controls and other jack types cannot be wired here.
+            <br />
+          </template>
           Panels are the front plates found for each module, or a drawing made from its manual
           where no picture was found. A jack the panel could not place is shown in the strip
           underneath it.
@@ -305,6 +383,15 @@ const allAnchors = computed(() => [...diagram.value.anchors.entries()].map(([key
   stroke: rgba(228, 228, 231, 0.55);
   stroke-width: 1.5;
 }
+.jack-marker.output {
+  cursor: crosshair;
+  stroke: var(--accent-2);
+  stroke-width: 2.5;
+}
+.jack-marker.input {
+  stroke: #4ade80;
+  stroke-width: 2;
+}
 .jack-label,
 .spare-label {
   fill: var(--muted);
@@ -326,6 +413,12 @@ const allAnchors = computed(() => [...diagram.value.anchors.entries()].map(([key
 .cable.optional {
   stroke-dasharray: 14 10;
   opacity: 0.6;
+}
+.draft-cable {
+  stroke: var(--accent-2);
+  stroke-dasharray: 8 6;
+  opacity: 0.9;
+  pointer-events: none;
 }
 .cable-end {
   stroke: var(--bg);

@@ -34,6 +34,7 @@ import ConfigView from '../src/views/ConfigView.vue';
 import NotesView from '../src/views/NotesView.vue';
 import PatchesView from '../src/views/PatchesView.vue';
 import PatchDetailView from '../src/views/PatchDetailView.vue';
+import PatchDiagram from '../src/components/PatchDiagram.vue';
 import { useJobsStore } from '../src/stores/jobs.js';
 import { useAuthStore } from '../src/stores/auth.js';
 
@@ -111,6 +112,43 @@ describe('ModulesView', () => {
     expect(wrapper.text()).toContain('No modules yet');
   });
 
+  it('adds and removes components from a module row', async () => {
+    const module = {
+      id: 1,
+      manufacturer: '2hp',
+      name: 'ARP',
+      quantity: 1,
+      racks: [{ id: 1, name: 'main rack', quantity: 1 }],
+      manual_status: 'found',
+      analysis_status: 'complete',
+    };
+    api.get.mockImplementation((path) => {
+      if (path === '/api/racks') return Promise.resolve(racksResponse);
+      if (path === '/api/modules/1') return Promise.resolve({ components: [{ id: 10, name: 'ROOT', type: 'input_jack' }] });
+      return Promise.resolve([module]);
+    });
+    api.post.mockResolvedValue({ id: 11, name: 'ROOT', type: 'knob' });
+    api.delete.mockResolvedValue({ ok: true });
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="components-1"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="component-editor-1"]').text()).toContain('ROOT');
+
+    await wrapper.find('[data-test="component-name-1"]').setValue('ROOT');
+    await wrapper.find('[data-test="component-type-1"]').setValue('knob');
+    await wrapper.find('[data-test="add-component-1"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/components', { name: 'ROOT', type: 'knob' });
+    expect(wrapper.find('[data-test="component-editor-1"]').text()).toContain('(knob)');
+
+    await wrapper.find('[data-test="remove-component-11"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/components/11');
+  });
+
   // Each rack is its own collapsible section, so a system of several racks
   // reads as the racks it is made of.
   it('files the modules under a collapsible section per rack', async () => {
@@ -180,7 +218,7 @@ describe('ModulesView', () => {
     vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     const wrapper = mount(ModulesView, { global: testGlobal() });
     await flushPromises();
-    await wrapper.find('[data-test="module-1"] button').trigger('click');
+    await wrapper.find('[data-test="module-1"] button.danger').trigger('click');
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/modules/1');
 
@@ -2015,6 +2053,26 @@ describe('PatchDetailView', () => {
     expect(wrapper.find('[data-test="patch-module-12"]').text()).toContain('no longer in your system');
     // The patch can be taken straight to the assistant.
     expect(wrapper.find('[data-test="ask-about-patch"]').attributes('to')).toBe('/ask?patch=7');
+  });
+
+  it('creates a cable emitted by the diagram drag gesture', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.post.mockResolvedValue({ id: 22 });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    wrapper.findComponent(PatchDiagram).vm.$emit('connect', {
+      from_patch_module_id: 11,
+      from_component_id: 2,
+      to_patch_module_id: 11,
+      to_component_id: 1,
+    });
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/cables', {
+      from_patch_module_id: 11,
+      from_component_id: 2,
+      to_patch_module_id: 11,
+      to_component_id: 1,
+    });
   });
 
   // Typing into a picker, then taking the highlighted match with Enter.

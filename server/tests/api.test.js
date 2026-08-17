@@ -57,6 +57,35 @@ describe('modules API', () => {
     });
   });
 
+  it('lets a racked user add and remove a component', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, users[0].id, { manufacturer: '2hp', name: 'ARP' });
+    await db.query(
+      `INSERT INTO module_panels (module_id, image_hash, image_ext, width, height)
+       VALUES ($1, 'test-panel', 'svg', 100, 500)`,
+      [module.id]
+    );
+
+    const created = await request(app)
+      .post(`/api/modules/${module.id}/components`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'ROOT', type: 'knob' });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ name: 'ROOT', type: 'knob' });
+    expect(created.body.panel_placement_id).not.toBeNull();
+    expect(
+      (await db.query('SELECT component_id FROM module_panel_components WHERE id = $1', [created.body.panel_placement_id]))
+        .rows
+    ).toEqual([{ component_id: created.body.id }]);
+
+    const removed = await request(app)
+      .delete(`/api/modules/${module.id}/components/${created.body.id}`)
+      .set('Cookie', aliceCookie);
+    expect(removed.status).toBe(200);
+    expect((await db.query('SELECT * FROM module_components WHERE id = $1', [created.body.id])).rows).toEqual([]);
+  });
+
   it('manually adds normalled connections, deriving the kind from the source', async () => {
     const { app, db, aliceCookie } = await createTestApp();
     const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");

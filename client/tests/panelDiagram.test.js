@@ -269,6 +269,40 @@ describe('PatchDiagram', () => {
     await wrapper.find('[data-test="diagram-jack-names"]').setValue(true);
     expect(wrapper.findAll('.jack-label').length).toBe(3);
   });
+
+  it('connects only when an output marker is dragged onto an input marker', async () => {
+    const source = modules();
+    // A placed knob is visible in the diagram but cannot start a cable.
+    source[0].components.push({ id: 9, type: 'knob', name: 'Rise' });
+    source[0].panel.components.push({ component_id: 9, name: 'Rise', shape: 'knob', x: 0.5, y: 0.5, w: 0.06, h: 0.06 });
+    const layout = layoutDiagram(source);
+    const wrapper = mountDiagram({ modules: source, cables: [], interactive: true });
+    const svg = wrapper.find('[data-test="diagram-svg"]');
+    Object.defineProperty(svg.element, 'getBoundingClientRect', {
+      value: () => ({ left: 0, top: 0, width: layout.width, height: layout.height }),
+    });
+
+    const output = layout.anchors.get('11:1');
+    const input = layout.anchors.get('12:3');
+    await wrapper.find('[data-test="diagram-jack-11-1"]').trigger('pointerdown', {
+      clientX: output.x,
+      clientY: output.y,
+      pointerId: 1,
+    });
+    await svg.trigger('pointermove', { clientX: input.x, clientY: input.y, pointerId: 1 });
+    await svg.trigger('pointerup', { clientX: input.x, clientY: input.y, pointerId: 1 });
+    expect(wrapper.emitted('connect')).toEqual([
+      [{ from_patch_module_id: 11, from_component_id: 1, to_patch_module_id: 12, to_component_id: 3 }],
+    ]);
+
+    await wrapper.find('[data-test="diagram-jack-11-9"]').trigger('pointerdown', {
+      clientX: output.x,
+      clientY: output.y,
+      pointerId: 2,
+    });
+    await svg.trigger('pointerup', { clientX: input.x, clientY: input.y, pointerId: 2 });
+    expect(wrapper.emitted('connect')).toHaveLength(1);
+  });
 });
 
 describe('ModulePanel', () => {
