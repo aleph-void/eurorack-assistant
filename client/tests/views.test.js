@@ -272,6 +272,28 @@ describe('RacksView', () => {
     expect(row.find('.placed-module').attributes('style')).toContain('--module-hp: 2');
   });
 
+  it('persists the module id when a panel is dragged from inventory into a row', async () => {
+    const detail = {
+      id: 1,
+      name: 'main rack',
+      modules: [{ id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, quantity: 1, panel: { url: '/api/panels/arp.svg' } }],
+      rows: [{ id: 9, unit: 3, hp: 84, modules: [] }],
+    };
+    api.get.mockImplementation((path) => Promise.resolve(path === '/api/racks' ? racksResponse : detail));
+    api.put.mockResolvedValue({ rows: [{ ...detail.rows[0], modules: [{ module_id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, panel: { url: '/api/panels/arp.svg' } }] }] });
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="organize-1"]').trigger('click');
+    await flushPromises();
+    await wrapper.find('[data-test="available-module-4-0"]').trigger('dragstart');
+    await wrapper.find('[data-test="rack-row-0"] .rack-row-slots').trigger('drop');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/layout', {
+      rows: [{ unit: 3, hp: 84, modules: [{ module_id: 4 }] }],
+    });
+    expect(wrapper.find('[data-test="rack-row-0"] img').attributes('src')).toBe('/api/panels/arp.svg');
+  });
+
   it('renames a rack', async () => {
     api.get.mockResolvedValue(racksResponse);
     api.put.mockResolvedValue({ id: 2, name: 'live case', module_count: 1 });

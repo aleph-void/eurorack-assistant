@@ -99,10 +99,12 @@ Respond with ONLY a JSON object, no prose and no code fences, shaped exactly lik
 
 Rules:
 - "image_urls": up to 4 candidate direct image URLs, best first. Prefer a
-  straight-on shot of the panel alone, on a plain background, at the largest
-  resolution offered. Avoid photographs of the module in a rack among others,
-  angled "hero" shots, rear/PCB shots, and lifestyle photos. Use [] if you
-  cannot find a usable image.
+  complete, straight-on FRONT view of the panel alone, with the camera square
+  to the plate (no perspective or visible side edge), on a plain background,
+  at the largest resolution offered. Reject every other view: rear/PCB,
+  side/top/bottom, three-quarter or tilted "hero" shots, a module installed
+  among other rack modules, packaging, product collages, or lifestyle photos.
+  Use [] if you cannot find a usable front view.
 - "page_url": the page the image was found on, or null.
 - "hp": the panel width in HP as a number, or null if it is not stated.
 `;
@@ -127,9 +129,11 @@ Respond with ONLY a JSON object, no prose and no code fences, shaped exactly lik
 
 Rules:
 - "image_urls": up to 4 direct image FILE URLs (ending .jpg, .jpeg, .png or
-  .webp), best first. ModularGrid serves these from its own image host; give
-  the largest version offered. Use [] if you cannot find the module's page or
-  it has no picture.
+  .webp), best first. The image must show the complete FRONT plate square on:
+  no side edge, perspective, rear/PCB, packaging or rack/lifestyle image.
+  ModularGrid serves these from its own image host; give the largest version
+  offered. Use [] if you cannot find the module's page or it has no usable
+  front-panel picture.
 - Make sure the page really is THIS module by THIS manufacturer. ModularGrid
   holds many modules with the same short name, and a picture of the wrong one
   is worse than no picture at all.
@@ -161,11 +165,13 @@ Rules:
 - ALL coordinates are fractions of the WHOLE image, with 0,0 at the top left
   and 1,1 at the bottom right. "x"/"y" are the CENTRE of the thing, "w"/"h"
   its size. Give "x" and "y" to three decimal places.
-- "is_panel" is false if the image does not actually show this module's front
-  panel straight on — a different module, a rear/PCB shot, a rack full of
-  modules, a heavily angled photo, a logo or a placeholder. Say so honestly
-  and return [] for "components": a wrong picture is worse than none, and
-  there is a fallback that does not need one.
+- "is_panel" is true ONLY for the complete front face of this exact module,
+  viewed square-on as if the panel were flat against the image plane. It is
+  false for a different module, rear/PCB shot, side/top/bottom view, ANY
+  three-quarter, tilted, or perspective photo (even if the front is visible),
+  a rack full of modules, packaging, a product collage, a logo, or a
+  placeholder. Say so honestly and return [] for "components": a wrong
+  picture is worse than none, and there is a fallback that does not need one.
 ${
   cropped
     ? `- The image has already been cropped to this module's front plate, so the
@@ -772,7 +778,7 @@ async function researchPanelImage(
   template,
   module,
   panelsDir,
-  { fetchImpl, log, tally = answerTally() }
+  { fetchImpl, log, tally = answerTally(), acceptImage = null }
 ) {
   let info;
   try {
@@ -795,11 +801,29 @@ async function researchPanelImage(
     const image = await downloadImage(url, { fetchImpl, log });
     if (!image) continue;
     const hash = saveImage(panelsDir, image.buffer, image.ext);
-    return {
+    const candidate = {
       image: { ...image, hash, path: panelPath(panelsDir, hash, image.ext) },
       hp,
       page_url,
     };
+    if (!acceptImage) return candidate;
+
+    // Downloading an image only establishes that it is a decodable raster.
+    // Before choosing it as a panel, inspect it to make sure it is actually a
+    // square-on front view. This also lets us continue through a product
+    // page's alternates (and then ModularGrid) when its first image is a
+    // tempting but unusable angled hero shot.
+    let accepted = null;
+    try {
+      accepted = await acceptImage(candidate);
+    } catch (e) {
+      log(`could not validate panel image: ${e.message}`);
+    }
+    if (accepted) return { ...candidate, located: accepted };
+    log('rejected candidate: it is not a usable straight-on front panel view');
+    // This candidate was only just written and has not been referenced by a
+    // panel record, so deleting this exact file is safe.
+    fs.rmSync(candidate.image.path, { force: true });
   }
   return { image: null, hp, page_url };
 }
@@ -810,8 +834,8 @@ async function researchPanelImage(
 // width learnt from either search is kept even when neither yields a picture,
 // because a module with no recorded HP still wants one.
 export async function findPanelImage(backend, module, panelsDir, deps = {}) {
-  const { fetchImpl = fetch, log = () => {}, tally = answerTally() } = deps;
-  const options = { fetchImpl, log, tally };
+  const { fetchImpl = fetch, log = () => {}, tally = answerTally(), acceptImage = null } = deps;
+  const options = { fetchImpl, log, tally, acceptImage };
   const first = await researchPanelImage(backend, PANEL_RESEARCH_TEMPLATE, module, panelsDir, options);
   if (first.image) return first;
 
@@ -827,6 +851,7 @@ export async function findPanelImage(backend, module, panelsDir, deps = {}) {
     image: second.image,
     hp: (second.image ? second.hp ?? first.hp : first.hp ?? second.hp) ?? null,
     page_url: (second.image ? second.page_url : first.page_url ?? second.page_url) ?? null,
+    ...(second.image ? { located: second.located } : {}),
   };
 }
 
@@ -984,16 +1009,21 @@ export async function buildPanelForModule(db, backend, module, panelsDir, deps =
   let researched = { image: null, hp: null, page_url: null };
   if (findImages) {
     log('researching a front panel image');
-    researched = await findPanelImage(backend, module, panelsDir, { fetchImpl, log, tally });
+    researched = await findPanelImage(backend, module, panelsDir, {
+      fetchImpl,
+      log,
+      tally,
+      acceptImage: (candidate) =>
+        mapPanelImage(backend, module, components, candidate.image.path, {
+          hp: module.hp ?? candidate.hp ?? null,
+          log,
+          tally,
+        }),
+    });
   }
 
   if (researched.image) {
-    log(`locating components on ${researched.image.width}x${researched.image.height} image`);
-    const located = await mapPanelImage(backend, module, components, researched.image.path, {
-      hp: module.hp ?? researched.hp ?? null,
-      log,
-      tally,
-    });
+    const located = researched.located;
     if (located) {
       log(`panel image mapped: ${located.matched} of ${components.length} component(s) located`);
       const landed = await uploadedPanel();

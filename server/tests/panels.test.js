@@ -442,6 +442,43 @@ describe('building a module panel', () => {
     expect(backend.calls.completeTextWithSearch).toHaveLength(1);
   });
 
+  it('rejects an angled candidate and keeps searching for a front-panel view', async () => {
+    const { module } = await analyzedModule(db, manualsDir);
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        image_urls: ['https://doepfer.de/a110-hero.png', 'https://doepfer.de/a110-front.png'],
+        page_url: 'https://doepfer.de/a110.html',
+        hp: 8,
+      }),
+      analyzeImage: () =>
+        JSON.stringify(
+          backend.calls.analyzeImage.length === 1
+            ? { is_panel: false, components: [] }
+            : {
+                is_panel: true,
+                components: COMPONENTS.map((c, i) => ({
+                  name: c.name,
+                  x: 0.5,
+                  y: 0.1 * (i + 1),
+                })),
+              }
+        ),
+    });
+
+    const { panel } = await buildPanelForModule(db, backend, module, panelsDir, {
+      fetchImpl: fakeFetch({
+        'doepfer.de/a110-hero.png': { body: PANEL_PNG },
+        'doepfer.de/a110-front.png': { body: PANEL_PNG },
+      }),
+      manualFile: path.join(manualsDir, `${PDF_HASH}.pdf`),
+    });
+
+    expect(panel.source).toBe('image');
+    expect(panel.source_url).toBe('https://doepfer.de/a110-front.png');
+    expect(backend.calls.analyzeImage).toHaveLength(2);
+    expect(fs.readdirSync(panelsDir).filter((file) => file.endsWith('.png'))).toHaveLength(1);
+  });
+
   // Neither search found a picture, but one of them did read the width off a
   // page, and a module with no recorded HP still wants it.
   it('keeps a width learnt while researching even when no image came of it', async () => {

@@ -189,7 +189,10 @@ export function rackRoutes(
         }
         let used = 0;
         const rowModules = raw.modules.map((item) => {
-          const moduleId = Number(item?.module_id);
+          // `module_id` is the layout wire format; accepting `id` as well
+          // keeps hand-written/older organizer requests from losing a valid
+          // rack module.
+          const moduleId = Number(item?.module_id ?? item?.id);
           const module = modules.get(moduleId);
           if (!module) throw new Error('A placed module is not in this rack');
           const moduleHp = Number(module.hp);

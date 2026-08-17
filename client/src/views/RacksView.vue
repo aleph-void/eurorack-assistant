@@ -152,7 +152,10 @@ async function removeRow(index) {
 }
 
 function startDrag(module, rowIndex = null) {
-  dragged.value = { module, rowIndex };
+  // Inventory entries use `id`; persisted row placements use `module_id`.
+  // Normalize once at the gesture boundary so a first drop saves the actual
+  // module id rather than an undefined placement.
+  dragged.value = { module: { ...module, module_id: module.module_id ?? module.id }, rowIndex };
 }
 
 async function dropIntoRow(rowIndex) {
