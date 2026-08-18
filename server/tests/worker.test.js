@@ -315,6 +315,13 @@ describe('worker', () => {
     const { rows: modules } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
     expect(modules[0].manual_status).toBe('found');
 
+    // The found manual arrives marked in scope for the analysis it chains.
+    const { rows: manuals } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [
+      module.id,
+    ]);
+    expect(manuals).toHaveLength(1);
+    expect(manuals[0].analysis_scope).toBe(true);
+
     const { rows: chained } = await db.query(
       `SELECT * FROM jobs WHERE type = 'analyze_manual' AND module_id = $1`,
       [module.id]
@@ -902,6 +909,64 @@ describe('worker', () => {
     ]);
   });
 
+  // The manual arrives marked in scope; unmarking it takes it out of the
+  // analysis like any other document, and the remaining marked documents are
+  // analyzed on their own.
+  it('leaves an unmarked manual out and analyzes the other in-scope documents', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, {
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+      manual_in_scope: false,
+    });
+    const ownHash = 'a'.repeat(64);
+    fs.writeFileSync(path.join(manualsDir, `${ownHash}.pdf`), PDF_BYTES);
+    await db.models.Manual.create({
+      module_id: module.id,
+      user_id: user.id,
+      hash: ownHash,
+      name: 'notes',
+      original_name: 'notes.pdf',
+      source: 'upload',
+      analysis_scope: true,
+    });
+    await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
+    const backend = fakeBackend({
+      analyzeDocument:
+        '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
+    });
+
+    expect((await makeWorker(db, backend).tick()).status).toBe('complete');
+
+    // One remaining document → the single-document backend call, without
+    // the manual.
+    expect(backend.calls.analyzeDocument).toHaveLength(1);
+    expect(backend.calls.analyzeDocument[0][1]).toBe(path.join(manualsDir, `${ownHash}.pdf`));
+  });
+
+  it('fails the analysis clearly when no document at all is marked in scope', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, {
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+      manual_in_scope: false,
+    });
+    const job = await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
+    // Exhaust all attempts so the job fails permanently.
+    await db.query('UPDATE jobs SET attempts = $2 WHERE id = $1', [job.id, MAX_ATTEMPTS - 1]);
+
+    const backend = fakeBackend();
+    const done = await makeWorker(db, backend).tick();
+    expect(done.status).toBe('failed');
+    expect(done.error).toMatch(/marked in scope/);
+    expect(backend.calls.analyzeDocument).toHaveLength(0);
+    expect(backend.calls.analyzeDocuments).toHaveLength(0);
+  });
+
   it('processes a scope_question job and leaves the question awaiting review', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -1211,8 +1276,8 @@ describe('worker', () => {
       const module = await insertModule(db, user.id);
       await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
       await db.query(
-        `INSERT INTO manuals (module_id, hash, source, original_name)
-         VALUES ($1, $2, 'found', 'm.pdf')`,
+        `INSERT INTO manuals (module_id, hash, source, original_name, analysis_scope)
+         VALUES ($1, $2, 'found', 'm.pdf', TRUE)`,
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
@@ -1244,8 +1309,8 @@ describe('worker', () => {
       const module = await insertModule(db, user.id);
       const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
       await db.query(
-        `INSERT INTO manuals (module_id, hash, source, original_name)
-         VALUES ($1, $2, 'found', 'm.pdf')`,
+        `INSERT INTO manuals (module_id, hash, source, original_name, analysis_scope)
+         VALUES ($1, $2, 'found', 'm.pdf', TRUE)`,
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
@@ -1280,8 +1345,8 @@ describe('worker', () => {
       const user = await createUser(db, { username: 'u' });
       const module = await insertModule(db, user.id);
       await db.query(
-        `INSERT INTO manuals (module_id, hash, source, original_name)
-         VALUES ($1, $2, 'found', 'm.pdf')`,
+        `INSERT INTO manuals (module_id, hash, source, original_name, analysis_scope)
+         VALUES ($1, $2, 'found', 'm.pdf', TRUE)`,
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
@@ -1317,8 +1382,8 @@ describe('worker', () => {
       const module = await insertModule(db, user.id);
       const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
       await db.query(
-        `INSERT INTO manuals (module_id, hash, source, original_name)
-         VALUES ($1, $2, 'found', 'm.pdf')`,
+        `INSERT INTO manuals (module_id, hash, source, original_name, analysis_scope)
+         VALUES ($1, $2, 'found', 'm.pdf', TRUE)`,
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
@@ -1351,8 +1416,8 @@ describe('worker', () => {
       const module = await insertModule(db, user.id);
       const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
       await db.query(
-        `INSERT INTO manuals (module_id, hash, source, original_name)
-         VALUES ($1, $2, 'found', 'm.pdf')`,
+        `INSERT INTO manuals (module_id, hash, source, original_name, analysis_scope)
+         VALUES ($1, $2, 'found', 'm.pdf', TRUE)`,
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
@@ -1383,8 +1448,8 @@ describe('worker', () => {
       const module = await insertModule(db, user.id);
       const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
       await db.query(
-        `INSERT INTO manuals (module_id, hash, source, original_name)
-         VALUES ($1, $2, 'found', 'm.pdf')`,
+        `INSERT INTO manuals (module_id, hash, source, original_name, analysis_scope)
+         VALUES ($1, $2, 'found', 'm.pdf', TRUE)`,
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
@@ -1422,8 +1487,8 @@ describe('worker', () => {
       const user = await createUser(db, { username: 'u' });
       const module = await insertModule(db, user.id);
       await db.query(
-        `INSERT INTO manuals (module_id, hash, source, original_name)
-         VALUES ($1, $2, 'found', 'm.pdf')`,
+        `INSERT INTO manuals (module_id, hash, source, original_name, analysis_scope)
+         VALUES ($1, $2, 'found', 'm.pdf', TRUE)`,
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
@@ -1487,8 +1552,8 @@ describe('worker', () => {
       // A module of the user's own, so two users' fixtures can coexist.
       const module = await insertModule(db, user.id, { name: `Maths (${username})` });
       await db.query(
-        `INSERT INTO manuals (module_id, hash, source, original_name)
-         VALUES ($1, $2, 'found', 'm.pdf')`,
+        `INSERT INTO manuals (module_id, hash, source, original_name, analysis_scope)
+         VALUES ($1, $2, 'found', 'm.pdf', TRUE)`,
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);

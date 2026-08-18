@@ -87,7 +87,7 @@ const reanalyzeTitle = computed(() =>
 );
 
 const rebuildTitle =
-  'Runs the manual analysis again with the documents already saved: the manual together with any vendor product pages. Nothing new is downloaded.';
+  'Runs the manual analysis again with the saved documents marked for analysis in Documents below. Nothing new is downloaded.';
 
 async function reanalyzeComponents() {
   reanalyzeNotice.value = '';
@@ -1938,7 +1938,7 @@ watch(() => props.id, () => {
                 <th>File</th>
                 <th>Kind</th>
                 <th>Text</th>
-                <th title="In-scope documents are sent with the manual when the module is (re)analyzed">
+                <th title="Checked documents are the ones submitted when the module is (re)analyzed. The manual arrives checked; uncheck it to leave it out.">
                   Analysis
                 </th>
                 <th></th>
@@ -1973,9 +1973,10 @@ watch(() => props.id, () => {
                   </RouterLink>
                   <span v-else class="muted" :data-test="`no-text-doc-${doc.id}`">not yet</span>
                 </td>
-                <!-- In scope for analysis: sent with the manual on every
-                     (re)analysis. A document somebody shared with you is
-                     theirs to mark, not yours. -->
+                <!-- In scope for analysis: submitted on every (re)analysis.
+                     The manual itself arrives marked and can be unmarked
+                     like anything else. A document somebody shared with you
+                     is theirs to mark, not yours. -->
                 <td>
                   <input
                     type="checkbox"

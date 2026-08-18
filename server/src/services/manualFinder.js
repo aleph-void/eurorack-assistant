@@ -550,6 +550,10 @@ export async function findManualForModule(db, backend, module, manualsDir, deps 
             hash,
             original_name: originalName,
             source: 'found',
+            // The manual arrives marked in scope for analysis like the
+            // vendor pages do (migration 025). Unmarking it on the module
+            // page leaves it out of the next analysis.
+            analysis_scope: true,
           },
           { transaction }
         );

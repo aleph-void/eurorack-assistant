@@ -268,6 +268,9 @@ export async function insertModule(db, userId, fields = {}) {
     rack = DEFAULT_RACK_NAME,
     manual_hash = null,
     manual_text = null,
+    // The finder marks a found manual in scope for analysis; pass false to
+    // model a user who unmarked it.
+    manual_in_scope = true,
     manual_status = manual_hash ? 'found' : 'pending',
     analysis_status = 'pending',
     panel_status = 'pending',
@@ -295,6 +298,7 @@ export async function insertModule(db, userId, fields = {}) {
       user_id: null,
       hash: manual_hash,
       source: 'found',
+      analysis_scope: manual_in_scope,
     });
     if (manual_text) {
       await insertManualText(db, manual.get({ plain: true }), {

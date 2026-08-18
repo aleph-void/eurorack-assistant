@@ -773,22 +773,36 @@ export function createWorker(db, options = {}) {
     return rows.filter((m) => m.user_id === null || (userId && m.user_id === userId));
   }
 
-  // Analyze the manual proper together with every in-scope document. The
-  // prompt flags describe what the set is made of: a rendered product page
-  // standing in for the manual, retailer listings, a build document.
+  // Analyze the in-scope documents: the manual proper — which arrives marked
+  // in scope and leads the set while it stays marked — plus every other
+  // marked document. Unmarking the manual leaves it out like anything else;
+  // the first remaining document then leads. The prompt flags describe what
+  // the set is made of: a rendered product page standing in for the manual,
+  // retailer listings, a build document.
   async function runScopedAnalysis(job, module, manual, backend, progress) {
     const scoped = (await analysisScopeDocuments(module, job.user_id)).filter(
       (m) => m.id !== manual.id
     );
-    const productPage = /_Product_Page\.pdf$/i.test(manual.original_name || '');
-    const hasRetailerPage = scoped.some(
+    const candidates = manual.analysis_scope ? [manual, ...scoped] : scoped;
+    if (candidates.length === 0) {
+      throw new Error(
+        'No documents are marked in scope for analysis — mark the manual ' +
+          '(or another document) on the module page and try again'
+      );
+    }
+    if (!manual.analysis_scope) {
+      progress('the manual is unmarked for analysis and stays out of the set');
+    }
+    const [primary, ...companions] = candidates;
+    const productPage = /_Product_Page\.pdf$/i.test(primary.original_name || '');
+    const hasRetailerPage = companions.some(
       (m) => isRetailerPageName(m.original_name) || isPerfectCircuitDocument(m)
     );
-    const hasBuildDoc = scoped.some(isBuildDocument);
+    const hasBuildDoc = companions.some(isBuildDocument);
     await runManualAnalysis(
       job,
       module,
-      [manual, ...scoped],
+      candidates,
       {
         backend,
         productPage,
@@ -804,8 +818,9 @@ export function createWorker(db, options = {}) {
     const record = await Module.findByPk(job.module_id);
     if (!record) throw new Error(`Module ${job.module_id} no longer exists`);
     const module = record.get({ plain: true });
-    // The shared auto-found manual is what gets analyzed; everything marked
-    // in scope for analysis is submitted alongside it.
+    // Everything marked in scope for analysis is what gets analyzed. The
+    // shared auto-found manual arrives marked and leads the set, but the
+    // user can unmark it like any other document.
     const { manual } = await sharedManualDocuments(module);
     if (!manual) {
       throw new Error(`Module ${module.manufacturer} ${module.name} has no manual to analyze`);
