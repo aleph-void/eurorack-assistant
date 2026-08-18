@@ -41,6 +41,16 @@ const retailerPagesExist = computed(() =>
   )
 );
 
+// Shown as the button's hover tooltip rather than inline text.
+const reanalyzeTitle = computed(() =>
+  retailerPagesExist.value
+    ? 'Retailer product pages already exist for this module (see Documents), so there is nothing new to fetch.'
+    : "Fetches the module's product page from Perfect Circuit, Detroit Modular and Midwest Modular and re-analyzes the components with every page it finds."
+);
+
+const rebuildTitle =
+  'Runs the manual analysis again with the documents already saved: the manual together with any vendor product pages. Nothing new is downloaded.';
+
 async function reanalyzeComponents() {
   reanalyzeNotice.value = '';
   reanalyzeError.value = '';
@@ -1042,46 +1052,27 @@ watch(() => props.id, () => {
     </p>
 
     <div class="row reanalyze-row">
-      <div class="shrink">
-        <button
-          style="margin: 0; white-space: nowrap"
-          :disabled="reanalyzing || retailerPagesExist"
-          data-test="reanalyze-components"
-          @click="reanalyzeComponents"
-        >
-          {{ reanalyzing ? 'Queuing…' : 'Re-analyze components' }}
-        </button>
-      </div>
-      <span class="muted" data-test="reanalyze-hint">
-        <template v-if="retailerPagesExist">
-          Retailer product pages already exist for this module (see Documents), so there is
-          nothing new to fetch.
-        </template>
-        <template v-else>
-          Fetches the module's product page from Perfect Circuit, Detroit Modular and Midwest
-          Modular and re-analyzes the components with every page it finds.
-        </template>
-      </span>
+      <button
+        style="margin: 0; white-space: nowrap"
+        :disabled="reanalyzing || retailerPagesExist"
+        :title="reanalyzeTitle"
+        data-test="reanalyze-components"
+        @click="reanalyzeComponents"
+      >
+        {{ reanalyzing ? 'Queuing…' : 'Re-analyze components' }}
+      </button>
+      <button
+        style="margin: 0; white-space: nowrap"
+        :disabled="rebuilding"
+        :title="rebuildTitle"
+        data-test="rebuild-analysis"
+        @click="rebuildAnalysis"
+      >
+        {{ rebuilding ? 'Queuing…' : 'Rebuild analysis' }}
+      </button>
     </div>
     <p v-if="reanalyzeNotice" class="muted" data-test="reanalyze-notice">{{ reanalyzeNotice }}</p>
     <p v-if="reanalyzeError" class="error" data-test="reanalyze-error">{{ reanalyzeError }}</p>
-
-    <div class="row reanalyze-row">
-      <div class="shrink">
-        <button
-          style="margin: 0; white-space: nowrap"
-          :disabled="rebuilding"
-          data-test="rebuild-analysis"
-          @click="rebuildAnalysis"
-        >
-          {{ rebuilding ? 'Queuing…' : 'Rebuild analysis' }}
-        </button>
-      </div>
-      <span class="muted" data-test="rebuild-hint">
-        Runs the manual analysis again with the documents already saved: the manual together with
-        any vendor product pages. Nothing new is downloaded.
-      </span>
-    </div>
     <p v-if="rebuildNotice" class="muted" data-test="rebuild-notice">{{ rebuildNotice }}</p>
     <p v-if="rebuildError" class="error" data-test="rebuild-error">{{ rebuildError }}</p>
 
