@@ -36,6 +36,9 @@ const TYPE_LABELS = {
   other: 'Other',
 };
 const MANUALLY_EDITABLE_TYPES = ['input_jack', 'output_jack', 'knob', 'toggle'];
+// Which components can be isolated on the panel picture one at a time, so a
+// single marker can be dragged into place without the others in the way.
+const ARRANGEABLE_TYPES = ['input_jack', 'output_jack', 'knob', 'toggle'];
 
 const grouped = computed(() => {
   if (!module.value?.components) return [];
@@ -491,15 +494,15 @@ const componentError = ref('');
 const componentNotice = ref('');
 const addingComponent = ref(false);
 const addingToType = ref(null);
-const arrangedJackId = ref(null);
+const arrangedComponentId = ref(null);
 
-const arrangedJack = computed(() =>
-  (module.value?.components || []).find((c) => c.id === arrangedJackId.value) || null
+const arrangedComponent = computed(() =>
+  (module.value?.components || []).find((c) => c.id === arrangedComponentId.value) || null
 );
 
-async function arrangeJack(c) {
-  if (arrangedJackId.value === c.id) {
-    arrangedJackId.value = null;
+async function arrangeComponent(c) {
+  if (arrangedComponentId.value === c.id) {
+    arrangedComponentId.value = null;
     return;
   }
   componentError.value = '';
@@ -514,14 +517,14 @@ async function arrangeJack(c) {
       });
       if (panel && module.value) module.value = { ...module.value, panel };
     }
-    arrangedJackId.value = c.id;
+    arrangedComponentId.value = c.id;
   } catch (e) {
     componentError.value = e.message;
   }
 }
 
 function showAllPanelComponents() {
-  arrangedJackId.value = null;
+  arrangedComponentId.value = null;
 }
 
 function startEditComponent(c) {
@@ -540,12 +543,8 @@ async function saveComponent(c) {
       group_label: editGroup.value,
       port_kind: editPortKind.value,
     });
-    if (
-      arrangedJackId.value === c.id &&
-      editType.value !== 'input_jack' &&
-      editType.value !== 'output_jack'
-    ) {
-      arrangedJackId.value = null;
+    if (arrangedComponentId.value === c.id && !ARRANGEABLE_TYPES.includes(editType.value)) {
+      arrangedComponentId.value = null;
     }
     editingComponentId.value = null;
     await load();
@@ -609,7 +608,7 @@ async function removeComponent(c) {
   try {
     await api.delete(`/api/modules/${props.id}/components/${c.id}`);
     if (editingComponentId.value === c.id) editingComponentId.value = null;
-    if (arrangedJackId.value === c.id) arrangedJackId.value = null;
+    if (arrangedComponentId.value === c.id) arrangedComponentId.value = null;
     await load();
   } catch (e) {
     componentError.value = e.message;
@@ -932,7 +931,7 @@ onMounted(load);
 watch(() => props.id, () => {
   panelHp.value = '';
   panelHpDirty.value = false;
-  arrangedJackId.value = null;
+  arrangedComponentId.value = null;
   load();
 });
 </script>
@@ -985,12 +984,16 @@ watch(() => props.id, () => {
         <ModulePanel
           v-if="module.panel"
           :panel="module.panel"
-          :only-component-id="arrangedJackId"
+          :only-component-id="arrangedComponentId"
           editable
           @move="movePanelMarker"
         />
-        <div v-if="arrangedJack" class="panel-arrangement-filter" data-test="panel-arrangement-filter">
-          <span>Arranging only <strong>{{ arrangedJack.name }}</strong>.</span>
+        <div
+          v-if="arrangedComponent"
+          class="panel-arrangement-filter"
+          data-test="panel-arrangement-filter"
+        >
+          <span>Arranging only <strong>{{ arrangedComponent.name }}</strong>.</span>
           <button type="button" class="secondary" data-test="panel-show-all" @click="showAllPanelComponents">
             Show all components
           </button>
@@ -1988,14 +1991,14 @@ watch(() => props.id, () => {
                   </div>
                   <div v-else class="component-row-actions">
                     <button
-                      v-if="group.type === 'input_jack' || group.type === 'output_jack'"
+                      v-if="ARRANGEABLE_TYPES.includes(group.type)"
                       type="button"
                       class="secondary"
-                      :class="{ selected: arrangedJackId === c.id }"
-                      :data-test="`arrange-jack-${c.id}`"
-                      @click="arrangeJack(c)"
+                      :class="{ selected: arrangedComponentId === c.id }"
+                      :data-test="`arrange-component-${c.id}`"
+                      @click="arrangeComponent(c)"
                     >
-                      {{ arrangedJackId === c.id ? 'Arranging' : 'Arrange' }}
+                      {{ arrangedComponentId === c.id ? 'Arranging' : 'Arrange' }}
                     </button>
                     <button
                       :data-test="`edit-component-${c.id}`"

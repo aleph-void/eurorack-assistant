@@ -927,7 +927,7 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('.marker').attributes('cy')).toBe(String(0.4 * 560));
   });
 
-  it('shows only the selected input or output jack while arranging the panel', async () => {
+  it('shows only the selected jack, knob or toggle while arranging the panel', async () => {
     const panel = {
       source: 'image',
       url: '/api/panels/abc.png',
@@ -945,21 +945,27 @@ describe('ModuleDetailView', () => {
     await flushPromises();
 
     expect(wrapper.findAll('.marker')).toHaveLength(3);
-    expect(wrapper.find('[data-test="arrange-jack-1"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="arrange-jack-2"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="arrange-jack-3"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="arrange-component-1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="arrange-component-2"]').exists()).toBe(true);
+    // Knobs get the same button, so a single control can be placed on its own.
+    expect(wrapper.find('[data-test="arrange-component-3"]').exists()).toBe(true);
 
-    await wrapper.find('[data-test="arrange-jack-2"]').trigger('click');
+    await wrapper.find('[data-test="arrange-component-3"]').trigger('click');
+    expect(wrapper.findAll('.marker')).toHaveLength(1);
+    expect(wrapper.find('[data-test="panel-marker-3"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="panel-arrangement-filter"]').text()).toContain('Rise');
+
+    await wrapper.find('[data-test="arrange-component-2"]').trigger('click');
     expect(wrapper.findAll('.marker')).toHaveLength(1);
     expect(wrapper.find('[data-test="panel-marker-2"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="panel-marker-1"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="panel-arrangement-filter"]').text()).toContain('EOR');
 
     // The active Arranging button is itself a toggle back to the full panel.
-    await wrapper.find('[data-test="arrange-jack-2"]').trigger('click');
+    await wrapper.find('[data-test="arrange-component-2"]').trigger('click');
     expect(wrapper.findAll('.marker')).toHaveLength(3);
 
-    await wrapper.find('[data-test="arrange-jack-2"]').trigger('click');
+    await wrapper.find('[data-test="arrange-component-2"]').trigger('click');
     expect(wrapper.findAll('.marker')).toHaveLength(1);
     await wrapper.find('[data-test="panel-show-all"]').trigger('click');
     expect(wrapper.findAll('.marker')).toHaveLength(3);
@@ -988,7 +994,7 @@ describe('ModuleDetailView', () => {
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
 
-    await wrapper.find('[data-test="arrange-jack-1"]').trigger('click');
+    await wrapper.find('[data-test="arrange-component-1"]').trigger('click');
     await flushPromises();
 
     expect(api.post).toHaveBeenCalledWith('/api/modules/1/panel/components', { component_id: 1 });
