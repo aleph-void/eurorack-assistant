@@ -33,6 +33,7 @@ import path from 'node:path';
 import { Op } from 'sequelize';
 import { PROVIDERS } from './llm.js';
 import { getConfig, getLlmSettings } from './config.js';
+import { sandboxConfig, prepareDirForSandbox, prepareFileForSandbox } from './sandbox.js';
 
 // ---------------------------------------------------------------------------
 // Encryption at rest
@@ -355,6 +356,11 @@ export function resolveLlmDataDir(env = process.env) {
 
 function ensurePrivateDir(dir) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // When the CLI runs as a separate sandbox user, it still has to read its own
+  // credential home (and, for codex, rewrite the auth.json it rotates), so the
+  // directory is handed across the uid boundary via the shared group. Without a
+  // sandbox this is a no-op and the dir stays 0700.
+  prepareDirForSandbox(dir, sandboxConfig());
   return dir;
 }
 
@@ -365,9 +371,12 @@ function ensurePrivateDir(dir) {
 export async function accountRuntime(db, account, opts = {}) {
   const dataDir = opts.dataDir || resolveLlmDataDir(opts.env || process.env);
   const home = ensurePrivateDir(path.join(dataDir, account.provider, String(account.user_id)));
+  // Under a sandbox the CLI runs as a uid that cannot write the server user's
+  // $HOME, so point HOME at the per-user dir it can write. No effect otherwise.
+  const homeEnv = sandboxConfig(opts.env || process.env) ? { HOME: home } : {};
 
   if (account.provider === 'claude') {
-    const env = { CLAUDE_CONFIG_DIR: home };
+    const env = { CLAUDE_CONFIG_DIR: home, ...homeEnv };
     if (account.kind === 'api_key') {
       env.ANTHROPIC_API_KEY = decryptSecrets(account.credentials, opts).api_key;
     } else if (account.kind === 'token') {
@@ -381,7 +390,11 @@ export async function accountRuntime(db, account, opts = {}) {
   if (account.provider === 'codex') {
     if (account.kind === 'api_key') {
       return {
-        env: { CODEX_HOME: home, OPENAI_API_KEY: decryptSecrets(account.credentials, opts).api_key },
+        env: {
+          CODEX_HOME: home,
+          ...homeEnv,
+          OPENAI_API_KEY: decryptSecrets(account.credentials, opts).api_key,
+        },
         sync: null,
       };
     }
@@ -393,9 +406,12 @@ export async function accountRuntime(db, account, opts = {}) {
     if (!fs.existsSync(file)) {
       const secrets = decryptSecrets(account.credentials, opts);
       fs.writeFileSync(file, JSON.stringify(secrets.auth, null, 2), { mode: 0o600 });
+      // codex (running as the sandbox user) rotates this file in place, so it
+      // needs group read/write when a sandbox is configured.
+      prepareFileForSandbox(file, sandboxConfig(), { writable: true });
     }
     return {
-      env: { CODEX_HOME: home },
+      env: { CODEX_HOME: home, ...homeEnv },
       sync: async () => {
         let auth;
         try {

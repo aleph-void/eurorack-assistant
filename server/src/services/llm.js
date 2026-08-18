@@ -6,6 +6,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import {
+  sandboxConfig,
+  wrapForSandbox,
+  prepareDirForSandbox,
+  prepareFileForSandbox,
+} from './sandbox.js';
 
 export const PROVIDERS = ['claude', 'codex'];
 
@@ -169,7 +175,11 @@ export function takeQuotaExhaustion() {
 // the model reads them — a file called Maths_manual.md says what it is — and
 // only deduplicated when two documents would collide.
 export function stageDocuments(paths = [], { tmpdir = os.tmpdir } = {}) {
+  const sandbox = sandboxConfig();
   const dir = fs.mkdtempSync(path.join(tmpdir(), 'llm-docs-'));
+  // Let the sandbox user into the jail (setgid so the copies below inherit the
+  // shared group). Done before staging so the group is in place on create.
+  prepareDirForSandbox(dir, sandbox);
   const taken = new Set();
   const staged = [];
   for (const source of paths.map((p) => path.resolve(p))) {
@@ -180,6 +190,10 @@ export function stageDocuments(paths = [], { tmpdir = os.tmpdir } = {}) {
     taken.add(name);
     const target = path.join(dir, name);
     try {
+      // A hard link keeps the source's owner and mode, which the sandbox user
+      // may not be able to read; under a sandbox always copy, so the file is
+      // created fresh in the setgid jail and its group/mode can be set.
+      if (sandbox) throw new Error('copy under sandbox');
       fs.linkSync(source, target);
     } catch {
       // Cross-device (the data volume and /tmp usually are), or a filesystem
@@ -192,6 +206,7 @@ export function stageDocuments(paths = [], { tmpdir = os.tmpdir } = {}) {
         throw new Error(`could not give the model ${source}: ${e.message}`);
       }
     }
+    prepareFileForSandbox(target, sandbox);
     staged.push(target);
   }
   return {
@@ -369,10 +384,18 @@ export function runCli(
   { timeoutMs = 600000, cwd = undefined, env = undefined, onQuota = null } = {}
 ) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, {
+    // The child's environment is the allowlisted set only. When a sandbox user
+    // is configured the command is rewritten to run as that user (via sudo),
+    // and that environment is handed across explicitly (env -i) rather than
+    // through spawn — so spawn itself gets only a bare PATH for sudo. Without a
+    // sandbox, spawn carries the environment as before.
+    const sandbox = sandboxConfig();
+    const wanted = childEnv(env || {});
+    const run = wrapForSandbox(cmd, args, wanted, sandbox);
+    const child = spawn(run.cmd, run.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd,
-      env: childEnv(env || {}),
+      env: sandbox ? { PATH: process.env.PATH } : wanted,
     });
     let stdout = '';
     let stderr = '';
@@ -558,12 +581,16 @@ export class CodexBackend {
   // The jail is codex's working root (--cd). It bounds where relative paths
   // land and what the agent is pointed at, but not what a read-only sandbox
   // may open: codex's read-only mode is read-only about writing, not about
-  // reach. Real containment for codex would need a container per job.
+  // reach. The filesystem is the backstop for that reach — with LLM_SANDBOX_USER
+  // set, runCli runs codex as a separate uid that owns none of the server's
+  // secrets (services/sandbox.js), so a read of /data/keys is denied by the OS
+  // regardless of what the sandbox flag allows.
   async _exec(prompt, extraArgs = [], { cwd = undefined } = {}) {
-    const outPath = path.join(
-      fs.mkdtempSync(path.join(this.tmpdir(), 'codex-')),
-      'answer.md'
-    );
+    // The agent (possibly a different uid) writes its answer here, so the
+    // directory has to be reachable across the uid boundary.
+    const outDir = fs.mkdtempSync(path.join(this.tmpdir(), 'codex-'));
+    prepareDirForSandbox(outDir);
+    const outPath = path.join(outDir, 'answer.md');
     try {
       const args = [
         'exec',

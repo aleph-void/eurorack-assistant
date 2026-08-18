@@ -8,6 +8,8 @@ import { createBus } from './events.js';
 import { attachWebSocketServer } from './ws.js';
 import { createDeviceHub } from './deviceHub.js';
 import { pruneDeviceAuth } from './services/deviceAuth.js';
+import { resolveLlmDataDir } from './services/llmAccounts.js';
+import { sandboxConfig, prepareDirForSandbox } from './services/sandbox.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const MANUALS_DIR = process.env.MANUALS_DIR || '/data/manuals';
@@ -24,6 +26,18 @@ async function main() {
   fs.mkdirSync(EXPORTS_DIR, { recursive: true });
   fs.mkdirSync(CAPTURES_DIR, { recursive: true });
   fs.mkdirSync(PANELS_DIR, { recursive: true });
+
+  // When the agent sandbox is enabled, the CLI runs as a separate uid that has
+  // to traverse the LLM data root to reach its own credential dir. A volume
+  // created before this feature existed is still node-only 0700 (Docker only
+  // stamps image ownership onto a fresh volume), so open the root to the shared
+  // group here — on every start, so an upgrade fixes itself. No-op otherwise.
+  const sandbox = sandboxConfig();
+  if (sandbox) {
+    const llmDir = resolveLlmDataDir();
+    fs.mkdirSync(llmDir, { recursive: true });
+    prepareDirForSandbox(llmDir, sandbox);
+  }
 
   const bus = createBus();
   // Connected oscilloscopes. The hub is shared by the HTTP routes (which ask

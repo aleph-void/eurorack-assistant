@@ -694,6 +694,98 @@ export function moduleRoutes(
   // produce, so importing the same manufacturer + name again — by you or by
   // another user — picks the finished record back up instead of rebuilding
   // it. Your questions and notes about it stay too, and come back with it.
+  // Removing a module is a disassociation, never a deletion of the shared
+  // record: the module and its found manual are hardware facts that belong to
+  // everyone who has it racked, so they stay. What goes is this user's tie to
+  // it (the rack membership) and — once the module is in none of their racks —
+  // the private data they built around it: their notes, their questions and
+  // answers, and any manual they uploaded themselves. Another user's racks,
+  // notes, questions and uploads are untouched.
+  async function cleanupUserModuleData(userId, moduleId, transaction) {
+    const {
+      Question,
+      QuestionModule,
+      QuestionComponent,
+    } = db.models;
+
+    const componentIds = (
+      await ModuleComponent.findAll({
+        where: { module_id: moduleId },
+        attributes: ['id'],
+        transaction,
+      })
+    ).map((c) => c.id);
+
+    // Resolve "this user's records that reference the module (directly, or via
+    // one of its components)" by intersecting in JS — the OR that would express
+    // it in one query is exactly what pg-mem mishandles (see helpers.js).
+    const ownNoteIds = new Set(
+      (await Note.findAll({ where: { user_id: userId }, attributes: ['id'], transaction })).map(
+        (n) => n.id
+      )
+    );
+    const linkedNoteIds = new Set(
+      (await NoteModule.findAll({ where: { module_id: moduleId }, transaction })).map(
+        (l) => l.note_id
+      )
+    );
+    if (componentIds.length) {
+      for (const l of await NoteComponent.findAll({
+        where: { component_id: componentIds },
+        transaction,
+      })) {
+        linkedNoteIds.add(l.note_id);
+      }
+    }
+    const noteIds = [...linkedNoteIds].filter((id) => ownNoteIds.has(id));
+
+    const ownQuestionIds = new Set(
+      (await Question.findAll({ where: { user_id: userId }, attributes: ['id'], transaction })).map(
+        (q) => q.id
+      )
+    );
+    const linkedQuestionIds = new Set(
+      (await QuestionModule.findAll({ where: { module_id: moduleId }, transaction })).map(
+        (l) => l.question_id
+      )
+    );
+    if (componentIds.length) {
+      for (const l of await QuestionComponent.findAll({
+        where: { component_id: componentIds },
+        transaction,
+      })) {
+        linkedQuestionIds.add(l.question_id);
+      }
+    }
+    const questionIds = [...linkedQuestionIds].filter((id) => ownQuestionIds.has(id));
+
+    // The user's own uploaded manuals for this module (never the shared
+    // found manual, which has a null user_id).
+    const manuals = await Manual.findAll({
+      where: { module_id: moduleId, user_id: userId },
+      transaction,
+    });
+
+    // Deleting a note/question/manual row cascades its link and document rows
+    // (FK ON DELETE CASCADE); the share rows that point at it do not, so they
+    // are cleared explicitly, exactly as the dedicated delete routes do.
+    for (const id of noteIds) {
+      await Note.destroy({ where: { id }, transaction });
+      await removeShares(db, 'note', id, { transaction });
+    }
+    for (const id of questionIds) {
+      await Question.destroy({ where: { id }, transaction });
+      await removeShares(db, 'question', id, { transaction });
+    }
+    const hashes = [];
+    for (const manual of manuals) {
+      await manual.destroy({ transaction });
+      await removeShares(db, 'document', manual.id, { transaction });
+      hashes.push(manual.hash);
+    }
+    return { hashes, counts: { notes: noteIds.length, questions: questionIds.length, manuals: manuals.length } };
+  }
+
   router.delete('/:id', async (req, res, next) => {
     try {
       const moduleId = Number(req.params.id);
@@ -707,7 +799,30 @@ export function moduleRoutes(
               where: { rack_id: racks.map((r) => r.id), module_id: moduleId },
             });
       if (deleted === 0) return res.status(404).json({ error: 'Module not found' });
-      res.json({ ok: true });
+
+      // Only tear down the private data once the module has left every one of
+      // the user's racks — removing it from one rack while it sits in another
+      // keeps the notes and questions relevant.
+      const ownRackIds = (
+        await Rack.findAll({ where: { user_id: req.user.id }, attributes: ['id'] })
+      ).map((r) => r.id);
+      const stillRacked = ownRackIds.length
+        ? await RackModule.count({ where: { module_id: moduleId, rack_id: ownRackIds } })
+        : 0;
+
+      let cleanup = null;
+      if (stillRacked === 0) {
+        cleanup = await db.sequelize.transaction((transaction) =>
+          cleanupUserModuleData(req.user.id, moduleId, transaction)
+        );
+        // Remove uploaded PDFs whose last reference just went away. The file is
+        // shared by every manual row with the same hash, so re-count first.
+        for (const hash of cleanup.hashes) {
+          const remaining = await Manual.count({ where: { hash } });
+          if (remaining === 0) fs.rmSync(manualPath(manualsDir, hash), { force: true });
+        }
+      }
+      res.json({ ok: true, ...(cleanup ? { removed: cleanup.counts } : {}) });
     } catch (e) {
       next(e);
     }

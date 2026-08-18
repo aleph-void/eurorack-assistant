@@ -295,6 +295,94 @@ describe('modules API', () => {
     ).toBe(404);
   });
 
+  it('cleans up only the leaving user\'s own notes, questions and uploads, keeping the shared module and manual', async () => {
+    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { rows: users } = await db.query('SELECT id, username FROM users');
+    const alice = users.find((u) => u.username === 'alice');
+    const admin = users.find((u) => u.username === 'admin');
+
+    // A module alice racks, with a shared found manual and an upload of hers.
+    const module = await insertModule(db, alice.id, { manual_hash: PDF_HASH });
+    await db.models.Manual.create({
+      module_id: module.id,
+      user_id: alice.id,
+      hash: 'a'.repeat(64),
+      name: 'my upload',
+      source: 'upload',
+    });
+    const aliceNote = (
+      await request(app)
+        .post('/api/notes')
+        .set('Cookie', aliceCookie)
+        .send({ title: 'mine', body: 'about maths', module_ids: [module.id] })
+    ).body;
+    const { rows: aliceQ } = await db.query(
+      `INSERT INTO questions (user_id, prompt, status) VALUES ($1, 'q', 'answered') RETURNING id`,
+      [alice.id]
+    );
+    await db.query('INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)', [
+      aliceQ[0].id,
+      module.id,
+    ]);
+
+    // The same module is in admin's rack, with their own note about it.
+    await mapModule(db, admin.id, module.id);
+    const adminNote = (
+      await request(app)
+        .post('/api/notes')
+        .set('Cookie', adminCookie)
+        .send({ title: 'theirs', body: 'also about maths', module_ids: [module.id] })
+    ).body;
+
+    // Alice removes the module from her rack.
+    const del = await request(app).delete(`/api/modules/${module.id}`).set('Cookie', aliceCookie);
+    expect(del.status).toBe(200);
+    expect(del.body.removed).toMatchObject({ notes: 1, questions: 1, manuals: 1 });
+
+    // The shared module and its found manual stay.
+    expect((await db.query('SELECT 1 FROM modules WHERE id = $1', [module.id])).rows).toHaveLength(1);
+    expect(
+      (await db.query('SELECT 1 FROM manuals WHERE module_id = $1 AND user_id IS NULL', [module.id]))
+        .rows
+    ).toHaveLength(1);
+
+    // Alice's own note, question and upload are gone.
+    expect((await db.query('SELECT 1 FROM notes WHERE id = $1', [aliceNote.id])).rows).toHaveLength(0);
+    expect((await db.query('SELECT 1 FROM questions WHERE id = $1', [aliceQ[0].id])).rows).toHaveLength(0);
+    expect(
+      (await db.query('SELECT 1 FROM manuals WHERE module_id = $1 AND user_id = $2', [module.id, alice.id])).rows
+    ).toHaveLength(0);
+
+    // Admin's note about the same module is untouched.
+    expect((await db.query('SELECT 1 FROM notes WHERE id = $1', [adminNote.id])).rows).toHaveLength(1);
+  });
+
+  it('keeps the private data when the module is still in another of your racks', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const alice = users[0];
+    const module = await insertModule(db, alice.id);
+    await mapModule(db, alice.id, module.id, { rack: 'travel case' });
+    const note = (
+      await request(app)
+        .post('/api/notes')
+        .set('Cookie', aliceCookie)
+        .send({ title: 'keep', body: 'x', module_ids: [module.id] })
+    ).body;
+
+    const { rows: racks } = await db.query(
+      "SELECT id FROM racks WHERE user_id = $1 AND name = 'travel case'",
+      [alice.id]
+    );
+    // Remove from just the travel case; it is still in the main rack.
+    const del = await request(app)
+      .delete(`/api/modules/${module.id}?rack_id=${racks[0].id}`)
+      .set('Cookie', aliceCookie);
+    expect(del.status).toBe(200);
+    expect(del.body.removed).toBeUndefined();
+    expect((await db.query('SELECT 1 FROM notes WHERE id = $1', [note.id])).rows).toHaveLength(1);
+  });
+
   it('requires authentication', async () => {
     const { app } = await createTestApp();
     expect((await request(app).get('/api/modules')).status).toBe(401);
