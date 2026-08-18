@@ -352,6 +352,27 @@ describe('/api/llm', () => {
     expect(res.body.effective_model).toBe('gpt-5.1');
   });
 
+  it('shows saved settings on a fresh request, not just in the save response', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    await request(app)
+      .put('/api/llm/settings')
+      .set('Cookie', aliceCookie)
+      .send({
+        llm_provider: 'claude',
+        llm_model: 'claude-opus-5',
+        llm_models: { analyze_manual: 'claude-fable-5' },
+      });
+
+    // A new GET goes through getSessionUser again — the settings must survive
+    // the round trip, not only ride along on the PUT's req.user.
+    const res = await request(app).get('/api/llm').set('Cookie', aliceCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.llm_provider).toBe('claude');
+    expect(res.body.llm_model).toBe('claude-opus-5');
+    expect(res.body.llm_models).toEqual({ analyze_manual: 'claude-fable-5' });
+    expect(res.body.effective_model).toBe('claude-opus-5');
+  });
+
   it('walks the claude authorization flow', async () => {
     const fetchImpl = tokenEndpoint([
       { json: { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 } },

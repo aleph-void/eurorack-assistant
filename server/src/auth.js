@@ -128,9 +128,11 @@ export async function getSessionUser(db, token) {
     return null;
   }
   // token_budget rides along because the budget guard runs on the request
-  // path and would otherwise re-read the user on every call it protects.
-  const { id, username, is_admin, must_change_password, token_budget } = session.User;
-  return { id, username, is_admin, must_change_password, token_budget };
+  // path and would otherwise re-read the user on every call it protects; the
+  // llm_* columns likewise, for the LLM settings route and requireLlmAccount.
+  const { id, username, is_admin, must_change_password, token_budget, llm_provider, llm_model, llm_models } =
+    session.User;
+  return { id, username, is_admin, must_change_password, token_budget, llm_provider, llm_model, llm_models };
 }
 
 // A user flagged must_change_password is locked out of everything except the
