@@ -10,6 +10,7 @@
 
 import { computed, ref } from 'vue';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 
 const props = defineProps({
   // 'note' | 'patch' | 'question' | 'rack' | 'document'
@@ -97,6 +98,15 @@ async function save() {
 }
 
 async function stopSharing() {
+  const ok = await dialog.confirm({
+    title: 'Stop sharing',
+    message:
+      `Stop sharing ${props.label || `this ${props.type}`}? Everyone it was shared with ` +
+      'loses access to it.',
+    confirmLabel: 'Stop sharing',
+    danger: true,
+  });
+  if (!ok) return;
   error.value = '';
   saving.value = true;
   try {

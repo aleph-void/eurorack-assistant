@@ -186,6 +186,62 @@ describe('ModulesView', () => {
     expect(travel.attributes('open')).toBeUndefined();
   });
 
+  // Typing narrows the visible rows by manufacturer or module name, and empties
+  // the racks that no longer have anything to show.
+  it('filters the visible modules by name or manufacturer', async () => {
+    mockLists([
+      {
+        id: 1,
+        manufacturer: 'Make Noise',
+        name: 'Maths',
+        quantity: 1,
+        racks: [{ id: 1, name: 'main rack', quantity: 1 }],
+        manual_status: 'found',
+        analysis_status: 'complete',
+      },
+      {
+        id: 2,
+        manufacturer: 'ALM',
+        name: 'Pamela New Workout',
+        quantity: 1,
+        racks: [{ id: 2, name: 'travel case', quantity: 1 }],
+        manual_status: 'pending',
+        analysis_status: 'pending',
+      },
+    ]);
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+
+    // By module name.
+    await wrapper.find('[data-test="module-filter"]').setValue('maths');
+    expect(wrapper.find('[data-test="module-1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="module-2"]').exists()).toBe(false);
+    // The rack left with nothing drops out rather than showing as empty.
+    expect(wrapper.find('[data-test="rack-group-2"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="filter-count"]').text()).toContain('1 of 2 modules');
+
+    // By manufacturer, case-insensitively.
+    await wrapper.find('[data-test="module-filter"]').setValue('alm');
+    expect(wrapper.find('[data-test="module-1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="module-2"]').exists()).toBe(true);
+
+    // Several words all have to match, across the two fields.
+    await wrapper.find('[data-test="module-filter"]').setValue('make maths');
+    expect(wrapper.find('[data-test="module-1"]').exists()).toBe(true);
+
+    // Nothing matching says so instead of showing empty racks.
+    await wrapper.find('[data-test="module-filter"]').setValue('erica');
+    expect(wrapper.find('[data-test="no-matches"]').exists()).toBe(true);
+
+    // And clearing puts everything back.
+    await wrapper.find('[data-test="clear-filter"]').trigger('click');
+    expect(wrapper.find('[data-test="module-1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="module-2"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="filter-count"]').exists()).toBe(false);
+    // Filtering is local — it does not re-ask the server.
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
   it('narrows the list to the selected rack', async () => {
     mockLists([
       { id: 1, manufacturer: 'ALM', name: 'Pam', quantity: 1, racks: [], manual_status: 'pending', analysis_status: 'pending' },
@@ -487,6 +543,8 @@ describe('ModuleDetailView', () => {
   });
 
   it('records and removes routing switch sections', async () => {
+    // The removals below now go through the confirm modal.
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     // A switch section needs a common plus two steps, so this module gets a
     // second input jack on top of the shared fixture.
     api.get.mockResolvedValue({
@@ -552,6 +610,8 @@ describe('ModuleDetailView', () => {
   });
 
   it('lists routes, shows what feeds an output, and removes routes', async () => {
+    // The removals below now go through the confirm modal.
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     api.get.mockResolvedValue({
       ...moduleResponse,
       routes: [{ id: 7, input_component_id: 1, output_component_id: 2, description: 'audio path' }],
@@ -650,6 +710,8 @@ describe('ModuleDetailView', () => {
   });
 
   it('deletes a normalization', async () => {
+    // The removals below now go through the confirm modal.
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     api.get.mockResolvedValue({
       ...moduleResponse,
       normalizations: [
@@ -672,6 +734,8 @@ describe('ModuleDetailView', () => {
   });
 
   it('lists documents; only own uploads are removable', async () => {
+    // The removals below now go through the confirm modal.
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     api.get.mockResolvedValue(moduleResponse);
     api.delete.mockResolvedValue({ ok: true });
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
@@ -1284,6 +1348,56 @@ describe('QuestionDetailView', () => {
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/questions/1');
     expect(routerPush).toHaveBeenCalledWith('/questions');
+    wrapper.unmount();
+  });
+
+  it('lists the in-scope modules first and filters both lists by name or manufacturer', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path === '/api/questions/1')
+        return { id: 1, prompt: 'How?', status: 'scoped', modules: [], components: [] };
+      if (path === '/api/questions/1/options')
+        return {
+          modules: [
+            { id: 3, manufacturer: '2hp', name: 'Pluck', in_scope: false },
+            { id: 4, manufacturer: 'Make Noise', name: 'Maths', in_scope: true },
+            { id: 5, manufacturer: 'Mutable', name: 'Plaits', in_scope: false },
+          ],
+          components: [],
+          manuals: [{ id: 11, module_id: 4, name: 'manual', original_name: null, source: 'found' }],
+          answers: [],
+          notes: [],
+        };
+      throw new Error(`unexpected ${path}`);
+    });
+
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    // The suggested module comes first even though it is second in the data.
+    const labels = () =>
+      wrapper.findAll('[data-test="module-option"]').map((b) => b.element.closest('label').textContent.trim());
+    expect(labels()[0]).toContain('Maths');
+
+    // Unticking it drops it out of the top list, back among the others.
+    const boxes = wrapper.findAll('[data-test="module-option"]');
+    await boxes[0].setValue(false);
+    expect(labels()[0]).toContain('Pluck');
+    expect(wrapper.find('[data-test="review"]').text()).toContain('No modules selected yet.');
+
+    // Filtering narrows the list; every word has to match somewhere.
+    await wrapper.find('[data-test="module-filter"]').setValue('mutable pl');
+    expect(labels()).toHaveLength(1);
+    expect(labels()[0]).toContain('Plaits');
+
+    // A selected module hidden by the filter is still counted as selected.
+    await wrapper.findAll('[data-test="module-option"]')[0].setValue(true);
+    await wrapper.find('[data-test="module-filter"]').setValue('2hp');
+    expect(labels()).toHaveLength(1);
+    expect(labels()[0]).toContain('Pluck');
+    expect(wrapper.find('[data-test="scope-filter-hidden"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="clear-module-filter"]').trigger('click');
+    expect(labels()).toHaveLength(3);
     wrapper.unmount();
   });
 
@@ -2305,6 +2419,35 @@ describe('PatchDetailView', () => {
     ],
   };
 
+  // The row-level removals ask before they act — except unplugging a cable,
+  // which is the ordinary motion of patching and stays a single click.
+  it('asks before removing, but unplugs a cable without a question', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.delete.mockResolvedValue({ ok: true });
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-cable-21"]').trigger('click');
+    await flushPromises();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(api.delete).toHaveBeenCalledWith('/api/patches/7/cables/21');
+
+    // Everything else on the page is gated, and a declined question acts on
+    // nothing.
+    api.delete.mockClear();
+    await wrapper.find('[data-test="delete-setting-31"]').trigger('click');
+    await wrapper.find('[data-test="remove-instance-12"]').trigger('click');
+    await flushPromises();
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(api.delete).not.toHaveBeenCalled();
+
+    confirm.mockResolvedValue(true);
+    await wrapper.find('[data-test="delete-setting-31"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/patches/7/settings/31');
+  });
+
   it('renders the snapshot, cables and settings', async () => {
     api.get.mockResolvedValue(patchResponse);
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
@@ -2799,6 +2942,8 @@ describe('ModuleDetailView component values', () => {
   });
 
   it('adds and removes a value', async () => {
+    // The removals below now go through the confirm modal.
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     api.get.mockResolvedValue(moduleResponse);
     api.post.mockResolvedValue({ id: 9 });
     api.delete.mockResolvedValue({ ok: true });
@@ -3014,6 +3159,8 @@ describe('ModuleDetailView signal-path detail', () => {
   });
 
   it('adds a stereo pair and an expander link', async () => {
+    // The removals below now go through the confirm modal.
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     api.get.mockResolvedValue(conditionalModule);
     api.post.mockResolvedValue({ id: 62 });
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });

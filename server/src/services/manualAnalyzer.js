@@ -46,11 +46,29 @@ export const PORT_KINDS = [
 // jack, or by one leaving it (an output normalled to another output).
 export const BREAK_MODES = ['cable_in', 'cable_out'];
 
-const PRODUCT_PAGE_JACK_GUIDANCE = `
-The attached PDFs are rendered PRODUCT PAGES, not a user manual. One is the
+// The attached set is a rendered product page, plus — when one was found — a
+// second document about the same panel. Which kind of second document it is
+// changes how it should be read: a retailer's listing is more product copy,
+// while an open-source module's build document is assembly instructions whose
+// panel information is reliable but scattered through wiring and BOM detail.
+const PRODUCT_PAGE_JACK_GUIDANCE = ({ buildDoc = false } = {}) => `
+${
+  buildDoc
+    ? `No user manual was attached. One PDF is a rendered PRODUCT PAGE — the
+maker's or best available page for the module. The other is the module's
+BUILD DOCUMENT: the assembly guide an open-source or DIY module publishes
+instead of a manual. Read the build document for the panel it describes —
+its jack and control labels, wiring and pinout tables, panel drawings and
+PCB silkscreen are authoritative for what is on the front panel and which
+way a signal runs. Ignore everything in it that is only about building the
+module: the bill of materials, component values, resistor colour codes,
+soldering order and calibration trimmers are not panel components, and a
+part on the PCB is not a jack.`
+    : `The attached PDFs are rendered PRODUCT PAGES, not a user manual. One is the
 maker's (or best available) page and the other, when available, is Perfect
-Circuit's page. Reconcile evidence from both and do not duplicate a physical
-jack merely because both pages mention it. Product-page prose often names
+Circuit's page.`
+} Reconcile evidence from both and do not duplicate a physical
+jack merely because both documents mention it. Product-page prose often names
 features without giving a numbered panel tour. For JACKS ONLY, also inspect
 every front-panel image, diagram, caption, specification and signal-flow
 statement in either PDF and infer the most likely inventory and direction:
@@ -76,9 +94,13 @@ For knobs, buttons, switches and every other non-jack component, keep the
 normal rule below: list it only when the document describes it.
 `;
 
-export const ANALYSIS_TEMPLATE = (manufacturer, name, { productPage = false } = {}) => `You are a eurorack modular synthesizer expert. Analyze the attached ${productPage ? 'rendered product page' : 'user manual'}
+export const ANALYSIS_TEMPLATE = (
+  manufacturer,
+  name,
+  { productPage = false, buildDoc = false } = {}
+) => `You are a eurorack modular synthesizer expert. Analyze the attached ${productPage ? 'rendered product page' : 'user manual'}
 for the module "${manufacturer} ${name}" and produce a structured description.
-${productPage ? PRODUCT_PAGE_JACK_GUIDANCE : ''}
+${productPage ? PRODUCT_PAGE_JACK_GUIDANCE({ buildDoc }) : ''}
 
 Many manuals cover more than one panel — a host module together with its
 expander, or a family of related modules. This description is for
@@ -745,10 +767,10 @@ export async function analyzeManualForModule(
   backend,
   module,
   manualPaths,
-  { productPage = false } = {}
+  { productPage = false, buildDoc = false } = {}
 ) {
   const paths = Array.isArray(manualPaths) ? manualPaths : [manualPaths];
-  const prompt = ANALYSIS_TEMPLATE(module.manufacturer, module.name, { productPage });
+  const prompt = ANALYSIS_TEMPLATE(module.manufacturer, module.name, { productPage, buildDoc });
   const response =
     paths.length > 1
       ? await backend.analyzeDocuments(prompt, paths)

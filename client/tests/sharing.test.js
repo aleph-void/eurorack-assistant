@@ -20,6 +20,7 @@ vi.mock('vue-router', async (importOriginal) => {
 });
 
 import { api } from '../src/api.js';
+import { dialog } from '../src/dialog.js';
 import ShareButton from '../src/components/ShareButton.vue';
 import SharedView from '../src/views/SharedView.vue';
 import SharedItemView from '../src/views/SharedItemView.vue';
@@ -104,6 +105,8 @@ describe('ShareButton', () => {
       )
     );
     api.delete.mockResolvedValue(shareState());
+    // Taking access away is destructive, so it goes through the modal first.
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
 
     const wrapper = mountButton();
     expect(wrapper.find('[data-test="share-note-7"]').text()).toBe('Share');
@@ -113,8 +116,19 @@ describe('ShareButton', () => {
 
     await wrapper.find('[data-test="share-stop"]').trigger('click');
     await flushPromises();
+    expect(confirm).toHaveBeenCalled();
     expect(api.delete).toHaveBeenCalledWith('/api/shares/note/7');
     expect(wrapper.find('[data-test="share-note-7"]').text()).toBe('Share');
+
+    // Declining leaves the share alone.
+    confirm.mockResolvedValue(false);
+    api.delete.mockClear();
+    await wrapper.find('[data-test="share-note-7"]').trigger('click');
+    await flushPromises();
+    await wrapper.find('[data-test="share-stop"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).not.toHaveBeenCalled();
+    confirm.mockRestore();
   });
 
   it('keeps the dialog open and says why when saving fails', async () => {

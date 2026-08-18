@@ -510,6 +510,156 @@ describe('worker', () => {
     expect(backend.calls.analyzeDocuments[0][1]).toHaveLength(2);
   });
 
+  // No Perfect Circuit listing for an open-source module, so the build document
+  // the finder downloaded is what goes in beside the product page.
+  it('analyzes the build document alongside a product page when there is no Perfect Circuit page', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, {
+      manufacturer: 'Music Thing',
+      name: 'Radio Music',
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+    });
+    await db.models.Manual.update(
+      { original_name: 'Music_Thing_Radio_Music_Product_Page.pdf' },
+      { where: { module_id: module.id } }
+    );
+    const buildHash = 'e'.repeat(64);
+    fs.writeFileSync(path.join(manualsDir, `${buildHash}.pdf`), PDF_BYTES);
+    await db.models.Manual.create({
+      module_id: module.id,
+      user_id: null,
+      hash: buildHash,
+      original_name: 'Music_Thing_Radio_Music_Build_Document.pdf',
+      source: 'found',
+    });
+    await enqueue(db, 'analyze_manual', { module_id: module.id });
+    const backend = fakeBackend({
+      analyzeDocument:
+        '{"summary":"A sample player.","components":[{"type":"output_jack","name":"OUT"}]}',
+    });
+
+    expect((await makeWorker(db, backend).tick()).status).toBe('complete');
+
+    const [prompt, submitted] = backend.calls.analyzeDocuments[0];
+    expect(submitted).toEqual([
+      path.join(manualsDir, `${PDF_HASH}.pdf`),
+      path.join(manualsDir, `${buildHash}.pdf`),
+    ]);
+    // The prompt says what the second document is, so the BOM and the
+    // soldering order are not read as panel components.
+    expect(prompt).toContain('BUILD DOCUMENT');
+    expect(prompt).toContain('part on the PCB is not a jack');
+    expect(prompt).not.toContain("Perfect\nCircuit's page");
+  });
+
+  // Whatever the uploader called it, a build document they supplied beats one
+  // nobody found.
+  it("uses the requesting user's uploaded build document when nothing was found", async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const other = await createUser(db, { username: 'other' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, {
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+    });
+    await db.models.Manual.update(
+      { original_name: 'Make_Noise_Maths_Product_Page.pdf' },
+      { where: { module_id: module.id, user_id: null } }
+    );
+    const ownHash = 'a'.repeat(64);
+    const otherHash = 'b'.repeat(64);
+    for (const hash of [ownHash, otherHash]) {
+      fs.writeFileSync(path.join(manualsDir, `${hash}.pdf`), PDF_BYTES);
+    }
+    await db.models.Manual.bulkCreate([
+      {
+        module_id: module.id,
+        user_id: other.id,
+        hash: otherHash,
+        name: 'Build Guide',
+        original_name: 'private-build.pdf',
+        source: 'upload',
+      },
+      {
+        module_id: module.id,
+        user_id: user.id,
+        hash: ownHash,
+        name: 'Assembly instructions',
+        original_name: 'maths-kit.pdf',
+        source: 'upload',
+      },
+    ]);
+    await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
+    const backend = fakeBackend({
+      analyzeDocument:
+        '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
+    });
+
+    expect((await makeWorker(db, backend).tick()).status).toBe('complete');
+
+    const [prompt, submitted] = backend.calls.analyzeDocuments[0];
+    expect(submitted).toEqual([
+      path.join(manualsDir, `${PDF_HASH}.pdf`),
+      path.join(manualsDir, `${ownHash}.pdf`),
+    ]);
+    expect(prompt).toContain('BUILD DOCUMENT');
+  });
+
+  // Perfect Circuit's listing reads jack by jack, so it stays the first choice
+  // when the module has both.
+  it('prefers the Perfect Circuit page over a build document', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, {
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+    });
+    await db.models.Manual.update(
+      { original_name: 'Make_Noise_Maths_Product_Page.pdf' },
+      { where: { module_id: module.id } }
+    );
+    const buildHash = 'e'.repeat(64);
+    const pcHash = 'f'.repeat(64);
+    for (const hash of [buildHash, pcHash]) {
+      fs.writeFileSync(path.join(manualsDir, `${hash}.pdf`), PDF_BYTES);
+    }
+    await db.models.Manual.bulkCreate([
+      {
+        module_id: module.id,
+        user_id: null,
+        hash: buildHash,
+        original_name: 'Make_Noise_Maths_Build_Document.pdf',
+        source: 'found',
+      },
+      {
+        module_id: module.id,
+        user_id: null,
+        hash: pcHash,
+        original_name: 'Make_Noise_Maths_Perfect_Circuit_Product_Page.pdf',
+        source: 'found',
+      },
+    ]);
+    await enqueue(db, 'analyze_manual', { module_id: module.id });
+    const backend = fakeBackend({
+      analyzeDocument:
+        '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
+    });
+
+    expect((await makeWorker(db, backend).tick()).status).toBe('complete');
+
+    const [prompt, submitted] = backend.calls.analyzeDocuments[0];
+    expect(submitted).toEqual([
+      path.join(manualsDir, `${PDF_HASH}.pdf`),
+      path.join(manualsDir, `${pcHash}.pdf`),
+    ]);
+    expect(prompt).not.toContain('BUILD DOCUMENT');
+  });
+
   it('includes only the requesting user\'s uploaded Perfect Circuit document with a product page', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });

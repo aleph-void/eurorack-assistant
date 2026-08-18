@@ -39,7 +39,11 @@ import {
   fetchModulargridRack,
   importModules,
 } from '../services/importer.js';
-import { findManualForModule } from '../services/manualFinder.js';
+import {
+  findManualForModule,
+  BUILD_DOCUMENT_SUFFIX,
+  PERFECT_CIRCUIT_SUFFIX,
+} from '../services/manualFinder.js';
 import { analyzeManualForModule } from '../services/manualAnalyzer.js';
 import { extractManualDocument } from '../services/manualText.js';
 import { buildPanelForModule } from '../services/panelImage.js';
@@ -83,6 +87,18 @@ export function isPerfectCircuitDocument(document) {
   const label = `${document?.name || ''} ${document?.original_name || ''}`;
   return /(?:^|[^a-z])perfect[\s_-]*circuit(?:[^a-z]|$)/i.test(label);
 }
+
+// The same, for the build document an open-source module publishes in place
+// of a manual — whatever the uploader called it ("build doc", "Build Guide",
+// "assembly instructions", "BOM and build").
+export function isBuildDocument(document) {
+  const label = `${document?.name || ''} ${document?.original_name || ''}`;
+  return /(?:^|[^a-z])(build|assembly)(?:[^a-z]|$)/i.test(label);
+}
+
+// The names findManualForModule gives the two kinds of companion it fetches.
+const isFoundCompanion = (document, suffix) =>
+  new RegExp(`_${suffix}\\.pdf$`, 'i').test(document?.original_name || '');
 
 // Timestamp of the last sign of life from whoever holds a running job. Rows
 // claimed before leases existed have no heartbeat, so fall back to updated_at.
@@ -630,28 +646,40 @@ export function createWorker(db, options = {}) {
       where: { module_id: module.id, user_id: null },
       order: [['id', 'ASC']],
     });
+    // A companion is never the document being analyzed; it is only ever
+    // submitted alongside one.
     const manual = manuals.find(
-      (m) => !/_Perfect_Circuit_Product_Page\.pdf$/i.test(m.original_name || '')
+      (m) =>
+        !isFoundCompanion(m, PERFECT_CIRCUIT_SUFFIX) && !isFoundCompanion(m, BUILD_DOCUMENT_SUFFIX)
     );
     if (!manual) {
       throw new Error(`Module ${module.manufacturer} ${module.name} has no manual to analyze`);
     }
     const productPage = /_Product_Page\.pdf$/i.test(manual.original_name || '');
-    const suppliedPerfectCircuit =
+    // A rendered product page rarely tours the panel by itself, so it is
+    // analyzed together with a second document: Perfect Circuit's listing,
+    // which reads jack by jack, or — for the open-source modules Perfect
+    // Circuit does not stock — the build document that names the same panel.
+    // One the user uploaded outranks one the finder fetched.
+    const uploads =
       productPage && job.user_id
-        ? (
-            await Manual.findAll({
-              where: { module_id: module.id, user_id: job.user_id, source: 'upload' },
-              order: [['id', 'DESC']],
-            })
-          ).find(isPerfectCircuitDocument)
-        : null;
-    const foundPerfectCircuit = manuals.find((m) =>
-      /_Perfect_Circuit_Product_Page\.pdf$/i.test(m.original_name || '')
-    );
-    const candidates = productPage
-      ? [manual, suppliedPerfectCircuit || foundPerfectCircuit].filter(Boolean)
-      : [manual];
+        ? await Manual.findAll({
+            where: { module_id: module.id, user_id: job.user_id, source: 'upload' },
+            order: [['id', 'DESC']],
+          })
+        : [];
+    const companion =
+      uploads.find(isPerfectCircuitDocument) ||
+      manuals.find((m) => isFoundCompanion(m, PERFECT_CIRCUIT_SUFFIX)) ||
+      uploads.find(isBuildDocument) ||
+      manuals.find((m) => isFoundCompanion(m, BUILD_DOCUMENT_SUFFIX)) ||
+      null;
+    const buildDoc =
+      productPage &&
+      Boolean(companion) &&
+      !isPerfectCircuitDocument(companion) &&
+      !isFoundCompanion(companion, PERFECT_CIRCUIT_SUFFIX);
+    const candidates = productPage ? [manual, companion].filter(Boolean) : [manual];
     // The selected companion may be byte-for-byte identical to the primary
     // product page. Submit that content only once.
     const seenAnalysisHashes = new Set();
@@ -673,7 +701,7 @@ export function createWorker(db, options = {}) {
         backend,
         module,
         analysisManuals.map((m) => manualPath(manualsDir, m.hash)),
-        { productPage }
+        { productPage, buildDoc: buildDoc && analysisManuals.length > 1 }
       );
       analyzed = components.length;
       progress(`analysis complete: ${components.length} component(s) found`);

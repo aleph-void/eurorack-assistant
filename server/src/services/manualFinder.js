@@ -33,10 +33,18 @@ Task: find the OFFICIAL user manual PDF for this module on the internet.
 4. Independently find the page for this exact module on perfectcircuit.com.
    This retailer often has a useful jack-by-jack feature description even when
    the manufacturer has not published a manual.
+5. Independently find the module's BUILD DOCUMENT: the assembly guide, build
+   guide, build instructions, construction manual or DIY kit documentation.
+   Open-source and DIY modules (Music Thing, Befaco, Nonlinearcircuits,
+   Thonk/Erica kits, Mutable clones, PCB+panel releases) usually publish one
+   even when they publish no user manual, and it names and describes the
+   panel's jacks and controls. Direct .pdf links are required — a build page
+   in HTML, a GitHub repository page or a wiki does not count. Kit-seller
+   documentation pages (Thonk, Modular Addict) are acceptable sources.
 
 Respond with ONLY a JSON object, no prose and no code fences, shaped exactly like:
 
-{"manufacturer": "...", "module": "...", "pdf_urls": ["https://..."], "product_page_url": "https://...", "perfect_circuit_url": "https://www.perfectcircuit.com/..."}
+{"manufacturer": "...", "module": "...", "pdf_urls": ["https://..."], "product_page_url": "https://...", "perfect_circuit_url": "https://www.perfectcircuit.com/...", "build_doc_urls": ["https://..."]}
 
 Rules:
 - "pdf_urls": up to 3 candidate direct-download PDF URLs, best first.
@@ -45,6 +53,10 @@ Rules:
 - "perfect_circuit_url": use the matching product page on perfectcircuit.com
   only. Verify that both manufacturer and module match; use null if Perfect
   Circuit has no page for it. Do not return a search-results or category URL.
+- "build_doc_urls": up to 2 candidate direct-download PDF URLs for the build
+  document, best first. Verify that both manufacturer and module match. Use []
+  if this module has no published build document — most commercial closed-
+  source modules do not, and a guess is worse than nothing.
 - Use the manufacturer's and module's official spelling/capitalization.
 `;
 
@@ -56,6 +68,10 @@ export async function researchModule(backend, line) {
   info.module = String(info.module || '').trim();
   info.product_page_url = info.product_page_url ? String(info.product_page_url).trim() : null;
   info.perfect_circuit_url = normalizePerfectCircuitUrl(info.perfect_circuit_url);
+  if (!Array.isArray(info.build_doc_urls)) {
+    info.build_doc_urls = info.build_doc_urls ? [info.build_doc_urls] : [];
+  }
+  info.build_doc_urls = info.build_doc_urls.map((u) => String(u).trim()).filter(Boolean);
   if (!info.manufacturer || !info.module) {
     throw new Error(`LLM response missing manufacturer/module: ${JSON.stringify(info)}`);
   }
@@ -76,8 +92,61 @@ export function normalizePerfectCircuitUrl(value) {
   }
 }
 
-async function renderCompanionProductPage(info, manualsDir, deps = {}) {
-  const { log = () => {}, renderImpl = renderPageToPdf } = deps;
+// The name suffixes of the two kinds of companion document. They are how the
+// analyze_manual job recognizes one later, so they are exported rather than
+// spelled out again there.
+export const PERFECT_CIRCUIT_SUFFIX = 'Perfect_Circuit_Product_Page';
+export const BUILD_DOCUMENT_SUFFIX = 'Build_Document';
+
+// Move a freshly acquired temporary file into the content-addressed store.
+function storeAcquired(tmp, manualsDir) {
+  const hash = sha256File(tmp);
+  const dest = manualPath(manualsDir, hash);
+  if (fs.existsSync(dest)) fs.rmSync(tmp, { force: true });
+  else fs.renameSync(tmp, dest);
+  return hash;
+}
+
+// An open-source module's build document: the assembly guide a DIY module
+// ships instead of a user manual. It names and describes the same panel, and
+// unlike a rendered page it is a real PDF, so the content hash makes a re-run
+// a no-op. Direct download first, then the Wayback Machine for a build guide
+// whose host has since gone (small makers' sites do).
+export async function acquireBuildDocument(info, manualsDir, deps = {}) {
+  const { fetchImpl = fetch, log = () => {} } = deps;
+  const urls = info.build_doc_urls || [];
+  if (!urls.length) return null;
+  const originalName = safeManualName(info.manufacturer, info.module, BUILD_DOCUMENT_SUFFIX);
+  const tmp = path.join(manualsDir, `download_${originalName}`);
+
+  for (const url of urls) {
+    log(`trying build document: ${url}`);
+    if (await downloadPdf(url, tmp, { fetchImpl, log })) {
+      return { hash: storeAcquired(tmp, manualsDir), originalName, kind: 'build_doc' };
+    }
+  }
+  for (const url of urls) {
+    const snapshot = await waybackSnapshotUrl(url, { fetchImpl, log });
+    if (!snapshot) continue;
+    log(`trying wayback snapshot of build document: ${snapshot}`);
+    if (await downloadPdf(snapshot, tmp, { fetchImpl, log })) {
+      return { hash: storeAcquired(tmp, manualsDir), originalName, kind: 'build_doc' };
+    }
+  }
+  log('no build document could be downloaded');
+  return null;
+}
+
+// The second document submitted alongside a rendered product page, because one
+// retailer's or maker's page rarely tours the panel on its own.
+//
+// Perfect Circuit's listing is the first choice: it reads jack by jack. When
+// there is no listing there — nobody stocks the module, or it is a DIY kit
+// rather than a finished product — the module is exactly the sort that has a
+// build document instead, so that is what is fetched. A Perfect Circuit page
+// that fails to render falls through to the same place.
+async function acquireCompanionDocument(info, manualsDir, deps = {}) {
+  const { log = () => {}, renderImpl = renderPageToPdf, fetchImpl = fetch } = deps;
   const url = normalizePerfectCircuitUrl(info.perfect_circuit_url);
   let primaryIsPerfectCircuit = false;
   try {
@@ -87,20 +156,18 @@ async function renderCompanionProductPage(info, manualsDir, deps = {}) {
   } catch {
     // A missing/invalid primary URL is handled by the normal acquisition path.
   }
-  if (!url || primaryIsPerfectCircuit) return null;
-  const originalName = safeManualName(
-    info.manufacturer,
-    info.module,
-    'Perfect_Circuit_Product_Page'
-  );
-  const tmp = path.join(manualsDir, `download_${originalName}`);
-  log(`rendering companion Perfect Circuit product page: ${url}`);
-  if (!(await renderImpl(url, tmp, { log }))) return null;
-  const hash = sha256File(tmp);
-  const dest = manualPath(manualsDir, hash);
-  if (fs.existsSync(dest)) fs.rmSync(tmp, { force: true });
-  else fs.renameSync(tmp, dest);
-  return { hash, originalName };
+  if (url && !primaryIsPerfectCircuit) {
+    const originalName = safeManualName(info.manufacturer, info.module, PERFECT_CIRCUIT_SUFFIX);
+    const tmp = path.join(manualsDir, `download_${originalName}`);
+    log(`rendering companion Perfect Circuit product page: ${url}`);
+    if (await renderImpl(url, tmp, { log })) {
+      return { hash: storeAcquired(tmp, manualsDir), originalName, kind: 'perfect_circuit' };
+    }
+    log('Perfect Circuit page did not render; looking for a build document instead');
+  } else {
+    log('no separate Perfect Circuit listing; looking for a build document instead');
+  }
+  return acquireBuildDocument(info, manualsDir, { fetchImpl, log });
 }
 
 // Search the archive.org item library for a PDF matching the query.
@@ -297,19 +364,22 @@ export async function findManualForModule(db, backend, module, manualsDir, deps 
     );
     const companion =
       kind === 'product_page'
-        ? await renderCompanionProductPage(info, manualsDir, { log, renderImpl })
+        ? await acquireCompanionDocument(info, manualsDir, { log, renderImpl, fetchImpl })
         : null;
     // A rendered product page produces different bytes on every run, so the
     // content-hash dedupe that makes re-runs a no-op for real manuals cannot
-    // collapse renders. Instead, any earlier rendered stand-in for this module
-    // (recognized by its _Product_Page.pdf name) with different content is
-    // superseded by this acquisition — a fresh render, or a real manual that
-    // has since turned up.
+    // collapse renders. Instead, any earlier auto-acquired stand-in for this
+    // module (recognized by its _Product_Page.pdf or _Build_Document.pdf name)
+    // with different content is superseded by this acquisition — a fresh
+    // render, or a real manual that has since turned up.
     const previousRenders = await Manual.findAll({
       where: {
         module_id: module.id,
         user_id: null,
-        original_name: { [Op.like]: '%_Product_Page.pdf' },
+        [Op.or]: [
+          { original_name: { [Op.like]: '%_Product_Page.pdf' } },
+          { original_name: { [Op.like]: `%_${BUILD_DOCUMENT_SUFFIX}.pdf` } },
+        ],
       },
     });
     const currentHashes = new Set([hash, companion?.hash].filter(Boolean));

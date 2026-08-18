@@ -31,6 +31,21 @@ const componentDrafts = ref({});
 const componentError = ref({});
 const componentNotice = ref({});
 
+// Free-text narrowing of the list by manufacturer or module name. Every
+// whitespace-separated word has to appear somewhere in the two of them, so
+// 'make maths' finds Make Noise Maths and 'noise 2hp' finds nothing.
+const filterText = ref('');
+const filterTerms = computed(() =>
+  filterText.value.toLowerCase().split(/\s+/).filter(Boolean)
+);
+const filteredModules = computed(() => {
+  if (!filterTerms.value.length) return modules.value;
+  return modules.value.filter((m) => {
+    const haystack = `${m.manufacturer || ''} ${m.name || ''}`.toLowerCase();
+    return filterTerms.value.every((term) => haystack.includes(term));
+  });
+});
+
 const currentRack = computed(() => racks.value.find((r) => r.id === selectedRack.value) || null);
 const otherRacks = computed(() => racks.value.filter((r) => r.id !== selectedRack.value));
 
@@ -38,13 +53,18 @@ const otherRacks = computed(() => racks.value.filter((r) => r.id !== selectedRac
 // the racks it is made of instead of one long list. A module in two racks is
 // listed under both; one in none (its rack was deleted out from under it)
 // still has somewhere to appear.
+// While a filter is typed, a rack the filter empties is left out entirely
+// rather than shown as an empty section.
 const rackGroups = computed(() => {
-  if (currentRack.value) return [{ rack: currentRack.value, modules: modules.value }];
-  const groups = racks.value.map((rack) => ({
-    rack,
-    modules: modules.value.filter((m) => (m.racks || []).some((r) => r.id === rack.id)),
-  }));
-  const loose = modules.value.filter((m) => !(m.racks || []).length);
+  const shown = filteredModules.value;
+  if (currentRack.value) return [{ rack: currentRack.value, modules: shown }];
+  const groups = racks.value
+    .map((rack) => ({
+      rack,
+      modules: shown.filter((m) => (m.racks || []).some((r) => r.id === rack.id)),
+    }))
+    .filter((group) => group.modules.length || !filterTerms.value.length);
+  const loose = shown.filter((m) => !(m.racks || []).length);
   return loose.length ? [...groups, { rack: null, modules: loose }] : groups;
 });
 
@@ -262,6 +282,16 @@ onUnmounted(() => clearTimeout(refreshTimer));
         <option v-for="rack in racks" :key="rack.id" :value="rack.id">{{ rack.name }}</option>
       </select>
     </div>
+    <div style="flex: 2">
+      <label for="module-filter">Filter</label>
+      <input
+        id="module-filter"
+        v-model="filterText"
+        type="search"
+        placeholder="Name or manufacturer"
+        data-test="module-filter"
+      />
+    </div>
     <div class="shrink" style="align-self: end; white-space: nowrap">
       <RouterLink to="/racks">Manage racks</RouterLink>
     </div>
@@ -285,6 +315,11 @@ onUnmounted(() => clearTimeout(refreshTimer));
       Rebuild every panel
     </label>
   </div>
+  <p v-if="filterTerms.length && !loading && modules.length" class="muted" data-test="filter-count">
+    {{ filteredModules.length }} of {{ modules.length }}
+    {{ modules.length === 1 ? 'module' : 'modules' }} match “{{ filterText.trim() }}”.
+    <button class="linklike" data-test="clear-filter" @click="filterText = ''">Clear filter</button>
+  </p>
   <p v-if="reanalyzed" class="muted" data-test="reanalyze-result">{{ reanalyzed }}</p>
   <p v-if="error" class="error">{{ error }}</p>
   <p v-if="loading" class="muted">Loading…</p>
@@ -293,6 +328,9 @@ onUnmounted(() => clearTimeout(refreshTimer));
       No modules {{ currentRack ? `in '${currentRack.name}'` : 'yet' }}.
       <RouterLink to="/import">Import your module list</RouterLink> to get started.
     </p>
+  </div>
+  <div v-else-if="filteredModules.length === 0" class="panel" data-test="no-matches">
+    <p>No module's name or manufacturer matches “{{ filterText.trim() }}”.</p>
   </div>
   <template v-else>
     <!-- Each rack folds away behind its name; the first one starts open. -->
@@ -342,27 +380,34 @@ onUnmounted(() => clearTimeout(refreshTimer));
                 <td>
                   <span class="badge" :class="module.panel_status">{{ module.panel_status }}</span>
                 </td>
-                <td>
-                  <button
-                    class="secondary"
-                    style="margin: 0 0.4rem 0 0"
-                    :data-test="`components-${module.id}`"
-                    @click="toggleComponents(module)"
-                  >
-                    {{ expandedComponents[module.id] ? 'Hide components' : 'Components' }}
-                  </button>
-                  <select
-                    v-if="currentRack && otherRacks.length > 0"
-                    style="width: auto; margin: 0 0.4rem 0 0"
-                    :data-test="`move-${module.id}`"
-                    @change="move(module, $event)"
-                  >
-                    <option value="">Move to…</option>
-                    <option v-for="rack in otherRacks" :key="rack.id" :value="rack.id">
-                      {{ rack.name }}
-                    </option>
-                  </select>
-                  <button class="danger" style="margin: 0" @click="remove(module)">Delete</button>
+                <td class="module-actions-cell">
+                  <div class="module-row-actions">
+                    <button
+                      class="secondary"
+                      :data-test="`components-${module.id}`"
+                      @click="toggleComponents(module)"
+                    >
+                      {{ expandedComponents[module.id] ? 'Hide components' : 'Components' }}
+                    </button>
+                    <select
+                      v-if="currentRack && otherRacks.length > 0"
+                      class="move-select"
+                      :data-test="`move-${module.id}`"
+                      @change="move(module, $event)"
+                    >
+                      <option value="">Move to…</option>
+                      <option v-for="rack in otherRacks" :key="rack.id" :value="rack.id">
+                        {{ rack.name }}
+                      </option>
+                    </select>
+                    <button
+                      class="danger"
+                      :data-test="`delete-${module.id}`"
+                      @click="remove(module)"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </td>
               </tr>
               <tr v-if="expandedComponents[module.id]" :data-test="`component-editor-${module.id}`">

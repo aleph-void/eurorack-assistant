@@ -147,6 +147,13 @@ async function saveOverride(index) {
 }
 
 async function clearChannel(index) {
+  const ok = await dialog.confirm({
+    title: 'Clear channel',
+    message: `Clear what scope channel ${index + 1} is watching?`,
+    confirmLabel: 'Clear',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await api.delete(`/api/scope/patches/${props.patchId}/channels/${index}`);
     channels.value = channels.value.filter((c) => c.channel_index !== index);

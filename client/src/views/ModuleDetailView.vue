@@ -197,6 +197,15 @@ async function createNormalization() {
 }
 
 async function removeNormalization(n) {
+  const ok = await dialog.confirm({
+    title: 'Remove normalled connection',
+    message:
+      `Remove the normalled connection into ${componentName(n.target_component_id)} ` +
+      `from ${normalizationSource(n)}?`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   normError.value = '';
   try {
     await api.delete(`/api/modules/${props.id}/normalizations/${n.id}`);
@@ -256,6 +265,15 @@ async function createRoute() {
 }
 
 async function removeRoute(route) {
+  const ok = await dialog.confirm({
+    title: 'Remove signal path',
+    message:
+      `Remove the internal path from ${componentName(route.input_component_id)} ` +
+      `to ${componentName(route.output_component_id)}?`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   routeError.value = '';
   try {
     await api.delete(`/api/modules/${props.id}/routes/${route.id}`);
@@ -297,6 +315,13 @@ async function createSwitch() {
 }
 
 async function removeSwitch(section) {
+  const ok = await dialog.confirm({
+    title: 'Remove routing switch',
+    message: `Remove ${section.name || `switch ${section.id}`} and the steps recorded for it?`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   switchError.value = '';
   try {
     await api.delete(`/api/modules/${props.id}/switches/${section.id}`);
@@ -335,6 +360,15 @@ async function createPair() {
 }
 
 async function removePair(pair) {
+  const ok = await dialog.confirm({
+    title: 'Remove jack pair',
+    message:
+      `Stop treating ${componentName(pair.a_component_id)} and ` +
+      `${componentName(pair.b_component_id)} as a ${pair.kind} pair?`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   pairError.value = '';
   try {
     await api.delete(`/api/modules/${props.id}/pairs/${pair.id}`);
@@ -412,6 +446,15 @@ async function createExpander() {
 }
 
 async function removeExpander(link) {
+  const ok = await dialog.confirm({
+    title: 'Unlink expander',
+    message:
+      `Unlink ${[link.manufacturer, link.name].filter(Boolean).join(' ') || 'this expander'}? ` +
+      'The two modules stop being treated as one instrument.',
+    confirmLabel: 'Unlink',
+    danger: true,
+  });
+  if (!ok) return;
   expanderError.value = '';
   try {
     await api.delete(`/api/modules/${props.id}/expanders/${link.id}`);
@@ -650,6 +693,13 @@ async function saveValue(v) {
 }
 
 async function removeValue(v) {
+  const ok = await dialog.confirm({
+    title: 'Remove position',
+    message: `Remove the '${v.value}' position of ${v.component?.name || 'this control'}?`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   valueError.value = '';
   try {
     await api.delete(`/api/modules/${props.id}/components/${v.component.id}/values/${v.id}`);
@@ -819,6 +869,13 @@ async function onFileChosen(event) {
 }
 
 async function removeDocument(doc) {
+  const ok = await dialog.confirm({
+    title: 'Remove document',
+    message: `Remove '${doc.name}'? The uploaded file and its searchable text are deleted.`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   uploadError.value = '';
   try {
     await api.delete(`/api/modules/${props.id}/manuals/${doc.id}`);

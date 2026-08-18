@@ -115,14 +115,26 @@ describe('researchModule', () => {
         pdf_urls: 'https://makenoise.com/maths.pdf',
         product_page_url: null,
         perfect_circuit_url: 'https://www.perfectcircuit.com/make-noise-maths.html',
+        build_doc_urls: 'https://makenoise.com/maths-build.pdf',
       }),
     });
     const info = await researchModule(backend, 'Make Noise,Maths');
     expect(info.pdf_urls).toEqual(['https://makenoise.com/maths.pdf']);
+    // A lone build-document URL is accepted where a list was asked for.
+    expect(info.build_doc_urls).toEqual(['https://makenoise.com/maths-build.pdf']);
     expect(info.perfect_circuit_url).toBe(
       'https://www.perfectcircuit.com/make-noise-maths.html'
     );
     expect(backend.calls.completeTextWithSearch[0][0]).toContain('Make Noise,Maths');
+  });
+
+  it('defaults the build-document list when the model omits it', async () => {
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({ manufacturer: 'Make Noise', module: 'Maths' }),
+    });
+    const info = await researchModule(backend, 'Make Noise,Maths');
+    expect(info.build_doc_urls).toEqual([]);
+    expect(backend.calls.completeTextWithSearch[0][0]).toContain('BUILD DOCUMENT');
   });
 
   it('throws when manufacturer/module are missing', async () => {
@@ -272,12 +284,14 @@ describe('findManualForModule', () => {
         pdf_urls: ['https://dead.example.com/maths.pdf'],
         product_page_url: 'https://makenoise.com/maths',
         perfect_circuit_url: 'https://www.perfectcircuit.com/make-noise-maths.html',
+        build_doc_urls: ['https://makenoise.com/maths-build.pdf'],
       }),
     });
     const fetchImpl = fakeFetch({
       'dead.example.com': { status: 404 },
       // No archived copy of the dead manual URL either.
       'archive.org/wayback/available': { json: {} },
+      'maths-build.pdf': { body: PDF_BYTES },
     });
     const renderImpl = fakeRender({
       'makenoise.com/maths': RENDER_A,
@@ -293,6 +307,8 @@ describe('findManualForModule', () => {
       'https://makenoise.com/maths',
       'https://www.perfectcircuit.com/make-noise-maths.html',
     ]);
+    // Perfect Circuit stocks it, so the build-document fallback stays put.
+    expect(fetchImpl.requested.some((u) => u.includes('maths-build'))).toBe(false);
     // The render satisfied the job, so the archive.org item library was
     // never consulted.
     expect(fetchImpl.requested.some((u) => u.includes('advancedsearch'))).toBe(false);
@@ -305,6 +321,113 @@ describe('findManualForModule', () => {
     ]);
     expect(fs.existsSync(path.join(manualsDir, `${hash}.pdf`))).toBe(true);
     expect(fs.existsSync(path.join(manualsDir, `${RENDER_B_HASH}.pdf`))).toBe(true);
+  });
+
+  // An open-source module that no retailer stocks: there is nothing to render
+  // from Perfect Circuit, but there is a build document, and it names the same
+  // panel the analysis needs.
+  it('downloads the build document when there is no Perfect Circuit listing', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id, {
+      manufacturer: 'Music Thing',
+      name: 'Radio Music',
+    });
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Music Thing',
+        module: 'Radio Music',
+        pdf_urls: [],
+        product_page_url: 'https://musicthing.co.uk/radio-music',
+        perfect_circuit_url: null,
+        build_doc_urls: ['https://musicthing.co.uk/radio-music-build.pdf'],
+      }),
+    });
+    const fetchImpl = fakeFetch({
+      'radio-music-build.pdf': { body: PDF_BYTES },
+    });
+    const renderImpl = fakeRender({ 'musicthing.co.uk/radio-music': RENDER_A });
+
+    const hash = await findManualForModule(db, backend, module, manualsDir, {
+      fetchImpl,
+      renderImpl,
+    });
+
+    // The product page is still the module's document; the build document is
+    // the companion beside it.
+    expect(hash).toBe(RENDER_A_HASH);
+    expect(renderImpl.calls).toEqual(['https://musicthing.co.uk/radio-music']);
+    const { rows } = await db.query(
+      'SELECT * FROM manuals WHERE module_id = $1 ORDER BY id',
+      [module.id]
+    );
+    expect(rows.map((r) => r.original_name)).toEqual([
+      'Music_Thing_Radio_Music_Product_Page.pdf',
+      'Music_Thing_Radio_Music_Build_Document.pdf',
+    ]);
+    expect(rows[1].hash).toBe(PDF_HASH);
+    expect(fs.existsSync(path.join(manualsDir, `${PDF_HASH}.pdf`))).toBe(true);
+    // A real PDF, so a second run finds the same content and adds nothing.
+    await findManualForModule(db, backend, module, manualsDir, { fetchImpl, renderImpl });
+    const after = await db.query('SELECT * FROM manuals WHERE module_id = $1', [module.id]);
+    expect(after.rows).toHaveLength(2);
+  });
+
+  it('recovers a build document from the Wayback Machine, and copes with none at all', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id, {
+      manufacturer: 'Music Thing',
+      name: 'Radio Music',
+    });
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Music Thing',
+        module: 'Radio Music',
+        pdf_urls: [],
+        product_page_url: 'https://musicthing.co.uk/radio-music',
+        perfect_circuit_url: null,
+        build_doc_urls: ['https://gone.example.com/radio-music-build.pdf'],
+      }),
+    });
+    const renderImpl = fakeRender({ 'musicthing.co.uk/radio-music': RENDER_A });
+    const snapshot = 'https://web.archive.org/web/2019/https://gone.example.com/radio-music-build.pdf';
+    // Routes are matched in order, and the snapshot URL embeds the dead one.
+    const fetchImpl = fakeFetch({
+      'web.archive.org/web/2019': { body: PDF_BYTES },
+      'archive.org/wayback/available': {
+        json: { archived_snapshots: { closest: { available: true, url: snapshot } } },
+      },
+      'gone.example.com': { status: 404 },
+    });
+
+    await findManualForModule(db, backend, module, manualsDir, { fetchImpl, renderImpl });
+    const { rows } = await db.query(
+      "SELECT * FROM manuals WHERE module_id = $1 AND original_name LIKE '%Build_Document.pdf'",
+      [module.id]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].hash).toBe(PDF_HASH);
+
+    // A module with no build document anywhere still gets its product page.
+    const plain = await insertModule(db, user.id, { manufacturer: 'Nobody', name: 'Nothing' });
+    const emptyBackend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Nobody',
+        module: 'Nothing',
+        pdf_urls: [],
+        product_page_url: 'https://musicthing.co.uk/radio-music',
+        perfect_circuit_url: null,
+        build_doc_urls: [],
+      }),
+    });
+    expect(
+      await findManualForModule(db, emptyBackend, plain, manualsDir, { fetchImpl, renderImpl })
+    ).toBe(RENDER_A_HASH);
+    const only = await db.query('SELECT * FROM manuals WHERE module_id = $1', [plain.id]);
+    expect(only.rows).toHaveLength(1);
   });
 
   it('renders the product page when the manual URL serves a corrupt PDF', async () => {

@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 import { parseQuickCable } from '../patchQuickCable.js';
 import AutocompleteSelect from '../components/AutocompleteSelect.vue';
 import ScopePanel from '../components/ScopePanel.vue';
@@ -367,6 +368,9 @@ async function connectDiagramCable(ends) {
   }
 }
 
+// Unplugging is not gated behind the modal the other removals use: patching
+// is done by plugging and unplugging over and over, and a cable is one click
+// away from being plugged again.
 async function removeCable(cable) {
   cableError.value = '';
   try {
@@ -518,6 +522,13 @@ async function saveSetting(component) {
 }
 
 async function removeSetting(setting) {
+  const ok = await dialog.confirm({
+    title: 'Remove setting',
+    message: `Remove the recorded '${setting.value}' for ${settingLabel(setting)}?`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   settingsError.value = '';
   try {
     await api.delete(`/api/patches/${props.id}/settings/${setting.id}`);
@@ -614,6 +625,15 @@ async function saveInstance(pm, updates) {
 }
 
 async function removeInstance(pm) {
+  const ok = await dialog.confirm({
+    title: 'Remove module from patch',
+    message:
+      `Take ${moduleLabel(pm)} out of this patch? Its cables, settings and links ` +
+      'in this patch go with it.',
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   instanceError.value = '';
   try {
     await api.delete(`/api/patches/${props.id}/modules/${pm.id}`);
@@ -639,6 +659,13 @@ async function addGroup() {
 }
 
 async function removeGroup(group) {
+  const ok = await dialog.confirm({
+    title: 'Remove bus',
+    message: `Remove the '${group.name}' bus? The modules filed under it stay in the patch.`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   groupError.value = '';
   try {
     await api.delete(`/api/patches/${props.id}/groups/${group.id}`);
@@ -740,6 +767,13 @@ async function addPort() {
 }
 
 async function removePort(pm, port) {
+  const ok = await dialog.confirm({
+    title: 'Remove jack',
+    message: `Remove ${jackLabel(port)} from ${moduleLabel(pm)}? Any cable plugged into it goes too.`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   portError.value = '';
   try {
     await api.delete(`/api/patches/${props.id}/modules/${pm.id}/ports/${port.id}`);
@@ -773,6 +807,13 @@ async function addLink() {
 }
 
 async function removeLink(link) {
+  const ok = await dialog.confirm({
+    title: 'Remove link',
+    message: `Remove the ${link.kind} link between these two instances?`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   linkError.value = '';
   try {
     await api.delete(`/api/patches/${props.id}/links/${link.id}`);

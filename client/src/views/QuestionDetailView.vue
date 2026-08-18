@@ -21,6 +21,7 @@ const selectedAnswers = ref([]);
 const selectedNotes = ref([]);
 const selectedCaptures = ref([]);
 const selectedPatches = ref([]);
+const moduleFilter = ref('');
 let pollTimer = null;
 
 const answerHtml = computed(() => {
@@ -106,6 +107,31 @@ function onPatchToggled(patch) {
     if (!selectedModules.value.includes(id)) selectedModules.value.push(id);
   }
 }
+
+// The module list runs to a whole rack, so the ones actually in scope sit at
+// the top and everything else below. It is the tick that decides which list a
+// module is in: unticking a suggested module drops it out of the top one.
+// Both lists narrow to a free-text filter over manufacturer and name, every
+// whitespace-separated word having to appear in one of them.
+const moduleFilterTerms = computed(() =>
+  moduleFilter.value.toLowerCase().split(/\s+/).filter(Boolean)
+);
+function moduleMatchesFilter(m) {
+  if (!moduleFilterTerms.value.length) return true;
+  const haystack = `${m.manufacturer || ''} ${m.name || ''}`.toLowerCase();
+  return moduleFilterTerms.value.every((term) => haystack.includes(term));
+}
+const scopedModules = computed(() =>
+  (options.value?.modules ?? []).filter(
+    (m) => selectedModules.value.includes(m.id) && moduleMatchesFilter(m)
+  )
+);
+const otherModules = computed(() =>
+  (options.value?.modules ?? []).filter(
+    (m) => !selectedModules.value.includes(m.id) && moduleMatchesFilter(m)
+  )
+);
+const hiddenScopedCount = computed(() => selectedModules.value.length - scopedModules.value.length);
 
 function moduleLabel(moduleId) {
   const m = options.value?.modules.find((mod) => mod.id === moduleId);
@@ -250,8 +276,57 @@ onUnmounted(() => clearTimeout(pollTimer));
             </span>
           </summary>
           <div class="expander-body">
-            <ul class="check-list">
-              <li v-for="m in options.modules" :key="m.id">
+            <div class="row">
+              <div>
+                <label for="scope-module-filter">Filter</label>
+                <input
+                  id="scope-module-filter"
+                  v-model="moduleFilter"
+                  type="search"
+                  placeholder="Name or manufacturer"
+                  data-test="module-filter"
+                />
+              </div>
+              <div v-if="moduleFilterTerms.length" class="shrink" style="align-self: end">
+                <button
+                  type="button"
+                  class="secondary"
+                  data-test="clear-module-filter"
+                  @click="moduleFilter = ''"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <h4>In scope</h4>
+            <p v-if="selectedModules.length === 0" class="muted">No modules selected yet.</p>
+            <p v-else-if="scopedModules.length === 0" class="muted" data-test="scope-filter-hidden">
+              None of the {{ selectedModules.length }} selected modules match
+              “{{ moduleFilter.trim() }}”.
+            </p>
+            <ul v-else class="check-list">
+              <li v-for="m in scopedModules" :key="m.id">
+                <label>
+                  <input type="checkbox" :value="m.id" v-model="selectedModules" data-test="module-option" />
+                  <span>
+                    {{ m.manufacturer }} {{ m.name }}
+                    <span v-if="m.in_scope" class="badge scoped">suggested</span>
+                  </span>
+                </label>
+              </li>
+            </ul>
+            <p v-if="scopedModules.length > 0 && hiddenScopedCount > 0" class="muted" data-test="scope-filter-hidden">
+              {{ hiddenScopedCount }} more selected
+              {{ hiddenScopedCount === 1 ? 'module does' : 'modules do' }} not match the filter.
+            </p>
+
+            <h4>Other modules</h4>
+            <p v-if="otherModules.length === 0" class="muted">
+              {{ moduleFilterTerms.length ? 'No other module matches the filter.' : 'Every module is in scope.' }}
+            </p>
+            <ul v-else class="check-list">
+              <li v-for="m in otherModules" :key="m.id">
                 <label>
                   <input type="checkbox" :value="m.id" v-model="selectedModules" data-test="module-option" />
                   <span>
