@@ -61,6 +61,15 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   panel picture you uploaded survives it — the job keeps the image and only
   works out its markers again.
 
+  One module whose component inventory came out wrong can be redone from its
+  own page ("Re-analyze components"): a `reanalyze_components` job fetches the
+  module's product page from Perfect Circuit, Detroit Modular and Midwest
+  Modular (each tends to tour the panel jack by jack), saves every page it
+  finds as a shared document, and re-runs the analysis with those pages
+  attached beside the manual. The button is disabled — and the API refuses —
+  while any of those retailer pages already exists among the module's
+  documents, since fetching them fresh is the point of the action.
+
   Each attempt of a job gets a time limit of 45 minutes, widened by the
   attempt count (45, then 90, then 135) — work that timed out because it is
   genuinely long would otherwise fail identically on every retry.
@@ -161,6 +170,10 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   documents *you* uploaded — an upload is searchable and readable by its owner
   alone, never by other users.
 
+  Attaching a document starts with the file: the name field fills itself in
+  from the file's own name, and nothing is uploaded until you press Upload, so
+  that name can be replaced first.
+
   Each document can also be **read as a page** rather than opened as a PDF
   (rendered from the markdown, with the source and a `.md` download a click
   away) — linked from the module page's Documents table and from every search
@@ -191,7 +204,10 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
 - **Patches**: record a patch against a snapshot of a rack — the cables, how
   every control is dialed in, what each instance is doing in this patch
   ("LXR #2 — ghost layer") and which bus or layer it belongs to. The snapshot
-  keeps rendering after modules move racks, get re-analyzed or are deleted.
+  keeps rendering after modules move racks, get re-analyzed or leave a rack.
+  The manufacturer and module name an instance is snapshotted under can be
+  corrected in place — useful for a piece of off-rack gear named in a hurry —
+  as long as neither is left empty.
 - **Fast patch entry**: every end of a cable is found by typing — arrow keys
   move through the matches, Enter takes one and moves to the next field —
   or the whole cable on one line (`maths eor > optomix ch1 in`), resolved as
@@ -346,8 +362,20 @@ Useful afterwards:
 ```sh
 docker compose logs -f server   # watch the job worker
 ./reset-admin-password.sh       # new random admin password (printed once; forces a change at next login)
+./backup-db.sh [--files]        # dump the database to /tmp on the host (or pass a path)
+./restore-db.sh [--files <zip>] <dump-file>   # replace the database with a dump (stops the app during the restore)
 docker compose down             # stop (data persists in volumes)
 ```
+
+`backup-db.sh` runs `pg_dump` inside the db container and streams the dump to
+a timestamped file in the host's `/tmp` (pg_dump's custom format). The dump
+covers the database only — the PDFs, panel pictures and scope captures live
+in their own volumes, which `--files` zips to a second file beside the dump
+(`...-files.zip`, written by `server/scripts/dump-data.js`). Handing that zip
+to `restore-db.sh --files` puts the files back after the database restore;
+files in the archive overwrite files on disk, extra files on disk are left
+alone (the stores are content-addressed, so an extra file is unreferenced,
+never wrong).
 
 ## Architecture
 
@@ -418,7 +446,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `question_components` | links a question to the specific components it pertains to (LLM-suggested, then user-reviewed) |
 | `question_manuals` / `question_answers` / `question_notes` / `question_captures` | the documents the user attached during review: manual PDFs, previous answers, notes, oscilloscope captures |
 | `question_patches` | the patches a question is about — the patch rides along as a document of its cables, settings, normalled connections and signal flow, and the modules it uses go into scope |
-| `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `panel_image`, `extract_manual`, `scope_question`, `answer_question`) with attempts + errors |
+| `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `reanalyze_components`, `panel_image`, `extract_manual`, `scope_question`, `answer_question`) with attempts + errors |
 | `llm_usage` | one row per CLI invocation: the tokens it spent (fresh input, cached input, cache writes, output), the model that spent them, and the job and user it is billed to. `cost_usd` is filled in where the provider reports one (claude does, codex does not) |
 | `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`), job worker count (`import_workers`, default 4), the per-user token budget and its window (`token_budget_default`, `token_budget_period`), and the queue pause the worker sets when the provider runs out of tokens (`queue_paused_until`, `queue_paused_reason`) |
 

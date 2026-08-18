@@ -1,20 +1,13 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { findRackByName } from '../services/racks.js';
-import { deleteModulesDeep } from '../services/moduleDeletion.js';
 import { readableResource, removeShares } from '../services/sharing.js';
 import { enqueueJob } from '../jobs/worker.js';
 import { loadPanels } from '../services/panelImage.js';
 
 // A user's racks. Every route operates on the requesting user's racks only —
 // racks (and their module lists) are never visible to other users.
-export function rackRoutes(
-  db,
-  {
-    manualsDir = process.env.MANUALS_DIR || '/data/manuals',
-    panelsDir = process.env.PANELS_DIR || '/data/panels',
-  } = {}
-) {
+export function rackRoutes(db) {
   const { Rack, RackModule, RackRow, RackRowModule, Module, User, Job } = db.models;
   const router = Router();
   router.use(requireAuth(db));
@@ -227,26 +220,17 @@ export function rackRoutes(
     }
   });
 
-  // Deleting a rack removes its module mappings, then fully deletes every
-  // module that is left in no rack at all — along with its components,
-  // manuals, and *your* questions and notes about it (other users' stay).
-  // Modules still mapped into another rack (yours or another user's) are
-  // kept.
+  // Deleting a rack removes the rack and its module mappings. The module
+  // records themselves are kept, in no rack at all if this was their last
+  // one, so that importing them again restores the manual, analysis and
+  // panel work rather than repeating it.
   router.delete('/:id', async (req, res, next) => {
     try {
       const rack = await ownRack(req.user.id, req.params.id);
       if (!rack) return res.status(404).json({ error: 'Rack not found' });
-      const mappings = await RackModule.findAll({ where: { rack_id: rack.id } });
       await rack.destroy();
       await removeShares(db, 'rack', rack.id);
-      const orphaned = [];
-      for (const { module_id: moduleId } of mappings) {
-        if ((await RackModule.count({ where: { module_id: moduleId } })) === 0) {
-          orphaned.push(moduleId);
-        }
-      }
-      await deleteModulesDeep(db, req.user.id, orphaned, { manualsDir, panelsDir });
-      res.json({ ok: true, deleted_modules: orphaned.length });
+      res.json({ ok: true });
     } catch (e) {
       next(e);
     }

@@ -259,7 +259,7 @@ describe('modules API', () => {
     ).toBe(404);
   });
 
-  it('hides unmapped modules; delete keeps the record only while another user has it', async () => {
+  it('hides unmapped modules; removing one keeps the shared record on the server', async () => {
     const { app, db, aliceCookie, adminCookie } = await createTestApp();
     const { rows: users } = await db.query('SELECT id, username FROM users');
     const alice = users.find((u) => u.username === 'alice');
@@ -282,17 +282,104 @@ describe('modules API', () => {
     const { rows: still } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
     expect(still).toHaveLength(1);
 
-    // …and is fully deleted once its last rack mapping is removed.
+    // …and also once its last rack mapping is gone: nobody can see it, but
+    // importing the same manufacturer + name again picks it back up.
     expect(
       (await request(app).delete(`/api/modules/${module.id}`).set('Cookie', adminCookie)).status
     ).toBe(200);
-    const { rows: gone } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
-    expect(gone).toHaveLength(0);
+    const { rows: kept } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
+    expect(kept).toHaveLength(1);
+    expect((await db.query('SELECT * FROM rack_modules')).rows).toHaveLength(0);
+    expect(
+      (await request(app).get(`/api/modules/${module.id}`).set('Cookie', adminCookie)).status
+    ).toBe(404);
   });
 
   it('requires authentication', async () => {
     const { app } = await createTestApp();
     expect((await request(app).get('/api/modules')).status).toBe(401);
+  });
+});
+
+// POST /api/modules/:id/reanalyze — one module's component re-analysis with
+// freshly fetched retailer product pages.
+describe('module re-analysis API', () => {
+  it('is only offered on modules in the requester’s racks', async () => {
+    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'admin'");
+    const module = await insertModule(db, rows[0].id, { manual_hash: PDF_HASH });
+    const res = await request(app)
+      .post(`/api/modules/${module.id}/reanalyze`)
+      .set('Cookie', aliceCookie);
+    expect(res.status).toBe(404);
+    // The owner can, proving the 404 was about the rack and not the route.
+    const ok = await request(app)
+      .post(`/api/modules/${module.id}/reanalyze`)
+      .set('Cookie', adminCookie);
+    expect(ok.status).toBe(202);
+  });
+
+  it('refuses a module with no manual to re-analyze from', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id);
+    const res = await request(app)
+      .post(`/api/modules/${module.id}/reanalyze`)
+      .set('Cookie', aliceCookie);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/no manual/i);
+  });
+
+  it('refuses while any retailer product page already exists', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id, { manual_hash: PDF_HASH });
+    await db.models.Manual.create({
+      module_id: module.id,
+      user_id: null,
+      hash: 'd'.repeat(64),
+      original_name: 'Make_Noise_Maths_Detroit_Modular_Product_Page.pdf',
+      source: 'found',
+    });
+    const res = await request(app)
+      .post(`/api/modules/${module.id}/reanalyze`)
+      .set('Cookie', aliceCookie);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already exist/i);
+    expect(res.body.documents).toEqual(['Make_Noise_Maths_Detroit_Modular_Product_Page.pdf']);
+    expect((await db.query('SELECT * FROM jobs')).rows).toHaveLength(0);
+  });
+
+  it('queues one reanalyze_components job and dedupes a second request', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id, username FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id, { manual_hash: PDF_HASH });
+
+    const res = await request(app)
+      .post(`/api/modules/${module.id}/reanalyze`)
+      .set('Cookie', aliceCookie);
+    expect(res.status).toBe(202);
+    const { rows: jobs } = await db.query('SELECT * FROM jobs');
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      type: 'reanalyze_components',
+      module_id: module.id,
+      user_id: rows[0].id,
+      status: 'pending',
+    });
+    expect(res.body.job_id).toBe(jobs[0].id);
+    const { rows: updated } = await db.query('SELECT analysis_status FROM modules WHERE id = $1', [
+      module.id,
+    ]);
+    expect(updated[0].analysis_status).toBe('pending');
+
+    // The job is still pending, so asking again queues nothing new.
+    const again = await request(app)
+      .post(`/api/modules/${module.id}/reanalyze`)
+      .set('Cookie', aliceCookie);
+    expect(again.status).toBe(409);
+    expect(again.body.error).toMatch(/already queued/i);
+    expect((await db.query('SELECT * FROM jobs')).rows).toHaveLength(1);
   });
 });
 

@@ -830,6 +830,49 @@ button.linklike:hover {
   min-width: auto;
 }
 
+/* A run of controls that belong on one line: buttons beside each other, or a
+   field with the button that saves it. Inputs are full-width block-ish by
+   default and buttons carry a top margin, so without this every control in a
+   group claims a line of its own — the reason action bars and edit-in-place
+   cells used to stack vertically. Wrapping is the last resort, not the first
+   thing that happens. */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.actions > button,
+.actions > a,
+.actions > p,
+.actions > select,
+.actions > input,
+.actions > span,
+.actions > form,
+.actions > label {
+  margin: 0;
+}
+/* Fields in an action group take the room they need, not the whole line. */
+.actions input,
+.actions select {
+  width: auto;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+/* Buttons that belong at the far end of the bar (whole-list actions), and the
+   note that explains them keeping the left. */
+.actions.end {
+  justify-content: flex-end;
+}
+.actions .push {
+  margin-right: auto;
+}
+/* An action bar between blocks of content needs the margin the buttons in it
+   just gave up, above and below. */
+.actions.spaced {
+  margin: 0.9rem 0;
+}
+
 /* Previous and next occupy opposite edges while the rack-level return link
    stays put in the middle, even at either end of the module list. */
 .module-detail-navigation {

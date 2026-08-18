@@ -16,12 +16,46 @@ const error = ref('');
 const uploadError = ref('');
 const uploading = ref(false);
 const docName = ref('');
+// The file waits here between being chosen and being sent, so the name it
+// suggests can be read and corrected first.
+const docFile = ref(null);
+const docInput = ref(null);
 
 // Uploads need a label; 'manual' is reserved for the shared auto-found manual.
 const docNameValid = computed(() => {
   const name = docName.value.trim();
   return name !== '' && name.toLowerCase() !== 'manual';
 });
+
+// --- Component re-analysis with fresh retailer product pages ---
+const reanalyzing = ref(false);
+const reanalyzeNotice = ref('');
+const reanalyzeError = ref('');
+// The saved renders the re-analysis job would fetch. While any of them is
+// already among the module's documents the button stays disabled (the server
+// refuses on the same test): the point of the action is fetching them fresh.
+const RETAILER_PAGE_RE = /_(Perfect_Circuit|Detroit_Modular|Midwest_Modular)_Product_Page\.pdf$/i;
+const retailerPagesExist = computed(() =>
+  (module.value?.manuals || []).some(
+    (d) => d.user_id === null && RETAILER_PAGE_RE.test(d.original_name || '')
+  )
+);
+
+async function reanalyzeComponents() {
+  reanalyzeNotice.value = '';
+  reanalyzeError.value = '';
+  reanalyzing.value = true;
+  try {
+    await api.post(`/api/modules/${props.id}/reanalyze`);
+    reanalyzeNotice.value =
+      'Re-analysis queued: retailer product pages will be downloaded and the components analyzed again.';
+    await load();
+  } catch (e) {
+    reanalyzeError.value = e.message;
+  } finally {
+    reanalyzing.value = false;
+  }
+}
 
 const TYPE_LABELS = {
   input_jack: 'Input jacks',
@@ -842,7 +876,15 @@ async function removePanel() {
   }
 }
 
-async function uploadDocument(file) {
+async function uploadDocument(file = docFile.value) {
+  if (!file) {
+    uploadError.value = 'Choose a PDF to attach.';
+    return;
+  }
+  if (!docNameValid.value) {
+    uploadError.value = "Give the document a name — anything but 'manual'.";
+    return;
+  }
   uploadError.value = '';
   uploading.value = true;
   try {
@@ -853,6 +895,8 @@ async function uploadDocument(file) {
       data_base64,
     });
     docName.value = '';
+    docFile.value = null;
+    if (docInput.value) docInput.value.value = '';
     await load();
   } catch (e) {
     uploadError.value = e.message;
@@ -861,10 +905,14 @@ async function uploadDocument(file) {
   }
 }
 
-async function onFileChosen(event) {
-  const file = event.target.files?.[0];
-  if (file) await uploadDocument(file);
-  event.target.value = '';
+// Picking the file comes first and names the document after it — 'extra.pdf'
+// becomes 'extra' — because the file is usually already named what the
+// document is. Nothing is sent until Upload, so that name can be replaced.
+function onFileChosen(event) {
+  const file = event.target.files?.[0] || null;
+  uploadError.value = '';
+  docFile.value = file;
+  if (file) docName.value = file.name.replace(/\.pdf$/i, '').trim();
 }
 
 async function removeDocument(doc) {
@@ -971,6 +1019,31 @@ watch(() => props.id, () => {
       {{ module.racks.map((r) => `${r.name} (×${r.quantity})`).join(', ') }}
       — <RouterLink to="/racks">manage racks</RouterLink>
     </p>
+
+    <div class="row reanalyze-row">
+      <div class="shrink">
+        <button
+          style="margin: 0; white-space: nowrap"
+          :disabled="reanalyzing || retailerPagesExist"
+          data-test="reanalyze-components"
+          @click="reanalyzeComponents"
+        >
+          {{ reanalyzing ? 'Queuing…' : 'Re-analyze components' }}
+        </button>
+      </div>
+      <span class="muted" data-test="reanalyze-hint">
+        <template v-if="retailerPagesExist">
+          Retailer product pages already exist for this module (see Documents), so there is
+          nothing new to fetch.
+        </template>
+        <template v-else>
+          Fetches the module's product page from Perfect Circuit, Detroit Modular and Midwest
+          Modular and re-analyzes the components with every page it finds.
+        </template>
+      </span>
+    </div>
+    <p v-if="reanalyzeNotice" class="muted" data-test="reanalyze-notice">{{ reanalyzeNotice }}</p>
+    <p v-if="reanalyzeError" class="error" data-test="reanalyze-error">{{ reanalyzeError }}</p>
 
     <details open class="panel" data-test="panel">
       <summary>
@@ -1803,23 +1876,43 @@ watch(() => props.id, () => {
           </table>
         </div>
         <p v-else class="muted">No documents yet.</p>
-        <label for="doc-name">Attach an additional PDF (visible only to you)</label>
         <div class="row">
-          <input
-            id="doc-name"
-            v-model="docName"
-            placeholder="Document name (not 'manual')"
-            data-test="doc-name"
-          />
-          <input
-            id="doc-upload"
-            type="file"
-            accept="application/pdf"
-            data-test="doc-upload"
-            :disabled="uploading || !docNameValid"
-            @change="onFileChosen"
-          />
+          <div>
+            <label for="doc-upload">Attach an additional PDF (visible only to you)</label>
+            <input
+              id="doc-upload"
+              ref="docInput"
+              type="file"
+              accept="application/pdf"
+              data-test="doc-upload"
+              :disabled="uploading"
+              @change="onFileChosen"
+            />
+          </div>
+          <div>
+            <label for="doc-name">Document name (not 'manual')</label>
+            <input
+              id="doc-name"
+              v-model="docName"
+              placeholder="e.g. calibration guide"
+              data-test="doc-name"
+            />
+          </div>
+          <div class="shrink">
+            <button
+              style="margin: 0"
+              :disabled="uploading || !docFile || !docNameValid"
+              data-test="doc-send"
+              @click="uploadDocument()"
+            >
+              {{ uploading ? 'Uploading…' : 'Upload' }}
+            </button>
+          </div>
         </div>
+        <p v-if="docFile && !docNameValid" class="muted" data-test="doc-name-hint">
+          The name came from the file — change it to anything but 'manual', which belongs to the
+          manual the app found.
+        </p>
         <p v-if="uploadError" class="error" data-test="upload-error">{{ uploadError }}</p>
       </div>
     </details>

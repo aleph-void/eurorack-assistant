@@ -75,8 +75,8 @@ async function remove(rack) {
     title: 'Delete rack',
     message:
       `Delete rack '${rack.name}' and its ${rack.module_count} module(s)? ` +
-      'Modules not in any other rack are permanently deleted, along with their ' +
-      'manuals, notes and questions.',
+      'The modules themselves stay on the server with their manuals, ' +
+      'analysis and panels, so importing them again restores that work.',
     confirmLabel: 'Delete rack',
     danger: true,
   });
@@ -211,18 +211,10 @@ async function dropIntoAvailable() {
           <tr v-for="rack in racks" :key="rack.id" :data-test="`rack-${rack.id}`">
             <td>
               <template v-if="renamingId === rack.id">
-                <form style="display: inline" @submit.prevent="rename(rack)">
-                  <input
-                    v-model="renameValue"
-                    :data-test="`rename-input-${rack.id}`"
-                    style="width: auto"
-                  />
-                  <button type="submit" style="margin: 0 0 0 0.4rem" :data-test="`rename-save-${rack.id}`">
-                    Save
-                  </button>
-                  <button type="button" style="margin: 0 0 0 0.4rem" @click="renamingId = null">
-                    Cancel
-                  </button>
+                <form class="actions" @submit.prevent="rename(rack)">
+                  <input v-model="renameValue" :data-test="`rename-input-${rack.id}`" />
+                  <button type="submit" :data-test="`rename-save-${rack.id}`">Save</button>
+                  <button type="button" @click="renamingId = null">Cancel</button>
                 </form>
               </template>
               <template v-else>
@@ -291,7 +283,7 @@ async function dropIntoAvailable() {
         Add 3U and 1U rows, set their HP, then drag each module copy into its physical row. A row
         cannot exceed its HP capacity.
       </p>
-      <div class="row">
+      <div class="actions spaced">
         <button class="secondary" :disabled="layoutBusy" data-test="add-3u-row" @click="addRow(3)">Add 3U row</button>
         <button class="secondary" :disabled="layoutBusy" data-test="add-1u-row" @click="addRow(1)">Add 1U row</button>
       </div>

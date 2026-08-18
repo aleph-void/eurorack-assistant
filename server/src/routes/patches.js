@@ -686,8 +686,12 @@ export function patchRoutes(db) {
     });
   }
 
-  // Name an instance's role in this patch and file it under a bus/layer.
-  // Body: { label?, group_id? } (group_id null clears it)
+  // Name an instance's role in this patch, file it under a bus/layer, and
+  // correct the name it is snapshotted under. Body:
+  // { label?, group_id?, manufacturer?, module_name? } (group_id null clears
+  // it). The two name columns are what the patch renders, live module behind
+  // it or not, so a mistyped manufacturer or module name is fixed here; both
+  // must still say something, and are trimmed.
   router.put('/:id/modules/:pmId', async (req, res, next) => {
     try {
       const patch = await ownPatch(req.user.id, req.params.id);
@@ -709,8 +713,16 @@ export function patchRoutes(db) {
           updates.group_id = group.id;
         }
       }
+      for (const field of ['manufacturer', 'module_name']) {
+        if (req.body?.[field] === undefined) continue;
+        const value = String(req.body[field] ?? '').trim();
+        if (!value) return res.status(400).json({ error: `${field} cannot be empty` });
+        updates[field] = value;
+      }
       if (Object.keys(updates).length === 0) {
-        return res.status(400).json({ error: 'label or group_id is required' });
+        return res
+          .status(400)
+          .json({ error: 'label, group_id, manufacturer or module_name is required' });
       }
       await pm.update(updates);
       res.json(moduleJson(pm, { live: pm.module_id !== null, components: [] }));

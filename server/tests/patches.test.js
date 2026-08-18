@@ -1082,6 +1082,44 @@ describe('patches API', () => {
     expect(removed.status).toBe(200);
   });
 
+  it("corrects an instance's manufacturer and module name, refusing empty ones", async () => {
+    const fixture = await withPatchFixture();
+    const { app, aliceCookie } = fixture;
+    const patch = (await createPatch(fixture)).body;
+    const detail = async () =>
+      (await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie)).body;
+    const maths = (await detail()).modules.find((m) => m.module_name === 'Maths');
+    const rename = (body) =>
+      request(app)
+        .put(`/api/patches/${patch.id}/modules/${maths.id}`)
+        .set('Cookie', aliceCookie)
+        .send(body);
+
+    const renamed = await rename({ manufacturer: '  Make Noise  ', module_name: ' Maths 2  ' });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.manufacturer).toBe('Make Noise');
+    expect(renamed.body.module_name).toBe('Maths 2');
+    // The live module behind the instance keeps its own name and components.
+    const after = (await detail()).modules.find((m) => m.id === maths.id);
+    expect(after.module_name).toBe('Maths 2');
+    expect(after.live).toBe(true);
+    expect(after.components).toHaveLength(4);
+
+    // Neither name may be blanked, whitespace included.
+    for (const body of [{ manufacturer: '' }, { manufacturer: '   ' }, { module_name: '' }]) {
+      const bad = await rename(body);
+      expect(bad.status).toBe(400);
+      expect(bad.body.error).toMatch(/cannot be empty/);
+    }
+    const unchanged = (await detail()).modules.find((m) => m.id === maths.id);
+    expect(unchanged.manufacturer).toBe('Make Noise');
+    expect(unchanged.module_name).toBe('Maths 2');
+
+    const nothing = await rename({});
+    expect(nothing.status).toBe(400);
+    expect(nothing.body.error).toMatch(/label, group_id, manufacturer or module_name/);
+  });
+
   it('keeps showing the snapshot after the module moves to another rack', async () => {
     const fixture = await withPatchFixture();
     const { db, app, aliceCookie, alice } = fixture;
@@ -1105,7 +1143,7 @@ describe('patches API', () => {
     expect(maths.components).toHaveLength(4);
   });
 
-  it('keeps showing cables by name after the module is deleted outright', async () => {
+  it('keeps showing cables by name once the module record itself is gone', async () => {
     const fixture = await withPatchFixture();
     const { db, app, aliceCookie, input, output } = fixture;
     const patch = (await createPatch(fixture)).body;
@@ -1121,12 +1159,19 @@ describe('patches API', () => {
         to_component_id: input.id,
       });
 
-    // Remove the module from every rack — the shared record is hard-deleted.
+    // Removing the module from every rack keeps the shared record, so the
+    // patch still reads its live components…
     const res = await request(app)
       .delete(`/api/modules/${fixture.module.id}`)
       .set('Cookie', aliceCookie);
     expect(res.status).toBe(200);
-    expect(await db.models.Module.findByPk(fixture.module.id)).toBeNull();
+    expect(await db.models.Module.findByPk(fixture.module.id)).not.toBeNull();
+    const unracked = await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie);
+    expect(unracked.body.modules.find((m) => m.module_name === 'Maths').live).toBe(true);
+
+    // …and falls back to the snapshot only if the record itself ever goes
+    // (nothing in the app deletes one; the schema still allows it).
+    await db.query('DELETE FROM modules WHERE id = $1', [fixture.module.id]);
 
     const after = await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie);
     expect(after.status).toBe(200);

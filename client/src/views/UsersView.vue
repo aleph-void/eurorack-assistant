@@ -90,7 +90,9 @@ async function resetPassword(user) {
 async function removeUser(user) {
   const ok = await dialog.confirm({
     title: 'Delete user',
-    message: `Delete user ${user.username}? Their modules and questions are removed too.`,
+    message:
+      `Delete user ${user.username}? Their racks, questions and notes go with ` +
+      'them; the module records themselves stay on the server.',
     confirmLabel: 'Delete user',
     danger: true,
   });

@@ -146,7 +146,7 @@ describe('racks API', () => {
     expect(detail.body.racks.map((r) => r.name)).toEqual(['main rack']);
   });
 
-  it('deleting the last rack fully deletes its modules and your related records', async () => {
+  it('deleting the last rack keeps its modules and your related records', async () => {
     const { app, db, manualsDir, aliceCookie } = await createTestApp();
     const { rows: users } = await db.query('SELECT id, username FROM users');
     const alice = users.find((u) => u.username === 'alice');
@@ -158,8 +158,8 @@ describe('racks API', () => {
       [module.id]
     );
 
-    // Alice's question on the module and note on its component must go with
-    // it; the admin's question on the same module must survive.
+    // Alice's question on the module and note on its component stay put, as
+    // does the admin's question on the same module.
     const { rows: q } = await db.query(
       `INSERT INTO questions (user_id, prompt, answer, status) VALUES ($1, 'Q', 'A', 'answered') RETURNING id`,
       [alice.id]
@@ -188,17 +188,27 @@ describe('racks API', () => {
     const racks = (await request(app).get('/api/racks').set('Cookie', aliceCookie)).body;
     const res = await request(app).delete(`/api/racks/${racks[0].id}`).set('Cookie', aliceCookie);
     expect(res.status).toBe(200);
-    expect(res.body.deleted_modules).toBe(1);
 
-    expect((await db.query('SELECT * FROM modules')).rows).toHaveLength(0);
-    expect((await db.query('SELECT * FROM module_components')).rows).toHaveLength(0);
-    expect((await db.query('SELECT * FROM manuals')).rows).toHaveLength(0);
-    expect(fs.existsSync(manualPath(manualsDir, PDF_HASH))).toBe(false);
-    expect((await db.query('SELECT * FROM notes')).rows).toHaveLength(0);
-    // Only the admin's question remains, unlinked from the deleted module.
-    const { rows: questions } = await db.query('SELECT id, user_id FROM questions');
-    expect(questions).toEqual([{ id: adminQ[0].id, user_id: admin.id }]);
-    expect((await db.query('SELECT * FROM question_modules')).rows).toHaveLength(0);
+    // The rack and its mappings go; everything the module knows about itself
+    // stays on the server, ready for whoever imports it next.
+    expect((await db.query('SELECT * FROM racks')).rows).toHaveLength(0);
+    expect((await db.query('SELECT * FROM rack_modules')).rows).toHaveLength(0);
+    expect((await db.query('SELECT * FROM modules')).rows).toHaveLength(1);
+    expect((await db.query('SELECT * FROM module_components')).rows).toHaveLength(1);
+    expect((await db.query('SELECT * FROM manuals')).rows).toHaveLength(1);
+    expect(fs.existsSync(manualPath(manualsDir, PDF_HASH))).toBe(true);
+    expect((await db.query('SELECT * FROM notes')).rows).toHaveLength(1);
+    const { rows: questions } = await db.query('SELECT id, user_id FROM questions ORDER BY id');
+    expect(questions).toEqual([
+      { id: q[0].id, user_id: alice.id },
+      { id: adminQ[0].id, user_id: admin.id },
+    ]);
+    expect((await db.query('SELECT * FROM question_modules')).rows).toHaveLength(2);
+
+    // Alice no longer has it: the module is only reachable through a rack.
+    expect(
+      (await request(app).get(`/api/modules/${module.id}`).set('Cookie', aliceCookie)).status
+    ).toBe(404);
   });
 
   it('moves a module between racks, merging quantities', async () => {

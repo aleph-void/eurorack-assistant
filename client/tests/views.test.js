@@ -433,6 +433,50 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="group-knob"]').text()).toContain('Rise');
   });
 
+  it('queues a component re-analysis with fresh retailer product pages', async () => {
+    api.get.mockResolvedValue(structuredClone(moduleResponse));
+    api.post.mockResolvedValue({ job_id: 7 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const button = wrapper.find('[data-test="reanalyze-components"]');
+    expect(button.attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('[data-test="reanalyze-hint"]').text()).toContain('Perfect Circuit');
+    await button.trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/reanalyze');
+    expect(wrapper.find('[data-test="reanalyze-notice"]').text()).toContain('queued');
+
+    api.post.mockRejectedValue(new Error('Retailer product pages already exist for this module'));
+    await button.trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="reanalyze-error"]').text()).toContain('already exist');
+  });
+
+  it('disables the re-analysis button while a retailer product page exists', async () => {
+    api.get.mockResolvedValue({
+      ...moduleResponse,
+      manuals: [
+        ...moduleResponse.manuals,
+        {
+          id: 3,
+          hash: 'c'.repeat(64),
+          name: 'manual',
+          original_name: 'Make_Noise_Maths_Midwest_Modular_Product_Page.pdf',
+          source: 'found',
+          user_id: null,
+          has_text: false,
+          text_pages: null,
+        },
+      ],
+    });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="reanalyze-components"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('[data-test="reanalyze-hint"]').text()).toContain('already exist');
+  });
+
   it('adds and removes controls while refreshing component lists and panel markers', async () => {
     vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     let detail = {
@@ -1056,15 +1100,30 @@ describe('ModuleDetailView', () => {
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
 
-    // The file input stays disabled until a valid name (not 'manual') is set.
-    expect(wrapper.find('[data-test="doc-upload"]').attributes('disabled')).toBeDefined();
-    await wrapper.find('[data-test="doc-name"]').setValue('manual');
-    expect(wrapper.find('[data-test="doc-upload"]').attributes('disabled')).toBeDefined();
-    await wrapper.find('[data-test="doc-name"]').setValue('calibration guide');
+    // The file is chosen first: nothing is sent yet, and the name comes from
+    // the file so the upload needs no name of its own.
     expect(wrapper.find('[data-test="doc-upload"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('[data-test="doc-send"]').attributes('disabled')).toBeDefined();
 
     const file = new File(['%PDF-1.4 fake pdf'], 'extra.pdf', { type: 'application/pdf' });
-    await wrapper.vm.uploadDocument(file);
+    wrapper.vm.onFileChosen({ target: { files: [file] } });
+    await flushPromises();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="doc-name"]').element.value).toBe('extra');
+    expect(wrapper.find('[data-test="doc-send"]').attributes('disabled')).toBeUndefined();
+
+    // The derived name can be replaced before the upload happens; 'manual' is
+    // still refused, since the found manual owns that name.
+    await wrapper.find('[data-test="doc-name"]').setValue('manual');
+    expect(wrapper.find('[data-test="doc-send"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('[data-test="doc-name-hint"]').exists()).toBe(true);
+    await wrapper.find('[data-test="doc-name"]').setValue('calibration guide');
+    expect(wrapper.find('[data-test="doc-send"]').attributes('disabled')).toBeUndefined();
+
+    await wrapper.find('[data-test="doc-send"]').trigger('click');
+    // The FileReader behind the upload resolves on a task, not a microtask.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushPromises();
     expect(api.post).toHaveBeenCalledWith(
       '/api/modules/1/manuals',
       expect.objectContaining({
@@ -3421,6 +3480,36 @@ describe('PatchDetailView beyond the rack', () => {
       external: true,
       label: undefined,
     });
+  });
+
+  it('corrects an instance\'s manufacturer and module name, refusing an empty one', async () => {
+    api.get.mockResolvedValue(richPatch);
+    api.put.mockResolvedValue({});
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    // The drafts start from the snapshot the patch holds.
+    expect(wrapper.find('[data-test="manufacturer-input-12"]').element.value).toBe('external');
+    expect(wrapper.find('[data-test="module-name-input-12"]').element.value).toBe('UMC404HD');
+
+    await wrapper.find('[data-test="manufacturer-input-12"]').setValue('Behringer');
+    await wrapper.find('[data-test="module-name-input-12"]').setValue('  UMC404HD mk2 ');
+    await wrapper.find('[data-test="name-save-12"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/patches/7/modules/12', {
+      manufacturer: 'Behringer',
+      module_name: 'UMC404HD mk2',
+    });
+
+    // Blanking either one is refused before it reaches the server.
+    api.put.mockClear();
+    await wrapper.find('[data-test="module-name-input-12"]').setValue('   ');
+    expect(wrapper.find('[data-test="name-save-12"]').attributes('disabled')).toBeDefined();
+    // Enter reaches the same guard the disabled button hides behind.
+    await wrapper.find('[data-test="module-name-input-12"]').trigger('keyup.enter');
+    await flushPromises();
+    expect(api.put).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="instance-error"]').text()).toContain('both required');
   });
 
   it('declares a connection point on gear the patch invented', async () => {

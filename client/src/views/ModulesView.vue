@@ -91,12 +91,13 @@ function moduleHref(module, rack) {
 async function remove(module) {
   const where = currentRack.value ? `from rack '${currentRack.value.name}'` : 'from all your racks';
   const ok = await dialog.confirm({
-    title: 'Delete module',
+    title: 'Remove module',
     message:
-      `Delete ${module.manufacturer} ${module.name} ${where}? ` +
-      'If it ends up in no rack at all, the module and its manuals, notes and ' +
-      'questions are permanently deleted.',
-    confirmLabel: 'Delete',
+      `Remove ${module.manufacturer} ${module.name} ${where}? ` +
+      'Its manual, analysis and panel stay on the server, so importing it ' +
+      'again brings the module back with all of that work — and your notes ' +
+      'and questions about it.',
+    confirmLabel: 'Remove',
     danger: true,
   });
   if (!ok) return;
@@ -405,7 +406,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
                       :data-test="`delete-${module.id}`"
                       @click="remove(module)"
                     >
-                      Delete
+                      Remove
                     </button>
                   </div>
                 </td>

@@ -282,7 +282,7 @@ watch(connected, (isConnected) => {
       <p v-if="error" class="error" data-test="scope-error">{{ error }}</p>
       <p v-if="status" class="ok" data-test="scope-status">{{ status }}</p>
 
-      <div class="row">
+      <div class="actions spaced">
         <button :disabled="!connected || busy" data-test="scope-automap" @click="automap">
           Map channels automatically
         </button>

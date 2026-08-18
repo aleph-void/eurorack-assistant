@@ -100,7 +100,7 @@ onMounted(() => {
     </p>
     <label for="device-name">Call this device</label>
     <input id="device-name" v-model="name" data-test="device-name" />
-    <div class="row">
+    <div class="actions spaced">
       <button :disabled="busy" data-test="approve" @click="decide(true)">Approve</button>
       <button class="danger" :disabled="busy" data-test="deny" @click="decide(false)">
         Deny

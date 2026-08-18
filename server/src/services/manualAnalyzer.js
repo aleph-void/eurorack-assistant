@@ -65,8 +65,8 @@ module: the bill of materials, component values, resistor colour codes,
 soldering order and calibration trimmers are not panel components, and a
 part on the PCB is not a jack.`
     : `The attached PDFs are rendered PRODUCT PAGES, not a user manual. One is the
-maker's (or best available) page and the other, when available, is Perfect
-Circuit's page.`
+maker's (or best available) page and the others, when available, are
+retailers' pages (Perfect Circuit, Detroit Modular, Midwest Modular).`
 } Reconcile evidence from both and do not duplicate a physical
 jack merely because both documents mention it. Product-page prose often names
 features without giving a numbered panel tour. For JACKS ONLY, also inspect
@@ -94,13 +94,25 @@ For knobs, buttons, switches and every other non-jack component, keep the
 normal rule below: list it only when the document describes it.
 `;
 
+// The re-analysis attaches retailer product pages BESIDE the manual proper.
+// The manual stays authoritative; the pages fill in what it never names.
+const RETAILER_PAGE_GUIDANCE = `
+In addition to the user manual, one or more retailer PRODUCT PAGES (Perfect
+Circuit, Detroit Modular, Midwest Modular), rendered to PDF, are attached.
+The manual is the primary source: where the documents disagree, the manual
+wins. Use the product pages to corroborate the panel inventory and to fill in
+jacks and controls the manual never names — retailer copy often tours the
+panel jack by jack. Do not duplicate a physical component merely because
+several documents mention it.
+`;
+
 export const ANALYSIS_TEMPLATE = (
   manufacturer,
   name,
-  { productPage = false, buildDoc = false } = {}
+  { productPage = false, buildDoc = false, retailerPages = false } = {}
 ) => `You are a eurorack modular synthesizer expert. Analyze the attached ${productPage ? 'rendered product page' : 'user manual'}
 for the module "${manufacturer} ${name}" and produce a structured description.
-${productPage ? PRODUCT_PAGE_JACK_GUIDANCE({ buildDoc }) : ''}
+${productPage ? PRODUCT_PAGE_JACK_GUIDANCE({ buildDoc }) : retailerPages ? RETAILER_PAGE_GUIDANCE : ''}
 
 Many manuals cover more than one panel — a host module together with its
 expander, or a family of related modules. This description is for
@@ -767,10 +779,14 @@ export async function analyzeManualForModule(
   backend,
   module,
   manualPaths,
-  { productPage = false, buildDoc = false } = {}
+  { productPage = false, buildDoc = false, retailerPages = false } = {}
 ) {
   const paths = Array.isArray(manualPaths) ? manualPaths : [manualPaths];
-  const prompt = ANALYSIS_TEMPLATE(module.manufacturer, module.name, { productPage, buildDoc });
+  const prompt = ANALYSIS_TEMPLATE(module.manufacturer, module.name, {
+    productPage,
+    buildDoc,
+    retailerPages,
+  });
   const response =
     paths.length > 1
       ? await backend.analyzeDocuments(prompt, paths)

@@ -189,21 +189,13 @@ onMounted(async () => {
       tokens. Queued jobs stay where they are and run when it resumes.
     </p>
     <p v-if="jobs.queue.reason" class="muted">{{ jobs.queue.reason }}</p>
-    <div class="row" style="align-items: baseline">
-      <p class="muted" style="margin: 0">
+    <div class="actions">
+      <p class="muted push">
         <template v-if="resumesAt">Resumes on its own at {{ resumesAt }}.</template>
       </p>
-      <div class="shrink">
-        <button
-          class="secondary"
-          style="margin: 0"
-          :disabled="resuming"
-          data-test="resume-queue"
-          @click="resumeQueue"
-        >
-          {{ resuming ? 'Resuming…' : 'Resume Now' }}
-        </button>
-      </div>
+      <button class="secondary" :disabled="resuming" data-test="resume-queue" @click="resumeQueue">
+        {{ resuming ? 'Resuming…' : 'Resume Now' }}
+      </button>
     </div>
   </div>
 
@@ -241,64 +233,49 @@ onMounted(async () => {
   </details>
 
   <div class="panel">
-    <div v-if="jobs.failedJobs.length > 0" class="row" style="align-items: baseline">
-      <p class="muted" style="margin: 0">{{ jobs.failedJobs.length }} failed job(s) can be retried.</p>
-      <div class="shrink">
-        <button
-          class="secondary"
-          style="margin: 0"
-          :disabled="retryingAll"
-          data-test="retry-all"
-          @click="retryAll"
-        >
-          {{ retryingAll ? 'Retrying…' : `Retry all failed (${jobs.failedJobs.length})` }}
-        </button>
-      </div>
-    </div>
-
-    <!-- Whole-list actions, over the viewer's own jobs only. Stop All appears
-         while there is something to stop; Delete All while they have anything
-         listed at all. -->
+    <!-- Whole-list actions on one bar, over the viewer's own jobs only: Retry
+         appears while something has failed, Stop All while there is something
+         to stop, Delete All while they have anything listed at all. -->
     <div
-      v-if="jobs.ownJobs.length > 0"
-      class="row"
-      style="align-items: baseline; justify-content: flex-end"
+      v-if="jobs.ownJobs.length > 0 || jobs.failedJobs.length > 0"
+      class="actions end spaced"
+      data-test="job-bulk-actions"
     >
-      <div class="shrink">
+      <p v-if="jobs.failedJobs.length > 0" class="muted push">
+        {{ jobs.failedJobs.length }} failed job(s) can be retried.
+      </p>
+      <button
+        v-if="jobs.failedJobs.length > 0"
+        class="secondary"
+        :disabled="retryingAll"
+        data-test="retry-all"
+        @click="retryAll"
+      >
+        {{ retryingAll ? 'Retrying…' : `Retry all failed (${jobs.failedJobs.length})` }}
+      </button>
+      <template v-if="jobs.ownJobs.length > 0">
         <button
           v-if="jobs.stoppableJobs.length > 0"
           class="secondary"
-          style="margin: 0"
           :disabled="stoppingAll"
           data-test="stop-all"
           @click="stopAll"
         >
           {{ stoppingAll ? 'Stopping…' : `Stop All (${jobs.stoppableJobs.length})` }}
         </button>
-      </div>
-      <div class="shrink">
         <button
           v-if="jobs.cancelledJobs.length > 0"
           class="secondary"
-          style="margin: 0"
           :disabled="removingCancelled"
           data-test="remove-cancelled"
           @click="removeCancelled"
         >
           {{ removingCancelled ? 'Removing…' : `Remove Cancelled (${jobs.cancelledJobs.length})` }}
         </button>
-      </div>
-      <div class="shrink">
-        <button
-          class="danger"
-          style="margin: 0"
-          :disabled="deletingAll"
-          data-test="delete-all"
-          @click="deleteAll"
-        >
+        <button class="danger" :disabled="deletingAll" data-test="delete-all" @click="deleteAll">
           {{ deletingAll ? 'Deleting…' : 'Delete All' }}
         </button>
-      </div>
+      </template>
     </div>
     <div class="table-wrap">
       <table data-test="job-table">
@@ -327,7 +304,10 @@ onMounted(async () => {
             </td>
             <td>{{ job.attempts }}</td>
             <td class="muted">{{ job.error || '' }}</td>
-            <td class="job-actions">
+            <!-- Up to four controls share this cell (Download, Retry, Stop,
+                 Delete): the shared action bar keeps them side by side and
+                 wraps them only when the column truly cannot hold them. -->
+            <td class="actions">
               <!-- Finished exports normally download themselves; the link
                    covers a missed event (page closed). It dies once used —
                    the server deletes the zip after serving it. -->
@@ -341,7 +321,6 @@ onMounted(async () => {
               <button
                 v-if="job.status === 'failed' || job.stalled"
                 class="secondary"
-                style="margin: 0"
                 :data-test="`retry-${job.id}`"
                 @click="retry(job)"
               >
@@ -352,7 +331,6 @@ onMounted(async () => {
               <button
                 v-if="job.own !== false && (job.status === 'pending' || job.status === 'running')"
                 class="secondary"
-                style="margin: 0"
                 :data-test="`stop-${job.id}`"
                 @click="stop(job)"
               >
@@ -361,7 +339,6 @@ onMounted(async () => {
               <button
                 v-if="job.own !== false"
                 class="danger"
-                style="margin: 0"
                 :data-test="`delete-${job.id}`"
                 @click="remove(job)"
               >
@@ -382,15 +359,5 @@ onMounted(async () => {
 .paused {
   border-color: var(--danger);
   background: rgba(248, 113, 113, 0.08);
-}
-
-/* Up to four controls share this cell (Download, Retry, Stop, Delete); they
-   wrap onto a second line rather than stretching the column on narrow
-   screens. */
-.job-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem;
 }
 </style>

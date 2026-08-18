@@ -605,13 +605,44 @@ function flowNodeText(node) {
   return `${moduleLabel(modulesById.value.get(node.patch_module_id))} — ${node.name}`;
 }
 
-// ---- instances: labels and groups ----
+// ---- instances: names, labels and groups ----
 const labelDraft = reactive({});
+const nameDraft = reactive({});
 const instanceError = ref('');
 
 function labelKey(pm) {
   if (!(pm.id in labelDraft)) labelDraft[pm.id] = pm.label || '';
   return pm.id;
+}
+
+// The manufacturer and module name the patch snapshotted, editable in place
+// so a typo or a piece of gear named in a hurry can be corrected. Both have
+// to say something — an instance with no name cannot be picked out of the
+// cable and settings pickers.
+function nameKey(pm) {
+  if (!(pm.id in nameDraft)) {
+    nameDraft[pm.id] = {
+      manufacturer: pm.manufacturer || '',
+      module_name: pm.module_name || '',
+    };
+  }
+  return pm.id;
+}
+
+function nameValid(pm) {
+  const draft = nameDraft[pm.id];
+  return Boolean(draft?.manufacturer.trim() && draft?.module_name.trim());
+}
+
+async function saveName(pm) {
+  if (!nameValid(pm)) {
+    instanceError.value = 'A manufacturer and a module name are both required.';
+    return;
+  }
+  await saveInstance(pm, {
+    manufacturer: nameDraft[pm.id].manufacturer.trim(),
+    module_name: nameDraft[pm.id].module_name.trim(),
+  });
 }
 
 async function saveInstance(pm, updates) {
@@ -849,10 +880,10 @@ onMounted(async () => {
   <p v-if="error" class="error" data-test="error">{{ error }}</p>
   <template v-if="patch">
     <template v-if="renaming">
-      <form style="display: inline" @submit.prevent="rename">
-        <input v-model="renameValue" data-test="rename-input" style="width: auto" />
-        <button type="submit" style="margin: 0 0 0 0.4rem" data-test="rename-save">Save</button>
-        <button type="button" style="margin: 0 0 0 0.4rem" @click="renaming = false">Cancel</button>
+      <form class="actions" @submit.prevent="rename">
+        <input v-model="renameValue" data-test="rename-input" />
+        <button type="submit" data-test="rename-save">Save</button>
+        <button type="button" @click="renaming = false">Cancel</button>
       </form>
       <p v-if="renameError" class="error">{{ renameError }}</p>
     </template>
@@ -1536,7 +1567,9 @@ onMounted(async () => {
       <div class="panel-body">
         <p class="muted">
           Name the groups a patch is really built from — a rhythm layer, a granular bus — and give
-          each instance the role it plays, so "LXR #2" reads as the ghost-note voice it is.
+          each instance the role it plays, so "LXR #2" reads as the ghost-note voice it is. The
+          manufacturer and module name are this patch's own, so correct either here when one came
+          in wrong; both have to say something.
         </p>
         <div v-for="entry in groupedModules" :key="entry.group?.id ?? 'ungrouped'">
           <h3 v-if="entry.group" :data-test="`group-${entry.group.id}`">
@@ -1555,7 +1588,7 @@ onMounted(async () => {
             <table>
               <thead>
                 <tr>
-                  <th>Module</th>
+                  <th>Manufacturer and module</th>
                   <th>Role in this patch</th>
                   <th>Bus</th>
                   <th></th>
@@ -1563,8 +1596,29 @@ onMounted(async () => {
               </thead>
               <tbody>
                 <tr v-for="pm in entry.members" :key="pm.id" :data-test="`instance-${pm.id}`">
-                  <td>{{ pm.manufacturer }} {{ pm.module_name }} #{{ pm.instance }}</td>
-                  <td>
+                  <td class="actions">
+                    <input
+                      v-model="nameDraft[nameKey(pm)].manufacturer"
+                      :data-test="`manufacturer-input-${pm.id}`"
+                      placeholder="Manufacturer"
+                      @keyup.enter="saveName(pm)"
+                    />
+                    <input
+                      v-model="nameDraft[nameKey(pm)].module_name"
+                      :data-test="`module-name-input-${pm.id}`"
+                      placeholder="Module name"
+                      @keyup.enter="saveName(pm)"
+                    />
+                    <span class="muted">#{{ pm.instance }}</span>
+                    <button
+                      :disabled="!nameValid(pm)"
+                      :data-test="`name-save-${pm.id}`"
+                      @click="saveName(pm)"
+                    >
+                      Save
+                    </button>
+                  </td>
+                  <td class="actions">
                     <input
                       v-model="labelDraft[labelKey(pm)]"
                       :data-test="`label-input-${pm.id}`"
@@ -1572,7 +1626,6 @@ onMounted(async () => {
                       @keyup.enter="saveInstance(pm, { label: labelDraft[pm.id] })"
                     />
                     <button
-                      style="margin: 0 0 0 0.4rem"
                       :data-test="`label-save-${pm.id}`"
                       @click="saveInstance(pm, { label: labelDraft[pm.id] })"
                     >

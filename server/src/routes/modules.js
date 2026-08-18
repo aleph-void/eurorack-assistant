@@ -10,7 +10,6 @@ import {
   PORT_KINDS,
   BREAK_MODES,
 } from '../services/manualAnalyzer.js';
-import { deleteModulesDeep } from '../services/moduleDeletion.js';
 import { refreshModuleLinks, unlinkedExpanderHints } from '../services/moduleLinks.js';
 import {
   downloadImage,
@@ -29,6 +28,7 @@ import {
   savePanel,
 } from '../services/panelImage.js';
 import { enqueueExtractManual, enqueueModuleJob } from '../jobs/worker.js';
+import { isCompanionDocumentName, isRetailerPageName } from '../services/manualFinder.js';
 import { readableIds, removeShares } from '../services/sharing.js';
 import { requireBudget } from '../services/budgets.js';
 
@@ -307,6 +307,41 @@ export function moduleRoutes(
     }
   });
 
+  // Re-analyze ONE module's components with retailer product pages fetched
+  // fresh: the job downloads the module's page from Perfect Circuit, Detroit
+  // Modular and Midwest Modular and submits whichever it finds alongside the
+  // manual. Refused while any of those pages already exists for the module —
+  // the GUI disables its button on the same test — because the fetch is what
+  // this action is for, and rendered pages would otherwise pile up.
+  router.post('/:id/reanalyze', requireBudget(db), async (req, res, next) => {
+    try {
+      const module = await userModule(req.user.id, req.params.id);
+      if (!module) return res.status(404).json({ error: 'Module not found' });
+      const shared = await Manual.findAll({
+        where: { module_id: module.id, user_id: null },
+        attributes: ['id', 'original_name'],
+      });
+      if (!shared.some((m) => !isCompanionDocumentName(m.original_name))) {
+        return res.status(409).json({ error: 'This module has no manual to re-analyze from' });
+      }
+      const existing = shared.filter((m) => isRetailerPageName(m.original_name));
+      if (existing.length > 0) {
+        return res.status(409).json({
+          error: 'Retailer product pages already exist for this module',
+          documents: existing.map((m) => m.original_name),
+        });
+      }
+      const job = await enqueueModuleJob(db, 'reanalyze_components', module, req.user.id);
+      if (!job) {
+        return res.status(409).json({ error: 'A re-analysis is already queued for this module' });
+      }
+      await Module.update({ analysis_status: 'pending' }, { where: { id: module.id } });
+      res.status(202).json({ job_id: job.id });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   router.get('/:id', async (req, res, next) => {
     try {
       const module = await userModule(req.user.id, req.params.id);
@@ -557,10 +592,12 @@ export function moduleRoutes(
   });
 
   // Removing a module removes it from *your* racks (one rack when ?rack_id=
-  // is given, otherwise all of them). Once a module is left in no rack at
-  // all, the module record itself is fully deleted — components, manuals,
-  // and *your* questions and notes about it included (other users' stay).
-  // While another user still has it racked, the shared record survives.
+  // is given, otherwise all of them) and nothing more. The module record
+  // itself is kept even once it is in no rack at all: its manual, analysis,
+  // panel and components are shared hardware facts that cost model runs to
+  // produce, so importing the same manufacturer + name again — by you or by
+  // another user — picks the finished record back up instead of rebuilding
+  // it. Your questions and notes about it stay too, and come back with it.
   router.delete('/:id', async (req, res, next) => {
     try {
       const moduleId = Number(req.params.id);
@@ -574,9 +611,6 @@ export function moduleRoutes(
               where: { rack_id: racks.map((r) => r.id), module_id: moduleId },
             });
       if (deleted === 0) return res.status(404).json({ error: 'Module not found' });
-      if ((await RackModule.count({ where: { module_id: moduleId } })) === 0) {
-        await deleteModulesDeep(db, req.user.id, [moduleId], { manualsDir, panelsDir });
-      }
       res.json({ ok: true });
     } catch (e) {
       next(e);

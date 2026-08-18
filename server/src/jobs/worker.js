@@ -12,6 +12,10 @@
 //                     only a model can read
 //   panel_image     — find (or draw) the module's front panel and place every
 //                     analyzed component on it
+//   reanalyze_components — fetch the module's product page from the retailers
+//                     that describe panels jack by jack (Perfect Circuit,
+//                     Detroit Modular, Midwest Modular), then re-run the
+//                     manual analysis with every page that was found attached
 //   scope_question  — determine which modules/jacks a question applies to,
 //                     then leave the question 'scoped' for the user to review
 //   answer_question — ask the LLM with the reviewed scope and attachments
@@ -41,6 +45,8 @@ import {
 } from '../services/importer.js';
 import {
   findManualForModule,
+  fetchRetailerPagesForModule,
+  isCompanionDocumentName,
   BUILD_DOCUMENT_SUFFIX,
   PERFECT_CIRCUIT_SUFFIX,
 } from '../services/manualFinder.js';
@@ -136,7 +142,7 @@ export async function resetJobTarget(db, job, status, message) {
       { manual_status: status === 'failed' ? 'failed' : 'pending' },
       { where: { id: job.module_id } }
     );
-  } else if (job.type === 'analyze_manual' && job.module_id) {
+  } else if ((job.type === 'analyze_manual' || job.type === 'reanalyze_components') && job.module_id) {
     await Module.update(
       { analysis_status: status === 'failed' ? 'failed' : 'pending' },
       { where: { id: job.module_id } }
@@ -636,22 +642,75 @@ export function createWorker(db, options = {}) {
     progress(`text saved: ${document.pages ?? '?'} page(s), ${document.chars} characters`);
   }
 
+  // Submit a set of documents to the analysis, with the module's status
+  // walked through analyzing → complete/failed and the panel job chained
+  // behind a successful run — the tail both analysis jobs share.
+  async function runManualAnalysis(job, module, candidates, flags, progress) {
+    const { Module } = db.models;
+    // Documents in the set may be byte-for-byte identical (a companion equal
+    // to the primary page). Submit each content only once.
+    const seenAnalysisHashes = new Set();
+    const analysisManuals = candidates.filter((m) => {
+      if (seenAnalysisHashes.has(m.hash)) return false;
+      seenAnalysisHashes.add(m.hash);
+      return true;
+    });
+    await Module.update({ analysis_status: 'analyzing' }, { where: { id: module.id } });
+    const documentLabel = analysisManuals.length === 1 ? 'document' : 'documents';
+    progress(
+      `analyzing ${analysisManuals.length} ${documentLabel}: ` +
+        analysisManuals.map((m) => m.original_name || `${m.hash}.pdf`).join(', ')
+    );
+    let analyzed = 0;
+    try {
+      const { components } = await analyzeManualForModule(
+        db,
+        flags.backend,
+        module,
+        analysisManuals.map((m) => manualPath(manualsDir, m.hash)),
+        {
+          productPage: flags.productPage,
+          buildDoc: flags.buildDoc && analysisManuals.length > 1,
+          retailerPages: flags.retailerPages && analysisManuals.length > 1,
+        }
+      );
+      analyzed = components.length;
+      progress(`analysis complete: ${components.length} component(s) found`);
+    } catch (e) {
+      await Module.update({ analysis_status: 'failed' }, { where: { id: module.id } });
+      throw e;
+    }
+    // The panel needs the component list the analysis just wrote, so it is
+    // chained rather than run alongside. A module whose panel job fails still
+    // has a complete analysis. An analysis that found no components at all
+    // has nothing to place on a panel, so there is nothing to queue.
+    if (analyzed > 0 && (await enqueueModuleJob(db, 'panel_image', module, job.user_id))) {
+      progress('queued front panel image');
+    }
+  }
+
+  // The module's shared documents and the one among them that is the manual
+  // proper — retailer pages and build documents are only ever companions.
+  async function sharedManualDocuments(module) {
+    const manuals = await db.models.Manual.findAll({
+      where: { module_id: module.id, user_id: null },
+      order: [['id', 'ASC']],
+    });
+    return {
+      manuals,
+      manual: manuals.find((m) => !isCompanionDocumentName(m.original_name)) ?? null,
+    };
+  }
+
   async function handleAnalyzeManual(job, backend, progress) {
     const { Module, Manual } = db.models;
     const record = await Module.findByPk(job.module_id);
     if (!record) throw new Error(`Module ${job.module_id} no longer exists`);
     const module = record.get({ plain: true });
-    // The shared auto-found manual is what gets analyzed.
-    const manuals = await Manual.findAll({
-      where: { module_id: module.id, user_id: null },
-      order: [['id', 'ASC']],
-    });
-    // A companion is never the document being analyzed; it is only ever
-    // submitted alongside one.
-    const manual = manuals.find(
-      (m) =>
-        !isFoundCompanion(m, PERFECT_CIRCUIT_SUFFIX) && !isFoundCompanion(m, BUILD_DOCUMENT_SUFFIX)
-    );
+    // The shared auto-found manual is what gets analyzed. A companion is
+    // never the document being analyzed; it is only ever submitted alongside
+    // one.
+    const { manuals, manual } = await sharedManualDocuments(module);
     if (!manual) {
       throw new Error(`Module ${module.manufacturer} ${module.name} has no manual to analyze`);
     }
@@ -680,42 +739,48 @@ export function createWorker(db, options = {}) {
       !isPerfectCircuitDocument(companion) &&
       !isFoundCompanion(companion, PERFECT_CIRCUIT_SUFFIX);
     const candidates = productPage ? [manual, companion].filter(Boolean) : [manual];
-    // The selected companion may be byte-for-byte identical to the primary
-    // product page. Submit that content only once.
-    const seenAnalysisHashes = new Set();
-    const analysisManuals = candidates.filter((m) => {
-      if (seenAnalysisHashes.has(m.hash)) return false;
-      seenAnalysisHashes.add(m.hash);
-      return true;
+    await runManualAnalysis(job, module, candidates, { backend, productPage, buildDoc }, progress);
+  }
+
+  // Re-run the component analysis with fresh retailer product pages beside
+  // the manual: fetch the module's page from each retailer that lists it,
+  // save every render as a shared document, and submit the lot together.
+  // The route refuses to queue this while any retailer page already exists,
+  // so the fetch never piles renders up.
+  async function handleReanalyzeComponents(job, backend, progress) {
+    const { Module } = db.models;
+    const record = await Module.findByPk(job.module_id);
+    if (!record) throw new Error(`Module ${job.module_id} no longer exists`);
+    const module = record.get({ plain: true });
+    const { manual } = await sharedManualDocuments(module);
+    if (!manual) {
+      throw new Error(`Module ${module.manufacturer} ${module.name} has no manual to analyze`);
+    }
+    progress(`searching retailer product pages: ${module.manufacturer} ${module.name}`.trim());
+    const pages = await fetchRetailerPagesForModule(db, backend, module, manualsDir, {
+      renderImpl,
+      log: progress,
     });
-    await Module.update({ analysis_status: 'analyzing' }, { where: { id: module.id } });
-    const documentLabel = analysisManuals.length === 1 ? 'document' : 'documents';
-    progress(
-      `analyzing ${analysisManuals.length} ${documentLabel}: ` +
-        analysisManuals.map((m) => m.original_name || `${m.hash}.pdf`).join(', ')
+    if (pages.length === 0) {
+      progress('no retailer product pages found; re-analyzing from the manual alone');
+    } else {
+      progress(`product pages saved: ${pages.map((p) => p.original_name).join(', ')}`);
+    }
+    // The new pages become searchable like every other saved document. The
+    // extraction needs nothing from the analysis, so it runs alongside.
+    for (const page of pages) {
+      if (await enqueueExtractManual(db, page, job.user_id)) {
+        progress(`queued text extraction: ${page.original_name}`);
+      }
+    }
+    const productPage = /_Product_Page\.pdf$/i.test(manual.original_name || '');
+    await runManualAnalysis(
+      job,
+      module,
+      [manual, ...pages],
+      { backend, productPage, retailerPages: !productPage },
+      progress
     );
-    let analyzed = 0;
-    try {
-      const { components } = await analyzeManualForModule(
-        db,
-        backend,
-        module,
-        analysisManuals.map((m) => manualPath(manualsDir, m.hash)),
-        { productPage, buildDoc: buildDoc && analysisManuals.length > 1 }
-      );
-      analyzed = components.length;
-      progress(`analysis complete: ${components.length} component(s) found`);
-    } catch (e) {
-      await Module.update({ analysis_status: 'failed' }, { where: { id: module.id } });
-      throw e;
-    }
-    // The panel needs the component list the analysis just wrote, so it is
-    // chained rather than run alongside. A module whose panel job fails still
-    // has a complete analysis. An analysis that found no components at all
-    // has nothing to place on a panel, so there is nothing to queue.
-    if (analyzed > 0 && (await enqueueModuleJob(db, 'panel_image', module, job.user_id))) {
-      progress('queued front panel image');
-    }
   }
 
   async function handlePanelImage(job, backend, progress) {
@@ -811,6 +876,7 @@ export function createWorker(db, options = {}) {
     import: handleImport,
     find_manual: handleFindManual,
     analyze_manual: handleAnalyzeManual,
+    reanalyze_components: handleReanalyzeComponents,
     extract_manual: handleExtractManual,
     panel_image: handlePanelImage,
     scope_question: handleScopeQuestion,

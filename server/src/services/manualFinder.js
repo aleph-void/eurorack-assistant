@@ -78,12 +78,16 @@ export async function researchModule(backend, line) {
   return info;
 }
 
-export function normalizePerfectCircuitUrl(value) {
+// A retailer product page URL is only usable when it really is a page on
+// that retailer's site — the LLM is prone to inventing plausible paths on
+// the right domain, which the render step then discovers, but a wrong
+// domain or a bare homepage is knowably useless up front.
+export function normalizeRetailerUrl(value, retailerHost) {
   if (!value) return null;
   try {
     const url = new URL(String(value).trim());
     const host = url.hostname.toLowerCase().replace(/^www\./, '');
-    if (url.protocol !== 'https:' || host !== 'perfectcircuit.com' || url.pathname === '/') {
+    if (url.protocol !== 'https:' || host !== retailerHost || url.pathname === '/') {
       return null;
     }
     return url.href;
@@ -92,11 +96,141 @@ export function normalizePerfectCircuitUrl(value) {
   }
 }
 
+export const normalizePerfectCircuitUrl = (value) =>
+  normalizeRetailerUrl(value, 'perfectcircuit.com');
+
 // The name suffixes of the two kinds of companion document. They are how the
 // analyze_manual job recognizes one later, so they are exported rather than
 // spelled out again there.
 export const PERFECT_CIRCUIT_SUFFIX = 'Perfect_Circuit_Product_Page';
 export const BUILD_DOCUMENT_SUFFIX = 'Build_Document';
+export const DETROIT_MODULAR_SUFFIX = 'Detroit_Modular_Product_Page';
+export const MIDWEST_MODULAR_SUFFIX = 'Midwest_Modular_Product_Page';
+
+// The retailers whose product pages the component re-analysis fetches: each
+// tends to describe a module's panel jack by jack. `key` names the URL field
+// in the research response, `suffix` the saved document.
+export const RETAILER_PAGES = [
+  {
+    host: 'perfectcircuit.com',
+    label: 'Perfect Circuit',
+    key: 'perfect_circuit_url',
+    suffix: PERFECT_CIRCUIT_SUFFIX,
+  },
+  {
+    host: 'detroitmodular.com',
+    label: 'Detroit Modular',
+    key: 'detroit_modular_url',
+    suffix: DETROIT_MODULAR_SUFFIX,
+  },
+  {
+    host: 'midwestmodular.com',
+    label: 'Midwest Modular',
+    key: 'midwest_modular_url',
+    suffix: MIDWEST_MODULAR_SUFFIX,
+  },
+];
+
+export const RETAILER_PAGE_SUFFIXES = RETAILER_PAGES.map((r) => r.suffix);
+
+const nameHasSuffix = (name, suffix) => new RegExp(`_${suffix}\\.pdf$`, 'i').test(name || '');
+
+// A saved retailer product-page render, recognized by the name the fetch
+// gave it. Both the route that refuses to fetch pages that already exist and
+// the button in the GUI test for this.
+export const isRetailerPageName = (name) =>
+  RETAILER_PAGE_SUFFIXES.some((suffix) => nameHasSuffix(name, suffix));
+
+// Any auto-found document that is only ever submitted ALONGSIDE the module's
+// manual, never analyzed as the manual itself.
+export const isCompanionDocumentName = (name) =>
+  isRetailerPageName(name) || nameHasSuffix(name, BUILD_DOCUMENT_SUFFIX);
+
+export const RETAILER_RESEARCH_TEMPLATE = (line) => `You are researching the eurorack modular synthesizer module: "${line}"
+
+Task: find this exact module's product page on each of these three retailers.
+
+1. perfectcircuit.com
+2. detroitmodular.com
+3. midwestmodular.com
+
+Respond with ONLY a JSON object, no prose and no code fences, shaped exactly like:
+
+{"perfect_circuit_url": "https://www.perfectcircuit.com/...", "detroit_modular_url": "https://detroitmodular.com/...", "midwest_modular_url": "https://midwestmodular.com/..."}
+
+Rules:
+- Each URL must be the product page for this exact module on that retailer's
+  site: verify that both manufacturer and module match. Do not return a
+  search-results, category or homepage URL.
+- Use null for any retailer that has no page for this module. A guess is
+  worse than nothing.
+`;
+
+// The three retailer product page URLs, keyed by retailer host. Only URLs
+// actually on the retailer's site survive normalization.
+export async function researchRetailerPages(backend, line) {
+  const response = await backend.completeTextWithSearch(RETAILER_RESEARCH_TEMPLATE(line));
+  const info = extractJsonObject(response);
+  const urls = new Map();
+  for (const retailer of RETAILER_PAGES) {
+    const url = normalizeRetailerUrl(info[retailer.key], retailer.host);
+    if (url) urls.set(retailer.host, url);
+  }
+  return urls;
+}
+
+// Fetch the module's product page from each retailer that has one and record
+// every render as a shared document. Returns the plain manual rows of the
+// pages saved this run. Callers refuse to run when any retailer page already
+// exists for the module, so this never has stale renders of its own kind to
+// supersede.
+export async function fetchRetailerPagesForModule(db, backend, module, manualsDir, deps = {}) {
+  const { log = () => {}, renderImpl = renderPageToPdf } = deps;
+  const line = module.manufacturer ? `${module.manufacturer},${module.name}` : module.name;
+  let urls;
+  try {
+    urls = await researchRetailerPages(backend, line);
+  } catch (e) {
+    log(`retailer page research failed: ${e.message}`);
+    return [];
+  }
+  const { Manual } = db.models;
+  const saved = [];
+  for (const retailer of RETAILER_PAGES) {
+    const url = urls.get(retailer.host);
+    if (!url) {
+      log(`no ${retailer.label} page found`);
+      continue;
+    }
+    const originalName = safeManualName(module.manufacturer, module.name, retailer.suffix);
+    const tmp = path.join(manualsDir, `download_${originalName}`);
+    log(`rendering ${retailer.label} product page: ${url}`);
+    if (!(await renderImpl(url, tmp, { log }))) {
+      log(`${retailer.label} page did not render`);
+      continue;
+    }
+    const hash = storeAcquired(tmp, manualsDir);
+    const row = await db.sequelize.transaction(async (transaction) => {
+      const existing = await Manual.findOne({
+        where: { module_id: module.id, user_id: null, hash },
+        transaction,
+      });
+      if (existing) return existing;
+      return Manual.create(
+        {
+          module_id: module.id,
+          user_id: null,
+          hash,
+          original_name: originalName,
+          source: 'found',
+        },
+        { transaction }
+      );
+    });
+    saved.push(row.get({ plain: true }));
+  }
+  return saved;
+}
 
 // Move a freshly acquired temporary file into the content-addressed store.
 function storeAcquired(tmp, manualsDir) {

@@ -555,6 +555,97 @@ describe('worker', () => {
     expect(prompt).not.toContain("Perfect\nCircuit's page");
   });
 
+  it('processes a reanalyze_components job: fetches retailer pages and re-analyzes with them', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, {
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+    });
+    await enqueue(db, 'reanalyze_components', { module_id: module.id, user_id: user.id });
+
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        perfect_circuit_url: 'https://www.perfectcircuit.com/make-noise-maths.html',
+        detroit_modular_url: 'https://detroitmodular.com/make-noise/maths',
+        // No Midwest Modular listing; also exercises URL validation.
+        midwest_modular_url: null,
+      }),
+      analyzeDocuments:
+        '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
+    });
+    const rendered = [];
+    const renderImpl = async (url, dest) => {
+      rendered.push(url);
+      // Distinct bytes per page, as a real render would produce.
+      fs.writeFileSync(dest, Buffer.concat([PDF_BYTES, Buffer.from(url)]));
+      return true;
+    };
+    const done = await makeWorker(db, backend, fakeFetch({}), null, { renderImpl }).tick();
+    expect(done.status).toBe('complete');
+
+    expect(rendered).toEqual([
+      'https://www.perfectcircuit.com/make-noise-maths.html',
+      'https://detroitmodular.com/make-noise/maths',
+    ]);
+    const { rows: manuals } = await db.query(
+      'SELECT * FROM manuals WHERE module_id = $1 ORDER BY id',
+      [module.id]
+    );
+    expect(manuals).toHaveLength(3);
+    expect(manuals.map((m) => m.original_name).slice(1)).toEqual([
+      'Make_Noise_Maths_Perfect_Circuit_Product_Page.pdf',
+      'Make_Noise_Maths_Detroit_Modular_Product_Page.pdf',
+    ]);
+    for (const page of manuals.slice(1)) {
+      expect(fs.existsSync(path.join(manualsDir, `${page.hash}.pdf`))).toBe(true);
+    }
+
+    // The analysis got the manual AND both fetched pages, with the prompt
+    // saying what the extra documents are.
+    const [prompt, submitted] = backend.calls.analyzeDocuments[0];
+    expect(submitted).toEqual(manuals.map((m) => path.join(manualsDir, `${m.hash}.pdf`)));
+    expect(prompt).toContain('retailer PRODUCT PAGES');
+    const { rows: components } = await db.query(
+      'SELECT * FROM module_components WHERE module_id = $1',
+      [module.id]
+    );
+    expect(components).toHaveLength(1);
+
+    // The new pages get searchable text and the panel is rebuilt behind the
+    // fresh component list.
+    const { rows: jobs } = await db.query('SELECT type, payload FROM jobs ORDER BY id');
+    expect(jobs.filter((j) => j.type === 'extract_manual')).toHaveLength(2);
+    expect(jobs.filter((j) => j.type === 'panel_image')).toHaveLength(1);
+  });
+
+  it('reanalyze_components falls back to the manual alone when research fails', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, {
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+    });
+    await enqueue(db, 'reanalyze_components', { module_id: module.id, user_id: user.id });
+
+    const backend = fakeBackend({
+      completeTextWithSearch: new Error('LLM down'),
+      analyzeDocument:
+        '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
+    });
+    const done = await makeWorker(db, backend).tick();
+    expect(done.status).toBe('complete');
+
+    // One document, so the single-document analysis path was used and no
+    // retailer guidance was injected.
+    expect(backend.calls.analyzeDocuments).toHaveLength(0);
+    expect(backend.calls.analyzeDocument).toHaveLength(1);
+    expect(backend.calls.analyzeDocument[0][0]).not.toContain('retailer PRODUCT PAGES');
+    expect((await db.query('SELECT * FROM manuals')).rows).toHaveLength(1);
+  });
+
   // Whatever the uploader called it, a build document they supplied beats one
   // nobody found.
   it("uses the requesting user's uploaded build document when nothing was found", async () => {
