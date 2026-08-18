@@ -1188,6 +1188,9 @@ describe('ModuleDetailView', () => {
     await wrapper.find('[data-test="doc-name"]').setValue('calibration guide');
     expect(wrapper.find('[data-test="doc-send"]').attributes('disabled')).toBeUndefined();
 
+    // Marking the upload for analysis rides along with the request.
+    await wrapper.find('[data-test="doc-scope"]').setValue(true);
+
     await wrapper.find('[data-test="doc-send"]').trigger('click');
     // The FileReader behind the upload resolves on a task, not a microtask.
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1198,10 +1201,39 @@ describe('ModuleDetailView', () => {
         name: 'calibration guide',
         filename: 'extra.pdf',
         data_base64: expect.any(String),
+        analysis_scope: true,
       })
     );
     const { data_base64 } = api.post.mock.calls[0][1];
     expect(atob(data_base64)).toContain('%PDF-1.4');
+  });
+
+  it("toggles a document's analysis scope, but never on one shared with you", async () => {
+    api.get.mockResolvedValue({
+      ...structuredClone(moduleResponse),
+      manuals: [
+        { id: 1, hash: 'a'.repeat(64), name: 'manual', original_name: 'Make_Noise_Maths_Manual.pdf', source: 'found', user_id: null, analysis_scope: false, has_text: true, text_pages: 12 },
+        { id: 2, hash: 'b'.repeat(64), name: 'my notes', original_name: 'my-notes.pdf', source: 'upload', user_id: 2, analysis_scope: true, has_text: false, text_pages: null },
+        { id: 3, hash: 'c'.repeat(64), name: 'from bob', original_name: 'bobs.pdf', source: 'upload', user_id: 9, shared_by: 'bob', analysis_scope: true, has_text: false, text_pages: null },
+      ],
+    });
+    api.put.mockResolvedValue({ id: 1, analysis_scope: true });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const shared = wrapper.find('[data-test="scope-doc-1"]');
+    expect(shared.element.checked).toBe(false);
+    await shared.setValue(true);
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/modules/1/manuals/1/scope', {
+      analysis_scope: true,
+    });
+    expect(shared.element.checked).toBe(true);
+
+    // Your own upload starts checked from the server's answer; a document
+    // somebody shared with you is theirs to mark, not yours.
+    expect(wrapper.find('[data-test="scope-doc-2"]').element.checked).toBe(true);
+    expect(wrapper.find('[data-test="scope-doc-3"]').attributes('disabled')).toBeDefined();
   });
 });
 

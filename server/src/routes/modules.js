@@ -309,8 +309,9 @@ export function moduleRoutes(
 
   // Re-analyze ONE module's components with retailer product pages fetched
   // fresh: the job downloads the module's page from Perfect Circuit, Detroit
-  // Modular and Midwest Modular and submits whichever it finds alongside the
-  // manual. Refused while any of those pages already exists for the module —
+  // Modular and Midwest Modular, saves whichever it finds marked in scope
+  // for analysis, and submits the manual together with every in-scope
+  // document. Refused while any of those pages already exists for the module —
   // the GUI disables its button on the same test — because the fetch is what
   // this action is for, and rendered pages would otherwise pile up.
   router.post('/:id/reanalyze', requireBudget(db), async (req, res, next) => {
@@ -343,10 +344,11 @@ export function moduleRoutes(
   });
 
   // Rebuild ONE module's manual analysis from the documents it already has:
-  // the shared manual is submitted again, together with every saved vendor
-  // page (retailer product-page renders and build documents). Nothing is
-  // fetched — this is the counterpart to /reanalyze for modules whose vendor
-  // pages are already on disk, or for simply re-running a bad analysis.
+  // the shared manual is submitted again, together with every document
+  // marked in scope for analysis (vendor pages arrive marked; the user can
+  // mark or unmark any document on the module page). Nothing is fetched —
+  // this is the counterpart to /reanalyze for modules whose vendor pages are
+  // already on disk, or for simply re-running a bad analysis.
   router.post('/:id/analyze', requireBudget(db), async (req, res, next) => {
     try {
       const module = await userModule(req.user.id, req.params.id);
@@ -527,7 +529,16 @@ export function moduleRoutes(
       const sharedDocumentIds = new Set(await readableIds(db, req.user.id, 'document'));
       const allManualRows = await Manual.findAll({
         where: { module_id: module.id },
-        attributes: ['id', 'hash', 'name', 'original_name', 'source', 'user_id', 'created_at'],
+        attributes: [
+          'id',
+          'hash',
+          'name',
+          'original_name',
+          'source',
+          'user_id',
+          'created_at',
+          'analysis_scope',
+        ],
         order: [['id', 'ASC']],
       });
       const manualRows = allManualRows.filter(
@@ -1732,33 +1743,48 @@ export function moduleRoutes(
         fs.writeFileSync(dest, data);
       }
 
+      // Whether this document should ride along with the module's analysis;
+      // omitted means "leave it alone" (false for a fresh upload).
+      const scopeGiven = req.body?.analysis_scope !== undefined;
+      const analysisScope = Boolean(req.body?.analysis_scope);
+
       // Re-uploading a document you already attached references the existing
-      // record instead of creating a duplicate (the original name is kept).
+      // record instead of creating a duplicate (the original file name is
+      // kept — it names the same bytes).
       const existing = await Manual.findOne({
         where: { module_id: module.id, user_id: req.user.id, hash },
       });
       // A database name may not be reused for different content (backed by
       // the unique index on (module_id, name, hash)).
-      if (!existing) {
-        const nameTaken = await Manual.findOne({
-          where: { module_id: module.id, user_id: req.user.id, name },
-        });
-        if (nameTaken) {
-          return res
-            .status(409)
-            .json({ error: `you already have a document named '${name}' on this module` });
-        }
+      const nameTaken = await Manual.findOne({
+        where: { module_id: module.id, user_id: req.user.id, name },
+      });
+      if (nameTaken && nameTaken.id !== existing?.id) {
+        return res
+          .status(409)
+          .json({ error: `you already have a document named '${name}' on this module` });
       }
-      const manual =
-        existing ||
-        (await Manual.create({
+      let manual = existing;
+      if (manual) {
+        // The typed name is an instruction either way: a re-upload under a
+        // new name renames the document rather than being silently ignored.
+        const updates = {};
+        if (manual.name !== name) updates.name = name;
+        if (scopeGiven && manual.analysis_scope !== analysisScope) {
+          updates.analysis_scope = analysisScope;
+        }
+        if (Object.keys(updates).length > 0) await manual.update(updates);
+      } else {
+        manual = await Manual.create({
           module_id: module.id,
           user_id: req.user.id,
           hash,
           name,
           original_name: String(filename),
           source: 'upload',
-        }));
+          analysis_scope: analysisScope,
+        });
+      }
 
       // Your uploads are searchable too — only by you, since the document
       // record they hang off is yours alone. The extraction is a job rather
@@ -1779,9 +1805,35 @@ export function moduleRoutes(
         source,
         user_id,
         created_at,
+        analysis_scope: manual.analysis_scope,
         has_text: Boolean(hasText),
         job_id: queued ? queued.id : null,
       });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Mark (or unmark) a document as in scope for analysis: in-scope documents
+  // are submitted alongside the manual whenever the module is (re)analyzed.
+  // Body: { analysis_scope: boolean }. Your own uploads and the shared
+  // documents are yours to mark; a document another user merely shared with
+  // you is not (and would not be attached to your jobs anyway).
+  router.put('/:id/manuals/:manualId/scope', async (req, res, next) => {
+    try {
+      const module = await userModule(req.user.id, req.params.id);
+      if (!module) return res.status(404).json({ error: 'Module not found' });
+      if (typeof req.body?.analysis_scope !== 'boolean') {
+        return res.status(400).json({ error: 'analysis_scope must be true or false' });
+      }
+      const manual = await Manual.findOne({
+        where: { id: Number(req.params.manualId), module_id: module.id },
+      });
+      if (!manual || (manual.user_id !== null && manual.user_id !== req.user.id)) {
+        return res.status(404).json({ error: 'Document not found' });
+      }
+      await manual.update({ analysis_scope: req.body.analysis_scope });
+      res.json({ id: manual.id, analysis_scope: manual.analysis_scope });
     } catch (e) {
       next(e);
     }

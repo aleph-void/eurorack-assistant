@@ -101,6 +101,9 @@ export function defineModels(sequelize) {
       name: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'manual' },
       original_name: { type: DataTypes.TEXT },
       source: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'found' },
+      // Submitted alongside the manual when the module is (re)analyzed
+      // (migration 024). Vendor pages are marked automatically when saved.
+      analysis_scope: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     },
     { tableName: 'manuals', createdAt: 'created_at', updatedAt: false }
   );

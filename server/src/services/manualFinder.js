@@ -223,6 +223,11 @@ export async function fetchRetailerPagesForModule(db, backend, module, manualsDi
           hash,
           original_name: originalName,
           source: 'found',
+          // A fetched vendor page exists to be read alongside the manual,
+          // so it arrives marked in scope for analysis. The user can unmark
+          // it from the module page, and that choice sticks — an existing
+          // record is never re-marked here.
+          analysis_scope: true,
         },
         { transaction }
       );
@@ -562,6 +567,9 @@ export async function findManualForModule(db, backend, module, manualsDir, deps 
               hash: companion.hash,
               original_name: companion.originalName,
               source: 'found',
+              // Companions exist to be read alongside the manual: in scope
+              // for analysis from the start (migration 024).
+              analysis_scope: true,
             },
             { transaction }
           );

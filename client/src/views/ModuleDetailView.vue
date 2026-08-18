@@ -945,6 +945,24 @@ async function removePanel() {
   }
 }
 
+// Whether the upload should ride along with the module's (re)analysis.
+const docScope = ref(false);
+
+// Mark or unmark a document as in scope for analysis. The checkbox drives
+// this directly; the row is patched in place so the page doesn't reload.
+async function toggleScope(doc, value) {
+  uploadError.value = '';
+  try {
+    await api.put(`/api/modules/${props.id}/manuals/${doc.id}/scope`, {
+      analysis_scope: value,
+    });
+    doc.analysis_scope = value;
+  } catch (e) {
+    uploadError.value = e.message;
+    await load();
+  }
+}
+
 async function uploadDocument(file = docFile.value) {
   if (!file) {
     uploadError.value = 'Choose a PDF to attach.';
@@ -962,8 +980,10 @@ async function uploadDocument(file = docFile.value) {
       name: docName.value.trim(),
       filename: file.name,
       data_base64,
+      analysis_scope: docScope.value,
     });
     docName.value = '';
+    docScope.value = false;
     docFile.value = null;
     if (docInput.value) docInput.value.value = '';
     await load();
@@ -1927,6 +1947,9 @@ watch(() => props.id, () => {
                 <th>File</th>
                 <th>Kind</th>
                 <th>Text</th>
+                <th title="In-scope documents are sent with the manual when the module is (re)analyzed">
+                  Analysis
+                </th>
                 <th></th>
               </tr>
             </thead>
@@ -1958,6 +1981,19 @@ watch(() => props.id, () => {
                     Read
                   </RouterLink>
                   <span v-else class="muted" :data-test="`no-text-doc-${doc.id}`">not yet</span>
+                </td>
+                <!-- In scope for analysis: sent with the manual on every
+                     (re)analysis. A document somebody shared with you is
+                     theirs to mark, not yours. -->
+                <td>
+                  <input
+                    type="checkbox"
+                    :checked="doc.analysis_scope"
+                    :disabled="Boolean(doc.shared_by)"
+                    :data-test="`scope-doc-${doc.id}`"
+                    :aria-label="`Include ${doc.name} in analysis`"
+                    @change="toggleScope(doc, $event.target.checked)"
+                  />
                 </td>
                 <td>
                   <a
@@ -2008,6 +2044,18 @@ watch(() => props.id, () => {
               placeholder="e.g. calibration guide"
               data-test="doc-name"
             />
+          </div>
+          <div class="shrink">
+            <label for="doc-scope" style="white-space: nowrap">
+              <input
+                id="doc-scope"
+                v-model="docScope"
+                type="checkbox"
+                data-test="doc-scope"
+                :disabled="uploading"
+              />
+              Use in analysis
+            </label>
           </div>
           <div class="shrink">
             <button

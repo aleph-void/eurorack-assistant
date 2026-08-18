@@ -53,8 +53,7 @@ import {
   findManualForModule,
   fetchRetailerPagesForModule,
   isCompanionDocumentName,
-  BUILD_DOCUMENT_SUFFIX,
-  PERFECT_CIRCUIT_SUFFIX,
+  isRetailerPageName,
 } from '../services/manualFinder.js';
 import { analyzeManualForModule } from '../services/manualAnalyzer.js';
 import { extractManualDocument } from '../services/manualText.js';
@@ -107,10 +106,6 @@ export function isBuildDocument(document) {
   const label = `${document?.name || ''} ${document?.original_name || ''}`;
   return /(?:^|[^a-z])(build|assembly)(?:[^a-z]|$)/i.test(label);
 }
-
-// The names findManualForModule gives the two kinds of companion it fetches.
-const isFoundCompanion = (document, suffix) =>
-  new RegExp(`_${suffix}\\.pdf$`, 'i').test(document?.original_name || '');
 
 // Timestamp of the last sign of life from whoever holds a running job. Rows
 // claimed before leases existed have no heartbeat, so fall back to updated_at.
@@ -765,61 +760,57 @@ export function createWorker(db, options = {}) {
     };
   }
 
+  // The documents that ride along with the manual: everything marked in
+  // scope for analysis — the shared ones (vendor pages arrive marked; the
+  // user marks or unmarks the rest on the module page) plus the job owner's
+  // own marked uploads. Another user's upload never joins, marked or not:
+  // scope is a request to read the document, not permission to.
+  async function analysisScopeDocuments(module, userId) {
+    const rows = await db.models.Manual.findAll({
+      where: { module_id: module.id, analysis_scope: true },
+      order: [['id', 'ASC']],
+    });
+    return rows.filter((m) => m.user_id === null || (userId && m.user_id === userId));
+  }
+
+  // Analyze the manual proper together with every in-scope document. The
+  // prompt flags describe what the set is made of: a rendered product page
+  // standing in for the manual, retailer listings, a build document.
+  async function runScopedAnalysis(job, module, manual, backend, progress) {
+    const scoped = (await analysisScopeDocuments(module, job.user_id)).filter(
+      (m) => m.id !== manual.id
+    );
+    const productPage = /_Product_Page\.pdf$/i.test(manual.original_name || '');
+    const hasRetailerPage = scoped.some(
+      (m) => isRetailerPageName(m.original_name) || isPerfectCircuitDocument(m)
+    );
+    const hasBuildDoc = scoped.some(isBuildDocument);
+    await runManualAnalysis(
+      job,
+      module,
+      [manual, ...scoped],
+      {
+        backend,
+        productPage,
+        buildDoc: productPage && hasBuildDoc && !hasRetailerPage,
+        retailerPages: !productPage,
+      },
+      progress
+    );
+  }
+
   async function handleAnalyzeManual(job, backend, progress) {
-    const { Module, Manual } = db.models;
+    const { Module } = db.models;
     const record = await Module.findByPk(job.module_id);
     if (!record) throw new Error(`Module ${job.module_id} no longer exists`);
     const module = record.get({ plain: true });
-    // The shared auto-found manual is what gets analyzed. A companion is
-    // never the document being analyzed; it is only ever submitted alongside
-    // one.
-    const { manuals, manual } = await sharedManualDocuments(module);
+    // The shared auto-found manual is what gets analyzed; everything marked
+    // in scope for analysis is submitted alongside it.
+    const { manual } = await sharedManualDocuments(module);
     if (!manual) {
       throw new Error(`Module ${module.manufacturer} ${module.name} has no manual to analyze`);
     }
-    const productPage = /_Product_Page\.pdf$/i.test(manual.original_name || '');
-    // A user-requested rebuild re-submits everything already on disk: the
-    // manual together with every saved vendor page (retailer renders and
-    // build documents). Unlike reanalyze_components nothing is fetched — the
-    // point is a fresh read of the documents the module already has.
-    if (JSON.parse(job.payload || '{}').rebuild) {
-      const companions = manuals.filter((m) => isCompanionDocumentName(m.original_name));
-      const buildOnly =
-        companions.length > 0 && companions.every((m) => isFoundCompanion(m, BUILD_DOCUMENT_SUFFIX));
-      await runManualAnalysis(
-        job,
-        module,
-        [manual, ...companions],
-        { backend, productPage, buildDoc: productPage && buildOnly, retailerPages: !productPage },
-        progress
-      );
-      return;
-    }
-    // A rendered product page rarely tours the panel by itself, so it is
-    // analyzed together with a second document: Perfect Circuit's listing,
-    // which reads jack by jack, or — for the open-source modules Perfect
-    // Circuit does not stock — the build document that names the same panel.
-    // One the user uploaded outranks one the finder fetched.
-    const uploads =
-      productPage && job.user_id
-        ? await Manual.findAll({
-            where: { module_id: module.id, user_id: job.user_id, source: 'upload' },
-            order: [['id', 'DESC']],
-          })
-        : [];
-    const companion =
-      uploads.find(isPerfectCircuitDocument) ||
-      manuals.find((m) => isFoundCompanion(m, PERFECT_CIRCUIT_SUFFIX)) ||
-      uploads.find(isBuildDocument) ||
-      manuals.find((m) => isFoundCompanion(m, BUILD_DOCUMENT_SUFFIX)) ||
-      null;
-    const buildDoc =
-      productPage &&
-      Boolean(companion) &&
-      !isPerfectCircuitDocument(companion) &&
-      !isFoundCompanion(companion, PERFECT_CIRCUIT_SUFFIX);
-    const candidates = productPage ? [manual, companion].filter(Boolean) : [manual];
-    await runManualAnalysis(job, module, candidates, { backend, productPage, buildDoc }, progress);
+    await runScopedAnalysis(job, module, manual, backend, progress);
   }
 
   // Re-run the component analysis with fresh retailer product pages beside
@@ -853,14 +844,9 @@ export function createWorker(db, options = {}) {
         progress(`queued text extraction: ${page.original_name}`);
       }
     }
-    const productPage = /_Product_Page\.pdf$/i.test(manual.original_name || '');
-    await runManualAnalysis(
-      job,
-      module,
-      [manual, ...pages],
-      { backend, productPage, retailerPages: !productPage },
-      progress
-    );
+    // The fetched pages were saved marked in scope, so the scoped analysis
+    // picks them up along with everything else the user marked.
+    await runScopedAnalysis(job, module, manual, backend, progress);
   }
 
   async function handlePanelImage(job, backend, progress) {

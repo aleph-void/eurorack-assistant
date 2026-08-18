@@ -501,6 +501,7 @@ describe('worker', () => {
       hash: companionHash,
       original_name: 'Make_Noise_Maths_Perfect_Circuit_Product_Page.pdf',
       source: 'found',
+      analysis_scope: true,
     });
     await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
     const backend = fakeBackend({
@@ -541,6 +542,7 @@ describe('worker', () => {
       hash: buildHash,
       original_name: 'Music_Thing_Radio_Music_Build_Document.pdf',
       source: 'found',
+      analysis_scope: true,
     });
     await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
     const backend = fakeBackend({
@@ -681,6 +683,7 @@ describe('worker', () => {
       hash: pageHash,
       original_name: 'Make_Noise_Maths_Detroit_Modular_Product_Page.pdf',
       source: 'found',
+      analysis_scope: true,
     });
     await enqueue(db, 'analyze_manual', {
       module_id: module.id,
@@ -712,9 +715,9 @@ describe('worker', () => {
     expect(jobs.filter((j) => j.type === 'panel_image')).toHaveLength(1);
   });
 
-  // Whatever the uploader called it, a build document they supplied beats one
-  // nobody found.
-  it("uses the requesting user's uploaded build document when nothing was found", async () => {
+  // A marked upload joins the analysis — but only the job owner's own.
+  // Another user's marked upload never rides along on someone else's job.
+  it("sends the user's own marked build document, never another user's", async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const other = await createUser(db, { username: 'other' });
@@ -740,6 +743,7 @@ describe('worker', () => {
         name: 'Build Guide',
         original_name: 'private-build.pdf',
         source: 'upload',
+        analysis_scope: true,
       },
       {
         module_id: module.id,
@@ -748,6 +752,7 @@ describe('worker', () => {
         name: 'Assembly instructions',
         original_name: 'maths-kit.pdf',
         source: 'upload',
+        analysis_scope: true,
       },
     ]);
     await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
@@ -766,9 +771,10 @@ describe('worker', () => {
     expect(prompt).toContain('BUILD DOCUMENT');
   });
 
-  // Perfect Circuit's listing reads jack by jack, so it stays the first choice
-  // when the module has both.
-  it('prefers the Perfect Circuit page over a build document', async () => {
+  // Every document marked in scope goes in together; when one of them is a
+  // retailer page the prompt keeps the retailer guidance rather than the
+  // build-document guidance.
+  it('sends every in-scope vendor page together', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
@@ -792,6 +798,7 @@ describe('worker', () => {
         hash: buildHash,
         original_name: 'Make_Noise_Maths_Build_Document.pdf',
         source: 'found',
+        analysis_scope: true,
       },
       {
         module_id: module.id,
@@ -799,6 +806,7 @@ describe('worker', () => {
         hash: pcHash,
         original_name: 'Make_Noise_Maths_Perfect_Circuit_Product_Page.pdf',
         source: 'found',
+        analysis_scope: true,
       },
     ]);
     await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
@@ -812,12 +820,13 @@ describe('worker', () => {
     const [prompt, submitted] = backend.calls.analyzeDocuments[0];
     expect(submitted).toEqual([
       path.join(manualsDir, `${PDF_HASH}.pdf`),
+      path.join(manualsDir, `${buildHash}.pdf`),
       path.join(manualsDir, `${pcHash}.pdf`),
     ]);
     expect(prompt).not.toContain('BUILD DOCUMENT');
   });
 
-  it('includes only the requesting user\'s uploaded Perfect Circuit document with a product page', async () => {
+  it('sends only marked documents, and only the shared ones and your own', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const other = await createUser(db, { username: 'other' });
@@ -839,11 +848,14 @@ describe('worker', () => {
     }
     await db.models.Manual.bulkCreate([
       {
+        // The finder's page, unmarked: the user took it out of scope, and
+        // that choice sticks.
         module_id: module.id,
         user_id: null,
         hash: foundHash,
         original_name: 'Make_Noise_Maths_Perfect_Circuit_Product_Page.pdf',
         source: 'found',
+        analysis_scope: false,
       },
       {
         module_id: module.id,
@@ -852,22 +864,27 @@ describe('worker', () => {
         name: 'Perfect Circuit',
         original_name: 'maths-product-page.pdf',
         source: 'upload',
+        analysis_scope: true,
       },
       {
+        // Another user's marked upload: not attachable to this user's job.
         module_id: module.id,
         user_id: other.id,
         hash: otherHash,
         name: 'Perfect_Circuit',
         original_name: 'private.pdf',
         source: 'upload',
+        analysis_scope: true,
       },
       {
+        // The user's own upload, unmarked: stays out.
         module_id: module.id,
         user_id: user.id,
         hash: notesHash,
         name: 'notes',
         original_name: 'notes.pdf',
         source: 'upload',
+        analysis_scope: false,
       },
     ]);
     await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });

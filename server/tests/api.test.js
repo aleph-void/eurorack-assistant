@@ -630,7 +630,7 @@ describe('module documents API', () => {
     expect(rows[0].hash).toBe(res.body.hash);
   });
 
-  it('re-uploading the same content references the existing record', async () => {
+  it('re-uploading the same content references the existing record, renamed as asked', async () => {
     const { app, db, aliceCookie, module } = await withModule();
     const first = await request(app)
       .post(`/api/modules/${module.id}/manuals`)
@@ -643,12 +643,70 @@ describe('module documents API', () => {
       .send({ name: 'notes again', filename: 'renamed.pdf', data_base64: otherBase64 });
     expect(again.status).toBe(200);
     expect(again.body.id).toBe(first.body.id);
+    // The typed name is honored on the re-upload rather than silently kept;
+    // the original file name still names the bytes that were first stored.
+    expect(again.body.name).toBe('notes again');
+    expect(again.body.original_name).toBe('notes.pdf');
 
     const { rows } = await db.query(
       'SELECT * FROM manuals WHERE module_id = $1 AND user_id IS NOT NULL',
       [module.id]
     );
     expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe('notes again');
+  });
+
+  it('marks documents in scope for analysis, at upload or afterwards', async () => {
+    const { app, db, adminCookie, aliceCookie, module } = await withModule();
+    // At upload: the flag rides along and comes back in the response.
+    const uploaded = await request(app)
+      .post(`/api/modules/${module.id}/manuals`)
+      .set('Cookie', aliceCookie)
+      .send({
+        name: 'panel notes',
+        filename: 'panel.pdf',
+        data_base64: otherBase64,
+        analysis_scope: true,
+      });
+    expect(uploaded.status).toBe(201);
+    expect(uploaded.body.analysis_scope).toBe(true);
+
+    // Afterwards: the toggle flips it either way.
+    const off = await request(app)
+      .put(`/api/modules/${module.id}/manuals/${uploaded.body.id}/scope`)
+      .set('Cookie', aliceCookie)
+      .send({ analysis_scope: false });
+    expect(off.status).toBe(200);
+    expect(off.body).toEqual({ id: uploaded.body.id, analysis_scope: false });
+
+    // The shared manual record is markable by any user who can see it…
+    const { rows: shared } = await db.query(
+      'SELECT id FROM manuals WHERE module_id = $1 AND user_id IS NULL',
+      [module.id]
+    );
+    const sharedOn = await request(app)
+      .put(`/api/modules/${module.id}/manuals/${shared[0].id}/scope`)
+      .set('Cookie', aliceCookie)
+      .send({ analysis_scope: true });
+    expect(sharedOn.status).toBe(200);
+
+    // …but another user's private upload is not yours to mark, even as an
+    // admin, and non-boolean bodies are refused.
+    const foreign = await request(app)
+      .put(`/api/modules/${module.id}/manuals/${uploaded.body.id}/scope`)
+      .set('Cookie', adminCookie)
+      .send({ analysis_scope: true });
+    expect(foreign.status).toBe(404);
+    const junk = await request(app)
+      .put(`/api/modules/${module.id}/manuals/${uploaded.body.id}/scope`)
+      .set('Cookie', aliceCookie)
+      .send({ analysis_scope: 'yes' });
+    expect(junk.status).toBe(400);
+
+    // The module page reports the flag with each document.
+    const page = await request(app).get(`/api/modules/${module.id}`).set('Cookie', aliceCookie);
+    const doc = page.body.manuals.find((m) => m.id === uploaded.body.id);
+    expect(doc.analysis_scope).toBe(false);
   });
 
   it('serves documents by hash, but never other users’ private documents', async () => {
