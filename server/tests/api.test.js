@@ -383,6 +383,84 @@ describe('module re-analysis API', () => {
   });
 });
 
+// POST /api/modules/:id/analyze — rebuild the manual analysis from the
+// documents already saved, vendor pages included, fetching nothing.
+describe('module analysis rebuild API', () => {
+  it('is only offered on modules in the requester’s racks', async () => {
+    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'admin'");
+    const module = await insertModule(db, rows[0].id, { manual_hash: PDF_HASH });
+    const res = await request(app)
+      .post(`/api/modules/${module.id}/analyze`)
+      .set('Cookie', aliceCookie);
+    expect(res.status).toBe(404);
+    const ok = await request(app)
+      .post(`/api/modules/${module.id}/analyze`)
+      .set('Cookie', adminCookie);
+    expect(ok.status).toBe(202);
+  });
+
+  it('refuses a module with no manual, counting a lone vendor page as no manual', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id);
+    await db.models.Manual.create({
+      module_id: module.id,
+      user_id: null,
+      hash: 'd'.repeat(64),
+      original_name: 'Make_Noise_Maths_Detroit_Modular_Product_Page.pdf',
+      source: 'found',
+    });
+    const res = await request(app)
+      .post(`/api/modules/${module.id}/analyze`)
+      .set('Cookie', aliceCookie);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/no manual/i);
+    expect((await db.query('SELECT * FROM jobs')).rows).toHaveLength(0);
+  });
+
+  it('queues one rebuild analyze_manual job and dedupes a second request', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id, { manual_hash: PDF_HASH });
+    // Vendor pages on disk are exactly the case /reanalyze refuses; this
+    // route accepts them, because they are what gets re-submitted.
+    await db.models.Manual.create({
+      module_id: module.id,
+      user_id: null,
+      hash: 'd'.repeat(64),
+      original_name: 'Make_Noise_Maths_Perfect_Circuit_Product_Page.pdf',
+      source: 'found',
+    });
+
+    const res = await request(app)
+      .post(`/api/modules/${module.id}/analyze`)
+      .set('Cookie', aliceCookie);
+    expect(res.status).toBe(202);
+    const { rows: jobs } = await db.query('SELECT * FROM jobs');
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      type: 'analyze_manual',
+      module_id: module.id,
+      user_id: rows[0].id,
+      status: 'pending',
+    });
+    expect(JSON.parse(jobs[0].payload)).toEqual({ rebuild: true });
+    expect(res.body.job_id).toBe(jobs[0].id);
+    const { rows: updated } = await db.query('SELECT analysis_status FROM modules WHERE id = $1', [
+      module.id,
+    ]);
+    expect(updated[0].analysis_status).toBe('pending');
+
+    const again = await request(app)
+      .post(`/api/modules/${module.id}/analyze`)
+      .set('Cookie', aliceCookie);
+    expect(again.status).toBe(409);
+    expect(again.body.error).toMatch(/already queued/i);
+    expect((await db.query('SELECT * FROM jobs')).rows).toHaveLength(1);
+  });
+});
+
 describe('module documents API', () => {
   const pdfBase64 = PDF_BYTES.toString('base64');
   // A second, distinct PDF (different content hash than PDF_BYTES).

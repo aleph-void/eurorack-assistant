@@ -71,9 +71,15 @@ function makeWorker(db, backend, fetchImpl, bus, options = {}) {
 
 async function enqueue(db, type, fields) {
   const { rows } = await db.query(
-    `INSERT INTO jobs (type, user_id, module_id, question_id, status)
-     VALUES ($1, $2, $3, $4, 'pending') RETURNING *`,
-    [type, fields.user_id ?? null, fields.module_id ?? null, fields.question_id ?? null]
+    `INSERT INTO jobs (type, user_id, module_id, question_id, payload, status)
+     VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING *`,
+    [
+      type,
+      fields.user_id ?? null,
+      fields.module_id ?? null,
+      fields.question_id ?? null,
+      fields.payload ?? null,
+    ]
   );
   return rows[0];
 }
@@ -644,6 +650,65 @@ describe('worker', () => {
     expect(backend.calls.analyzeDocument).toHaveLength(1);
     expect(backend.calls.analyzeDocument[0][0]).not.toContain('retailer PRODUCT PAGES');
     expect((await db.query('SELECT * FROM manuals')).rows).toHaveLength(1);
+  });
+
+  // The user-requested rebuild: nothing is fetched, the manual goes in with
+  // every vendor page already saved, and the fresh analysis replaces the old
+  // component inventory.
+  it('rebuild analyze_manual re-submits the manual with saved vendor pages and replaces components', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+    const module = await insertModule(db, user.id, {
+      manual_hash: PDF_HASH,
+      manual_status: 'found',
+      analysis_status: 'complete',
+    });
+    await db.models.ModuleComponent.create({
+      module_id: module.id,
+      type: 'input_jack',
+      name: 'STALE IN',
+    });
+    const pageHash = 'd'.repeat(64);
+    fs.writeFileSync(
+      path.join(manualsDir, `${pageHash}.pdf`),
+      Buffer.concat([PDF_BYTES, Buffer.from('page')])
+    );
+    await db.models.Manual.create({
+      module_id: module.id,
+      user_id: null,
+      hash: pageHash,
+      original_name: 'Make_Noise_Maths_Detroit_Modular_Product_Page.pdf',
+      source: 'found',
+    });
+    await enqueue(db, 'analyze_manual', {
+      module_id: module.id,
+      user_id: user.id,
+      payload: JSON.stringify({ rebuild: true }),
+    });
+
+    const backend = fakeBackend({
+      analyzeDocuments:
+        '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
+    });
+    expect((await makeWorker(db, backend).tick()).status).toBe('complete');
+
+    // Nothing was researched or fetched — the saved page went in as-is.
+    expect(backend.calls.completeTextWithSearch).toHaveLength(0);
+    const [prompt, submitted] = backend.calls.analyzeDocuments[0];
+    expect(submitted).toEqual([
+      path.join(manualsDir, `${PDF_HASH}.pdf`),
+      path.join(manualsDir, `${pageHash}.pdf`),
+    ]);
+    expect(prompt).toContain('retailer PRODUCT PAGES');
+
+    const { rows: components } = await db.query(
+      'SELECT name FROM module_components WHERE module_id = $1',
+      [module.id]
+    );
+    expect(components.map((c) => c.name)).toEqual(['OUT']);
+    const { rows: jobs } = await db.query('SELECT type FROM jobs ORDER BY id');
+    expect(jobs.filter((j) => j.type === 'panel_image')).toHaveLength(1);
   });
 
   // Whatever the uploader called it, a build document they supplied beats one

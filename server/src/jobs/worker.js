@@ -176,12 +176,12 @@ export async function enqueueJob(db, type, { userId = null, moduleId = null, que
 // module — the chained pipeline (find_manual → analyze_manual → panel_image)
 // and the "re-analyze everything" action both have to be safe to trigger
 // twice. The job is owned by (and visible to) the user who caused it.
-export async function enqueueModuleJob(db, type, module, userId) {
+export async function enqueueModuleJob(db, type, module, userId, payload = null) {
   const pending = await db.models.Job.findOne({
     where: { module_id: module.id, type, status: ['pending', 'running'] },
   });
   if (pending) return null;
-  return enqueueJob(db, type, { moduleId: module.id, userId });
+  return enqueueJob(db, type, { moduleId: module.id, userId, payload });
 }
 
 // Imports always re-try retrieval from the internet — an unchanged manual
@@ -715,6 +715,23 @@ export function createWorker(db, options = {}) {
       throw new Error(`Module ${module.manufacturer} ${module.name} has no manual to analyze`);
     }
     const productPage = /_Product_Page\.pdf$/i.test(manual.original_name || '');
+    // A user-requested rebuild re-submits everything already on disk: the
+    // manual together with every saved vendor page (retailer renders and
+    // build documents). Unlike reanalyze_components nothing is fetched — the
+    // point is a fresh read of the documents the module already has.
+    if (JSON.parse(job.payload || '{}').rebuild) {
+      const companions = manuals.filter((m) => isCompanionDocumentName(m.original_name));
+      const buildOnly =
+        companions.length > 0 && companions.every((m) => isFoundCompanion(m, BUILD_DOCUMENT_SUFFIX));
+      await runManualAnalysis(
+        job,
+        module,
+        [manual, ...companions],
+        { backend, productPage, buildDoc: productPage && buildOnly, retailerPages: !productPage },
+        progress
+      );
+      return;
+    }
     // A rendered product page rarely tours the panel by itself, so it is
     // analyzed together with a second document: Perfect Circuit's listing,
     // which reads jack by jack, or — for the open-source modules Perfect

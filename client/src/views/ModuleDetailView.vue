@@ -57,6 +57,27 @@ async function reanalyzeComponents() {
   }
 }
 
+// --- Analysis rebuild from the documents already on disk ---
+const rebuilding = ref(false);
+const rebuildNotice = ref('');
+const rebuildError = ref('');
+
+async function rebuildAnalysis() {
+  rebuildNotice.value = '';
+  rebuildError.value = '';
+  rebuilding.value = true;
+  try {
+    await api.post(`/api/modules/${props.id}/analyze`);
+    rebuildNotice.value =
+      'Analysis queued: the manual and any saved vendor pages will be analyzed again.';
+    await load();
+  } catch (e) {
+    rebuildError.value = e.message;
+  } finally {
+    rebuilding.value = false;
+  }
+}
+
 const TYPE_LABELS = {
   input_jack: 'Input jacks',
   output_jack: 'Output jacks',
@@ -1044,6 +1065,25 @@ watch(() => props.id, () => {
     </div>
     <p v-if="reanalyzeNotice" class="muted" data-test="reanalyze-notice">{{ reanalyzeNotice }}</p>
     <p v-if="reanalyzeError" class="error" data-test="reanalyze-error">{{ reanalyzeError }}</p>
+
+    <div class="row reanalyze-row">
+      <div class="shrink">
+        <button
+          style="margin: 0; white-space: nowrap"
+          :disabled="rebuilding"
+          data-test="rebuild-analysis"
+          @click="rebuildAnalysis"
+        >
+          {{ rebuilding ? 'Queuing…' : 'Rebuild analysis' }}
+        </button>
+      </div>
+      <span class="muted" data-test="rebuild-hint">
+        Runs the manual analysis again with the documents already saved: the manual together with
+        any vendor product pages. Nothing new is downloaded.
+      </span>
+    </div>
+    <p v-if="rebuildNotice" class="muted" data-test="rebuild-notice">{{ rebuildNotice }}</p>
+    <p v-if="rebuildError" class="error" data-test="rebuild-error">{{ rebuildError }}</p>
 
     <details open class="panel" data-test="panel">
       <summary>

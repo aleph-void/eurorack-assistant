@@ -477,6 +477,26 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="reanalyze-hint"]').text()).toContain('already exist');
   });
 
+  it('queues an analysis rebuild from the saved manual and vendor pages', async () => {
+    api.get.mockResolvedValue(structuredClone(moduleResponse));
+    api.post.mockResolvedValue({ job_id: 8 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const button = wrapper.find('[data-test="rebuild-analysis"]');
+    expect(button.attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('[data-test="rebuild-hint"]').text()).toContain('Nothing new is downloaded');
+    await button.trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/analyze');
+    expect(wrapper.find('[data-test="rebuild-notice"]').text()).toContain('queued');
+
+    api.post.mockRejectedValue(new Error('This module has no manual to analyze'));
+    await button.trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="rebuild-error"]').text()).toContain('no manual');
+  });
+
   it('adds and removes controls while refreshing component lists and panel markers', async () => {
     vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     let detail = {

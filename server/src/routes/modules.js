@@ -342,6 +342,35 @@ export function moduleRoutes(
     }
   });
 
+  // Rebuild ONE module's manual analysis from the documents it already has:
+  // the shared manual is submitted again, together with every saved vendor
+  // page (retailer product-page renders and build documents). Nothing is
+  // fetched — this is the counterpart to /reanalyze for modules whose vendor
+  // pages are already on disk, or for simply re-running a bad analysis.
+  router.post('/:id/analyze', requireBudget(db), async (req, res, next) => {
+    try {
+      const module = await userModule(req.user.id, req.params.id);
+      if (!module) return res.status(404).json({ error: 'Module not found' });
+      const shared = await Manual.findAll({
+        where: { module_id: module.id, user_id: null },
+        attributes: ['id', 'original_name'],
+      });
+      if (!shared.some((m) => !isCompanionDocumentName(m.original_name))) {
+        return res.status(409).json({ error: 'This module has no manual to analyze' });
+      }
+      const job = await enqueueModuleJob(db, 'analyze_manual', module, req.user.id, {
+        rebuild: true,
+      });
+      if (!job) {
+        return res.status(409).json({ error: 'An analysis is already queued for this module' });
+      }
+      await Module.update({ analysis_status: 'pending' }, { where: { id: module.id } });
+      res.status(202).json({ job_id: job.id });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   router.get('/:id', async (req, res, next) => {
     try {
       const module = await userModule(req.user.id, req.params.id);
