@@ -21,11 +21,14 @@ import LinkDeviceView from './views/LinkDeviceView.vue';
 import UsersView from './views/UsersView.vue';
 import ConfigView from './views/ConfigView.vue';
 import ChangePasswordView from './views/ChangePasswordView.vue';
+import LlmSettingsView from './views/LlmSettingsView.vue';
 
 export const routes = [
   { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
   { path: '/', redirect: '/modules' },
   { path: '/account/password', name: 'change-password', component: ChangePasswordView },
+  // Per-user LLM provider account and settings.
+  { path: '/account/llm', name: 'llm-settings', component: LlmSettingsView },
   { path: '/modules', name: 'modules', component: ModulesView },
   { path: '/modules/:id', name: 'module-detail', component: ModuleDetailView, props: true },
   { path: '/racks', name: 'racks', component: RacksView },

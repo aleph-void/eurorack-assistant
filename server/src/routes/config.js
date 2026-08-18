@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { getConfig, setConfig } from '../services/config.js';
-import { PROVIDERS, KNOWN_MODELS, DEFAULT_MODELS, LLM_JOB_TYPES } from '../services/llm.js';
+import { PROVIDERS, KNOWN_MODELS, DEFAULT_MODELS } from '../services/llm.js';
 
 export function configRoutes(db) {
   const router = Router();
@@ -15,7 +15,6 @@ export function configRoutes(db) {
         providers: PROVIDERS,
         known_models: KNOWN_MODELS,
         default_models: DEFAULT_MODELS,
-        llm_job_types: LLM_JOB_TYPES,
       });
     } catch (e) {
       next(e);
@@ -31,7 +30,6 @@ export function configRoutes(db) {
         'import_workers',
         'token_budget_default',
         'token_budget_period',
-        ...LLM_JOB_TYPES.map((type) => `llm_model_${type}`),
       ];
       for (const key of allowed) {
         if (req.body?.[key] !== undefined) updates[key] = req.body[key];

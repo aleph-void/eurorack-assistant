@@ -34,6 +34,12 @@ const resumesAt = computed(() => {
   return at && !Number.isNaN(at.getTime()) ? at.toLocaleString() : null;
 });
 
+// Same, for the viewer's own LLM account pause.
+const llmResumesAt = computed(() => {
+  const at = jobs.llmPause.until ? new Date(jobs.llmPause.until) : null;
+  return at && !Number.isNaN(at.getTime()) ? at.toLocaleString() : null;
+});
+
 function describe(job) {
   if (job.module_name) return `${job.module_manufacturer || ''} ${job.module_name}`.trim();
   if (job.question_prompt) return job.question_prompt;
@@ -160,7 +166,23 @@ async function resumeQueue() {
   }
 }
 
+const resumingLlm = ref(false);
+async function resumeLlm() {
+  error.value = '';
+  resumingLlm.value = true;
+  try {
+    await jobs.resumeLlm();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    resumingLlm.value = false;
+  }
+}
+
 onMounted(async () => {
+  // The account pause is a nicety beside the job list — a page that cannot
+  // read it still renders everything else.
+  jobs.fetchLlmPause().catch(() => {});
   try {
     await jobs.fetchJobs();
     await jobs.fetchQueue();
@@ -195,6 +217,25 @@ onMounted(async () => {
       </p>
       <button class="secondary" :disabled="resuming" data-test="resume-queue" @click="resumeQueue">
         {{ resuming ? 'Resuming…' : 'Resume Now' }}
+      </button>
+    </div>
+  </div>
+
+  <!-- The viewer's own LLM account hit its provider's token wall. Only their
+       jobs wait — everyone runs on their own subscription — so this banner is
+       personal in a way the queue pause above is not. -->
+  <div v-if="jobs.llmPause.paused" class="panel paused" data-test="llm-paused">
+    <p>
+      <strong>Your {{ jobs.llmPause.provider }} account is out of tokens</strong> — your queued
+      jobs stay where they are and run when it resumes. Other users are unaffected.
+    </p>
+    <p v-if="jobs.llmPause.reason" class="muted">{{ jobs.llmPause.reason }}</p>
+    <div class="actions">
+      <p class="muted push">
+        <template v-if="llmResumesAt">Resumes on its own at {{ llmResumesAt }}.</template>
+      </p>
+      <button class="secondary" :disabled="resumingLlm" data-test="resume-llm" @click="resumeLlm">
+        {{ resumingLlm ? 'Resuming…' : 'Resume Now' }}
       </button>
     </div>
   </div>

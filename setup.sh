@@ -10,9 +10,7 @@
 #      exist in /etc/letsencrypt/live/<fqdn>/, serves HTTPS on port 443 (with
 #      port 80 redirecting) instead of plain HTTP on port 8080.
 #   4. Generates secrets, builds containers, migrates the database.
-#   5. Asks which provider to use and guides you through authenticating —
-#      skipped entirely when a provider is already configured in the database.
-#   6. Creates the admin account — its random password is printed ONCE below
+#   5. Creates the admin account — its random password is printed ONCE below
 #      and stored nowhere else in cleartext.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -113,79 +111,6 @@ ensure_llm_clis() {
   fi
   install_cli claude @anthropic-ai/claude-code || true
   install_cli codex @openai/codex || true
-}
-
-# The server container mounts these host directories for the CLIs' logins.
-claude_logged_in() { [ -f "$HOME/.claude/.credentials.json" ]; }
-codex_logged_in() { [ -f "$HOME/.codex/auth.json" ]; }
-
-PROVIDER=""
-
-choose_provider() {
-  if [ "$INTERACTIVE" != "1" ]; then
-    info "non-interactive shell; skipping provider selection (defaults to claude)."
-    info "You can change it later on the admin LLM Config page."
-    return
-  fi
-  echo ""
-  echo "Which LLM provider should answer questions and analyze manuals?"
-  echo "  1) Claude Code  (Anthropic — Claude Pro/Max subscription)"
-  echo "  2) Codex        (OpenAI — ChatGPT subscription)"
-  echo "  s) skip for now (configure later on the admin LLM Config page)"
-  local choice
-  read -r -p "Choice [1/2/s]: " choice
-  case "$choice" in
-    1) PROVIDER="claude" ;;
-    2) PROVIDER="codex" ;;
-    *) info "skipping provider selection" ;;
-  esac
-}
-
-authenticate_provider() {
-  case "$PROVIDER" in
-    claude)
-      if claude_logged_in; then
-        info "Claude Code is already logged in."
-        return
-      fi
-      if ! command -v claude >/dev/null 2>&1; then
-        warn "claude CLI not installed; cannot authenticate."
-        return
-      fi
-      echo ""
-      echo "Claude Code login: an interactive session will open."
-      echo "  - Type /login and follow the browser prompts to sign in with your"
-      echo "    Claude Pro/Max subscription."
-      echo "  - Then type /exit (or press Ctrl+C) to come back to this script."
-      read -r -p "Press Enter to launch claude... " _
-      claude || true
-      if claude_logged_in; then
-        info "Claude Code login detected."
-      else
-        warn "no Claude Code login found ($HOME/.claude/.credentials.json missing)."
-        warn "Run 'claude' and use /login before asking questions."
-      fi
-      ;;
-    codex)
-      if codex_logged_in; then
-        info "Codex is already logged in."
-        return
-      fi
-      if ! command -v codex >/dev/null 2>&1; then
-        warn "codex CLI not installed; cannot authenticate."
-        return
-      fi
-      echo ""
-      echo "Codex login: choose 'Sign in with ChatGPT' and follow the browser prompts."
-      codex login || true
-      if codex_logged_in; then
-        info "Codex login detected."
-      else
-        warn "no Codex login found ($HOME/.codex/auth.json missing)."
-        warn "Run 'codex login' before asking questions."
-      fi
-      ;;
-  esac
 }
 
 # ------------------------------------------------------------------- tls ----
@@ -335,20 +260,6 @@ if [ "$SCHEMA_STATUS" != "ok" ]; then
   esac
 fi
 
-# Provider selection is skipped when one is already configured (the raw
-# app_config row, not the built-in default).
-EXISTING_PROVIDER=$($DOCKER compose run --rm --no-deps -T server node scripts/get-config.js llm_provider 2>/dev/null | tail -n 1 | tr -d '[:space:]' || true)
-if [ -n "$EXISTING_PROVIDER" ]; then
-  info "LLM provider already configured ('$EXISTING_PROVIDER'); skipping provider setup."
-else
-  choose_provider
-  authenticate_provider
-  if [ -n "$PROVIDER" ]; then
-    info "setting LLM provider to '$PROVIDER'..."
-    $DOCKER compose run --rm --no-deps server node scripts/set-config.js llm_provider "$PROVIDER"
-  fi
-fi
-
 # Admin creation is skipped when an admin account already exists.
 HAS_ADMIN=$($DOCKER compose run --rm --no-deps -T server node scripts/has-admin.js 2>/dev/null | tail -n 1 | tr -d '[:space:]' || true)
 if [ "$HAS_ADMIN" = "yes" ]; then
@@ -375,6 +286,6 @@ if [ "$HAS_ADMIN" = "yes" ]; then
 else
   info "log in with the admin credentials printed above."
 fi
-if [ -z "$PROVIDER" ] && [ -z "$EXISTING_PROVIDER" ]; then
-  info "LLM provider defaults to Claude Code; change it on the admin LLM Config page."
-fi
+info "LLM accounts are per user: each user connects their own Claude or Codex"
+info "account in the web UI under Account -> LLM provider before running LLM"
+info "jobs (the site default provider is set on the admin Configuration page)."

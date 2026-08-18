@@ -31,6 +31,7 @@ import JobsView from '../src/views/JobsView.vue';
 import UsersView from '../src/views/UsersView.vue';
 import ChangePasswordView from '../src/views/ChangePasswordView.vue';
 import ConfigView from '../src/views/ConfigView.vue';
+import LlmSettingsView from '../src/views/LlmSettingsView.vue';
 import NotesView from '../src/views/NotesView.vue';
 import PatchesView from '../src/views/PatchesView.vue';
 import PatchDetailView from '../src/views/PatchDetailView.vue';
@@ -2238,14 +2239,9 @@ describe('ConfigView', () => {
     llm_provider: 'claude',
     llm_model: '',
     import_workers: '4',
-    llm_model_find_manual: '',
-    llm_model_analyze_manual: 'claude-haiku-4-5',
-    llm_model_scope_question: '',
-    llm_model_answer_question: '',
     providers: ['claude', 'codex'],
     known_models: { claude: ['claude-fable-5'], codex: ['gpt-5.1-codex'] },
     default_models: { claude: 'claude-fable-5', codex: 'gpt-5.1-codex' },
-    llm_job_types: ['find_manual', 'analyze_manual', 'scope_question', 'answer_question'],
     token_budget_default: '0',
     token_budget_period: 'month',
   };
@@ -2257,13 +2253,11 @@ describe('ConfigView', () => {
     await flushPromises();
     expect(wrapper.find('[data-test="provider"]').element.value).toBe('claude');
     expect(wrapper.find('[data-test="import-workers"]').element.value).toBe('4');
-    // Per-job-type model fields are populated from the config response.
-    expect(wrapper.find('[data-test="model-analyze_manual"]').element.value).toBe('claude-haiku-4-5');
-    expect(wrapper.find('[data-test="model-find_manual"]').element.value).toBe('');
+    // Per-job-type models moved to each user's own LLM settings page.
+    expect(wrapper.find('[data-test="model-find_manual"]').exists()).toBe(false);
 
     await wrapper.find('[data-test="provider"]').setValue('codex');
     await wrapper.find('[data-test="model"]').setValue('gpt-5.1-codex');
-    await wrapper.find('[data-test="model-find_manual"]').setValue('gpt-5.1-codex-mini');
     await wrapper.find('[data-test="import-workers"]').setValue('6');
     // A token budget is off (0) until an admin sets one here.
     expect(wrapper.find('[data-test="token-budget-default"]').element.value).toBe('0');
@@ -2275,10 +2269,6 @@ describe('ConfigView', () => {
       llm_provider: 'codex',
       llm_model: 'gpt-5.1-codex',
       import_workers: 6,
-      llm_model_find_manual: 'gpt-5.1-codex-mini',
-      llm_model_analyze_manual: 'claude-haiku-4-5',
-      llm_model_scope_question: '',
-      llm_model_answer_question: '',
       token_budget_default: 250000,
       token_budget_period: 'week',
     });
@@ -3596,5 +3586,123 @@ describe('PatchDetailView beyond the rack', () => {
       type: 'input_jack',
       port_kind: 'audio_quarter_inch',
     });
+  });
+});
+
+describe('LlmSettingsView', () => {
+  const llmStatus = (over = {}) => ({
+    llm_provider: '',
+    llm_model: '',
+    llm_models: {},
+    llm_job_types: ['find_manual', 'analyze_manual', 'extract_manual'],
+    effective_provider: 'claude',
+    effective_model: 'claude-fable-5',
+    providers: ['claude', 'codex'],
+    known_models: { claude: ['claude-fable-5'], codex: ['gpt-5.1'] },
+    default_models: { claude: 'claude-fable-5', codex: 'gpt-5.1-codex' },
+    accounts: { claude: null, codex: null },
+    ...over,
+  });
+  const claudeAccount = (over = {}) => ({
+    provider: 'claude',
+    kind: 'oauth',
+    connected: true,
+    expires_at: null,
+    paused_until: null,
+    paused_reason: '',
+    created_at: '2026-08-18T00:00:00Z',
+    updated_at: '2026-08-18T00:00:00Z',
+    ...over,
+  });
+
+  it('warns when no account is connected and walks the authorize flow', async () => {
+    api.get.mockResolvedValue(llmStatus());
+    const wrapper = mount(LlmSettingsView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="not-connected"]').text()).toContain('claude');
+
+    api.post.mockResolvedValueOnce({ url: 'https://claude.ai/oauth/authorize?x=1' });
+    await wrapper.find('[data-test="claude-authorize"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/llm/claude/oauth/start');
+    expect(wrapper.find('[data-test="claude-auth-link"]').attributes('href')).toContain(
+      'claude.ai/oauth/authorize'
+    );
+
+    api.post.mockResolvedValueOnce(
+      llmStatus({ accounts: { claude: claudeAccount(), codex: null } })
+    );
+    await wrapper.find('[data-test="claude-auth-code"]').setValue('the-code#state');
+    await wrapper.find('[data-test="claude-auth-step"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/llm/claude/oauth/finish', {
+      code: 'the-code#state',
+    });
+    expect(wrapper.find('[data-test="not-connected"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="claude-status"]').text()).toContain('authorized account');
+  });
+
+  it('saves the provider and model choice', async () => {
+    api.get.mockResolvedValue(llmStatus());
+    const wrapper = mount(LlmSettingsView, { global: testGlobal() });
+    await flushPromises();
+
+    api.put.mockResolvedValue(
+      llmStatus({ llm_provider: 'codex', llm_model: 'gpt-5.1', effective_provider: 'codex' })
+    );
+    await wrapper.find('[data-test="provider"]').setValue('codex');
+    await wrapper.find('[data-test="model"]').setValue('gpt-5.1');
+    await wrapper.find('[data-test="my-model-extract_manual"]').setValue('gpt-5.1-codex-mini');
+    await wrapper.find('[data-test="save-settings"]').trigger('submit');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/llm/settings', {
+      llm_provider: 'codex',
+      llm_model: 'gpt-5.1',
+      llm_models: { find_manual: '', analyze_manual: '', extract_manual: 'gpt-5.1-codex-mini' },
+    });
+  });
+
+  it('shows a quota pause and lifts it', async () => {
+    api.get.mockResolvedValue(
+      llmStatus({
+        accounts: {
+          claude: claudeAccount({
+            paused_until: '2026-08-19T00:00:00Z',
+            paused_reason: 'usage limit reached',
+          }),
+          codex: null,
+        },
+      })
+    );
+    const wrapper = mount(LlmSettingsView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="claude-paused"]').text()).toContain('usage limit reached');
+
+    api.post.mockResolvedValue(
+      llmStatus({ accounts: { claude: claudeAccount(), codex: null } })
+    );
+    await wrapper.find('[data-test="claude-resume"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/llm/claude/resume');
+    expect(wrapper.find('[data-test="claude-paused"]').exists()).toBe(false);
+  });
+
+  it('saves a pasted codex auth.json', async () => {
+    api.get.mockResolvedValue(llmStatus());
+    const wrapper = mount(LlmSettingsView, { global: testGlobal() });
+    await flushPromises();
+
+    api.post.mockResolvedValue(
+      llmStatus({
+        accounts: { claude: null, codex: claudeAccount({ provider: 'codex', kind: 'auth_json' }) },
+      })
+    );
+    await wrapper.find('[data-test="codex-auth-json"]').setValue('{"tokens":{}}');
+    await wrapper.find('[data-test="codex-panel"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/llm/codex/auth-json', {
+      auth_json: '{"tokens":{}}',
+    });
+    expect(wrapper.find('[data-test="codex-status"]').text()).toContain('auth.json');
   });
 });

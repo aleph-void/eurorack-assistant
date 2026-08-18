@@ -1,4 +1,4 @@
-import { PROVIDERS, DEFAULT_MODELS, LLM_JOB_TYPES } from './llm.js';
+import { PROVIDERS, DEFAULT_MODELS } from './llm.js';
 
 export const CONFIG_DEFAULTS = {
   llm_provider: 'claude',
@@ -16,9 +16,6 @@ export const CONFIG_DEFAULTS = {
   // surprise, so the admin turns this on when they want it.
   token_budget_default: '0',
   token_budget_period: 'month',
-  // Per-job-type model overrides (llm_model_find_manual, ...); blank falls
-  // back to the global llm_model.
-  ...Object.fromEntries(LLM_JOB_TYPES.map((type) => [`llm_model_${type}`, ''])),
 };
 
 export const DEFAULT_IMPORT_WORKERS = Number(CONFIG_DEFAULTS.import_workers);
@@ -104,13 +101,33 @@ export const pauseQueue = (db, { until, reason = '' }) =>
 export const resumeQueue = (db) =>
   setConfig(db, { queue_paused_until: '', queue_paused_reason: '' });
 
-// Provider/model pair for creating an LLM backend. Resolution order: the
-// job type's override, then the global llm_model, then the provider default.
-export async function getLlmSettings(db, jobType = null) {
+// The user's per-job-type model overrides, parsed. A row written before the
+// column existed, or hand-edited into junk, is just "no overrides".
+export function userJobModels(user) {
+  try {
+    const parsed = JSON.parse(user?.llm_models || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// Provider/model pair for creating an LLM backend. The user's own provider
+// choice (users.llm_provider) outranks the admin default; blank follows it.
+//
+// Model resolution: the user's override for this job type, then the user's
+// own default model, then — only while the user is on the admin's provider —
+// the admin's llm_model (an admin model names the admin provider's models,
+// which mean nothing to a user who chose the other provider), then the
+// provider default.
+export async function getLlmSettings(db, jobType = null, user = null) {
   const config = await getConfig(db);
-  const override = jobType ? config[`llm_model_${jobType}`] : '';
+  const provider = user?.llm_provider || config.llm_provider;
+  const override = jobType ? String(userJobModels(user)[jobType] || '') : '';
+  const siteModel = provider === config.llm_provider ? config.llm_model : '';
   return {
-    provider: config.llm_provider,
-    model: override || config.llm_model || DEFAULT_MODELS[config.llm_provider] || null,
+    provider,
+    model:
+      override || user?.llm_model || siteModel || DEFAULT_MODELS[provider] || null,
   };
 }

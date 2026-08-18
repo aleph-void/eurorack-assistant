@@ -3,6 +3,7 @@ import { requireAuth } from '../auth.js';
 import { enqueueJob } from '../jobs/worker.js';
 import { DEFAULT_RACK_NAME } from '../services/racks.js';
 import { requireBudget } from '../services/budgets.js';
+import { requireLlmAccount } from '../services/llmAccounts.js';
 
 // Imports are fully asynchronous: the request only validates the input shape
 // and queues an `import` job. The worker parses the list, creates module
@@ -15,7 +16,7 @@ export function importRoutes(db) {
   // Body: { type: 'csv' | 'text' | 'modulargrid', content?, url?, rack? }
   // Modules land in the named rack (created on first use); a missing or blank
   // rack name falls back to the default 'main rack'.
-  router.post('/', requireBudget(db), async (req, res, next) => {
+  router.post('/', requireBudget(db), requireLlmAccount(db), async (req, res, next) => {
     try {
       const { type, content, url } = req.body || {};
       const rack = String(req.body?.rack ?? '').trim() || DEFAULT_RACK_NAME;

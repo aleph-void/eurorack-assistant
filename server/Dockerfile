@@ -9,7 +9,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # The LLM provider CLIs the server shells out to (configurable in the admin
-# UI). Their subscription logins are mounted from the host at runtime.
+# UI). Each run is pointed at the job owner's own credentials via environment
+# variables (services/llmAccounts.js) — no login lives in the image or the
+# host.
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
 WORKDIR /app
@@ -25,7 +27,7 @@ COPY migrations ./migrations
 # directory it is mounted over, so a path that is missing here is created
 # root-owned and nothing the `node` user does can write to it (the panel,
 # export and capture jobs failing with EACCES).
-RUN mkdir -p /data/manuals /data/exports /data/captures /data/panels \
+RUN mkdir -p /data/manuals /data/exports /data/captures /data/panels /data/llm /data/keys \
     && chown -R node:node /data /app
 USER node
 

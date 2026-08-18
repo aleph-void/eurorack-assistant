@@ -301,10 +301,22 @@ function reportUsage(onUsage, usage) {
 
 // Runs `cmd args...`, writing `input` to stdin; resolves with stdout. `cwd` is
 // the directory the CLI is started in — the jail above, so a relative path the
-// agent tries lands inside it.
-export function runCli(cmd, args, input, { timeoutMs = 600000, cwd = undefined } = {}) {
+// agent tries lands inside it. `env` vars are laid over the process's own —
+// how a run is pointed at one user's credentials (services/llmAccounts.js).
+// `onQuota` hears about an exhausted subscription in addition to the global
+// note, so a caller running jobs for many users can tell whose it was.
+export function runCli(
+  cmd,
+  args,
+  input,
+  { timeoutMs = 600000, cwd = undefined, env = undefined, onQuota = null } = {}
+) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], cwd });
+    const child = spawn(cmd, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd,
+      env: env ? { ...process.env, ...env } : undefined,
+    });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
@@ -336,6 +348,11 @@ export function runCli(cmd, args, input, { timeoutMs = 600000, cwd = undefined }
       const quota = detectQuotaExhaustion(said);
       if (quota) {
         noteQuotaExhaustion(quota);
+        try {
+          onQuota?.(quota);
+        } catch {
+          // a listener that threw must not eat the real error
+        }
         error.quotaExhausted = true;
         error.quotaResetAt = quota.resetAt;
       }
@@ -352,16 +369,22 @@ export function runCli(cmd, args, input, { timeoutMs = 600000, cwd = undefined }
 }
 
 export class ClaudeBackend {
-  constructor(model, { run = runCli, tmpdir = os.tmpdir, onUsage = null } = {}) {
+  constructor(model, { run = runCli, tmpdir = os.tmpdir, onUsage = null, env = null, onQuota = null } = {}) {
     this.model = model || DEFAULT_MODELS.claude;
     this.run = run;
     this.tmpdir = tmpdir;
     this.onUsage = onUsage;
+    this.env = env;
+    this.onQuota = onQuota;
   }
 
   async _exec(prompt, extraArgs = [], { cwd = undefined } = {}) {
     const args = ['-p', '--model', this.model, '--output-format', 'json', ...extraArgs];
-    const stdout = await this.run('claude', args, prompt, { cwd });
+    const stdout = await this.run('claude', args, prompt, {
+      cwd,
+      env: this.env ?? undefined,
+      onQuota: this.onQuota ?? undefined,
+    });
     const { text, usage, isError } = parseClaudeResult(stdout, this.model);
     reportUsage(this.onUsage, usage);
     // The CLI usually exits non-zero when it fails, and runCli has already
@@ -462,11 +485,13 @@ export class ClaudeBackend {
 }
 
 export class CodexBackend {
-  constructor(model, { run = runCli, tmpdir = os.tmpdir, onUsage = null } = {}) {
+  constructor(model, { run = runCli, tmpdir = os.tmpdir, onUsage = null, env = null, onQuota = null } = {}) {
     this.model = model || null;
     this.run = run;
     this.tmpdir = tmpdir;
     this.onUsage = onUsage;
+    this.env = env;
+    this.onQuota = onQuota;
   }
 
   // codex exec prints its event log to stdout; --output-last-message captures
@@ -493,7 +518,11 @@ export class CodexBackend {
         ...extraArgs,
       ];
       if (this.model) args.push('-m', this.model);
-      const result = await this.run('codex', args, prompt, { cwd });
+      const result = await this.run('codex', args, prompt, {
+        cwd,
+        env: this.env ?? undefined,
+        onQuota: this.onQuota ?? undefined,
+      });
       reportUsage(this.onUsage, parseCodexUsage(result, this.model));
       const answer = fs.existsSync(outPath) ? fs.readFileSync(outPath, 'utf-8').trim() : '';
       if (!answer) throw new Error(`codex CLI returned an empty answer:\n${result}`);

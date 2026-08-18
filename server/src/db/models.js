@@ -22,8 +22,32 @@ export function defineModels(sequelize) {
       // Token allowance per budget window (migration 021). NULL takes the
       // configured default; 0 lifts the ceiling for this user alone.
       token_budget: { type: DataTypes.BIGINT },
+      // The user's own LLM provider/model choice (migration 023). Blank falls
+      // back to the admin-configured default. llm_models is a JSON object of
+      // per-job-type model overrides ({"extract_manual": "claude-haiku-4-5"}).
+      llm_provider: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
+      llm_model: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
+      llm_models: { type: DataTypes.TEXT, allowNull: false, defaultValue: '{}' },
     },
     { tableName: 'users', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // One user's authorization of one LLM provider (migration 023).
+  // `credentials` is encrypted JSON — services/llmAccounts.js holds the key
+  // and is the only reader.
+  const UserLlmAccount = define(
+    'UserLlmAccount',
+    {
+      id,
+      user_id: { type: DataTypes.INTEGER, allowNull: false },
+      provider: { type: DataTypes.TEXT, allowNull: false },
+      kind: { type: DataTypes.TEXT, allowNull: false },
+      credentials: { type: DataTypes.TEXT, allowNull: false },
+      expires_at: { type: DataTypes.DATE },
+      paused_until: { type: DataTypes.DATE },
+      paused_reason: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
+    },
+    { tableName: 'user_llm_accounts', createdAt: 'created_at', updatedAt: 'updated_at' }
   );
 
   const Session = define(
@@ -789,6 +813,9 @@ export function defineModels(sequelize) {
   // which produce flat joins.
   Session.belongsTo(User, { foreignKey: 'user_id' });
 
+  UserLlmAccount.belongsTo(User, { foreignKey: 'user_id' });
+  User.hasMany(UserLlmAccount, { foreignKey: 'user_id' });
+
   Rack.belongsTo(User, { foreignKey: 'user_id' });
   User.hasMany(Rack, { foreignKey: 'user_id' });
 
@@ -952,6 +979,7 @@ export function defineModels(sequelize) {
   return {
     User,
     Session,
+    UserLlmAccount,
     AppConfig,
     Module,
     Manual,

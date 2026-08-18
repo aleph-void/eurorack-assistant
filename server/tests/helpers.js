@@ -11,12 +11,18 @@ import { createApp } from '../src/app.js';
 import { createDeviceHub } from '../src/deviceHub.js';
 import { issueDeviceToken } from '../src/services/deviceAuth.js';
 import { hashPassword } from '../src/auth.js';
+import { saveClaudeToken } from '../src/services/llmAccounts.js';
 import { DEFAULT_RACK_NAME, findOrCreateRack } from '../src/services/racks.js';
 import { textToPdf } from '../src/services/textPdf.js';
 
 // pg-mem hands timestamps to Sequelize as strings moment can only parse via
 // its js-Date fallback; the resulting deprecation warning would spam the run.
 moment.suppressDeprecationWarnings = true;
+
+// LLM credentials at rest are encrypted (services/llmAccounts.js); tests use
+// a throwaway key and a temp directory so nothing reaches for /data.
+process.env.LLM_TOKEN_KEY ||= crypto.randomBytes(32).toString('hex');
+process.env.LLM_DIR ||= fs.mkdtempSync(path.join(os.tmpdir(), 'llm-homes-'));
 
 // pg-mem has no text-search engine: no tsvector type, no to_tsvector, no @@.
 // The manual search (migration 018 + routes/manuals.js) is written in real
@@ -137,12 +143,21 @@ export async function createTestDb() {
   return db;
 }
 
-export async function createUser(db, { username, password = 'password123', isAdmin = false }) {
+// Users start with a connected claude account (a pasted setup-token) because
+// LLM work now requires one per user; tests about the unconnected state pass
+// llmAccount: false.
+export async function createUser(
+  db,
+  { username, password = 'password123', isAdmin = false, llmAccount = true }
+) {
   const user = await db.models.User.create({
     username,
     password_hash: hashPassword(password),
     is_admin: isAdmin,
   });
+  if (llmAccount) {
+    await saveClaudeToken(db, user.id, `sk-ant-oat01-test-${user.id}`);
+  }
   return user.get({ plain: true });
 }
 

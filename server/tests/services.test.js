@@ -45,14 +45,6 @@ afterEach(() => {
 describe('config service', () => {
   it('returns defaults and persists updates', async () => {
     const db = await createTestDb();
-    const perTypeDefaults = {
-      llm_model_find_manual: '',
-      llm_model_analyze_manual: '',
-      llm_model_extract_manual: '',
-      llm_model_panel_image: '',
-      llm_model_scope_question: '',
-      llm_model_answer_question: '',
-    };
     // The queue pause lives in app_config too; blank means the queue runs.
     const queueDefaults = { queue_paused_until: '', queue_paused_reason: '' };
     // Token budgets ship off: 0 is no ceiling (services/budgets.js).
@@ -61,7 +53,6 @@ describe('config service', () => {
       llm_provider: 'claude',
       llm_model: '',
       import_workers: '4',
-      ...perTypeDefaults,
       ...queueDefaults,
       ...budgetDefaults,
     });
@@ -70,7 +61,6 @@ describe('config service', () => {
       llm_provider: 'codex',
       llm_model: 'gpt-5.1',
       import_workers: '4',
-      ...perTypeDefaults,
       ...queueDefaults,
       ...budgetDefaults,
     });
@@ -92,17 +82,22 @@ describe('config service', () => {
     expect(settings).toEqual({ provider: 'claude', model: 'claude-fable-5' });
   });
 
-  it('resolves per-job-type model overrides', async () => {
+  it("resolves the user's per-job-type model overrides", async () => {
     const db = await createTestDb();
-    await setConfig(db, { llm_model_find_manual: 'claude-haiku-4-5' });
-    expect((await getLlmSettings(db, 'find_manual')).model).toBe('claude-haiku-4-5');
+    const user = await createUser(db, { username: 'cfg' });
+    await db.models.User.update(
+      { llm_models: JSON.stringify({ find_manual: 'claude-haiku-4-5' }) },
+      { where: { id: user.id } }
+    );
+    const row = await db.models.User.findByPk(user.id);
+    expect((await getLlmSettings(db, 'find_manual', row)).model).toBe('claude-haiku-4-5');
     // Other types fall back to the global model, then the provider default.
-    expect((await getLlmSettings(db, 'analyze_manual')).model).toBe('claude-fable-5');
+    expect((await getLlmSettings(db, 'analyze_manual', row)).model).toBe('claude-fable-5');
     await setConfig(db, { llm_model: 'claude-sonnet-5' });
-    expect((await getLlmSettings(db, 'analyze_manual')).model).toBe('claude-sonnet-5');
-    expect((await getLlmSettings(db, 'find_manual')).model).toBe('claude-haiku-4-5');
-    // Non-LLM job types (import, export_rack) have no override key.
-    expect((await getLlmSettings(db, 'import')).model).toBe('claude-sonnet-5');
+    expect((await getLlmSettings(db, 'analyze_manual', row)).model).toBe('claude-sonnet-5');
+    expect((await getLlmSettings(db, 'find_manual', row)).model).toBe('claude-haiku-4-5');
+    // Non-LLM job types (import, export_rack) have no override entry.
+    expect((await getLlmSettings(db, 'import', row)).model).toBe('claude-sonnet-5');
   });
 });
 

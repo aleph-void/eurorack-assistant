@@ -296,7 +296,7 @@ describe('worker', () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id);
-    await enqueue(db, 'find_manual', { module_id: module.id });
+    await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
 
     const backend = fakeBackend({
       completeTextWithSearch: JSON.stringify({
@@ -394,11 +394,12 @@ describe('worker', () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id);
-    await db.query(
-      "INSERT INTO app_config (key, value) VALUES ('llm_model_find_manual', 'claude-haiku-4-5')"
+    await db.models.User.update(
+      { llm_models: JSON.stringify({ find_manual: 'claude-haiku-4-5' }) },
+      { where: { id: user.id } }
     );
     await enqueueJob(db, 'import', { userId: user.id, payload: { type: 'text', content: 'A,B' } });
-    await enqueue(db, 'find_manual', { module_id: module.id });
+    await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
 
     const backend = fakeBackend({
       completeTextWithSearch: JSON.stringify({
@@ -428,7 +429,7 @@ describe('worker', () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id);
-    await enqueue(db, 'find_manual', { module_id: module.id });
+    await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
 
     const backend = fakeBackend({
       completeTextWithSearch: JSON.stringify({
@@ -464,7 +465,7 @@ describe('worker', () => {
       manual_hash: PDF_HASH,
       manual_status: 'found',
     });
-    await enqueue(db, 'analyze_manual', { module_id: module.id });
+    await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
 
     const backend = fakeBackend({
       analyzeDocument:
@@ -501,7 +502,7 @@ describe('worker', () => {
       original_name: 'Make_Noise_Maths_Perfect_Circuit_Product_Page.pdf',
       source: 'found',
     });
-    await enqueue(db, 'analyze_manual', { module_id: module.id });
+    await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
     const backend = fakeBackend({
       analyzeDocument:
         '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
@@ -541,7 +542,7 @@ describe('worker', () => {
       original_name: 'Music_Thing_Radio_Music_Build_Document.pdf',
       source: 'found',
     });
-    await enqueue(db, 'analyze_manual', { module_id: module.id });
+    await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
     const backend = fakeBackend({
       analyzeDocument:
         '{"summary":"A sample player.","components":[{"type":"output_jack","name":"OUT"}]}',
@@ -800,7 +801,7 @@ describe('worker', () => {
         source: 'found',
       },
     ]);
-    await enqueue(db, 'analyze_manual', { module_id: module.id });
+    await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
     const backend = fakeBackend({
       analyzeDocument:
         '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
@@ -973,7 +974,7 @@ describe('worker', () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id);
-    await enqueue(db, 'find_manual', { module_id: module.id });
+    await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
 
     const backend = fakeBackend({ completeTextWithSearch: new Error('LLM down') });
     const fetchImpl = fakeFetch({ 'archive.org/advancedsearch.php': { json: { response: { docs: [] } } } });
@@ -993,7 +994,7 @@ describe('worker', () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id);
-    const job = await enqueue(db, 'find_manual', { module_id: module.id });
+    const job = await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
     await db.query('UPDATE jobs SET module_id = NULL WHERE id = $1', [job.id]);
 
     const worker = makeWorker(db, fakeBackend());
@@ -1007,7 +1008,7 @@ describe('worker', () => {
     const user = await createUser(db, { username: 'u' });
     fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
     const module = await insertModule(db, user.id, { manual_hash: PDF_HASH });
-    await enqueue(db, 'analyze_manual', { module_id: module.id });
+    await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
 
     const backend = fakeBackend({
       analyzeDocument: '{"summary": "S", "components": [{"type": "knob", "name": "Rise"}]}',
@@ -1035,7 +1036,7 @@ describe('worker', () => {
     fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
     for (let i = 0; i < 3; i++) {
       const module = await insertModule(db, user.id, { name: `Module ${i}`, manual_hash: PDF_HASH });
-      await enqueue(db, 'analyze_manual', { module_id: module.id });
+      await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
     }
 
     let inFlight = 0;
@@ -1126,11 +1127,11 @@ describe('worker', () => {
   // they stayed that way for good: never retried, and never re-queued either,
   // because the dedupe guards saw a live job for the module.
   describe('orphaned jobs', () => {
-    async function insertRunning(db, moduleId, { heartbeatAt, attempts = 1 }) {
+    async function insertRunning(db, moduleId, { heartbeatAt, attempts = 1, userId = null }) {
       const { rows } = await db.query(
-        `INSERT INTO jobs (type, module_id, status, attempts, heartbeat_at, worker_id)
-         VALUES ('analyze_manual', $1, 'running', $2, $3, 'dead-worker#1') RETURNING *`,
-        [moduleId, attempts, heartbeatAt]
+        `INSERT INTO jobs (type, module_id, user_id, status, attempts, heartbeat_at, worker_id)
+         VALUES ('analyze_manual', $1, $2, 'running', $3, $4, 'dead-worker#1') RETURNING *`,
+        [moduleId, userId, attempts, heartbeatAt]
       );
       return rows[0];
     }
@@ -1269,6 +1270,7 @@ describe('worker', () => {
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
       const stale = await insertRunning(db, module.id, {
         heartbeatAt: new Date(Date.now() - 60 * 60 * 1000),
+        userId: user.id,
       });
 
       const worker = makeWorker(
@@ -1465,7 +1467,8 @@ describe('worker', () => {
     // Enough of a module, manual and job for an analyze_manual run.
     async function analyzeJob(db, { username = 'u' } = {}) {
       const user = await createUser(db, { username });
-      const module = await insertModule(db, user.id);
+      // A module of the user's own, so two users' fixtures can coexist.
+      const module = await insertModule(db, user.id, { name: `Maths (${username})` });
       await db.query(
         `INSERT INTO manuals (module_id, hash, source, original_name)
          VALUES ($1, $2, 'found', 'm.pdf')`,
@@ -1483,17 +1486,58 @@ describe('worker', () => {
       takeQuotaExhaustion(); // no leftovers from another test
     });
 
-    it('pauses the queue until the limit lifts', async () => {
+    it("pauses the owner's account until the limit lifts, not the queue", async () => {
       const db = await createTestDb();
-      await analyzeJob(db);
+      const { user } = await analyzeJob(db);
       const worker = makeWorker(db, fakeBackend({ analyzeDocument: outOfTokens() }));
 
       await worker.tick();
 
-      const pause = await getQueuePause(db);
-      expect(pause.paused).toBe(true);
-      expect(pause.until).toBe(new Date(1893456000 * 1000).toISOString());
-      expect(pause.reason).toMatch(/usage limit reached/);
+      // The wall is the owner's, so the pause is the owner's too.
+      expect((await getQueuePause(db)).paused).toBe(false);
+      const account = await db.models.UserLlmAccount.findOne({
+        where: { user_id: user.id, provider: 'claude' },
+      });
+      expect(new Date(account.paused_until).toISOString()).toBe(
+        new Date(1893456000 * 1000).toISOString()
+      );
+      expect(account.paused_reason).toMatch(/usage limit reached/);
+    });
+
+    it("holds the paused user's jobs while other users' jobs keep running", async () => {
+      const db = await createTestDb();
+      const { user } = await analyzeJob(db);
+      const worker = makeWorker(db, fakeBackend({ analyzeDocument: outOfTokens() }), null, null, {
+        budgetCacheMs: 0,
+      });
+      await worker.tick(); // hits the wall, pauses the account, requeues
+
+      // The paused user's requeued job is passed over…
+      expect(await worker.tick()).toBeNull();
+
+      // …while another user's identical job runs to completion.
+      const other = await analyzeJob(db, { username: 'v' });
+      const okBackend = fakeBackend({ analyzeDocument: '{"summary": "S", "components": []}' });
+      const otherWorker = makeWorker(db, okBackend, null, null, { budgetCacheMs: 0 });
+      const done = await otherWorker.tick();
+      expect(done.id).toBe(other.job.id);
+      expect(done.status).toBe('complete');
+    });
+
+    it('fails a job for good when its user has no account for the provider', async () => {
+      const db = await createTestDb();
+      const user = await createUser(db, { username: 'w', llmAccount: false });
+      const module = await insertModule(db, user.id);
+      await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
+
+      const backend = fakeBackend({ analyzeDocument: '{"summary": "S", "components": []}' });
+      const result = await makeWorker(db, backend).tick();
+
+      // Failed on the first attempt — no retry will conjure an account —
+      // and without the model ever being run.
+      expect(result.status).toBe('failed');
+      expect(result.error).toMatch(/no claude account is connected/);
+      expect(backend.calls.analyzeDocument ?? []).toHaveLength(0);
     });
 
     it('puts the job back on the queue without spending an attempt on it', async () => {
@@ -1555,22 +1599,38 @@ describe('worker', () => {
       const done = await worker.tick();
 
       expect(done.status).toBe('complete');
-      const pause = await getQueuePause(db);
-      expect(pause.paused).toBe(true);
-      expect(pause.reason).toBe('out of usage credits');
-      // Nothing said when the limit lifts, so the queue takes the fallback.
-      expect(new Date(pause.until).getTime()).toBeGreaterThan(Date.now() + 25 * 60 * 1000);
+      expect((await getQueuePause(db)).paused).toBe(false);
+      const account = await db.models.UserLlmAccount.findOne({
+        where: { user_id: done.user_id, provider: 'claude' },
+      });
+      expect(account.paused_reason).toBe('out of usage credits');
+      // Nothing said when the limit lifts, so the pause takes the fallback.
+      expect(new Date(account.paused_until).getTime()).toBeGreaterThan(
+        Date.now() + 25 * 60 * 1000
+      );
     });
 
-    it('tells every connected user, not just the owner of the job', async () => {
+    it('tells the owner of the account, and nobody else', async () => {
       const db = await createTestDb();
-      await analyzeJob(db);
-      const events = [];
-      const bus = { publish: () => {}, publishAll: (e) => events.push(e) };
+      const { user } = await analyzeJob(db);
+      const toUser = [];
+      const toAll = [];
+      const bus = {
+        publish: (userId, e) => toUser.push({ userId, ...e }),
+        publishAll: (e) => toAll.push(e),
+      };
       await makeWorker(db, fakeBackend({ analyzeDocument: outOfTokens() }), null, bus).tick();
 
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ kind: 'queue', event: 'paused', paused: true });
+      // The pause is the owner's own subscription, not shared queue state.
+      expect(toAll).toHaveLength(0);
+      const paused = toUser.filter((e) => e.kind === 'llm_account');
+      expect(paused).toHaveLength(1);
+      expect(paused[0]).toMatchObject({
+        userId: user.id,
+        event: 'paused',
+        provider: 'claude',
+        paused: true,
+      });
     });
 
     it('leaves an ordinary failure to the usual retries', async () => {

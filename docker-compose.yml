@@ -33,10 +33,12 @@ services:
       # Module front-panel images: the ones found on the web, and the logical
       # panels the server draws when no usable picture exists.
       - panels:/data/panels
-      # Subscription logins for the LLM provider CLIs, from the host.
-      # Log in on the host first: `claude` + /login, and/or `codex login`.
-      - ${CLAUDE_CONFIG_DIR:-~/.claude}:/home/node/.claude
-      - ${CODEX_CONFIG_DIR:-~/.codex}:/home/node/.codex
+      # Per-user LLM provider credentials: a CLI home directory per user
+      # (claude config dirs, codex auth.json files) …
+      - llm:/data/llm
+      # … and the key that encrypts the tokens stored in the database, kept
+      # outside the database on purpose (a dump alone can't use the tokens).
+      - llmkeys:/data/keys
     depends_on:
       db:
         condition: service_healthy
@@ -58,3 +60,5 @@ volumes:
   exports:
   captures:
   panels:
+  llm:
+  llmkeys:

@@ -11,6 +11,7 @@ import { requireAuth } from '../auth.js';
 import { engagedPatchModuleIds } from '../services/patchTopology.js';
 import { userModuleIds } from '../services/racks.js';
 import { requireBudget } from '../services/budgets.js';
+import { requireLlmAccount } from '../services/llmAccounts.js';
 import { readableResource, removeShares } from '../services/sharing.js';
 
 // Positive integer ids from a client-supplied array, deduped.
@@ -447,7 +448,7 @@ export function questionRoutes(db) {
 
   // Questions are scoped asynchronously by the job worker; the client polls
   // and then presents the review step.
-  router.post('/', requireBudget(db), async (req, res, next) => {
+  router.post('/', requireBudget(db), requireLlmAccount(db), async (req, res, next) => {
     try {
       const prompt = String(req.body?.prompt || '').trim();
       if (!prompt) return res.status(400).json({ error: 'prompt is required' });
@@ -501,7 +502,7 @@ export function questionRoutes(db) {
 
   // Confirm the review step: save the reviewed module/component scope and
   // attachment selection, then queue the job that answers the question.
-  router.post('/:id/answer', requireBudget(db), async (req, res, next) => {
+  router.post('/:id/answer', requireBudget(db), requireLlmAccount(db), async (req, res, next) => {
     try {
       const question = await Question.findOne({
         where: { id: Number(req.params.id), user_id: req.user.id },

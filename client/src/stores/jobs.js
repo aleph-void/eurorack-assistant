@@ -8,6 +8,15 @@ const asQueue = (queue) => ({
   reason: queue?.reason || '',
 });
 
+// The viewer's own LLM account pause (out of tokens), same shape plus which
+// provider hit the wall.
+const asLlmPause = (event) => ({
+  paused: Boolean(event?.paused),
+  provider: event?.provider || '',
+  until: event?.until ?? null,
+  reason: event?.reason || '',
+});
+
 // Job list + live progress feed. WebSocket events land here via applyEvent().
 export const useJobsStore = defineStore('jobs', {
   state: () => ({
@@ -17,6 +26,9 @@ export const useJobsStore = defineStore('jobs', {
     // The queue stops itself when the LLM provider reports the subscription
     // is out of tokens; `until` is when it will start again on its own.
     queue: { paused: false, until: null, reason: '' },
+    // The viewer's own account hit its provider's token wall; only their
+    // jobs wait (everyone runs on their own subscription).
+    llmPause: { paused: false, provider: '', until: null, reason: '' },
   }),
   getters: {
     activeCount: (state) =>
@@ -50,6 +62,26 @@ export const useJobsStore = defineStore('jobs', {
     async resumeQueue() {
       this.queue = asQueue(await api.post('/api/jobs/queue/resume'));
       return this.queue;
+    },
+    // Whether the viewer's own LLM account is paused for quota. Live updates
+    // arrive over the socket; this is for a page opened after it stopped.
+    async fetchLlmPause() {
+      const status = await api.get('/api/llm');
+      const account = status.accounts?.[status.effective_provider] || null;
+      this.llmPause = asLlmPause({
+        paused: Boolean(account?.paused_until),
+        provider: status.effective_provider,
+        until: account?.paused_until ?? null,
+        reason: account?.paused_reason || '',
+      });
+      return this.llmPause;
+    },
+    async resumeLlm() {
+      if (this.llmPause.provider) {
+        await api.post(`/api/llm/${this.llmPause.provider}/resume`);
+      }
+      this.llmPause = asLlmPause({ provider: this.llmPause.provider });
+      return this.llmPause;
     },
     async retry(jobId) {
       const updated = await api.post(`/api/jobs/${jobId}/retry`);
@@ -114,6 +146,12 @@ export const useJobsStore = defineStore('jobs', {
       // about one job, and carries no job to fold into the list.
       if (event.kind === 'queue') {
         this.queue = asQueue(event);
+        return;
+      }
+      // The viewer's own account pausing (or resuming) is personal queue
+      // state: it explains why their jobs sit still while others' run.
+      if (event.kind === 'llm_account') {
+        this.llmPause = asLlmPause(event);
         return;
       }
       if (event.kind !== 'job' || !event.job) return;

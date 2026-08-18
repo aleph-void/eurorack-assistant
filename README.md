@@ -198,9 +198,16 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   pages to find out what is on them. Only a manual with no extracted text (a
   scan nothing could read) is still sent as the PDF, and the answer says so in
   the job log.
-- **LLM provider is admin-configurable** in the web UI: Claude Code CLI
-  (`claude -p`) or Codex CLI (`codex exec`), with an optional model override —
-  both use your existing subscription login, no API key needed.
+- **LLM runs on each user's own account**: model calls go through the Claude
+  Code CLI (`claude -p`) or Codex CLI (`codex exec`), and every user connects
+  their own provider account under Account → LLM provider — an in-app
+  authorization flow for Claude (or a pasted `claude setup-token` token), a
+  pasted `codex login` auth.json for Codex, or a plain API key for either.
+  Each user also picks their own provider, default model, and per-job-type
+  model overrides; blank falls back to the site default the admin configured
+  (worker count and token budgets stay admin-only). Jobs will not run for a user with no
+  connected account, and stored tokens are encrypted at rest with a key kept
+  outside the database.
 - **Patches**: record a patch against a snapshot of a rack — the cables, how
   every control is dialed in, what each instance is doing in this patch
   ("LXR #2 — ghost layer") and which bus or layer it belongs to. The snapshot
@@ -308,12 +315,14 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   directory each, so pointing an agent at a file where it lives would hand it
   every other file beside it — including documents other users uploaded
   privately. See Security notes.
-- **Out of tokens stops the queue**: when the provider CLI reports that the
-  subscription is exhausted, the whole queue is paused rather than every job
-  behind it burning three attempts on the same wall. The job that hit it goes
-  back on the queue with its attempt refunded, the jobs screen says so, and
-  the queue starts again by itself at the reset time the provider named (an
-  hour, if it named none) or when anyone presses Resume Now.
+- **Out of tokens pauses that user's account**: when a provider CLI reports
+  the subscription is exhausted, the account that hit the wall is paused
+  rather than every job behind it burning three attempts on the same wall —
+  and only that user's jobs wait, because every account is now personal. The
+  job that hit it goes back on the queue with its attempt refunded, and the
+  account resumes by itself at the reset time the provider named (an hour, if
+  it named none) or when the user presses Resume Now on the LLM provider
+  page.
 
 ## Quick start
 
@@ -325,12 +334,11 @@ The setup script does everything (Ubuntu is the supported target for automatic
 installation; on other distros install Docker yourself first):
 
 1. installs `docker.io` + `docker-compose-v2` via apt if missing,
-2. installs the `claude` and `codex` CLIs if missing,
-3. asks which LLM provider you want and walks you through logging in
-   (Claude Pro/Max subscription for Claude Code, ChatGPT for Codex),
-4. generates `.env` (random database password), builds the images, migrates
+2. installs the `claude` and `codex` CLIs if missing (each user connects
+   their own Claude or Codex account in the web UI afterwards),
+3. generates `.env` (random database password), builds the images, migrates
    the database, and
-5. creates the `admin` account — **its random password is printed once during
+4. creates the `admin` account — **its random password is printed once during
    setup and stored only as a bcrypt hash**. The admin must set their own
    password at the first login.
 
@@ -353,9 +361,13 @@ mounted read-only from the host; after a `certbot renew`, reload nginx with
 With rootless Docker, setup grants `rootlesskit` the `cap_net_bind_service`
 capability so it can bind ports 80/443.
 
-The server container mounts `~/.claude` and `~/.codex` from the host so the
-CLIs inside the container reuse your subscription logins (override the paths
-with `CLAUDE_CONFIG_DIR` / `CODEX_CONFIG_DIR` in `.env`).
+LLM credentials are per user, connected in the web UI (Account → LLM
+provider) — the server no longer mounts or uses a login from the host. Each
+user's tokens are AES-256-GCM encrypted in the database with a key generated
+into the `llmkeys` volume (`/data/keys/llm-token.key`), and per-user CLI home
+directories live in the `llm` volume; a database dump alone cannot use the
+stored tokens, so back the key up alongside it if restored accounts should
+keep working without re-authorizing.
 
 Useful afterwards:
 

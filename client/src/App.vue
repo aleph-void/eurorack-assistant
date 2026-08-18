@@ -102,6 +102,7 @@ async function logout() {
     <RouterLink to="/ask">Ask</RouterLink>
     <RouterLink to="/questions">Questions</RouterLink>
     <RouterLink to="/notes">Notes</RouterLink>
+    <RouterLink to="/account/llm" data-test="nav-llm">LLM account</RouterLink>
 
     <p class="nav-heading">Bench</p>
     <RouterLink to="/devices" data-test="nav-devices">

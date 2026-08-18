@@ -262,6 +262,46 @@ describe('jobs store', () => {
     expect(jobs.jobs.map((j) => j.id)).toEqual([3, 4]);
   });
 
+  it("follows the viewer's own LLM account pausing and resuming", async () => {
+    const jobs = useJobsStore();
+    expect(jobs.llmPause.paused).toBe(false);
+
+    // A page opened after the pause reads it from /api/llm.
+    api.get.mockResolvedValue({
+      effective_provider: 'claude',
+      accounts: {
+        claude: { paused_until: '2026-08-19T00:00:00Z', paused_reason: 'usage limit reached' },
+      },
+    });
+    await jobs.fetchLlmPause();
+    expect(jobs.llmPause).toEqual({
+      paused: true,
+      provider: 'claude',
+      until: '2026-08-19T00:00:00Z',
+      reason: 'usage limit reached',
+    });
+
+    // Live events replace it; they carry no job and land in no feed.
+    jobs.applyEvent({ kind: 'llm_account', event: 'resumed', provider: 'claude', paused: false });
+    expect(jobs.llmPause.paused).toBe(false);
+    expect(jobs.feed).toHaveLength(0);
+
+    jobs.applyEvent({
+      kind: 'llm_account',
+      event: 'paused',
+      provider: 'claude',
+      paused: true,
+      until: '2026-08-19T01:00:00Z',
+      reason: 'out of usage credits',
+    });
+    expect(jobs.llmPause.paused).toBe(true);
+
+    api.post.mockResolvedValue({});
+    await jobs.resumeLlm();
+    expect(api.post).toHaveBeenCalledWith('/api/llm/claude/resume');
+    expect(jobs.llmPause.paused).toBe(false);
+  });
+
   it('follows the queue being paused and started again', async () => {
     const jobs = useJobsStore();
     expect(jobs.queue.paused).toBe(false);

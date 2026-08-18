@@ -12,12 +12,8 @@ const error = ref('');
 const saved = ref(false);
 const busy = ref(false);
 
-const jobModels = ref({});
-
 const knownModels = computed(() => config.value?.known_models?.[provider.value] || []);
 const defaultModel = computed(() => config.value?.default_models?.[provider.value] || '');
-const jobTypes = computed(() => config.value?.llm_job_types || []);
-
 onMounted(async () => {
   try {
     config.value = await api.get('/api/config');
@@ -26,9 +22,6 @@ onMounted(async () => {
     importWorkers.value = Number(config.value.import_workers);
     budgetDefault.value = Number(config.value.token_budget_default) || 0;
     budgetPeriod.value = config.value.token_budget_period || 'month';
-    for (const type of config.value.llm_job_types || []) {
-      jobModels.value[type] = config.value[`llm_model_${type}`] || '';
-    }
   } catch (e) {
     error.value = e.message;
   }
@@ -45,7 +38,6 @@ async function save() {
       import_workers: importWorkers.value,
       token_budget_default: budgetDefault.value,
       token_budget_period: budgetPeriod.value,
-      ...Object.fromEntries(jobTypes.value.map((type) => [`llm_model_${type}`, jobModels.value[type] || ''])),
     })) };
     saved.value = true;
   } catch (e) {
@@ -60,8 +52,10 @@ async function save() {
   <h1>Configuration</h1>
   <div class="panel">
     <p class="muted">
-      Questions, manual research, and manual analysis are sent to this provider. The provider CLI
-      (<code>claude</code> or <code>codex</code>) must be installed and logged in on the server.
+      Questions, manual research, and manual analysis are sent to this provider by default; users
+      can pick a different provider for themselves. Every user runs on their own account,
+      connected under Account &rarr; LLM provider — the provider CLI (<code>claude</code> or
+      <code>codex</code>) only needs to be installed on the server, not logged in.
     </p>
     <form @submit.prevent="save">
       <label for="provider">Provider</label>
@@ -77,14 +71,6 @@ async function save() {
         <option v-for="m in knownModels" :key="m" :value="m" />
       </datalist>
 
-      <fieldset v-if="jobTypes.length">
-        <legend>Model per job type (blank = model above)</legend>
-        <template v-for="t in jobTypes" :key="t">
-          <label :for="`model-${t}`">{{ t.replaceAll('_', ' ') }}</label>
-          <input :id="`model-${t}`" v-model="jobModels[t]" :data-test="`model-${t}`" list="known-models" />
-        </template>
-      </fieldset>
-
       <label for="import-workers">Import job workers (jobs processed in parallel)</label>
       <input
         id="import-workers"
@@ -99,7 +85,7 @@ async function save() {
       <fieldset>
         <legend>Token budget</legend>
         <p class="muted" style="margin-top: 0">
-          What one user may spend on the shared subscription in a rolling window. 0 is no limit,
+          What one user may spend across their LLM jobs in a rolling window. 0 is no limit,
           which is how the app ships. Admins are never limited, and a user's own allowance (set on
           the Users page) overrides this one. Work already queued waits for the window to roll
           forward rather than failing.

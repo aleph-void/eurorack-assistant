@@ -28,6 +28,12 @@
 import os from 'node:os';
 import { createBackend, detectQuotaExhaustion, takeQuotaExhaustion } from '../services/llm.js';
 import { exhaustedUserIds, recordUsage } from '../services/budgets.js';
+import {
+  accountRuntime,
+  getAccount,
+  pauseAccount,
+  sweepAccountPauses,
+} from '../services/llmAccounts.js';
 import { manualPath, renderPageToPdf } from '../services/pdf.js';
 import {
   getLlmSettings,
@@ -228,6 +234,8 @@ export function createWorker(db, options = {}) {
     // claim to see it set this to 0.
     budgetCacheMs = 2000,
     workerId = `${os.hostname()}#${process.pid}`,
+    // Where per-user CLI homes (and materialized codex auth files) live.
+    llmDataDir = process.env.LLM_DIR || '/data/llm',
     backendFactory = createBackend,
     fetchImpl = fetch,
     renderImpl = renderPageToPdf,
@@ -381,15 +389,69 @@ export function createWorker(db, options = {}) {
   }
 
   // The quota exhaustion behind a finished job, if there was one: what the
-  // job threw, or what any CLI run recorded on the way through.
-  function quotaBehind(error = null) {
-    const recorded = takeQuotaExhaustion();
+  // job threw, what this job's own CLI runs reported (`noted`, collected via
+  // the backend's onQuota hook — the attribution to trust with concurrent
+  // runners on different accounts), or what any CLI run recorded globally.
+  // The global note is always drained so one job's wall does not bleed into
+  // the next job's bookkeeping.
+  function quotaBehind(error = null, noted = null) {
+    const recorded = noted ?? takeQuotaExhaustion();
     if (error?.quotaExhausted) {
       return { message: error.message, resetAt: error.quotaResetAt ?? recorded?.resetAt ?? null };
     }
     const detected = error ? detectQuotaExhaustion(error.message) : null;
     if (detected) return { ...detected, resetAt: detected.resetAt ?? recorded?.resetAt ?? null };
     return recorded;
+  }
+
+  // An out-of-tokens report on a job that belongs to somebody: their account
+  // is what ran dry, so their account is what pauses — everyone else's queue
+  // keeps moving. Their queued jobs wait via heldForAccountPause below.
+  async function pauseForUserQuota(userId, provider, quota) {
+    const resetAt =
+      quota.resetAt && quota.resetAt > Date.now() ? quota.resetAt : Date.now() + quotaPauseMs;
+    const until = new Date(resetAt);
+    const reason =
+      quota.message || `the ${provider} subscription reported it is out of tokens`;
+    await pauseAccount(db, userId, provider, { until, reason });
+    accountPauseCache = { at: 0, ids: accountPauseCache.ids.add(userId) };
+    log(`user ${userId}'s ${provider} account paused until ${until.toISOString()}: ${reason}`);
+    bus?.publish(userId, {
+      kind: 'llm_account',
+      event: 'paused',
+      provider,
+      paused: true,
+      until: until.toISOString(),
+      reason,
+    });
+    return until;
+  }
+
+  // Users whose LLM account is paused for quota, cached the same way (and
+  // for the same reason) as heldForBudget below. The sweep also clears
+  // pauses whose time has come, announcing each to its owner.
+  let accountPauseCache = { at: 0, ids: new Set() };
+  async function heldForAccountPause() {
+    if (Date.now() - accountPauseCache.at < budgetCacheMs) return accountPauseCache.ids;
+    try {
+      const { held, resumed } = await sweepAccountPauses(db);
+      for (const account of resumed) {
+        log(`user ${account.user_id}'s ${account.provider} account pause expired; their jobs resume`);
+        bus?.publish(account.user_id, {
+          kind: 'llm_account',
+          event: 'resumed',
+          provider: account.provider,
+          paused: false,
+          until: null,
+          reason: '',
+        });
+      }
+      accountPauseCache = { at: Date.now(), ids: held };
+      return held;
+    } catch (e) {
+      log(`could not read LLM account pauses: ${e.message}`);
+      return new Set();
+    }
   }
 
   // Users who have spent their token allowance. Their queued work waits where
@@ -434,6 +496,7 @@ export function createWorker(db, options = {}) {
   async function claimNextJob() {
     const { Job } = db.models;
     const exhausted = await heldForBudget();
+    const paused = await heldForAccountPause();
     // A page of the queue rather than one row: the oldest job might belong to
     // a user who is out of tokens while the one behind it does not, and the
     // second one should still run. The page is filtered here rather than in
@@ -449,7 +512,7 @@ export function createWorker(db, options = {}) {
       });
       if (page.length === 0) return null;
       for (const next of page) {
-        if (next.user_id && exhausted.has(next.user_id)) continue;
+        if (next.user_id && (exhausted.has(next.user_id) || paused.has(next.user_id))) continue;
         // Concurrent workers can race for the same pending row; the guarded
         // update decides the winner and the loser moves on to the next row.
         const now = new Date();
@@ -930,13 +993,42 @@ export function createWorker(db, options = {}) {
 
     held.set(job.id, job);
     publish(owners, 'started', job, `attempt ${job.attempts}`);
+    // Which provider this job runs, whose credentials it runs on, and any
+    // quota wall its own CLI runs reported — visible to the catch/finally
+    // arms because they act on all three.
+    let settings = null;
+    let runtime = null;
+    let notedQuota = null;
     try {
       const handler = handlers[job.type];
       if (!handler) throw new Error(`Unknown job type: ${job.type}`);
+      const ownerUser = owners[0] ? await db.models.User.findByPk(owners[0]) : null;
+      settings = await getLlmSettings(db, job.type, ownerUser);
+      // Model runs happen on the job owner's own authorized account — there
+      // is no shared login to fall back to. import and export_rack are the
+      // two types that never call the model; everything else may, and fails
+      // for good (not three times) when no account is connected, because no
+      // retry will conjure one.
+      if (job.type !== 'import' && job.type !== 'export_rack') {
+        const account = ownerUser && (await getAccount(db, ownerUser.id, settings.provider));
+        if (!account) {
+          const missing = new Error(
+            `no ${settings.provider} account is connected for this user — ` +
+              'authorize the app under Account → LLM provider, then retry the job'
+          );
+          missing.permanent = true;
+          throw missing;
+        }
+        runtime = await accountRuntime(db, account, { dataDir: llmDataDir });
+      }
       // Every CLI run this job makes is billed to whoever caused the job —
       // including the runs of an attempt that goes on to fail, because those
       // tokens were spent too.
-      const backend = backendFactory(await getLlmSettings(db, job.type), {
+      const backend = backendFactory(settings, {
+        env: runtime?.env ?? null,
+        onQuota: (quota) => {
+          notedQuota = quota;
+        },
         onUsage: (usage) =>
           recordUsage(db, usage, {
             userId: owners[0] ?? null,
@@ -965,25 +1057,32 @@ export function createWorker(db, options = {}) {
       publish(owners, 'completed', done);
       // A job can spend the last of the subscription and still finish — the
       // manual search falls back to archive.org when the model will not run —
-      // so the queue is stopped on the way out of a success too.
-      const spent = quotaBehind();
-      if (spent) await pauseForQuota(spent);
+      // so the wall is acted on on the way out of a success too.
+      const spent = quotaBehind(null, notedQuota);
+      if (spent) {
+        if (owners[0] && settings) await pauseForUserQuota(owners[0], settings.provider, spent);
+        else await pauseForQuota(spent);
+      }
       return done;
     } catch (e) {
-      // Out of tokens is not this job's fault: every job behind it runs the
-      // same provider and would fail the same way, three attempts each. Stop
-      // the queue and put this one back on it with its attempt refunded.
-      const quota = quotaBehind(e);
+      // Out of tokens is not this job's fault: every job of this user's runs
+      // the same account and would fail the same way, three attempts each.
+      // Pause that account (or, for work nobody owns, the whole queue) and
+      // put this job back on the queue with its attempt refunded.
+      const quota = quotaBehind(e, notedQuota);
       if (quota) {
-        const until = await pauseForQuota(quota);
+        const until =
+          owners[0] && settings
+            ? await pauseForUserQuota(owners[0], settings.provider, quota)
+            : await pauseForQuota(quota);
         const requeued = await requeue(
           job,
-          `out of tokens; queued again for when the queue resumes at ${until.toISOString()}: ${e.message}`,
+          `out of tokens; queued again for when the account resumes at ${until.toISOString()}: ${e.message}`,
           { refundAttempt: true }
         );
         return requeued || abandoned(job, owners, 'failed');
       }
-      const status = job.attempts >= MAX_ATTEMPTS ? 'failed' : 'pending';
+      const status = e.permanent || job.attempts >= MAX_ATTEMPTS ? 'failed' : 'pending';
       const [, failedRows] = await db.models.Job.update(
         { status, error: e.message },
         { where: { id: job.id, status: 'running' }, returning: true }
@@ -995,6 +1094,14 @@ export function createWorker(db, options = {}) {
       return failed;
     } finally {
       held.delete(job.id);
+      // codex rotates its tokens in the per-user home; keep the database's
+      // copy current. Failing to sync must not fail the job — the stored
+      // copy stands until a later run manages it.
+      try {
+        await runtime?.sync?.();
+      } catch (e) {
+        log(`could not sync LLM credentials after job ${job.id}: ${e.message}`);
+      }
     }
   }
 
