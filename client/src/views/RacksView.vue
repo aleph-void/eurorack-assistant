@@ -234,28 +234,28 @@ async function dropIntoAvailable() {
                 {{ organizingRackId === rack.id ? 'Close organizer' : 'Organize rack' }}
               </button>
             </td>
-            <td>
-              <ShareButton type="rack" :id="rack.id" :label="rack.name" small />
-              <button
-                v-if="renamingId !== rack.id"
-                style="margin: 0 0.4rem"
-                :data-test="`rename-${rack.id}`"
-                @click="startRename(rack)"
-              >
-                Rename
-              </button>
-              <button
-                class="secondary"
-                style="margin: 0 0.4rem 0 0"
-                :disabled="rack.module_count === 0"
-                :data-test="`export-${rack.id}`"
-                @click="exportRack(rack)"
-              >
-                Export Rack
-              </button>
-              <button class="danger" style="margin: 0" :data-test="`delete-${rack.id}`" @click="remove(rack)">
-                Delete
-              </button>
+            <td class="actions-cell">
+              <div class="actions nowrap">
+                <ShareButton type="rack" :id="rack.id" :label="rack.name" small />
+                <button
+                  v-if="renamingId !== rack.id"
+                  :data-test="`rename-${rack.id}`"
+                  @click="startRename(rack)"
+                >
+                  Rename
+                </button>
+                <button
+                  class="secondary"
+                  :disabled="rack.module_count === 0"
+                  :data-test="`export-${rack.id}`"
+                  @click="exportRack(rack)"
+                >
+                  Export Rack
+                </button>
+                <button class="danger" :data-test="`delete-${rack.id}`" @click="remove(rack)">
+                  Delete
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>

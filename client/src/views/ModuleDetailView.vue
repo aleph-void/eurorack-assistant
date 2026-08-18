@@ -1857,34 +1857,25 @@ watch(() => props.id, () => {
                   />
                   <template v-else>{{ v.description || '—' }}</template>
                 </td>
-                <td style="white-space: nowrap">
-                  <template v-if="editingValueId === v.id">
-                    <button
-                      style="margin: 0"
-                      :data-test="`save-value-${v.id}`"
-                      @click="saveValue(v)"
-                    >
-                      Save
-                    </button>
-                    <button style="margin: 0 0 0 0.4rem" @click="cancelEditValue">Cancel</button>
-                  </template>
-                  <template v-else>
-                    <button
-                      style="margin: 0"
-                      :data-test="`edit-value-${v.id}`"
-                      @click="startEditValue(v)"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      class="danger"
-                      style="margin: 0 0 0 0.4rem"
-                      :data-test="`delete-value-${v.id}`"
-                      @click="removeValue(v)"
-                    >
-                      Remove
-                    </button>
-                  </template>
+                <td class="actions-cell">
+                  <div class="actions nowrap">
+                    <template v-if="editingValueId === v.id">
+                      <button :data-test="`save-value-${v.id}`" @click="saveValue(v)">Save</button>
+                      <button @click="cancelEditValue">Cancel</button>
+                    </template>
+                    <template v-else>
+                      <button :data-test="`edit-value-${v.id}`" @click="startEditValue(v)">
+                        Edit
+                      </button>
+                      <button
+                        class="danger"
+                        :data-test="`delete-value-${v.id}`"
+                        @click="removeValue(v)"
+                      >
+                        Remove
+                      </button>
+                    </template>
+                  </div>
                 </td>
               </tr>
             </tbody>
@@ -1995,28 +1986,25 @@ watch(() => props.id, () => {
                     @change="toggleScope(doc, $event.target.checked)"
                   />
                 </td>
-                <td>
-                  <a
-                    :href="`/api/manuals/${doc.hash}/export`"
-                    :data-test="`export-doc-${doc.id}`"
-                    style="margin-right: 0.6rem"
-                  >
-                    Export
-                  </a>
-                  <!-- Your own uploads only: the shared manual is nobody's to
-                       hand out, and a document you were given is not yours to
-                       pass on or remove. -->
-                  <template v-if="doc.user_id !== null && !doc.shared_by">
-                    <ShareButton type="document" :id="doc.id" :label="doc.name" small />
-                    <button
-                      class="danger"
-                      style="margin: 0 0 0 0.4rem"
-                      :data-test="`delete-doc-${doc.id}`"
-                      @click="removeDocument(doc)"
-                    >
-                      Remove
-                    </button>
-                  </template>
+                <td class="actions-cell">
+                  <div class="actions nowrap">
+                    <a :href="`/api/manuals/${doc.hash}/export`" :data-test="`export-doc-${doc.id}`">
+                      Export
+                    </a>
+                    <!-- Your own uploads only: the shared manual is nobody's to
+                         hand out, and a document you were given is not yours to
+                         pass on or remove. -->
+                    <template v-if="doc.user_id !== null && !doc.shared_by">
+                      <ShareButton type="document" :id="doc.id" :label="doc.name" small />
+                      <button
+                        class="danger"
+                        :data-test="`delete-doc-${doc.id}`"
+                        @click="removeDocument(doc)"
+                      >
+                        Remove
+                      </button>
+                    </template>
+                  </div>
                 </td>
               </tr>
             </tbody>
@@ -2217,29 +2205,23 @@ watch(() => props.id, () => {
                       v-model="editGroup"
                       placeholder="Mult group (e.g. 1)"
                       :data-test="`edit-group-${c.id}`"
-                      style="width: auto; margin-left: 0.4rem"
+                      style="width: auto"
                     />
                     <select
                       v-if="editType.endsWith('_jack')"
                       v-model="editPortKind"
                       :data-test="`edit-port-kind-${c.id}`"
-                      style="width: auto; margin-left: 0.4rem"
+                      style="width: auto"
                     >
                       <option value="">3.5mm patch point</option>
                       <option v-for="k in PORT_KINDS" :key="k" :value="k">
                         {{ portKindLabel(k) }}
                       </option>
                     </select>
-                    <button
-                      style="margin: 0 0 0 0.4rem"
-                      :data-test="`edit-save-${c.id}`"
-                      @click="saveComponent(c)"
-                    >
+                    <button :data-test="`edit-save-${c.id}`" @click="saveComponent(c)">
                       Save
                     </button>
-                    <button style="margin: 0 0 0 0.4rem" @click="editingComponentId = null">
-                      Cancel
-                    </button>
+                    <button @click="editingComponentId = null">Cancel</button>
                   </div>
                   <div v-else class="component-row-actions">
                     <button

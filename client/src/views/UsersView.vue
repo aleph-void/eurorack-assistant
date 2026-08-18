@@ -208,7 +208,7 @@ onMounted(load);
               <template v-if="user.is_admin">
                 <span class="muted">exempt</span>
               </template>
-              <template v-else>
+              <div v-else class="actions nowrap">
                 <input
                   :value="budgetFor(user)"
                   :data-test="`budget-${user.id}`"
@@ -216,33 +216,28 @@ onMounted(load);
                   min="0"
                   step="1000"
                   placeholder="default"
-                  style="width: 8rem; margin: 0 0.4rem 0 0"
+                  style="width: 8rem"
                   @input="budgets[user.id] = $event.target.value"
                   @keyup.enter="saveBudget(user)"
                 />
-                <button style="margin: 0" :data-test="`save-budget-${user.id}`" @click="saveBudget(user)">
+                <button :data-test="`save-budget-${user.id}`" @click="saveBudget(user)">
                   Save
                 </button>
-              </template>
+              </div>
             </td>
-            <td>
-              <template v-if="user.id !== auth.user?.id">
-                <button
-                  style="margin: 0 0.5rem 0 0"
-                  :data-test="`reset-${user.id}`"
-                  @click="resetPassword(user)"
-                >
+            <td class="actions-cell">
+              <div v-if="user.id !== auth.user?.id" class="actions nowrap">
+                <button :data-test="`reset-${user.id}`" @click="resetPassword(user)">
                   Reset password
                 </button>
                 <button
                   class="danger"
-                  style="margin: 0"
                   :data-test="`delete-${user.id}`"
                   @click="removeUser(user)"
                 >
                   Delete
                 </button>
-              </template>
+              </div>
             </td>
           </tr>
         </tbody>

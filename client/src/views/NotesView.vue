@@ -128,14 +128,9 @@ onMounted(load);
   >
     <div class="row" style="align-items: baseline">
       <h2 style="margin: 0">{{ note.title || 'Untitled note' }}</h2>
-      <div class="shrink">
+      <div class="shrink actions nowrap">
         <ShareButton type="note" :id="note.id" :label="note.title || 'this note'" small />
-        <button
-          class="danger"
-          style="margin: 0 0 0 0.4rem"
-          :data-test="`note-delete-${note.id}`"
-          @click="removeNote(note)"
-        >
+        <button class="danger" :data-test="`note-delete-${note.id}`" @click="removeNote(note)">
           Delete
         </button>
       </div>

@@ -65,16 +65,17 @@ async function remove(q) {
             </td>
             <td><span class="badge" :class="q.status">{{ q.status }}</span></td>
             <td class="muted">{{ formatDate(q.created_at) }}</td>
-            <td>
-              <ShareButton type="question" :id="q.id" :label="q.prompt" small />
-              <button
-                class="danger"
-                style="margin: 0 0 0 0.4rem"
-                :data-test="`delete-question-${q.id}`"
-                @click="remove(q)"
-              >
-                Delete
-              </button>
+            <td class="actions-cell">
+              <div class="actions nowrap">
+                <ShareButton type="question" :id="q.id" :label="q.prompt" small />
+                <button
+                  class="danger"
+                  :data-test="`delete-question-${q.id}`"
+                  @click="remove(q)"
+                >
+                  Delete
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>

@@ -230,21 +230,10 @@ onUnmounted(() => clearTimeout(pollTimer));
   <p v-if="error" class="error" data-test="error">{{ error }}</p>
   <template v-if="question">
     <h1 data-test="prompt">{{ question.prompt }}</h1>
-    <p>
+    <p class="actions">
       <span class="badge" :class="question.status">{{ question.status }}</span>
-      <ShareButton
-        type="question"
-        :id="props.id"
-        :label="question.prompt"
-        small
-        style="margin-left: 0.8rem"
-      />
-      <button
-        class="danger"
-        style="margin: 0 0 0 0.4rem"
-        data-test="delete-question"
-        @click="removeQuestion"
-      >
+      <ShareButton type="question" :id="props.id" :label="question.prompt" small />
+      <button class="danger" data-test="delete-question" @click="removeQuestion">
         Delete
       </button>
     </p>

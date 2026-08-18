@@ -887,17 +887,20 @@ onMounted(async () => {
       </form>
       <p v-if="renameError" class="error">{{ renameError }}</p>
     </template>
-    <h1 v-else>
+    <!-- The title and its small actions on one centered line: without the
+         flex row the buttons baseline-align against the heading text and sit
+         at odd heights beside it. -->
+    <h1 v-else class="actions">
       {{ patch.name }}
       <button
-        style="margin: 0 0 0 0.6rem; font-size: 0.8rem"
+        style="font-size: 0.8rem"
         data-test="rename"
         @click="renaming = true; renameValue = patch.name"
       >
         Rename
       </button>
       <button
-        style="margin: 0 0 0 0.4rem; font-size: 0.8rem"
+        style="font-size: 0.8rem"
         class="secondary"
         :disabled="duplicating"
         data-test="duplicate-patch"
@@ -908,7 +911,7 @@ onMounted(async () => {
       <ShareButton type="patch" :id="props.id" :label="patch.name" small />
       <a
         :href="`/api/patches/${props.id}/export`"
-        style="margin-left: 0.6rem; font-size: 0.8rem"
+        style="font-size: 0.8rem"
         data-test="export-patch"
         title="Download this patch as a JSON file"
       >
@@ -916,7 +919,7 @@ onMounted(async () => {
       </a>
       <RouterLink
         :to="`/ask?patch=${props.id}`"
-        style="margin-left: 0.6rem; font-size: 0.8rem"
+        style="font-size: 0.8rem"
         data-test="ask-about-patch"
       >
         Ask about this patch
@@ -981,48 +984,45 @@ onMounted(async () => {
                   <span v-if="cable.alt_group" class="badge pending">{{ cable.alt_group }}</span>
                   {{ cable.note || '' }}
                 </td>
-                <td>
-                  <button
-                    class="secondary"
-                    style="margin: 0"
-                    title="Load this cable into the form to plug a variant of it"
-                    :data-test="`cable-reuse-${cable.id}`"
-                    @click="reuseCable(cable)"
-                  >
-                    Reuse
-                  </button>
-                  <button
-                    v-if="reversible(cable)"
-                    class="secondary"
-                    style="margin: 0 0 0 0.4rem"
-                    title="Swap the ends of this cable"
-                    :data-test="`cable-reverse-${cable.id}`"
-                    @click="reverseCable(cable)"
-                  >
-                    Reverse
-                  </button>
-                  <button
-                    style="margin: 0 0 0 0.4rem"
-                    :data-test="`cable-optional-${cable.id}`"
-                    @click="toggleCableFlag(cable, 'optional')"
-                  >
-                    {{ cable.optional ? 'Required' : 'Optional' }}
-                  </button>
-                  <button
-                    style="margin: 0 0 0 0.4rem"
-                    :data-test="`cable-stacked-${cable.id}`"
-                    @click="toggleCableFlag(cable, 'stacked')"
-                  >
-                    {{ cable.stacked ? 'Not stacked' : 'Stacked' }}
-                  </button>
-                  <button
-                    class="danger"
-                    style="margin: 0 0 0 0.4rem"
-                    :data-test="`delete-cable-${cable.id}`"
-                    @click="removeCable(cable)"
-                  >
-                    Unplug
-                  </button>
+                <td class="actions-cell">
+                  <div class="actions nowrap">
+                    <button
+                      class="secondary"
+                      title="Load this cable into the form to plug a variant of it"
+                      :data-test="`cable-reuse-${cable.id}`"
+                      @click="reuseCable(cable)"
+                    >
+                      Reuse
+                    </button>
+                    <button
+                      v-if="reversible(cable)"
+                      class="secondary"
+                      title="Swap the ends of this cable"
+                      :data-test="`cable-reverse-${cable.id}`"
+                      @click="reverseCable(cable)"
+                    >
+                      Reverse
+                    </button>
+                    <button
+                      :data-test="`cable-optional-${cable.id}`"
+                      @click="toggleCableFlag(cable, 'optional')"
+                    >
+                      {{ cable.optional ? 'Required' : 'Optional' }}
+                    </button>
+                    <button
+                      :data-test="`cable-stacked-${cable.id}`"
+                      @click="toggleCableFlag(cable, 'stacked')"
+                    >
+                      {{ cable.stacked ? 'Not stacked' : 'Stacked' }}
+                    </button>
+                    <button
+                      class="danger"
+                      :data-test="`delete-cable-${cable.id}`"
+                      @click="removeCable(cable)"
+                    >
+                      Unplug
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>

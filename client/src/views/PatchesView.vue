@@ -152,32 +152,28 @@ onMounted(load);
             <td>{{ patch.module_count }}</td>
             <td>{{ patch.cable_count }}</td>
             <td>{{ new Date(patch.created_at).toLocaleString() }}</td>
-            <td>
-              <a
-                class="export-link"
-                :href="`/api/patches/${patch.id}/export`"
-                :data-test="`export-${patch.id}`"
-                title="Download this patch as a JSON file"
-              >
-                Export
-              </a>
-              <ShareButton type="patch" :id="patch.id" :label="patch.name" small />
-              <button
-                class="secondary"
-                style="margin: 0 0 0 0.4rem"
-                :data-test="`duplicate-${patch.id}`"
-                @click="duplicate(patch)"
-              >
-                Duplicate
-              </button>
-              <button
-                class="danger"
-                style="margin: 0 0 0 0.4rem"
-                :data-test="`delete-${patch.id}`"
-                @click="remove(patch)"
-              >
-                Delete
-              </button>
+            <td class="actions-cell">
+              <div class="actions nowrap">
+                <a
+                  class="export-link"
+                  :href="`/api/patches/${patch.id}/export`"
+                  :data-test="`export-${patch.id}`"
+                  title="Download this patch as a JSON file"
+                >
+                  Export
+                </a>
+                <ShareButton type="patch" :id="patch.id" :label="patch.name" small />
+                <button
+                  class="secondary"
+                  :data-test="`duplicate-${patch.id}`"
+                  @click="duplicate(patch)"
+                >
+                  Duplicate
+                </button>
+                <button class="danger" :data-test="`delete-${patch.id}`" @click="remove(patch)">
+                  Delete
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>

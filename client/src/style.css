@@ -859,6 +859,20 @@ button.linklike:hover {
   min-width: 0;
   flex: 0 1 auto;
 }
+/* An action group that must hold one line no matter what — a table row's
+   buttons, where wrapping would stack them under each other. */
+.actions.nowrap {
+  flex-wrap: nowrap;
+}
+/* The actions column of a table: the cell claims only the width its buttons
+   need. Pair with an .actions.nowrap row inside the cell, which keeps the
+   buttons, links and the share control on one line, vertically centered —
+   without it, buttons baseline-align against neighbouring links and sit
+   visibly lower than the text beside them. */
+.actions-cell {
+  width: 1%;
+  white-space: nowrap;
+}
 /* Buttons that belong at the far end of the bar (whole-list actions), and the
    note that explains them keeping the left. */
 .actions.end {
