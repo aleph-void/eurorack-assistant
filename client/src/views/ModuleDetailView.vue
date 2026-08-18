@@ -27,6 +27,44 @@ const docNameValid = computed(() => {
   return name !== '' && name.toLowerCase() !== 'manual';
 });
 
+// --- Naming/HP correction (shared record: a fix shows for every user).
+// Saved with a plain PATCH — no re-analysis is triggered. ---
+const editingNaming = ref(false);
+const editManufacturer = ref('');
+const editModuleName = ref('');
+const editHp = ref('');
+const savingNaming = ref(false);
+const namingError = ref('');
+
+function startEditNaming() {
+  editManufacturer.value = module.value.manufacturer;
+  editModuleName.value = module.value.name;
+  editHp.value = module.value.hp == null ? '' : String(module.value.hp);
+  namingError.value = '';
+  editingNaming.value = true;
+}
+
+async function saveNaming() {
+  const manufacturer = editManufacturer.value.trim();
+  const name = editModuleName.value.trim();
+  const hp = editHp.value.trim();
+  if (!manufacturer || !name) {
+    namingError.value = 'Manufacturer and name are both required';
+    return;
+  }
+  savingNaming.value = true;
+  namingError.value = '';
+  try {
+    await api.patch(`/api/modules/${props.id}`, { manufacturer, name, hp: hp || null });
+    editingNaming.value = false;
+    await load();
+  } catch (e) {
+    namingError.value = e.message;
+  } finally {
+    savingNaming.value = false;
+  }
+}
+
 // --- Component re-analysis with fresh retailer product pages ---
 const reanalyzing = ref(false);
 const reanalyzeNotice = ref('');
@@ -1031,7 +1069,49 @@ watch(() => props.id, () => {
   </nav>
   <p v-if="error" class="error">{{ error }}</p>
   <template v-if="module">
-    <h1>{{ module.manufacturer }} {{ module.name }}</h1>
+    <div v-if="editingNaming" class="row reanalyze-row" data-test="edit-naming">
+      <input
+        v-model="editManufacturer"
+        aria-label="Manufacturer"
+        placeholder="Manufacturer"
+        style="flex: 0 0 auto; width: 13rem"
+        data-test="edit-manufacturer"
+      />
+      <input
+        v-model="editModuleName"
+        aria-label="Module name"
+        placeholder="Module name"
+        style="flex: 0 0 auto; width: 13rem"
+        data-test="edit-module-name"
+      />
+      <input
+        v-model="editHp"
+        aria-label="Width in HP"
+        placeholder="HP"
+        style="flex: 0 0 auto; width: 4.5rem"
+        title="Width in HP — leave empty if unknown"
+        data-test="edit-hp"
+      />
+      <button style="margin: 0" :disabled="savingNaming" data-test="save-naming" @click="saveNaming">
+        {{ savingNaming ? 'Saving…' : 'Save' }}
+      </button>
+      <button style="margin: 0" class="secondary" data-test="cancel-naming" @click="editingNaming = false">
+        Cancel
+      </button>
+    </div>
+    <h1 v-else>
+      {{ module.manufacturer }} {{ module.name }}
+      <button
+        class="linklike"
+        style="font-size: 1rem; vertical-align: middle"
+        title="Correct the manufacturer, module name or HP without re-analysis (the fix shows for every user of this module)"
+        data-test="edit-naming-button"
+        @click="startEditNaming"
+      >
+        Edit
+      </button>
+    </h1>
+    <p v-if="namingError" class="error" data-test="naming-error">{{ namingError }}</p>
     <p>
       <span class="badge" :class="module.manual_status">manual: {{ module.manual_status }}</span>
       &nbsp;

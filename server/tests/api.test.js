@@ -301,6 +301,114 @@ describe('modules API', () => {
   });
 });
 
+// PATCH /api/modules/:id — correcting a module's naming and HP in place,
+// without triggering any re-analysis.
+describe('module edit API', () => {
+  it('updates the naming and HP for a racked user', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id, {
+      manufacturer: 'Make Nose',
+      name: 'Math',
+      analysis_status: 'complete',
+    });
+
+    const res = await request(app)
+      .patch(`/api/modules/${module.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ manufacturer: 'Make Noise', name: 'Maths', hp: '20' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ manufacturer: 'Make Noise', name: 'Maths', hp: 20 });
+
+    const saved = await db.models.Module.findByPk(module.id);
+    expect(saved.manufacturer).toBe('Make Noise');
+    expect(saved.name).toBe('Maths');
+    expect(saved.hp).toBe(20);
+    // A plain correction, not a re-analysis: no job was queued and the
+    // analysis state is untouched.
+    expect(saved.analysis_status).toBe('complete');
+    expect((await db.query('SELECT id FROM jobs')).rows).toEqual([]);
+  });
+
+  it('updates HP alone and clears it with an empty value', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id, { hp: 8 });
+
+    const res = await request(app)
+      .patch(`/api/modules/${module.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ hp: 10 });
+    expect(res.status).toBe(200);
+    expect((await db.models.Module.findByPk(module.id)).hp).toBe(10);
+
+    const cleared = await request(app)
+      .patch(`/api/modules/${module.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ hp: '' });
+    expect(cleared.status).toBe(200);
+    expect((await db.models.Module.findByPk(module.id)).hp).toBeNull();
+  });
+
+  it('rejects empty fields, bad HP and empty bodies', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id);
+
+    for (const body of [{ name: '  ' }, { manufacturer: '' }, { hp: 'wide' }, { hp: -4 }, {}]) {
+      const res = await request(app)
+        .patch(`/api/modules/${module.id}`)
+        .set('Cookie', aliceCookie)
+        .send(body);
+      expect(res.status, JSON.stringify(body)).toBe(400);
+    }
+    const saved = await db.models.Module.findByPk(module.id);
+    expect(saved.name).toBe('Maths');
+    expect(saved.manufacturer).toBe('Make Noise');
+  });
+
+  it('refuses a rename that collides with another module, case-insensitively', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    await insertModule(db, rows[0].id, { manufacturer: 'ALM', name: 'Pamela’s PRO Workout' });
+    const module = await insertModule(db, rows[0].id, { manufacturer: 'ALM', name: 'Pam' });
+
+    const res = await request(app)
+      .patch(`/api/modules/${module.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'pamela’s pro workout' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('already exists');
+    expect((await db.models.Module.findByPk(module.id)).name).toBe('Pam');
+  });
+
+  it('keeps its own naming when only the case changes', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id, { manufacturer: 'make noise', name: 'maths' });
+
+    const res = await request(app)
+      .patch(`/api/modules/${module.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ manufacturer: 'Make Noise', name: 'Maths' });
+    expect(res.status).toBe(200);
+    expect((await db.models.Module.findByPk(module.id)).manufacturer).toBe('Make Noise');
+  });
+
+  it('is only offered on modules in the requester’s racks', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'admin'");
+    const module = await insertModule(db, rows[0].id);
+
+    const res = await request(app)
+      .patch(`/api/modules/${module.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'Hijacked' });
+    expect(res.status).toBe(404);
+    expect((await db.models.Module.findByPk(module.id)).name).toBe('Maths');
+  });
+});
+
 // POST /api/modules/:id/reanalyze — one module's component re-analysis with
 // freshly fetched retailer product pages.
 describe('module re-analysis API', () => {

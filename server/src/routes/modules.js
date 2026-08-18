@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { Router } from 'express';
-import { Op } from 'sequelize';
+import { Op, col, fn, where } from 'sequelize';
 import { requireAuth } from '../auth.js';
 import { isProbablyPdfBuffer, manualPath, sha256Buffer } from '../services/pdf.js';
 import {
@@ -615,6 +615,62 @@ export function moduleRoutes(
           ...componentNotes.map((nc) => noteJson(nc.Note, nc.component_id)),
         ],
       });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Correct a module's basic facts. Body: { manufacturer?, name?, hp? } — at
+  // least one. Like components, these are shared hardware facts: any user who
+  // has the module racked may fix them, and the fix shows for every user
+  // sharing the record. No re-analysis is triggered. Imports dedupe modules
+  // case-insensitively on manufacturer + name, so a rename that collides with
+  // another module is refused rather than creating two records that later
+  // imports could not tell apart.
+  router.patch('/:id', async (req, res, next) => {
+    try {
+      const module = await userModule(req.user.id, req.params.id);
+      if (!module) return res.status(404).json({ error: 'Module not found' });
+      const fields = {};
+      for (const key of ['manufacturer', 'name']) {
+        if (req.body?.[key] === undefined) continue;
+        const value = String(req.body[key]).trim();
+        if (!value) return res.status(400).json({ error: `${key} cannot be empty` });
+        fields[key] = value;
+      }
+      if (req.body?.hp !== undefined) {
+        const raw = req.body.hp;
+        if (raw === null || String(raw).trim() === '') {
+          fields.hp = null;
+        } else {
+          const hp = normalizeHp(raw);
+          if (hp === null) return res.status(400).json({ error: 'hp must be a positive number' });
+          fields.hp = hp;
+        }
+      }
+      if (Object.keys(fields).length === 0) {
+        return res.status(400).json({ error: 'Send manufacturer, name and/or hp to update' });
+      }
+      if (fields.manufacturer !== undefined || fields.name !== undefined) {
+        const manufacturer = fields.manufacturer ?? module.manufacturer;
+        const name = fields.name ?? module.name;
+        const clash = await Module.findOne({
+          where: {
+            [Op.and]: [
+              where(fn('lower', col('manufacturer')), manufacturer.toLowerCase()),
+              where(fn('lower', col('name')), name.toLowerCase()),
+              { id: { [Op.ne]: module.id } },
+            ],
+          },
+        });
+        if (clash) {
+          return res
+            .status(409)
+            .json({ error: `A module named "${manufacturer} ${name}" already exists` });
+        }
+      }
+      await Module.update(fields, { where: { id: module.id } });
+      res.json({ ...module, ...fields });
     } catch (e) {
       next(e);
     }

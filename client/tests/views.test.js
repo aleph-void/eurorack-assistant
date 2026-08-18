@@ -433,6 +433,52 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="group-knob"]').text()).toContain('Rise');
   });
 
+  it('edits the naming and HP inline', async () => {
+    api.get.mockResolvedValue({ ...structuredClone(moduleResponse), hp: 20 });
+    api.patch.mockResolvedValue({});
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('h1').text()).toContain('Make Noise Maths');
+    expect(wrapper.find('[data-test="edit-naming"]').exists()).toBe(false);
+    await wrapper.find('[data-test="edit-naming-button"]').trigger('click');
+
+    const manufacturer = wrapper.find('[data-test="edit-manufacturer"]');
+    const name = wrapper.find('[data-test="edit-module-name"]');
+    const hp = wrapper.find('[data-test="edit-hp"]');
+    expect(manufacturer.element.value).toBe('Make Noise');
+    expect(name.element.value).toBe('Maths');
+    expect(hp.element.value).toBe('20');
+
+    await manufacturer.setValue('Make Noise Music');
+    await name.setValue('Maths v2');
+    await hp.setValue('24');
+    await wrapper.find('[data-test="save-naming"]').trigger('click');
+    await flushPromises();
+    expect(api.patch).toHaveBeenCalledWith('/api/modules/1', {
+      manufacturer: 'Make Noise Music',
+      name: 'Maths v2',
+      hp: '24',
+    });
+    expect(wrapper.find('[data-test="edit-naming"]').exists()).toBe(false);
+  });
+
+  it('reports an edit conflict and keeps the form open', async () => {
+    api.get.mockResolvedValue(structuredClone(moduleResponse));
+    api.patch.mockRejectedValue(new Error('A module named "ALM Pam" already exists'));
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="edit-naming-button"]').trigger('click');
+    await wrapper.find('[data-test="save-naming"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="naming-error"]').text()).toContain('already exists');
+    expect(wrapper.find('[data-test="edit-naming"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="cancel-naming"]').trigger('click');
+    expect(wrapper.find('[data-test="edit-naming"]').exists()).toBe(false);
+  });
+
   it('queues a component re-analysis with fresh retailer product pages', async () => {
     api.get.mockResolvedValue(structuredClone(moduleResponse));
     api.post.mockResolvedValue({ job_id: 7 });
