@@ -526,10 +526,18 @@ describe('worker', () => {
     const ownHash = 'a'.repeat(64);
     const otherHash = 'b'.repeat(64);
     const notesHash = 'c'.repeat(64);
-    for (const hash of [ownHash, otherHash, notesHash]) {
+    const foundHash = 'd'.repeat(64);
+    for (const hash of [ownHash, otherHash, notesHash, foundHash]) {
       fs.writeFileSync(path.join(manualsDir, `${hash}.pdf`), PDF_BYTES);
     }
     await db.models.Manual.bulkCreate([
+      {
+        module_id: module.id,
+        user_id: null,
+        hash: foundHash,
+        original_name: 'Make_Noise_Maths_Perfect_Circuit_Product_Page.pdf',
+        source: 'found',
+      },
       {
         module_id: module.id,
         user_id: user.id,

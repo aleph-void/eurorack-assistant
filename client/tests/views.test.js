@@ -445,7 +445,7 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="group-knob"] .summary-count').text()).toBe('1');
   });
 
-  it('links to the next module in the current rack and stops at the last one', async () => {
+  it('links to the previous and next modules in the current rack', async () => {
     currentRouteQuery = { rack: '1' };
     const list = [
       { id: 1, manufacturer: 'Make Noise', name: 'Maths', racks: [{ id: 1 }] },
@@ -458,6 +458,7 @@ describe('ModuleDetailView', () => {
 
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
+    expect(wrapper.find('[data-test="previous-module"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="next-module"]').attributes('to')).toBe('/modules/2?rack=1');
 
     api.get.mockImplementation((path) =>
@@ -465,6 +466,9 @@ describe('ModuleDetailView', () => {
     );
     await wrapper.setProps({ id: '2' });
     await flushPromises();
+    expect(wrapper.find('[data-test="previous-module"]').attributes('to')).toBe(
+      '/modules/1?rack=1'
+    );
     expect(wrapper.find('[data-test="next-module"]').exists()).toBe(false);
   });
 

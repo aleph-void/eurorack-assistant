@@ -370,8 +370,19 @@ const nextModule = computed(() => {
   );
   return index < 0 ? null : modulesInNavigationRack.value[index + 1] ?? null;
 });
+const previousModule = computed(() => {
+  const index = modulesInNavigationRack.value.findIndex(
+    (candidate) => candidate.id === Number(props.id)
+  );
+  return index <= 0 ? null : modulesInNavigationRack.value[index - 1] ?? null;
+});
 const modulesHref = computed(() =>
   navigationRackId.value ? `/modules?rack=${navigationRackId.value}` : '/modules'
+);
+const previousModuleHref = computed(() =>
+  previousModule.value
+    ? `/modules/${previousModule.value.id}?rack=${navigationRackId.value}`
+    : null
 );
 const nextModuleHref = computed(() =>
   nextModule.value
@@ -870,12 +881,19 @@ watch(() => props.id, () => {
 </script>
 
 <template>
-  <p class="row">
+  <nav class="module-detail-navigation" aria-label="Module navigation">
+    <span>
+      <RouterLink v-if="previousModule" :to="previousModuleHref" data-test="previous-module">
+        ← Previous Module
+      </RouterLink>
+    </span>
     <RouterLink :to="modulesHref">← All modules</RouterLink>
-    <RouterLink v-if="nextModule" :to="nextModuleHref" data-test="next-module">
-      Next Module →
-    </RouterLink>
-  </p>
+    <span>
+      <RouterLink v-if="nextModule" :to="nextModuleHref" data-test="next-module">
+        Next Module →
+      </RouterLink>
+    </span>
+  </nav>
   <p v-if="error" class="error">{{ error }}</p>
   <template v-if="module">
     <h1>{{ module.manufacturer }} {{ module.name }}</h1>

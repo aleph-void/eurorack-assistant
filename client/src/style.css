@@ -710,7 +710,18 @@ button.danger:hover {
 }
 
 .feed {
-  font-family: var(--font-mono);
+  /* Do not prefer a locally installed JetBrains Mono here. Some builds of
+     that face expose malformed numeric metrics in the browser: letters look
+     normal while 768 is laid out like "7 6 8". Job ids, dimensions and
+     hashes make the feed especially sensitive to it, so use the platform's
+     dependable fixed-width face and reset inherited spacing/features. */
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-variant-ligatures: none;
+  font-feature-settings: normal;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-align: left;
   font-size: 0.82rem;
   line-height: 1.45;
   max-height: 20rem;
@@ -773,6 +784,19 @@ button.danger:hover {
 .row > .shrink {
   flex: 0;
   min-width: auto;
+}
+
+/* Previous and next occupy opposite edges while the rack-level return link
+   stays put in the middle, even at either end of the module list. */
+.module-detail-navigation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 1rem;
+  align-items: baseline;
+  margin: 1em 0;
+}
+.module-detail-navigation > :last-child {
+  text-align: right;
 }
 
 /* An action and the option that modifies it, on one line: "Re-analyze all"

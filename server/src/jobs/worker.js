@@ -642,21 +642,18 @@ export function createWorker(db, options = {}) {
         ? (
             await Manual.findAll({
               where: { module_id: module.id, user_id: job.user_id, source: 'upload' },
-              order: [['id', 'ASC']],
+              order: [['id', 'DESC']],
             })
-          ).filter(isPerfectCircuitDocument)
-        : [];
+          ).find(isPerfectCircuitDocument)
+        : null;
+    const foundPerfectCircuit = manuals.find((m) =>
+      /_Perfect_Circuit_Product_Page\.pdf$/i.test(m.original_name || '')
+    );
     const candidates = productPage
-      ? [
-          manual,
-          ...manuals.filter((m) =>
-            /_Perfect_Circuit_Product_Page\.pdf$/i.test(m.original_name || '')
-          ),
-          ...suppliedPerfectCircuit,
-        ]
+      ? [manual, suppliedPerfectCircuit || foundPerfectCircuit].filter(Boolean)
       : [manual];
-    // The uploaded file may be byte-for-byte identical to the auto-rendered
-    // companion. Submit it once while still preferring the shared record.
+    // The selected companion may be byte-for-byte identical to the primary
+    // product page. Submit that content only once.
     const seenAnalysisHashes = new Set();
     const analysisManuals = candidates.filter((m) => {
       if (seenAnalysisHashes.has(m.hash)) return false;
@@ -664,8 +661,9 @@ export function createWorker(db, options = {}) {
       return true;
     });
     await Module.update({ analysis_status: 'analyzing' }, { where: { id: module.id } });
+    const documentLabel = analysisManuals.length === 1 ? 'document' : 'documents';
     progress(
-      `analyzing ${analysisManuals.length} document(s): ` +
+      `analyzing ${analysisManuals.length} ${documentLabel}: ` +
         analysisManuals.map((m) => m.original_name || `${m.hash}.pdf`).join(', ')
     );
     let analyzed = 0;
