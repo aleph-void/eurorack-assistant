@@ -12,6 +12,36 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CHROME_DESKTOP_HEADERS, USER_AGENT } from './pdf.js';
+import { safeFetch, BlockedUrlError } from './safeFetch.js';
+
+// Read a response body into a Buffer, but stop and fail the moment it passes
+// `max` bytes rather than materialising a hostile multi-GB body first. A
+// declared Content-Length over the limit is rejected before any body is read.
+export async function readCappedBuffer(res, max) {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > max) {
+    throw new Error(`declared length ${declared} exceeds ${max} byte limit`);
+  }
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > max) throw new Error(`body exceeds ${max} byte limit`);
+    return buf;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`body exceeds ${max} byte limit`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+}
 
 export const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 
@@ -158,16 +188,19 @@ export async function downloadImage(url, { fetchImpl = fetch, log = () => {} } =
     if (note) log(`${note}: ${url}`);
     let buffer;
     try {
-      const res = await fetchImpl(url, { headers, redirect: 'follow' });
+      // safeFetch validates the URL and every redirect hop against the SSRF
+      // policy; the body is read through a hard byte cap so a hostile endpoint
+      // cannot OOM the server before the size is known.
+      const res = await safeFetch(url, { fetchImpl, headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      buffer = Buffer.from(await res.arrayBuffer());
+      buffer = await readCappedBuffer(res, MAX_IMAGE_BYTES);
     } catch (e) {
-      log(`image download failed: ${url}: ${e.message}`);
+      // A blocked address is reported the same as any other failure — no
+      // distinct error and no stored bytes, so the route is not an
+      // internal-network probe.
+      if (e instanceof BlockedUrlError) log(`image download blocked: ${url}: ${e.message}`);
+      else log(`image download failed: ${url}: ${e.message}`);
       continue;
-    }
-    if (buffer.length > MAX_IMAGE_BYTES) {
-      log(`${url} is larger than the ${MAX_IMAGE_BYTES} byte limit`);
-      return null;
     }
     const info = sniffImage(buffer);
     if (!info) {

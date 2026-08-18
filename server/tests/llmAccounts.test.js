@@ -7,6 +7,7 @@ import {
   accountRuntime,
   accountSummary,
   beginClaudeOauth,
+  deleteAccount,
   decryptSecrets,
   encryptSecrets,
   finishClaudeOauth,
@@ -82,7 +83,7 @@ describe('claude authorization', () => {
       { json: { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 } },
     ]);
 
-    const account = await finishClaudeOauth(db, user.id, 'the-code#the-state', 'the-verifier', {
+    const account = await finishClaudeOauth(db, user.id, 'the-code#the-verifier', 'the-verifier', {
       fetchImpl,
     });
 
@@ -90,7 +91,7 @@ describe('claude authorization', () => {
     expect(fetchImpl.calls[0].body).toMatchObject({
       grant_type: 'authorization_code',
       code: 'the-code',
-      state: 'the-state',
+      state: 'the-verifier',
       code_verifier: 'the-verifier',
     });
     expect(account.kind).toBe('oauth');
@@ -100,6 +101,17 @@ describe('claude authorization', () => {
       refresh_token: 'rt-1',
     });
     expect(new Date(account.expires_at).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('refuses a pasted state that is not the verifier we issued', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u', llmAccount: false });
+    const fetchImpl = tokenEndpoint([{ json: { access_token: 'at-1' } }]);
+    await expect(
+      finishClaudeOauth(db, user.id, 'the-code#tampered', 'the-verifier', { fetchImpl })
+    ).rejects.toThrow(/Invalid authorization state/);
+    expect(fetchImpl.calls).toHaveLength(0); // rejected before any exchange
+    expect(await getAccount(db, user.id, 'claude')).toBeNull();
   });
 
   it('refuses a failed exchange', async () => {
@@ -119,7 +131,7 @@ describe('claude authorization', () => {
       { json: { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 } },
       { json: { access_token: 'at-2', refresh_token: 'rt-2', expires_in: 3600 } },
     ]);
-    let account = await finishClaudeOauth(db, user.id, 'code#s', 'v', { fetchImpl });
+    let account = await finishClaudeOauth(db, user.id, 'code#v', 'v', { fetchImpl });
 
     // An hour of life left: no refresh.
     expect(await freshClaudeAccessToken(db, account, { fetchImpl })).toBe('at-1');
@@ -175,6 +187,25 @@ describe('account runtime environments', () => {
     expect(runtime.env.CLAUDE_CONFIG_DIR).toBe(path.join(dataDir, 'claude', String(user.id)));
     expect(fs.statSync(runtime.env.CLAUDE_CONFIG_DIR).isDirectory()).toBe(true);
     expect(runtime.sync).toBeNull();
+  });
+
+  it('erases the materialized credential from disk when the account is deleted', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u', llmAccount: false });
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-rt-'));
+    const account = await saveCodexAuthJson(
+      db,
+      user.id,
+      JSON.stringify({ tokens: { access_token: 'a', refresh_token: 'r' } })
+    );
+    // Running a job materializes the live auth.json onto the volume.
+    const runtime = await accountRuntime(db, account, { dataDir });
+    const authFile = path.join(runtime.env.CODEX_HOME, 'auth.json');
+    expect(fs.existsSync(authFile)).toBe(true);
+
+    await deleteAccount(db, user.id, 'codex', { dataDir });
+    expect(fs.existsSync(runtime.env.CODEX_HOME)).toBe(false);
+    expect(await getAccount(db, user.id, 'codex')).toBeNull();
   });
 
   it('uses an API key as the provider env var', async () => {
@@ -299,6 +330,19 @@ describe('/api/llm', () => {
       .send({ llm_provider: 'gemini' });
     expect(bad.status).toBe(400);
 
+    // A flag-shaped model would be argv-injected into the agent CLI.
+    const injected = await request(app)
+      .put('/api/llm/settings')
+      .set('Cookie', aliceCookie)
+      .send({ llm_model: '--dangerously-skip-permissions' });
+    expect(injected.status).toBe(400);
+
+    const injectedPerType = await request(app)
+      .put('/api/llm/settings')
+      .set('Cookie', aliceCookie)
+      .send({ llm_models: { answer_question: '-m' } });
+    expect(injectedPerType.status).toBe(400);
+
     const res = await request(app)
       .put('/api/llm/settings')
       .set('Cookie', aliceCookie)
@@ -318,15 +362,16 @@ describe('/api/llm', () => {
     expect(start.status).toBe(200);
     expect(start.body.url).toContain('https://claude.ai/oauth/authorize');
 
+    // The callback presents the code as `code#state`, and the state it echoes
+    // is the verifier that signed the URL.
+    const verifier = new URL(start.body.url).searchParams.get('state');
     const finish = await request(app)
       .post('/api/llm/claude/oauth/finish')
       .set('Cookie', aliceCookie)
-      .send({ code: 'abc#def' });
+      .send({ code: `abc#${verifier}` });
     expect(finish.status).toBe(200);
     expect(finish.body.accounts.claude).toMatchObject({ connected: true, kind: 'oauth' });
 
-    // The verifier that signed the URL is the one presented for the code.
-    const verifier = new URL(start.body.url).searchParams.get('state');
     expect(fetchImpl.calls[0].body.code_verifier).toBe(verifier);
     const alice = await db.models.User.findOne({ where: { username: 'alice' } });
     expect(await getAccount(db, alice.id, 'claude')).not.toBeNull();

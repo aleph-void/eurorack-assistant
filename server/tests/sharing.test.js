@@ -324,3 +324,82 @@ describe('what a shared record lets you do', () => {
     expect((await share(app, aliceCookie, 'document', rows[0].id, { everyone: true })).status).toBe(404);
   });
 });
+
+// A share hands over the record itself, not the owner's other private records
+// that happen to be linked to it. Patches and captures are never shareable in
+// their own right (a rack's physical layout only through a rack share), so
+// none of them may ride out as an attachment on a note, question or patch.
+describe('a share does not leak the owner\'s other private records', () => {
+  it('hides a note\'s linked patches from the recipient but not the owner', async () => {
+    const fixture = await withUsers();
+    const { app, aliceCookie, adminCookie, admin } = fixture;
+    const { patch } = await createPatch(fixture);
+    const note = (
+      await request(app)
+        .post('/api/notes')
+        .set('Cookie', aliceCookie)
+        .send({ title: 'linked', body: 'see the patch', patch_ids: [patch.id] })
+    ).body;
+    expect(note.patches).toHaveLength(1);
+
+    await share(app, aliceCookie, 'note', note.id, { user_ids: [admin.id] });
+
+    const recipient = await request(app).get(`/api/notes/${note.id}`).set('Cookie', adminCookie);
+    expect(recipient.status).toBe(200);
+    expect(recipient.body.shared).toBe(true);
+    expect(recipient.body.patches).toEqual([]);
+    expect(recipient.body.captures).toEqual([]);
+
+    // The owner still sees the whole note.
+    const owner = await request(app).get(`/api/notes/${note.id}`).set('Cookie', aliceCookie);
+    expect(owner.body.patches).toHaveLength(1);
+  });
+
+  it('hides a question\'s linked patches from the recipient but not the owner', async () => {
+    const fixture = await withUsers();
+    const { app, aliceCookie, adminCookie, admin, db, alice } = fixture;
+    const { patch } = await createPatch(fixture);
+    const { rows } = await db.query(
+      `INSERT INTO questions (user_id, prompt, answer, status, answered_at)
+       VALUES ($1, 'q', 'a', 'answered', now()) RETURNING *`,
+      [alice.id]
+    );
+    const question = rows[0];
+    await db.query(
+      'INSERT INTO question_patches (question_id, patch_id) VALUES ($1, $2)',
+      [question.id, patch.id]
+    );
+    await share(app, aliceCookie, 'question', question.id, { user_ids: [admin.id] });
+
+    const recipient = await request(app).get(`/api/questions/${question.id}`).set('Cookie', adminCookie);
+    expect(recipient.status).toBe(200);
+    expect(recipient.body.shared).toBe(true);
+    expect(recipient.body.patches).toEqual([]);
+    expect(recipient.body.notes).toEqual([]);
+    expect(recipient.body.captures).toEqual([]);
+    expect(recipient.body.manuals).toEqual([]);
+
+    const owner = await request(app).get(`/api/questions/${question.id}`).set('Cookie', aliceCookie);
+    expect(owner.body.patches).toHaveLength(1);
+  });
+
+  it('hides the rack layout behind a shared patch from the recipient but not the owner', async () => {
+    const fixture = await withUsers();
+    const { app, aliceCookie, adminCookie, admin, db, alice } = fixture;
+    const { patch, rackId } = await createPatch(fixture);
+    // Give the rack a physical row so a layout exists to leak.
+    await db.query(
+      'INSERT INTO rack_rows (rack_id, position, unit, hp) VALUES ($1, 0, 3, 84)',
+      [rackId]
+    );
+    await share(app, aliceCookie, 'patch', patch.id, { user_ids: [admin.id] });
+
+    const recipient = await request(app).get(`/api/patches/${patch.id}`).set('Cookie', adminCookie);
+    expect(recipient.status).toBe(200);
+    expect(recipient.body.shared).toBe(true);
+    expect(recipient.body.rack_layout).toEqual([]);
+
+    const owner = await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie);
+    expect(owner.body.rack_layout.length).toBeGreaterThan(0);
+  });
+});

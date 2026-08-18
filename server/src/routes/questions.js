@@ -152,6 +152,13 @@ export function questionRoutes(db) {
       if (!found) return res.status(404).json({ error: 'Question not found' });
       const question = found.row;
       const owner = found.shared ? await User.findByPk(question.user_id) : null;
+      // A shared question is served to someone who is not its owner. Its
+      // answer and the global hardware it names (modules, components) travel
+      // with the share; the owner's private cross-references — the notes,
+      // captures, patches and prior questions they attached as context, and
+      // the manuals (whose hash fingerprints a possibly-private upload) — do
+      // not. Skip those queries entirely for a share recipient.
+      const includePrivate = !found.shared;
       const links = await QuestionModule.findAll({
         where: { question_id: question.id },
         include: Module,
@@ -165,31 +172,41 @@ export function questionRoutes(db) {
         include: [{ model: ModuleComponent, include: [Module] }],
         order: [[ModuleComponent, 'id', 'ASC']],
       });
-      const manualLinks = await QuestionManual.findAll({
-        where: { question_id: question.id },
-        include: [{ model: Manual, include: [Module] }],
-        order: [['manual_id', 'ASC']],
-      });
-      const answerLinks = await QuestionAnswer.findAll({
-        where: { question_id: question.id },
-        include: [{ model: Question, as: 'SourceQuestion' }],
-        order: [['source_question_id', 'ASC']],
-      });
-      const noteLinks = await QuestionNote.findAll({
-        where: { question_id: question.id },
-        include: Note,
-        order: [['note_id', 'ASC']],
-      });
-      const captureLinkRows = await QuestionCapture.findAll({
-        where: { question_id: question.id },
-        include: Capture,
-        order: [['capture_id', 'ASC']],
-      });
-      const patchLinkRows = await QuestionPatch.findAll({
-        where: { question_id: question.id },
-        include: Patch,
-        order: [['patch_id', 'ASC']],
-      });
+      const manualLinks = includePrivate
+        ? await QuestionManual.findAll({
+            where: { question_id: question.id },
+            include: [{ model: Manual, include: [Module] }],
+            order: [['manual_id', 'ASC']],
+          })
+        : [];
+      const answerLinks = includePrivate
+        ? await QuestionAnswer.findAll({
+            where: { question_id: question.id },
+            include: [{ model: Question, as: 'SourceQuestion' }],
+            order: [['source_question_id', 'ASC']],
+          })
+        : [];
+      const noteLinks = includePrivate
+        ? await QuestionNote.findAll({
+            where: { question_id: question.id },
+            include: Note,
+            order: [['note_id', 'ASC']],
+          })
+        : [];
+      const captureLinkRows = includePrivate
+        ? await QuestionCapture.findAll({
+            where: { question_id: question.id },
+            include: Capture,
+            order: [['capture_id', 'ASC']],
+          })
+        : [];
+      const patchLinkRows = includePrivate
+        ? await QuestionPatch.findAll({
+            where: { question_id: question.id },
+            include: Patch,
+            order: [['patch_id', 'ASC']],
+          })
+        : [];
       res.json({
         ...question.get({ plain: true }),
         shared: found.shared,

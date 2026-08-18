@@ -86,7 +86,12 @@ export const moduleJson = (pm, { live, components, panel = null, hp = null }) =>
 
 // Everything the patch is made of, resolved: the snapshot instances with
 // their jacks, the cables and settings, and the graph the tracers walk.
-export async function loadPatchDetail(db, patch) {
+//
+// `includeRackLayout` is false when the patch is served to someone it was
+// shared with: the rack's physical row/HP geometry belongs to the rack, which
+// is a separately-shareable record, and must not leak just because a patch
+// that happens to sit in it was shared.
+export async function loadPatchDetail(db, patch, { includeRackLayout = true } = {}) {
 const {
   Module,
   ModuleComponent,
@@ -285,7 +290,7 @@ const {
   });
 
   const panels = await loadPanels(db, [...liveIds]);
-  const rackRows = patch.rack_id
+  const rackRows = includeRackLayout && patch.rack_id
     ? await RackRow.findAll({ where: { rack_id: patch.rack_id }, order: [['position', 'ASC'], ['id', 'ASC']] })
     : [];
   const rowPlacements = rackRows.length

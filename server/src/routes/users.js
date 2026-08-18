@@ -8,6 +8,8 @@ import {
   requireAdmin,
   requireAuth,
 } from '../auth.js';
+import { purgeUserLlmData } from '../services/llmAccounts.js';
+import { revokeUserDeviceTokens } from '../services/deviceAuth.js';
 
 function publicUser(user) {
   const { id, username, is_admin, created_at, token_budget } = user;
@@ -107,6 +109,9 @@ export function userRoutes(db) {
           { transaction }
         );
         await deleteUserSessions(db, user.id, { transaction });
+        // An admin reset is the incident-response path; a device bearer token
+        // that refreshes itself indefinitely would otherwise survive it.
+        await revokeUserDeviceTokens(db, user.id, { transaction });
       });
       const result = { ok: true, username: user.username };
       res.json(generated ? { ...result, generated_password: generated } : result);
@@ -149,6 +154,10 @@ export function userRoutes(db) {
       }
       const deleted = await User.destroy({ where: { id } });
       if (deleted === 0) return res.status(404).json({ error: 'User not found' });
+      // The DB rows cascade; the credentials materialized on the data volume
+      // do not, so erase those too — otherwise a deleted user's provider
+      // tokens linger in cleartext on disk.
+      purgeUserLlmData(id);
       res.json({ ok: true });
     } catch (e) {
       next(e);

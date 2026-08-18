@@ -14,7 +14,48 @@ import {
   stageDocuments,
   takeQuotaExhaustion,
   DEFAULT_MODELS,
+  modelNameProblem,
+  childEnv,
 } from '../src/services/llm.js';
+
+describe('modelNameProblem', () => {
+  it('accepts real model names', () => {
+    for (const name of ['claude-fable-5', 'gpt-5.1-codex', 'gpt_5', 'Model.2']) {
+      expect(modelNameProblem(name)).toBeNull();
+    }
+  });
+  it('rejects a flag-shaped value so it cannot inject a CLI option', () => {
+    expect(modelNameProblem('--dangerously-skip-permissions')).toBeTruthy();
+    expect(modelNameProblem('-m')).toBeTruthy();
+  });
+  it('rejects spaces, shell metacharacters and over-long names', () => {
+    expect(modelNameProblem('a b')).toBeTruthy();
+    expect(modelNameProblem('a;rm -rf /')).toBeTruthy();
+    expect(modelNameProblem('x'.repeat(65))).toBeTruthy();
+  });
+});
+
+describe('childEnv', () => {
+  it('passes through allowlisted vars and the credential overlay', () => {
+    const base = { PATH: '/usr/bin', HOME: '/home/node', LANG: 'C' };
+    const env = childEnv({ CLAUDE_CONFIG_DIR: '/data/llm/claude/1' }, base);
+    expect(env.PATH).toBe('/usr/bin');
+    expect(env.CLAUDE_CONFIG_DIR).toBe('/data/llm/claude/1');
+  });
+  it('never leaks the database URL or the credential-encryption key', () => {
+    const base = {
+      PATH: '/usr/bin',
+      DATABASE_URL: 'postgres://eurorack:secret@db:5432/eurorack',
+      LLM_TOKEN_KEY: 'a'.repeat(64),
+      POSTGRES_PASSWORD: 'secret',
+    };
+    const env = childEnv({ CODEX_HOME: '/data/llm/codex/2' }, base);
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.LLM_TOKEN_KEY).toBeUndefined();
+    expect(env.POSTGRES_PASSWORD).toBeUndefined();
+    expect(env.CODEX_HOME).toBe('/data/llm/codex/2');
+  });
+});
 
 function captureRun(response = 'ok') {
   const calls = [];

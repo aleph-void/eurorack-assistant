@@ -1,4 +1,4 @@
-import { PROVIDERS, DEFAULT_MODELS } from './llm.js';
+import { PROVIDERS, DEFAULT_MODELS, modelNameProblem } from './llm.js';
 
 export const CONFIG_DEFAULTS = {
   llm_provider: 'claude',
@@ -34,6 +34,13 @@ export async function setConfig(db, updates) {
     let value = rawValue;
     if (key === 'llm_provider' && !PROVIDERS.includes(value)) {
       throw new Error(`Invalid llm_provider: ${value}`);
+    }
+    // The default model is written into the agent CLI argv like every other;
+    // hold it to the same non-flag-shaped rule (blank = use the built-in
+    // default per provider).
+    if (key === 'llm_model' && String(value).trim() !== '') {
+      const problem = modelNameProblem(String(value).trim());
+      if (problem) throw new Error(`Invalid llm_model: ${problem}`);
     }
     if (key === 'queue_paused_until' && String(value).trim() !== '') {
       const at = new Date(value);

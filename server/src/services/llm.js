@@ -16,6 +16,24 @@ export const KNOWN_MODELS = {
 
 export const DEFAULT_MODELS = { claude: 'claude-fable-5', codex: 'gpt-5.1-codex' };
 
+// A model name is written straight into the agent CLI's argv (`--model <name>`
+// / `-m <name>`). A value beginning with '-' would be read by the CLI as a
+// flag rather than the model, letting a user turn on options the server
+// deliberately never passes (a permission or sandbox bypass). So the name is
+// held to a conservative shape: it must start with an alphanumeric and contain
+// only alphanumerics, dot, underscore and dash. Free-form (not an allowlist)
+// so a newly released model still works, but never flag-shaped. Returns an
+// error string, or null when the name is acceptable. Blank is allowed by
+// callers separately (it means "use the configured default").
+export function modelNameProblem(value) {
+  const v = String(value);
+  if (v.length > 64) return 'model name must be at most 64 characters';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(v)) {
+    return 'model name may only contain letters, digits, dot, underscore and dash';
+  }
+  return null;
+}
+
 // Job types that invoke an LLM backend and accept a per-type model override.
 // (import and export_rack never call the LLM.)
 //
@@ -299,12 +317,51 @@ function reportUsage(onUsage, usage) {
   }
 }
 
+// The only server-process env vars an agent CLI is allowed to inherit. The
+// server's own environment carries secrets the agent must never see — the
+// database URL (with its password) and LLM_TOKEN_KEY (the key that decrypts
+// every user's stored provider credentials) among them — and the agent runs
+// untrusted text: a prompt-injected question can ask it to print its
+// environment back in the answer. So instead of handing it the whole
+// environment, the child gets this fixed set (the things a CLI genuinely needs
+// to find its tools, reach the network through a proxy, and validate TLS)
+// overlaid with the per-user credential env from accountRuntime. Anything not
+// listed here — DATABASE_URL, LLM_TOKEN_KEY, POSTGRES_PASSWORD, … — is absent.
+export const CHILD_ENV_ALLOWLIST = [
+  'PATH',
+  'HOME',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  'TERM',
+  'TMPDIR',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+];
+
+export function childEnv(overlay = {}, base = process.env) {
+  const env = {};
+  for (const key of CHILD_ENV_ALLOWLIST) {
+    if (base[key] !== undefined) env[key] = base[key];
+  }
+  return { ...env, ...overlay };
+}
+
 // Runs `cmd args...`, writing `input` to stdin; resolves with stdout. `cwd` is
 // the directory the CLI is started in — the jail above, so a relative path the
-// agent tries lands inside it. `env` vars are laid over the process's own —
-// how a run is pointed at one user's credentials (services/llmAccounts.js).
-// `onQuota` hears about an exhausted subscription in addition to the global
-// note, so a caller running jobs for many users can tell whose it was.
+// agent tries lands inside it. `env` vars are laid over an allowlisted base
+// (NOT the full server environment — see CHILD_ENV_ALLOWLIST) — how a run is
+// pointed at one user's credentials (services/llmAccounts.js). `onQuota` hears
+// about an exhausted subscription in addition to the global note, so a caller
+// running jobs for many users can tell whose it was.
 export function runCli(
   cmd,
   args,
@@ -315,7 +372,7 @@ export function runCli(
     const child = spawn(cmd, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd,
-      env: env ? { ...process.env, ...env } : undefined,
+      env: childEnv(env || {}),
     });
     let stdout = '';
     let stderr = '';

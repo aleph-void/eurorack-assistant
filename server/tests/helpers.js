@@ -14,6 +14,14 @@ import { hashPassword } from '../src/auth.js';
 import { saveClaudeToken } from '../src/services/llmAccounts.js';
 import { DEFAULT_RACK_NAME, findOrCreateRack } from '../src/services/racks.js';
 import { textToPdf } from '../src/services/textPdf.js';
+import { setDefaultLookup } from '../src/services/safeFetch.js';
+
+// The download paths run every URL through the SSRF guard, which resolves the
+// host and rejects private/loopback/metadata addresses. The suite uses fake
+// hostnames (example.com, *.test, retailer domains) and must not touch the
+// network, so resolve every host to a fixed public address here. Tests that
+// exercise the guard itself pass their own lookupImpl and are unaffected.
+setDefaultLookup(async () => [{ address: '93.184.216.34', family: 4 }]);
 
 // pg-mem hands timestamps to Sequelize as strings moment can only parse via
 // its js-Date fallback; the resulting deprecation warning would spam the run.
@@ -408,9 +416,18 @@ export function fakeFetch(routes) {
       if (String(url).includes(match)) {
         const r = typeof responder === 'function' ? await responder(url) : responder;
         if (r.error) throw new Error(r.error);
+        // A minimal Headers-like object so code paths that read response
+        // headers (the SSRF guard's redirect Location, the download size cap's
+        // Content-Length) work against the mock. Per-route headers may be
+        // supplied as `headers: { location: '...' }`.
+        const headerMap = new Map(
+          Object.entries(r.headers ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)])
+        );
+        const headers = { get: (name) => headerMap.get(String(name).toLowerCase()) ?? null };
         return {
           ok: r.status === undefined || (r.status >= 200 && r.status < 300),
           status: r.status ?? 200,
+          headers,
           text: async () => r.text ?? '',
           json: async () => r.json ?? {},
           arrayBuffer: async () => {

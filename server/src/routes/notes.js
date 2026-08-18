@@ -80,7 +80,13 @@ export function noteRoutes(db) {
     }
   }
 
-  async function noteWithAttachments(note) {
+  // `includePrivate` is false when the note is being served to someone it was
+  // shared with rather than its owner. A note's linked patches and waveform
+  // captures are the owner's own private records (patches and captures are
+  // never shareable in their own right), so they must not ride out on a note
+  // share — only the note's text and the global hardware facts it references
+  // (modules, components) do.
+  async function noteWithAttachments(note, { includePrivate = true } = {}) {
     const moduleLinks = await NoteModule.findAll({
       where: { note_id: note.id },
       include: Module,
@@ -94,16 +100,21 @@ export function noteRoutes(db) {
       include: [{ model: ModuleComponent, include: [Module] }],
       order: [[ModuleComponent, 'id', 'ASC']],
     });
-    const patchLinks = await NotePatch.findAll({
-      where: { note_id: note.id },
-      include: Patch,
-      order: [[Patch, 'id', 'ASC']],
-    });
-    // Waveform captures filed under this note travel with it.
-    const captures = await Capture.findAll({
-      where: { note_id: note.id },
-      order: [['id', 'ASC']],
-    });
+    const patchLinks = includePrivate
+      ? await NotePatch.findAll({
+          where: { note_id: note.id },
+          include: Patch,
+          order: [[Patch, 'id', 'ASC']],
+        })
+      : [];
+    // Waveform captures filed under this note travel with it — but only for
+    // the owner; a share recipient never sees them.
+    const captures = includePrivate
+      ? await Capture.findAll({
+          where: { note_id: note.id },
+          order: [['id', 'ASC']],
+        })
+      : [];
     return {
       ...(typeof note.get === 'function' ? note.get({ plain: true }) : note),
       modules: moduleLinks.map(({ Module: m }) => ({
@@ -203,7 +214,7 @@ export function noteRoutes(db) {
       if (!found) return res.status(404).json({ error: 'Note not found' });
       const owner = found.shared ? await db.models.User.findByPk(found.row.user_id) : null;
       res.json({
-        ...(await noteWithAttachments(found.row)),
+        ...(await noteWithAttachments(found.row, { includePrivate: !found.shared })),
         shared: found.shared,
         owner_username: owner?.username ?? req.user.username,
       });

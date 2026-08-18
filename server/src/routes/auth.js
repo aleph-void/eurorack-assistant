@@ -10,6 +10,7 @@ import {
   sessionCookieOptions,
   verifyPassword,
 } from '../auth.js';
+import { revokeUserDeviceTokens } from '../services/deviceAuth.js';
 
 export function authRoutes(db) {
   const router = Router();
@@ -82,6 +83,10 @@ export function authRoutes(db) {
           exceptToken: req.cookies?.[SESSION_COOKIE],
           transaction,
         });
+        // A device (oscilloscope) bearer token refreshes itself forever and
+        // never re-checks the password, so a change that logs out every other
+        // browser must cut those off too — the user re-links the device once.
+        await revokeUserDeviceTokens(db, user.id, { transaction });
       });
       res.json({
         id: user.id,

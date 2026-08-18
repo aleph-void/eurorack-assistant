@@ -76,6 +76,13 @@ export function manualRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
       'Content-Disposition',
       `${disposition}; filename="${filename.replace(/["\\\r\n]/g, '_')}"`
     );
+    // A manual is a user-supplied file served from the app's own origin. It is
+    // accepted on a %PDF- prefix alone, so it could be a polyglot; stop the
+    // browser from sniffing it into something scriptable, and forbid it from
+    // loading or running anything if a viewer renders it inline. Mirrors the
+    // policy the panel route already applies to its images.
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
     fs.createReadStream(file).pipe(res);
   }
 

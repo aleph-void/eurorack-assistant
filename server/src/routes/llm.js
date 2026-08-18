@@ -6,7 +6,13 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { getLlmSettings, userJobModels } from '../services/config.js';
-import { PROVIDERS, KNOWN_MODELS, DEFAULT_MODELS, LLM_JOB_TYPES } from '../services/llm.js';
+import {
+  PROVIDERS,
+  KNOWN_MODELS,
+  DEFAULT_MODELS,
+  LLM_JOB_TYPES,
+  modelNameProblem,
+} from '../services/llm.js';
 import {
   accountSummary,
   beginClaudeOauth,
@@ -77,7 +83,12 @@ export function llmRoutes(db, { fetchImpl = fetch, oauth = undefined } = {}) {
         updates.llm_provider = provider;
       }
       if (req.body?.llm_model !== undefined) {
-        updates.llm_model = String(req.body.llm_model).trim().slice(0, 200);
+        const model = String(req.body.llm_model).trim();
+        if (model !== '') {
+          const problem = modelNameProblem(model);
+          if (problem) return res.status(400).json({ error: `llm_model: ${problem}` });
+        }
+        updates.llm_model = model;
       }
       if (req.body?.llm_models !== undefined) {
         const given = req.body.llm_models;
@@ -89,8 +100,12 @@ export function llmRoutes(db, { fetchImpl = fetch, oauth = undefined } = {}) {
           if (!LLM_JOB_TYPES.includes(type)) {
             return res.status(400).json({ error: `Unknown job type: ${type}` });
           }
-          const value = String(model ?? '').trim().slice(0, 200);
-          if (value) models[type] = value; // blank means "no override"
+          const value = String(model ?? '').trim();
+          if (value) {
+            const problem = modelNameProblem(value);
+            if (problem) return res.status(400).json({ error: `llm_models.${type}: ${problem}` });
+            models[type] = value; // blank means "no override"
+          }
         }
         updates.llm_models = JSON.stringify(models);
       }

@@ -13,6 +13,7 @@ import {
   PBKDF2_ITERATIONS,
 } from '../src/auth.js';
 import { ensureAdmin } from '../src/setupAdmin.js';
+import { issueDeviceToken, getDeviceTokenUser } from '../src/services/deviceAuth.js';
 
 describe('PBKDF2 password hashing', () => {
   it('hashes in the self-describing pbkdf2 format and verifies round-trip', () => {
@@ -188,6 +189,27 @@ describe('password policy', () => {
 
     const ok = await change('a'.repeat(MIN_PASSWORD_LENGTH));
     expect(ok.status).toBe(200);
+  });
+
+  it('revokes the user\'s device tokens on a self-service password change', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const { accessToken } = await issueDeviceToken(db, {
+      userId: users[0].id,
+      clientId: 'cvosc',
+      name: 'Bench scope',
+      scopes: 'oscilloscope',
+    });
+    expect(await getDeviceTokenUser(db, accessToken)).not.toBeNull();
+
+    const changed = await request(app)
+      .post('/api/auth/password')
+      .set('Cookie', aliceCookie)
+      .send({ current_password: 'password123', new_password: 'a-brand-new-password' });
+    expect(changed.status).toBe(200);
+
+    // The device bearer token no longer authenticates.
+    expect(await getDeviceTokenUser(db, accessToken)).toBeNull();
   });
 
   it('enforces the minimum when an admin creates a user', async () => {

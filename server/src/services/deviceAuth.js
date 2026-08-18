@@ -248,6 +248,18 @@ export async function revokeDeviceToken(db, { tokenId, userId, now = Date.now() 
   return row;
 }
 
+// Revoke every live device token of a user at once. A password change or reset
+// is meant to cut off access won with the old credential, and a bearer device
+// token — which refreshes itself indefinitely without re-checking the password
+// — would otherwise outlive it. Called in the same transaction as the password
+// update so the two land together.
+export async function revokeUserDeviceTokens(db, userId, { now = Date.now(), transaction = null } = {}) {
+  return db.models.DeviceToken.update(
+    { revoked_at: new Date(now), refresh_token_hash: null },
+    { where: { user_id: userId, revoked_at: null }, transaction }
+  );
+}
+
 // Housekeeping: lapsed device codes and long-dead tokens are of no further
 // use to anyone.
 export async function pruneDeviceAuth(db, { now = Date.now(), keepRevokedMs = 7 * 24 * 60 * 60 * 1000 } = {}) {

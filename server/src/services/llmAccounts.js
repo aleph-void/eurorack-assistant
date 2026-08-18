@@ -135,8 +135,28 @@ export async function saveAccount(
   return db.models.UserLlmAccount.create({ user_id: userId, provider, ...fields });
 }
 
-export async function deleteAccount(db, userId, provider) {
+// Disconnecting an account has to erase the live credential, not just the
+// database row. accountRuntime materializes the credential into a per-user
+// directory on the data volume (the codex auth.json the CLI rotates in place,
+// the claude config dir), and that copy is what a job actually runs on. Left
+// behind it makes "disconnected" a lie — the tokens sit there in cleartext,
+// and because the codex path only rewrites auth.json when it is missing, a
+// stale file would even be used in preference to a freshly connected account.
+// So the row and the directory go together.
+export async function deleteAccount(db, userId, provider, opts = {}) {
+  const dataDir = opts.dataDir || resolveLlmDataDir(opts.env || process.env);
+  const dir = path.join(dataDir, provider, String(userId));
+  fs.rmSync(dir, { recursive: true, force: true });
   return db.models.UserLlmAccount.destroy({ where: { user_id: userId, provider } });
+}
+
+// Every on-disk credential a user has, across providers — used when the whole
+// account is deleted, so nothing of theirs is left materialized on the volume.
+export function purgeUserLlmData(userId, opts = {}) {
+  const dataDir = opts.dataDir || resolveLlmDataDir(opts.env || process.env);
+  for (const provider of PROVIDERS) {
+    fs.rmSync(path.join(dataDir, provider, String(userId)), { recursive: true, force: true });
+  }
 }
 
 // What the API may say about an account: everything but the secrets.
@@ -224,6 +244,13 @@ export async function finishClaudeOauth(db, userId, pastedCode, verifier, opts =
     .split('#');
   if (!code) throw new Error('Invalid authorization code');
   if (!verifier) throw new Error('No authorization in progress — start again');
+  // The state the callback echoes is our own PKCE verifier (beginClaudeOauth
+  // uses it as the state). PKCE already blocks code injection because the
+  // exchange sends our code_verifier, but rejecting a mismatched state closes
+  // the door earlier and makes a tampered paste an explicit error.
+  if (state && state !== verifier) {
+    throw new Error('Invalid authorization state — start the authorization again');
+  }
   const json = await exchangeClaudeToken(
     {
       grant_type: 'authorization_code',

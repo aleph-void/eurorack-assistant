@@ -69,7 +69,7 @@ export function patchRoutes(db) {
     return Patch.findOne({ where: { id: Number(id) || 0, user_id: userId } });
   }
 
-  const loadPatchDetail = (patch) => loadPatchDetailFor(db, patch);
+  const loadPatchDetail = (patch, opts) => loadPatchDetailFor(db, patch, opts);
 
   router.get('/', async (req, res, next) => {
     try {
@@ -277,7 +277,9 @@ export function patchRoutes(db) {
       const found = await readableResource(db, req.user.id, 'patch', req.params.id);
       if (!found) return res.status(404).json({ error: 'Patch not found' });
       const patch = found.row;
-      const { json } = await loadPatchDetail(patch);
+      // A share recipient gets the patch itself but not the private layout of
+      // the rack it sits in (racks are shared separately, if at all).
+      const { json } = await loadPatchDetail(patch, { includeRackLayout: !found.shared });
       const owner = found.shared ? await db.models.User.findByPk(patch.user_id) : null;
       res.json(
         patchJson(patch, {

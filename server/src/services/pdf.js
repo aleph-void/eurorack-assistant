@@ -4,6 +4,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
+import { safeFetch, assertUrlAllowed, BlockedUrlError } from './safeFetch.js';
+
+// A manual PDF that would fill the disk is refused: real module manuals are a
+// few MB, and this is the ceiling a discovery job streams to before giving up.
+export const MAX_PDF_BYTES = 128 * 1024 * 1024;
 
 export const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ' +
@@ -191,6 +196,16 @@ export async function renderPageToPdf(url, dest, opts = {}) {
     log('no chrome/chromium binary found on PATH; cannot render page to PDF');
     return false;
   }
+  // Chrome will happily render file:// and internal http:// URLs, so the URL
+  // is held to the same SSRF policy as a plain download before it is handed to
+  // the browser. Chrome does not re-consult us on redirects, but the starting
+  // point at least cannot be pointed at the metadata endpoint or a local file.
+  try {
+    await assertUrlAllowed(url);
+  } catch (e) {
+    log(`refusing to render ${url}: ${e.message}`);
+    return false;
+  }
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   const args = [
     '--headless',
@@ -237,17 +252,38 @@ export async function downloadPdf(
   for (const [headers, note] of attempts) {
     if (note) log(`${note}: ${url}`);
     try {
-      const res = await fetchImpl(url, { headers, redirect: 'follow' });
+      // safeFetch validates the URL and every redirect hop; the write is
+      // capped so a hostile endpoint cannot fill the manuals volume.
+      const res = await safeFetch(url, { fetchImpl, headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const declared = Number(res.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > MAX_PDF_BYTES) {
+        throw new Error(`declared length ${declared} exceeds ${MAX_PDF_BYTES} byte limit`);
+      }
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       if (res.body && typeof res.body.getReader === 'function') {
-        await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(dest));
+        let written = 0;
+        await pipeline(
+          Readable.fromWeb(res.body),
+          async function* (source) {
+            for await (const chunk of source) {
+              written += chunk.length;
+              if (written > MAX_PDF_BYTES) {
+                throw new Error(`body exceeds ${MAX_PDF_BYTES} byte limit`);
+              }
+              yield chunk;
+            }
+          },
+          fs.createWriteStream(dest)
+        );
       } else {
         const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length > MAX_PDF_BYTES) throw new Error(`body exceeds ${MAX_PDF_BYTES} byte limit`);
         fs.writeFileSync(dest, buf);
       }
     } catch (e) {
-      log(`download failed: ${url}: ${e.message}`);
+      if (e instanceof BlockedUrlError) log(`download blocked: ${url}: ${e.message}`);
+      else log(`download failed: ${url}: ${e.message}`);
       fs.rmSync(dest, { force: true });
       continue;
     }
