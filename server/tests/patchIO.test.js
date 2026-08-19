@@ -132,6 +132,48 @@ describe('importing a patch', () => {
     expect(instanceIds).toContain(cable.from_patch_module_id);
   });
 
+  // A system patch names its system and each instance's rack. Those are soft
+  // names — no account but the exporter's has that system — so they survive
+  // the trip and keep a multi-rack patch readable on the other side.
+  it('carries a system patch’s system and rack names across accounts', async () => {
+    const { app, db, aliceCookie, adminCookie } = await withPatch();
+    const { rows: patches } = await db.query('SELECT id FROM patches ORDER BY id');
+    await db.query(
+      "UPDATE patches SET system_id = 4, system_name = 'studio', rack_id = NULL WHERE id = $1",
+      [patches[0].id]
+    );
+    await db.query("UPDATE patch_modules SET rack_name = 'left case' WHERE patch_id = $1", [
+      patches[0].id,
+    ]);
+    const doc = JSON.parse((await exportPatch(app, aliceCookie, patches[0].id)).text);
+    expect(doc.patch.system_name).toBe('studio');
+    expect(doc.patch.modules.every((m) => m.rack_name === 'left case')).toBe(true);
+
+    // Imported unfiled, the names come through and the patch still reads as
+    // one built from a system.
+    const loose = await importPatch(app, adminCookie, { document: doc });
+    expect(loose.status).toBe(201);
+    expect(loose.body.system_name).toBe('studio');
+    const detail = await request(app)
+      .get(`/api/patches/${loose.body.id}`)
+      .set('Cookie', adminCookie);
+    expect(detail.body.modules.every((m) => m.rack_name === 'left case')).toBe(true);
+    // No system of the importer's is invented for it.
+    expect(detail.body.system_id).toBe(null);
+
+    // Filed under a rack of your own, it becomes a patch of that rack.
+    const ownRack = (
+      await request(app).post('/api/racks').set('Cookie', adminCookie).send({ name: 'my case' })
+    ).body;
+    const filed = await importPatch(app, adminCookie, { document: doc, rack_id: ownRack.id });
+    expect(filed.status).toBe(201);
+    expect(filed.body.system_name).toBe(null);
+    const filedDetail = await request(app)
+      .get(`/api/patches/${filed.body.id}`)
+      .set('Cookie', adminCookie);
+    expect(filedDetail.body.modules.every((m) => m.rack_id === ownRack.id)).toBe(true);
+  });
+
   it('resolves identically named components by their exported type', async () => {
     const { app, aliceCookie, db, maths, rackId } = await withPatch();
     const { rows: components } = await db.query(

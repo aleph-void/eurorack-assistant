@@ -1013,3 +1013,96 @@ describe('PatchDetailView beyond the rack', () => {
     expect(wrapper.find('[data-test="link-error"]').text()).toContain('gone already');
   });
 });
+
+// A patch built from a system spans several racks, and then which case a
+// module stands in is part of knowing which module it is.
+describe('PatchDetailView system patches', () => {
+  const systemPatch = {
+    id: 8,
+    name: 'Whole studio',
+    description: null,
+    rack_id: null,
+    rack_name: 'studio',
+    system_id: 4,
+    system_name: 'studio',
+    created_at: '2026-08-12T10:00:00Z',
+    modules: [
+      {
+        id: 11,
+        module_id: 1,
+        manufacturer: 'Make Noise',
+        module_name: 'Maths',
+        instance: 1,
+        rack_id: 10,
+        rack_name: 'left case',
+        live: true,
+        components: [{ id: 2, type: 'output_jack', name: 'Out', values: [] }],
+      },
+      {
+        id: 12,
+        module_id: 2,
+        manufacturer: 'Mutable',
+        module_name: 'Plaits',
+        instance: 1,
+        rack_id: 11,
+        rack_name: 'right case',
+        live: true,
+        components: [{ id: 3, type: 'input_jack', name: 'In', values: [] }],
+      },
+    ],
+    cables: [],
+    settings: [],
+    normalizations: [],
+    groups: [],
+    links: [],
+    pairs: [],
+    flow: { sources: [] },
+    rack_layout: [
+      { id: 100, rack_id: 10, rack_name: 'left case', unit: 3, hp: 84, modules: [11] },
+      { id: 101, rack_id: 11, rack_name: 'right case', unit: 3, hp: 84, modules: [12] },
+    ],
+  };
+
+  it('says the patch spans a system, and names each module’s rack', async () => {
+    api.get.mockResolvedValue(systemPatch);
+    const wrapper = mount(PatchDetailView, { props: { id: '8' }, global: testGlobal() });
+    await flushPromises();
+
+    const note = wrapper.find('[data-test="snapshot-note"]').text();
+    expect(note).toContain("system 'studio'");
+    expect(note).toContain('any jack on any of those racks');
+    // The snapshot table gains a rack column only when there is more than one.
+    expect(wrapper.find('[data-test="patch-module-11"]').text()).toContain('left case');
+    expect(wrapper.find('[data-test="patch-module-12"]').text()).toContain('right case');
+    // …and the rack rides along in the name the diagram and cable list use,
+    // which is what tells two identical modules in two cases apart.
+    expect(wrapper.findComponent(PatchDiagram).props('labelFor')(systemPatch.modules[0])).toBe(
+      'Make Noise Maths · left case'
+    );
+  });
+
+  it('hands the diagram the rows of every rack in the system', async () => {
+    api.get.mockResolvedValue(systemPatch);
+    const wrapper = mount(PatchDetailView, { props: { id: '8' }, global: testGlobal() });
+    await flushPromises();
+    const rows = wrapper.findComponent(PatchDiagram).props('rackRows');
+    expect(rows.map((row) => row.rack_name)).toEqual(['left case', 'right case']);
+  });
+
+  it('leaves a single-rack patch as it was', async () => {
+    // The same payload with one rack behind it: no system, one rack name.
+    api.get.mockResolvedValue({
+      ...systemPatch,
+      rack_id: 10,
+      rack_name: 'left case',
+      system_id: null,
+      system_name: null,
+      modules: systemPatch.modules.map((pm) => ({ ...pm, rack_id: 10, rack_name: 'left case' })),
+    });
+    const wrapper = mount(PatchDetailView, { props: { id: '8' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="snapshot-note"]').text()).toContain("rack 'left case'");
+    // No rack column: every instance stands in the same one.
+    expect(wrapper.find('[data-test="patch-module-11"]').findAll('td')).toHaveLength(3);
+  });
+});

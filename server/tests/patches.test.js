@@ -1624,3 +1624,256 @@ describe('patch shortcuts', () => {
     expect(input).toBeTruthy();
   });
 });
+
+describe('system patches', () => {
+  // Alice's studio: a Maths in the left case, a Plaits in the right case,
+  // both racks in one system. Each module has one input and one output jack.
+  async function withSystemFixture() {
+    const fixture = await createTestApp();
+    const { db, app, aliceCookie } = fixture;
+    const { rows: users } = await db.query('SELECT id, username FROM users ORDER BY id');
+    fixture.alice = users.find((u) => u.username === 'alice');
+
+    const jacks = async (moduleId) => {
+      const { rows } = await db.query(
+        `INSERT INTO module_components (module_id, type, name) VALUES
+         ($1, 'input_jack', 'In'), ($1, 'output_jack', 'Out') RETURNING *`,
+        [moduleId]
+      );
+      return {
+        input: rows.find((c) => c.type === 'input_jack'),
+        output: rows.find((c) => c.type === 'output_jack'),
+      };
+    };
+    fixture.maths = await insertModule(db, fixture.alice.id, {
+      manufacturer: 'Make Noise',
+      name: 'Maths',
+      rack: 'left case',
+      hp: 20,
+    });
+    fixture.mathsJacks = await jacks(fixture.maths.id);
+    fixture.plaits = await insertModule(db, fixture.alice.id, {
+      manufacturer: 'Mutable',
+      name: 'Plaits',
+      rack: 'right case',
+      hp: 12,
+    });
+    fixture.plaitsJacks = await jacks(fixture.plaits.id);
+
+    const racks = (await request(app).get('/api/racks').set('Cookie', aliceCookie)).body;
+    fixture.leftRack = racks.find((r) => r.name === 'left case');
+    fixture.rightRack = racks.find((r) => r.name === 'right case');
+    fixture.system = (
+      await request(app).post('/api/systems').set('Cookie', aliceCookie).send({ name: 'studio' })
+    ).body;
+    for (const rack of [fixture.leftRack, fixture.rightRack]) {
+      await request(app)
+        .put(`/api/racks/${rack.id}/system`)
+        .set('Cookie', aliceCookie)
+        .send({ system_id: fixture.system.id });
+    }
+    return fixture;
+  }
+
+  it('snapshots every rack in the system, remembering which rack each copy came from', async () => {
+    const fixture = await withSystemFixture();
+    const { app, aliceCookie, system } = fixture;
+    const created = await request(app)
+      .post('/api/patches')
+      .set('Cookie', aliceCookie)
+      .send({ system_id: system.id, name: 'Whole studio' });
+    expect(created.status).toBe(201);
+    expect(created.body.module_count).toBe(2);
+    expect(created.body.system_id).toBe(system.id);
+    expect(created.body.system_name).toBe('studio');
+    // A system patch belongs to no single rack.
+    expect(created.body.rack_id).toBe(null);
+
+    const detail = await request(app)
+      .get(`/api/patches/${created.body.id}`)
+      .set('Cookie', aliceCookie);
+    expect(detail.status).toBe(200);
+    expect(
+      detail.body.modules.map((m) => [m.module_name, m.rack_name])
+    ).toEqual([
+      ['Maths', 'left case'],
+      ['Plaits', 'right case'],
+    ]);
+    expect(detail.body.modules.every((m) => m.live)).toBe(true);
+  });
+
+  it('runs a cable from a jack in one rack to a jack in another', async () => {
+    const fixture = await withSystemFixture();
+    const { app, aliceCookie, system } = fixture;
+    const patch = (
+      await request(app)
+        .post('/api/patches')
+        .set('Cookie', aliceCookie)
+        .send({ system_id: system.id, name: 'Cross-case' })
+    ).body;
+    const detail = (
+      await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie)
+    ).body;
+    const maths = detail.modules.find((m) => m.module_name === 'Maths');
+    const plaits = detail.modules.find((m) => m.module_name === 'Plaits');
+
+    // Maths (left case) out → Plaits (right case) in: the whole point of a
+    // system, and something a single-rack patch could not express.
+    const cable = await request(app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: maths.id,
+        from_component_id: fixture.mathsJacks.output.id,
+        to_patch_module_id: plaits.id,
+        to_component_id: fixture.plaitsJacks.input.id,
+      });
+    expect(cable.status).toBe(201);
+
+    const after = (await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie))
+      .body;
+    expect(after.cables).toHaveLength(1);
+    expect(after.cables[0]).toMatchObject({
+      from_component_name: 'Out',
+      to_component_name: 'In',
+    });
+    // The cable-legality rules still apply across racks: that input is taken.
+    const twice = await request(app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: plaits.id,
+        from_component_id: fixture.plaitsJacks.output.id,
+        to_patch_module_id: plaits.id,
+        to_component_id: fixture.plaitsJacks.input.id,
+      });
+    expect(twice.status).toBe(409);
+  });
+
+  it('lays out a system patch rack by rack', async () => {
+    const fixture = await withSystemFixture();
+    const { app, aliceCookie, system } = fixture;
+    // Each case gets one physical row holding its module.
+    for (const [rack, module] of [
+      [fixture.leftRack, fixture.maths],
+      [fixture.rightRack, fixture.plaits],
+    ]) {
+      await request(app)
+        .put(`/api/racks/${rack.id}/layout`)
+        .set('Cookie', aliceCookie)
+        .send({ rows: [{ unit: 3, hp: 84, modules: [{ module_id: module.id }] }] });
+    }
+    const patch = (
+      await request(app)
+        .post('/api/patches')
+        .set('Cookie', aliceCookie)
+        .send({ system_id: system.id, name: 'Laid out' })
+    ).body;
+    const detail = (
+      await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie)
+    ).body;
+
+    expect(detail.rack_layout).toHaveLength(2);
+    expect(detail.rack_layout.map((row) => row.rack_name)).toEqual(['left case', 'right case']);
+    // Each row places the instance from ITS OWN rack, not just the next one
+    // that happens to be the same module.
+    const instanceOf = (name) => detail.modules.find((m) => m.module_name === name).id;
+    expect(detail.rack_layout[0].modules).toEqual([instanceOf('Maths')]);
+    expect(detail.rack_layout[1].modules).toEqual([instanceOf('Plaits')]);
+  });
+
+  it('keeps the two copies of one module in the racks they stand in', async () => {
+    const fixture = await withSystemFixture();
+    const { app, db, aliceCookie, system } = fixture;
+    // The same Maths in both cases, each placed in its own rack's row.
+    await mapModule(db, fixture.alice.id, fixture.maths.id, { rack: 'right case' });
+    for (const rack of [fixture.leftRack, fixture.rightRack]) {
+      await request(app)
+        .put(`/api/racks/${rack.id}/layout`)
+        .set('Cookie', aliceCookie)
+        .send({ rows: [{ unit: 3, hp: 84, modules: [{ module_id: fixture.maths.id }] }] });
+    }
+    const patch = (
+      await request(app)
+        .post('/api/patches')
+        .set('Cookie', aliceCookie)
+        .send({ system_id: system.id, name: 'Two Mathses' })
+    ).body;
+    const detail = (
+      await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie)
+    ).body;
+
+    const mathses = detail.modules.filter((m) => m.module_name === 'Maths');
+    // Numbering runs across the whole system, and each copy names its rack.
+    expect(mathses.map((m) => [m.instance, m.rack_name]).sort()).toEqual([
+      [1, 'left case'],
+      [2, 'right case'],
+    ]);
+    // Each rack's row draws the copy that actually stands in it.
+    const rackOf = (id) => mathses.find((m) => m.id === id).rack_name;
+    expect(detail.rack_layout.map((row) => [row.rack_name, rackOf(row.modules[0])])).toEqual([
+      ['left case', 'left case'],
+      ['right case', 'right case'],
+    ]);
+  });
+
+  it('refuses a system that is empty, or that belongs to somebody else', async () => {
+    const fixture = await withSystemFixture();
+    const { app, aliceCookie, adminCookie, system } = fixture;
+    const bare = (
+      await request(app).post('/api/systems').set('Cookie', aliceCookie).send({ name: 'bare' })
+    ).body;
+    const empty = await request(app)
+      .post('/api/patches')
+      .set('Cookie', aliceCookie)
+      .send({ system_id: bare.id, name: 'nothing here' });
+    expect(empty.status).toBe(400);
+    expect(empty.body.error).toMatch(/no racks/);
+
+    const foreign = await request(app)
+      .post('/api/patches')
+      .set('Cookie', adminCookie)
+      .send({ system_id: system.id, name: 'steal' });
+    expect(foreign.status).toBe(404);
+  });
+
+  it('keeps rendering a system patch after the system is deleted', async () => {
+    const fixture = await withSystemFixture();
+    const { app, aliceCookie, system } = fixture;
+    const patch = (
+      await request(app)
+        .post('/api/patches')
+        .set('Cookie', aliceCookie)
+        .send({ system_id: system.id, name: 'Outlives it' })
+    ).body;
+    expect(
+      (await request(app).delete(`/api/systems/${system.id}`).set('Cookie', aliceCookie)).status
+    ).toBe(200);
+
+    const detail = await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie);
+    expect(detail.status).toBe(200);
+    // The name is snapshotted, so the patch still says what it was built from.
+    expect(detail.body.system_name).toBe('studio');
+    expect(detail.body.modules.map((m) => m.rack_name)).toEqual(['left case', 'right case']);
+  });
+
+  it('carries the system and per-instance racks into a clone', async () => {
+    const fixture = await withSystemFixture();
+    const { app, aliceCookie, system } = fixture;
+    const patch = (
+      await request(app)
+        .post('/api/patches')
+        .set('Cookie', aliceCookie)
+        .send({ system_id: system.id, name: 'Original' })
+    ).body;
+    const copy = (
+      await request(app).post(`/api/patches/${patch.id}/clone`).set('Cookie', aliceCookie).send({})
+    ).body;
+    const detail = (
+      await request(app).get(`/api/patches/${copy.id}`).set('Cookie', aliceCookie)
+    ).body;
+    expect(detail.system_id).toBe(system.id);
+    expect(detail.system_name).toBe('studio');
+    expect(detail.modules.map((m) => m.rack_name)).toEqual(['left case', 'right case']);
+  });
+});

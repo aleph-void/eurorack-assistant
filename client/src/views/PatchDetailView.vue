@@ -31,7 +31,7 @@ const onCaptured = () => notesPanel.value?.load();
 const patch = ref(null);
 const error = ref('');
 
-const { modules, modulesById, groupsById, moduleLabel, cables, jackCandidates } =
+const { modules, modulesById, groupsById, multiRack, moduleLabel, cables, jackCandidates } =
   usePatchFacts(patch);
 
 const rackModules = ref([]);
@@ -188,7 +188,13 @@ onMounted(async () => {
         Ask about this patch
       </RouterLink>
     </h1>
-    <p class="muted" data-test="snapshot-note">
+    <p v-if="patch.system_id" class="muted" data-test="snapshot-note">
+      Snapshot of every rack in system '{{ patch.system_name }}' as of
+      {{ new Date(patch.created_at).toLocaleString() }} — a cable may run from any jack on any of
+      those racks to any jack on any other, and later changes to the racks do not affect this
+      patch.
+    </p>
+    <p v-else class="muted" data-test="snapshot-note">
       Snapshot of rack '{{ patch.rack_name }}' as of
       {{ new Date(patch.created_at).toLocaleString() }} — later changes to the rack do not affect
       this patch.
@@ -244,6 +250,7 @@ onMounted(async () => {
             <thead>
               <tr>
                 <th>Module</th>
+                <th v-if="multiRack">Rack</th>
                 <th>Bus</th>
                 <th>Status</th>
               </tr>
@@ -256,6 +263,7 @@ onMounted(async () => {
                   </RouterLink>
                   <template v-else>{{ moduleLabel(pm) }}</template>
                 </td>
+                <td v-if="multiRack">{{ pm.rack_name || '—' }}</td>
                 <td>{{ groupsById.get(pm.group_id)?.name || '—' }}</td>
                 <td>
                   <span

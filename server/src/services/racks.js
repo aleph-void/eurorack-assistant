@@ -25,6 +25,18 @@ export async function findOrCreateRack(db, userId, name, { transaction } = {}) {
   return db.models.Rack.create({ user_id: userId, name }, { transaction });
 }
 
+// The user's system with this name (case-insensitive), or null. Systems are
+// named per user exactly as racks are.
+export function findSystemByName(db, userId, name, { transaction } = {}) {
+  return db.models.System.findOne({
+    where: {
+      user_id: userId,
+      [Op.and]: [where(fn('lower', col('name')), name.toLowerCase())],
+    },
+    transaction,
+  });
+}
+
 // Distinct ids of every module in any of the user's racks.
 export async function userModuleIds(db, userId) {
   const { Rack, RackModule } = db.models;

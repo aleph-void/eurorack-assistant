@@ -16,6 +16,9 @@ export const patchJson = (patch, extra = {}) => ({
   description: patch.description,
   rack_id: patch.rack_id,
   rack_name: patch.rack_name,
+  // Set instead of rack_id when the patch spans a whole system.
+  system_id: patch.system_id ?? null,
+  system_name: patch.system_name ?? null,
   created_at: patch.created_at,
   updated_at: patch.updated_at,
   ...extra,
@@ -69,6 +72,10 @@ export const moduleJson = (pm, { live, components, panel = null, hp = null }) =>
   manufacturer: pm.manufacturer,
   module_name: pm.module_name,
   instance: pm.instance,
+  // Which rack of the system this copy was snapshotted from. Null on
+  // patches made before systems existed, and on gear added by hand.
+  rack_id: pm.rack_id ?? null,
+  rack_name: pm.rack_name ?? null,
   label: pm.label ?? null,
   group_id: pm.group_id ?? null,
   external: Boolean(pm.external),
@@ -102,6 +109,7 @@ const {
   ComponentSwitchStep,
   ComponentPair,
   ModuleExpander,
+  Rack,
   RackRow,
   RackRowModule,
   PatchModule,
@@ -290,33 +298,76 @@ const {
   });
 
   const panels = await loadPanels(db, [...liveIds]);
-  const rackRows = includeRackLayout && patch.rack_id
-    ? await RackRow.findAll({ where: { rack_id: patch.rack_id }, order: [['position', 'ASC'], ['id', 'ASC']] })
+  // Which racks this patch stands in: every rack its instances were
+  // snapshotted from (a system patch spans several), falling back to the
+  // patch's own rack for patches made before instances carried one. The
+  // references are soft, so the racks are re-checked against the owner
+  // rather than trusted.
+  const snapshotRackIds = [
+    ...new Set(patchModules.map((pm) => pm.rack_id).filter((id) => id !== null && id !== undefined)),
+  ];
+  const wantedRackIds = snapshotRackIds.length
+    ? snapshotRackIds
+    : patch.rack_id
+      ? [patch.rack_id]
+      : [];
+  const racks =
+    includeRackLayout && wantedRackIds.length
+      ? await Rack.findAll({
+          where: { id: wantedRackIds, user_id: patch.user_id },
+          order: [
+            ['system_position', 'ASC'],
+            ['id', 'ASC'],
+          ],
+        })
+      : [];
+  const rackRows = racks.length
+    ? await RackRow.findAll({
+        where: { rack_id: racks.map((rack) => rack.id) },
+        order: [
+          ['position', 'ASC'],
+          ['id', 'ASC'],
+        ],
+      })
     : [];
   const rowPlacements = rackRows.length
     ? await RackRowModule.findAll({ where: { row_id: rackRows.map((row) => row.id) }, order: [['position', 'ASC'], ['id', 'ASC']] })
     : [];
   // Rack placements identify a module model, while a patch snapshots physical
-  // instances. Assign each placed copy to the next matching snapshot instance.
+  // instances. Assign each placed copy to the next matching snapshot instance
+  // OF THE SAME RACK, so the two Mathses of a two-rack system do not swap
+  // ends of the studio.
+  const instanceKey = (rackId, moduleId) => `${rackId ?? patch.rack_id ?? 0}:${moduleId}`;
   const instancesByModule = new Map();
   for (const pm of patchModules) {
-    if (!instancesByModule.has(pm.module_id)) instancesByModule.set(pm.module_id, []);
-    instancesByModule.get(pm.module_id).push(pm.id);
+    const key = instanceKey(pm.rack_id, pm.module_id);
+    if (!instancesByModule.has(key)) instancesByModule.set(key, []);
+    instancesByModule.get(key).push(pm.id);
   }
   const usedInstances = new Set();
-  const rack_layout = rackRows.map((row) => ({
-    id: row.id,
-    unit: row.unit,
-    hp: row.hp,
-    modules: rowPlacements
-      .filter((placement) => placement.row_id === row.id)
-      .map((placement) => {
-        const instance = (instancesByModule.get(placement.module_id) ?? []).find((id) => !usedInstances.has(id));
-        if (instance) usedInstances.add(instance);
-        return instance ?? null;
-      })
-      .filter(Boolean),
-  }));
+  // Rows in rack order, each carrying the rack it belongs to so a multi-rack
+  // diagram can say which case a row is in.
+  const rack_layout = racks.flatMap((rack) =>
+    rackRows
+      .filter((row) => row.rack_id === rack.id)
+      .map((row) => ({
+        id: row.id,
+        rack_id: rack.id,
+        rack_name: rack.name,
+        unit: row.unit,
+        hp: row.hp,
+        modules: rowPlacements
+          .filter((placement) => placement.row_id === row.id)
+          .map((placement) => {
+            const instance = (
+              instancesByModule.get(instanceKey(rack.id, placement.module_id)) ?? []
+            ).find((id) => !usedInstances.has(id));
+            if (instance) usedInstances.add(instance);
+            return instance ?? null;
+          })
+          .filter(Boolean),
+      }))
+  );
 
   return {
     patchModules,

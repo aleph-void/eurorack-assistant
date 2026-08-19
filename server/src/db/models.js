@@ -201,12 +201,32 @@ export function defineModels(sequelize) {
   );
 
   // A user's racks; modules are mapped into racks, not directly onto users.
+  // A collection of racks patched together as one instrument (migration
+  // 028): the studio, or the live case plus the skiff that travels with it.
+  const System = define(
+    'System',
+    {
+      id,
+      user_id: { type: DataTypes.INTEGER, allowNull: false },
+      name: { type: DataTypes.TEXT, allowNull: false },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'systems', createdAt: 'created_at', updatedAt: 'updated_at' }
+  );
+
   const Rack = define(
     'Rack',
     {
       id,
       user_id: { type: DataTypes.INTEGER, allowNull: false },
       name: { type: DataTypes.TEXT, allowNull: false },
+      // Which system this rack is part of, and where it stands on that
+      // system's floor plan (migration 028). Coordinates are HP across and
+      // rack-units down; position is the tie-breaking order.
+      system_id: { type: DataTypes.INTEGER },
+      system_x: { type: DataTypes.REAL, allowNull: false, defaultValue: 0 },
+      system_y: { type: DataTypes.REAL, allowNull: false, defaultValue: 0 },
+      system_position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     },
     { tableName: 'racks', createdAt: 'created_at', updatedAt: 'updated_at' }
   );
@@ -413,6 +433,10 @@ export function defineModels(sequelize) {
       user_id: { type: DataTypes.INTEGER, allowNull: false },
       rack_id: { type: DataTypes.INTEGER },
       rack_name: { type: DataTypes.TEXT, allowNull: false },
+      // Set instead of rack_id when the patch was built from a whole system
+      // (migration 028), and soft like it: the patch outlives the system.
+      system_id: { type: DataTypes.INTEGER },
+      system_name: { type: DataTypes.TEXT },
       name: { type: DataTypes.TEXT, allowNull: false },
       description: { type: DataTypes.TEXT },
     },
@@ -430,6 +454,11 @@ export function defineModels(sequelize) {
       manufacturer: { type: DataTypes.TEXT, allowNull: false },
       module_name: { type: DataTypes.TEXT, allowNull: false },
       instance: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+      // Which rack this copy was snapshotted from (migration 028), so a
+      // system patch spanning several racks can group its instances and
+      // match each to the right rack's physical rows. Soft, like module_id.
+      rack_id: { type: DataTypes.INTEGER },
+      rack_name: { type: DataTypes.TEXT },
       // What this instance does in this patch ("snare voice"), and which
       // named bus/layer it belongs to (soft reference into patch_groups).
       label: { type: DataTypes.TEXT },
@@ -926,6 +955,11 @@ export function defineModels(sequelize) {
   ModuleComponent.hasMany(ComponentValue, { foreignKey: 'component_id' });
   ComponentValue.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
 
+  System.belongsTo(User, { foreignKey: 'user_id' });
+  User.hasMany(System, { foreignKey: 'user_id' });
+  System.hasMany(Rack, { foreignKey: 'system_id' });
+  Rack.belongsTo(System, { foreignKey: 'system_id' });
+
   Patch.belongsTo(User, { foreignKey: 'user_id' });
   Patch.hasMany(PatchModule, { foreignKey: 'patch_id' });
   PatchModule.belongsTo(Patch, { foreignKey: 'patch_id' });
@@ -1017,6 +1051,7 @@ export function defineModels(sequelize) {
     Manual,
     ManualDocument,
     ModuleVideo,
+    System,
     Rack,
     RackModule,
     RackRow,

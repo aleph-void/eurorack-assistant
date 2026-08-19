@@ -22,6 +22,12 @@ const modulesById = computed(() => new Map(modules.value.map((m) => [m.id, m])))
 const groups = computed(() => patch.value?.groups || []);
 const groupsById = computed(() => new Map(groups.value.map((g) => [g.id, g])));
 
+// A patch built from a system spans several racks, and then which rack a
+// module stands in is part of knowing which module it is.
+const multiRack = computed(
+  () => new Set(modules.value.map((pm) => pm.rack_name).filter(Boolean)).size > 1
+);
+
 // "Make Noise Maths", plus "#2" when the rack held several of the module and
 // the role this instance plays in the patch when one has been recorded.
 function moduleLabel(pm) {
@@ -32,7 +38,10 @@ function moduleLabel(pm) {
       : modules.value.filter((m) => m.module_id === pm.module_id).length;
   const base = `${pm.manufacturer} ${pm.module_name}`.trim();
   const numbered = twins > 1 ? `${base} #${pm.instance}` : base;
-  return pm.label ? `${numbered} (${pm.label})` : numbered;
+  const named = pm.label ? `${numbered} (${pm.label})` : numbered;
+  // Across a system, the rack is part of the name: on the diagram and in the
+  // cable list it is what tells two identical modules in two cases apart.
+  return multiRack.value && pm.rack_name ? `${named} · ${pm.rack_name}` : named;
 }
 
 const cables = computed(() => patch.value?.cables || []);
@@ -52,7 +61,13 @@ const moduleOptions = (list) =>
   list.map((pm) => ({
     value: pm.id,
     label: moduleLabel(pm),
-    hint: pm.live ? undefined : pm.external ? 'off-rack gear' : 'not in this rack',
+    hint: pm.live
+      ? multiRack.value && pm.rack_name
+        ? pm.rack_name
+        : undefined
+      : pm.external
+        ? 'off-rack gear'
+        : 'not in this rack',
   }));
 
 // "only with MODE set to LP" / "MODE is set to BP, so this default is one of
@@ -94,6 +109,7 @@ const jackCandidates = (types, forDestination) =>
     modulesById,
     groups,
     groupsById,
+    multiRack,
     moduleLabel,
     moduleOptions,
     cables,

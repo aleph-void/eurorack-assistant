@@ -12,6 +12,7 @@ import { asyncHandler } from '../asyncHandler.js';
 // habit-learned cable suggestions, rename, delete and clone.
 export function patchCoreRoutes(db) {
   const {
+    System,
     Rack,
     RackModule,
     Module,
@@ -58,17 +59,45 @@ export function patchCoreRoutes(db) {
     );
   }));
 
-  // Create a patch from one of the user's racks, snapshotting the rack's
-  // current contents. Body: { rack_id, name, description? }
+  // Create a patch from one of the user's racks, or from a whole system —
+  // every rack in it at once, so a cable can run from any jack on any of
+  // those racks to any jack on any other. Either way the contents are
+  // snapshotted as they stand. Body: { rack_id | system_id, name,
+  // description? }
   router.post('/', asyncHandler(async (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
-    const rack = await Rack.findOne({
-      where: { id: Number(req.body?.rack_id) || 0, user_id: req.user.id },
-    });
-    if (!rack) return res.status(404).json({ error: 'Rack not found' });
+    const wantsSystem =
+      req.body?.system_id !== undefined &&
+      req.body?.system_id !== null &&
+      req.body?.system_id !== '';
+    let system = null;
+    let racks;
+    if (wantsSystem) {
+      system = await System.findOne({
+        where: { id: Number(req.body.system_id) || 0, user_id: req.user.id },
+      });
+      if (!system) return res.status(404).json({ error: 'System not found' });
+      racks = await Rack.findAll({
+        where: { system_id: system.id },
+        order: [
+          ['system_position', 'ASC'],
+          ['id', 'ASC'],
+        ],
+      });
+      if (racks.length === 0) {
+        return res.status(400).json({ error: 'this system has no racks to patch' });
+      }
+    } else {
+      const rack = await Rack.findOne({
+        where: { id: Number(req.body?.rack_id) || 0, user_id: req.user.id },
+      });
+      if (!rack) return res.status(404).json({ error: 'Rack not found' });
+      racks = [rack];
+    }
+    const rackById = new Map(racks.map((rack) => [rack.id, rack]));
     const mappings = await RackModule.findAll({
-      where: { rack_id: rack.id },
+      where: { rack_id: racks.map((rack) => rack.id) },
       include: [Module],
       order: [
         [Module, 'manufacturer', 'ASC'],
@@ -76,19 +105,32 @@ export function patchCoreRoutes(db) {
       ],
     });
     if (mappings.length === 0) {
-      return res.status(400).json({ error: 'this rack has no modules to patch' });
+      return res.status(400).json({
+        error: system ? 'this system has no modules to patch' : 'this rack has no modules to patch',
+      });
     }
     const description = String(req.body?.description || '').trim();
     // One patch_modules row per module INSTANCE: quantity 2 becomes
-    // instance 1 and instance 2 so cables can tell them apart.
-    const snapshot = mappings.flatMap((rm) =>
-      Array.from({ length: Math.max(1, rm.quantity) }, (_, i) => ({
-        module_id: rm.Module.id,
-        manufacturer: rm.Module.manufacturer,
-        module_name: rm.Module.name,
-        instance: i + 1,
-      }))
-    );
+    // instance 1 and instance 2 so cables can tell them apart. Across a
+    // system the numbering keeps running, so the same module in two racks
+    // still gets distinct instance numbers — the rack columns say which
+    // copy stands where.
+    const instanceCounts = new Map();
+    const snapshot = mappings.flatMap((rm) => {
+      const rack = rackById.get(rm.rack_id);
+      return Array.from({ length: Math.max(1, rm.quantity) }, () => {
+        const instance = (instanceCounts.get(rm.Module.id) ?? 0) + 1;
+        instanceCounts.set(rm.Module.id, instance);
+        return {
+          module_id: rm.Module.id,
+          manufacturer: rm.Module.manufacturer,
+          module_name: rm.Module.name,
+          instance,
+          rack_id: rack?.id ?? null,
+          rack_name: rack?.name ?? null,
+        };
+      });
+    });
     // Hosts and expanders in the same rack arrive already wired together —
     // that is what the ribbon cable does — so the patch links them without
     // being asked, instance by instance.
@@ -105,8 +147,13 @@ export function patchCoreRoutes(db) {
       patch = await Patch.create(
         {
           user_id: req.user.id,
-          rack_id: rack.id,
-          rack_name: rack.name,
+          // A system patch is not filed under any one rack; rack_name is
+          // NOT NULL and reads as the thing the patch was built from, so
+          // the system's name stands in it as well as in system_name.
+          rack_id: system ? null : racks[0].id,
+          rack_name: system ? system.name : racks[0].name,
+          system_id: system?.id ?? null,
+          system_name: system?.name ?? null,
           name,
           description: description || null,
         },
@@ -339,6 +386,8 @@ export function patchCoreRoutes(db) {
           user_id: req.user.id,
           rack_id: source.rack_id,
           rack_name: source.rack_name,
+          system_id: source.system_id,
+          system_name: source.system_name,
           name,
           description: source.description,
         },
@@ -369,6 +418,8 @@ export function patchCoreRoutes(db) {
             manufacturer: pm.manufacturer,
             module_name: pm.module_name,
             instance: pm.instance,
+            rack_id: pm.rack_id,
+            rack_name: pm.rack_name,
             label: pm.label,
             external: pm.external,
             group_id: pm.group_id === null ? null : (groupMap.get(pm.group_id) ?? null),

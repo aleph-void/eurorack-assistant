@@ -4,6 +4,7 @@ import { createLimiters } from './rateLimit.js';
 import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
 import { moduleRoutes } from './routes/modules/index.js';
+import { systemRoutes } from './routes/systems.js';
 import { rackRoutes } from './routes/racks.js';
 import { manualRoutes } from './routes/manuals.js';
 import { importRoutes } from './routes/imports.js';
@@ -48,6 +49,7 @@ export function createApp(
   // runImpl is the test seam for the keyless yt-dlp listings (module
   // tutorial search, channel scan), like fetchImpl is for outbound HTTP.
   app.use('/api/modules', moduleRoutes(db, { manualsDir, panelsDir, videosDir, fetchImpl, runImpl }));
+  app.use('/api/systems', systemRoutes(db));
   app.use('/api/racks', rackRoutes(db, { fetchImpl, runImpl }));
   app.use('/api/manuals', manualRoutes(db, { manualsDir }));
   app.use('/api/panels', panelRoutes(db, { panelsDir }));

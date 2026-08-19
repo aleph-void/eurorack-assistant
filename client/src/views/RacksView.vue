@@ -5,6 +5,7 @@ import { dialog } from '../dialog.js';
 import ShareButton from '../components/ShareButton.vue';
 
 const racks = ref([]);
+const systems = ref([]);
 const error = ref('');
 const notice = ref('');
 const loading = ref(true);
@@ -18,7 +19,10 @@ const dragged = ref(null);
 
 async function load() {
   try {
-    racks.value = await api.get('/api/racks');
+    [racks.value, systems.value] = await Promise.all([
+      api.get('/api/racks'),
+      api.get('/api/systems'),
+    ]);
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -54,6 +58,21 @@ async function rename(rack) {
 }
 
 onMounted(load);
+
+// Put a rack into one of the user's systems, or take it out of the one it is
+// in. Racks keep their modules and their own row layout either way — the
+// system only says which racks are patched together.
+async function setSystem(rack, event) {
+  const value = event.target.value;
+  error.value = '';
+  try {
+    await api.put(`/api/racks/${rack.id}/system`, { system_id: value === '' ? null : Number(value) });
+    await load();
+  } catch (e) {
+    error.value = e.message;
+    await load();
+  }
+}
 
 // The zip is built by a background job; when its 'completed' event arrives
 // over the WebSocket the jobs store starts the download automatically.
@@ -192,7 +211,10 @@ async function dropIntoAvailable() {
     Racks group the modules in your systems. Deleting a rack deletes the modules in it — a module
     survives only if it is still in another rack.
   </p>
-  <p class="muted">Choose <strong>Organize rack</strong> to arrange its physical 3U and 1U rows.</p>
+  <p class="muted">
+    Choose <strong>Organize rack</strong> to arrange its physical 3U and 1U rows. Racks in the same
+    <RouterLink to="/systems">system</RouterLink> can be patched to each other.
+  </p>
   <p v-if="error" class="error" data-test="error">{{ error }}</p>
   <p v-if="notice" class="success" data-test="notice">{{ notice }}</p>
   <p v-if="loading" class="muted">Loading…</p>
@@ -203,6 +225,7 @@ async function dropIntoAvailable() {
           <tr>
             <th>Name</th>
             <th>Modules</th>
+            <th>System</th>
             <th>Layout</th>
             <th></th>
           </tr>
@@ -224,6 +247,19 @@ async function dropIntoAvailable() {
               </template>
             </td>
             <td>{{ rack.module_count }}</td>
+            <td>
+              <select
+                :value="rack.system_id ?? ''"
+                :data-test="`system-${rack.id}`"
+                aria-label="System"
+                @change="setSystem(rack, $event)"
+              >
+                <option value="">No system</option>
+                <option v-for="system in systems" :key="system.id" :value="system.id">
+                  {{ system.name }}
+                </option>
+              </select>
+            </td>
             <td>
               <button
                 class="secondary"

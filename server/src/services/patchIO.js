@@ -94,8 +94,10 @@ export async function exportPatchDocument(db, patch) {
       name: patch.name,
       description: patch.description ?? null,
       // The rack the patch was built against, by name — an id would be
-      // meaningless in another account.
+      // meaningless in another account. A patch built from a whole system
+      // names the system instead, and each instance names its own rack.
       rack_name: patch.rack_name,
+      system_name: patch.system_name ?? null,
       groups: groups.map((g) => ({
         name: g.name,
         description: g.description ?? null,
@@ -106,6 +108,7 @@ export async function exportPatchDocument(db, patch) {
         manufacturer: m.manufacturer,
         module_name: m.module_name,
         instance: m.instance,
+        rack_name: m.rack_name ?? null,
         label: m.label ?? null,
         group: m.group_id === null ? null : (groupNames.get(m.group_id) ?? null),
         external: Boolean(m.external),
@@ -253,6 +256,7 @@ export function parsePatchDocument(input) {
       manufacturer: text(m.manufacturer, `module ${at + 1} manufacturer`, { required: false }) ?? '',
       module_name: text(m.module_name ?? m.name, `module ${at + 1} name`),
       instance: Math.max(1, integer(m.instance, 1)),
+      rack_name: text(m.rack_name, `module ${at + 1} rack name`, { required: false }),
       label: text(m.label, 'module label', { required: false }),
       group: groupName,
       external: Boolean(m.external),
@@ -339,6 +343,7 @@ export function parsePatchDocument(input) {
     name: text(body.name, 'patch name', { required: false }),
     description: text(body.description, 'patch description', { required: false, max: LIMITS.body }),
     rack_name: text(body.rack_name, 'rack name', { required: false }),
+    system_name: text(body.system_name, 'system name', { required: false }),
     groups,
     modules,
     cables,
@@ -428,6 +433,12 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
         user_id: userId,
         rack_id: rack?.id ?? null,
         rack_name: rack?.name ?? document.rack_name ?? 'imported patch',
+        // Filing the import under one of your racks makes it a patch of that
+        // rack, whatever it was elsewhere. Left unfiled, the document's own
+        // system and rack names are kept — they are soft names precisely so
+        // a multi-rack patch still reads in an account that has no such
+        // system.
+        system_name: rack ? null : (document.system_name ?? null),
         name: name || document.name || 'Imported patch',
         description: document.description,
       },
@@ -452,6 +463,8 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
           manufacturer: m.manufacturer,
           module_name: m.module_name,
           instance: m.instance,
+          rack_id: rack?.id ?? null,
+          rack_name: rack?.name ?? m.rack_name ?? null,
           label: m.label,
           external: m.external,
           group_id: m.group === null ? null : (groupIds.get(m.group) ?? null),

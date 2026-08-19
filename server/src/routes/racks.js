@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { findRackByName } from '../services/racks.js';
+import { layoutJson, rackDetailJson, rackJson } from '../services/rackJson.js';
 import { readableResource, removeShares } from '../services/sharing.js';
 import { enqueueJob, enqueueVideoJob } from '../jobs/worker.js';
 import { loadPanels } from '../services/panelImage.js';
@@ -23,53 +24,13 @@ import { asyncHandler } from './asyncHandler.js';
 // A user's racks. Every route operates on the requesting user's racks only —
 // racks (and their module lists) are never visible to other users.
 export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
-  const { Rack, RackModule, RackRow, RackRowModule, Module, ModuleVideo, User, Job } = db.models;
+  const { Rack, RackModule, RackRow, RackRowModule, Module, ModuleVideo, System, User, Job } =
+    db.models;
   const router = Router();
   router.use(requireAuth(db));
 
   function ownRack(userId, id) {
     return Rack.findOne({ where: { id: Number(id), user_id: userId } });
-  }
-
-  const rackJson = (rack, moduleCount) => ({
-    id: rack.id,
-    name: rack.name,
-    module_count: moduleCount,
-    created_at: rack.created_at,
-    updated_at: rack.updated_at,
-  });
-
-  async function layoutJson(rack, mappings, panels = new Map()) {
-    const rows = await RackRow.findAll({ where: { rack_id: rack.id }, order: [['position', 'ASC'], ['id', 'ASC']] });
-    const placements = rows.length
-      ? await RackRowModule.findAll({ where: { row_id: rows.map((row) => row.id) }, order: [['position', 'ASC'], ['id', 'ASC']] })
-      : [];
-    const modules = new Map(
-      mappings.filter((mapping) => mapping.Module).map((mapping) => [mapping.module_id, mapping.Module])
-    );
-    return rows.map((row) => ({
-      id: row.id,
-      unit: row.unit,
-      hp: row.hp,
-      position: row.position,
-      modules: placements
-        .filter((placement) => placement.row_id === row.id)
-        .map((placement) => {
-          const module = modules.get(placement.module_id);
-          return module
-            ? {
-                id: placement.id,
-                module_id: module.id,
-                manufacturer: module.manufacturer,
-                name: module.name,
-                hp: module.hp,
-                panel: panels.get(module.id) ?? null,
-                position: placement.position,
-              }
-            : null;
-        })
-        .filter(Boolean),
-    }));
   }
 
   router.get('/', asyncHandler(async (req, res) => {
@@ -97,32 +58,21 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
     const found = await readableResource(db, req.user.id, 'rack', req.params.id);
     if (!found) return res.status(404).json({ error: 'Rack not found' });
     const rack = found.row;
-    const mappings = await RackModule.findAll({
-      where: { rack_id: rack.id },
-      include: Module,
-      order: [
-        [Module, 'manufacturer', 'ASC'],
-        [Module, 'name', 'ASC'],
-      ],
-    });
     const owner = found.shared ? await User.findByPk(rack.user_id) : null;
-    const panels = await loadPanels(db, mappings.map((mapping) => mapping.module_id));
+    const detail = await rackDetailJson(db, rack);
+    // Sharing a rack shares the rack. Which system its owner keeps it in, and
+    // where it stands in their studio, is about the rest of their gear and is
+    // not part of what was handed over.
+    if (found.shared) {
+      delete detail.system_id;
+      delete detail.system_x;
+      delete detail.system_y;
+      delete detail.system_position;
+    }
     res.json({
-      ...rackJson(rack, mappings.length),
+      ...detail,
       shared: found.shared,
       owner_username: owner?.username ?? req.user.username,
-      modules: mappings
-        .filter((rm) => rm.Module)
-        .map((rm) => ({
-          id: rm.Module.id,
-          manufacturer: rm.Module.manufacturer,
-          name: rm.Module.name,
-          hp: rm.Module.hp,
-          panel: panels.get(rm.Module.id) ?? null,
-          summary: rm.Module.summary,
-          quantity: rm.quantity,
-        })),
-      rows: await layoutJson(rack, mappings, panels),
     });
   }));
 
@@ -150,6 +100,32 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
     await rack.update({ name });
     const moduleCount = await RackModule.count({ where: { rack_id: rack.id } });
     res.json(rackJson(rack, moduleCount));
+  }));
+
+  // Put this rack into one of the user's systems, or take it out of the one
+  // it is in. Racks own their modules either way; a system only groups them.
+  // Body: { system_id } — null or empty takes the rack out.
+  router.put('/:id/system', asyncHandler(async (req, res) => {
+    const rack = await ownRack(req.user.id, req.params.id);
+    if (!rack) return res.status(404).json({ error: 'Rack not found' });
+    const raw = req.body?.system_id;
+    if (raw === null || raw === undefined || raw === '') {
+      await rack.update({ system_id: null, system_x: 0, system_y: 0, system_position: 0 });
+      return res.json(rackJson(rack, await RackModule.count({ where: { rack_id: rack.id } })));
+    }
+    const system = await System.findOne({
+      where: { id: Number(raw) || 0, user_id: req.user.id },
+    });
+    if (!system) return res.status(404).json({ error: 'System not found' });
+    // A rack joining a system lands after the ones already in it, so its box
+    // does not sit on top of another until the user drags it somewhere.
+    const siblings = await Rack.findAll({ where: { system_id: system.id } });
+    const position = siblings.reduce((max, r) => Math.max(max, r.system_position + 1), 0);
+    await rack.update({
+      system_id: system.id,
+      system_position: rack.system_id === system.id ? rack.system_position : position,
+    });
+    res.json(rackJson(rack, await RackModule.count({ where: { rack_id: rack.id } })));
   }));
 
   // Replace the physical layout of a rack. Rack modules remain the inventory;
@@ -210,7 +186,7 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
         }
       });
       const panels = await loadPanels(db, mappings.map((mapping) => mapping.module_id));
-      res.json({ rows: await layoutJson(rack, mappings, panels) });
+      res.json({ rows: await layoutJson(db, rack, mappings, panels) });
     } catch (e) {
       if (e.message?.includes('placed module') || e.message?.includes('needs an HP') || e.message?.includes('more times')) {
         return res.status(400).json({ error: e.message });

@@ -6,22 +6,29 @@ import ShareButton from '../components/ShareButton.vue';
 
 const patches = ref([]);
 const racks = ref([]);
+const systems = ref([]);
 const error = ref('');
 const loading = ref(true);
 const newName = ref('');
-const newRackId = ref('');
+// One picker for both: 'rack:3' or 'system:1', so a patch can be built from a
+// single rack or from every rack of a system at once.
+const newSource = ref('');
 const newDescription = ref('');
 
 async function load() {
   try {
-    [patches.value, racks.value] = await Promise.all([
+    [patches.value, racks.value, systems.value] = await Promise.all([
       api.get('/api/patches'),
       api.get('/api/racks'),
+      api.get('/api/systems'),
     ]);
-    // Preselect the only (or first) rack with modules in it.
-    if (!newRackId.value) {
-      const usable = racks.value.find((r) => r.module_count > 0);
-      if (usable) newRackId.value = usable.id;
+    // Preselect a system with modules if there is one — a patch over the whole
+    // instrument is the more useful default — else the first usable rack.
+    if (!newSource.value) {
+      const system = systems.value.find((s) => s.module_count > 0);
+      const rack = racks.value.find((r) => r.module_count > 0);
+      if (system) newSource.value = `system:${system.id}`;
+      else if (rack) newSource.value = `rack:${rack.id}`;
     }
   } catch (e) {
     error.value = e.message;
@@ -32,9 +39,10 @@ async function load() {
 
 async function create() {
   error.value = '';
+  const [kind, id] = String(newSource.value).split(':');
   try {
     await api.post('/api/patches', {
-      rack_id: Number(newRackId.value),
+      ...(kind === 'system' ? { system_id: Number(id) } : { rack_id: Number(id) }),
       name: newName.value,
       description: newDescription.value.trim() || undefined,
     });
@@ -123,9 +131,10 @@ onMounted(load);
 <template>
   <h1>Your patches</h1>
   <p class="muted">
-    A patch records the cables and control settings of one moment in a rack. It keeps a snapshot
-    of the rack's modules from when it was created, so it stays intact when modules later move or
-    disappear.
+    A patch records the cables and control settings of one moment in a rack — or in a whole
+    system, in which case every rack of it is snapshotted at once and a cable may run from any
+    jack on any of those racks to any jack on any other. The snapshot is taken when the patch is
+    created, so it stays intact when modules later move or disappear.
   </p>
   <p v-if="error" class="error" data-test="error">{{ error }}</p>
   <p v-if="loading" class="muted">Loading…</p>
@@ -135,7 +144,7 @@ onMounted(load);
         <thead>
           <tr>
             <th>Name</th>
-            <th>Rack</th>
+            <th>Rack or system</th>
             <th>Modules</th>
             <th>Cables</th>
             <th>Created</th>
@@ -148,7 +157,10 @@ onMounted(load);
               <RouterLink :to="`/patches/${patch.id}`">{{ patch.name }}</RouterLink>
               <span v-if="patch.description" class="muted"> — {{ patch.description }}</span>
             </td>
-            <td>{{ patch.rack_name }}</td>
+            <td>
+              {{ patch.system_name || patch.rack_name }}
+              <span v-if="patch.system_id" class="badge found" data-test="system-badge">system</span>
+            </td>
             <td>{{ patch.module_count }}</td>
             <td>{{ patch.cable_count }}</td>
             <td>{{ new Date(patch.created_at).toLocaleString() }}</td>
@@ -191,11 +203,23 @@ onMounted(load);
           placeholder="e.g. Krell patch"
         />
         <div>
-          <select id="new-patch-rack" v-model="newRackId" data-test="new-rack" aria-label="Rack">
-            <option value="" disabled>Select a rack…</option>
-            <option v-for="rack in racks" :key="rack.id" :value="rack.id">
-              {{ rack.name }} ({{ rack.module_count }} modules)
-            </option>
+          <select
+            id="new-patch-rack"
+            v-model="newSource"
+            data-test="new-rack"
+            aria-label="Rack or system"
+          >
+            <option value="" disabled>Select a rack or system…</option>
+            <optgroup v-if="systems.length" label="Systems (every rack in them)">
+              <option v-for="system in systems" :key="`s${system.id}`" :value="`system:${system.id}`">
+                {{ system.name }} ({{ system.rack_count }} racks, {{ system.module_count }} modules)
+              </option>
+            </optgroup>
+            <optgroup label="Racks">
+              <option v-for="rack in racks" :key="`r${rack.id}`" :value="`rack:${rack.id}`">
+                {{ rack.name }} ({{ rack.module_count }} modules)
+              </option>
+            </optgroup>
           </select>
         </div>
         <input
@@ -208,7 +232,7 @@ onMounted(load);
           <button
             type="submit"
             style="margin: 0"
-            :disabled="!newName.trim() || !newRackId"
+            :disabled="!newName.trim() || !newSource"
             data-test="create"
           >
             Create

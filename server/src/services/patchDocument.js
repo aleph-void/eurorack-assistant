@@ -52,7 +52,10 @@ export function patchTextDocument(patch) {
 
   const lines = [];
   lines.push(`# Patch: ${patch.name}`);
-  if (patch.rack_name) lines.push(`Rack: ${patch.rack_name}`);
+  // A patch built from a whole system spans several racks, and saying "Rack"
+  // of it would send an answer looking for one case.
+  if (patch.system_name) lines.push(`System: ${patch.system_name}`);
+  else if (patch.rack_name) lines.push(`Rack: ${patch.rack_name}`);
   if (patch.description) lines.push('', patch.description);
 
   // Only the instances the patch uses. A patch snapshots the whole rack, and
@@ -61,6 +64,10 @@ export function patchTextDocument(patch) {
   const used = engagedPatchModuleIds({ cables, settings, links: patch.links ?? [] });
 
   lines.push('', '## Modules in this patch');
+  // Across a system, which case a module stands in is part of what it is —
+  // "patch its output into the other rack" is a different instruction from
+  // one about two neighbours on the same rail.
+  const spansRacks = new Set(modules.map((m) => m.rack_name).filter(Boolean)).size > 1;
   const inUse = modules.filter((m) => used.has(m.id));
   if (inUse.length === 0) {
     lines.push('Nothing is patched yet.');
@@ -69,6 +76,7 @@ export function patchTextDocument(patch) {
       const notes = [];
       if (pm.external) notes.push('gear outside the rack');
       else if (!pm.live) notes.push('not in the rack this patch was made from');
+      if (spansRacks && pm.rack_name) notes.push(`in rack "${pm.rack_name}"`);
       if (pm.group_id && groupName.has(pm.group_id)) notes.push(`in the "${groupName.get(pm.group_id)}" group`);
       lines.push(`- ${name(pm.id)}${notes.length ? ` — ${notes.join(', ')}` : ''}`);
     }

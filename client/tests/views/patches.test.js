@@ -32,10 +32,14 @@ describe('PatchesView', () => {
     { id: 2, name: 'empty case', module_count: 0 },
   ];
 
-  function mockLists(patches) {
-    api.get.mockImplementation((path) =>
-      Promise.resolve(path === '/api/racks' ? racksResponse : patches)
-    );
+  const systemsResponse = [{ id: 7, name: 'studio', rack_count: 2, module_count: 9 }];
+
+  function mockLists(patches, { systems = [] } = {}) {
+    api.get.mockImplementation((path) => {
+      if (path === '/api/racks') return Promise.resolve(racksResponse);
+      if (path === '/api/systems') return Promise.resolve(systems);
+      return Promise.resolve(patches);
+    });
   }
 
   it('lists patches with their rack and counts', async () => {
@@ -85,8 +89,8 @@ describe('PatchesView', () => {
     const wrapper = mount(PatchesView, { global: testGlobal() });
     await flushPromises();
     expect(wrapper.find('[data-test="empty"]').exists()).toBe(true);
-    // The first rack that actually has modules is preselected.
-    expect(wrapper.find('[data-test="new-rack"]').element.value).toBe('1');
+    // With no systems, the first rack that actually has modules is preselected.
+    expect(wrapper.find('[data-test="new-rack"]').element.value).toBe('rack:1');
     await wrapper.find('[data-test="new-name"]').setValue('Krell');
     await wrapper.find('form').trigger('submit');
     await flushPromises();
@@ -95,6 +99,46 @@ describe('PatchesView', () => {
       name: 'Krell',
       description: undefined,
     });
+  });
+
+  it('creates a patch from a whole system, which is preselected over a rack', async () => {
+    mockLists([], { systems: systemsResponse });
+    api.post.mockResolvedValue({ id: 10 });
+    const wrapper = mount(PatchesView, { global: testGlobal() });
+    await flushPromises();
+    // A system spans every rack in it, so it is the more useful default.
+    expect(wrapper.find('[data-test="new-rack"]').element.value).toBe('system:7');
+    await wrapper.find('[data-test="new-name"]').setValue('Whole studio');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches', {
+      system_id: 7,
+      name: 'Whole studio',
+      description: undefined,
+    });
+  });
+
+  it('names a system patch by its system, with a badge', async () => {
+    mockLists(
+      [
+        {
+          id: 5,
+          name: 'Whole studio',
+          rack_name: 'studio',
+          system_id: 7,
+          system_name: 'studio',
+          module_count: 9,
+          cable_count: 4,
+          created_at: '2026-08-12T10:00:00Z',
+        },
+      ],
+      { systems: systemsResponse }
+    );
+    const wrapper = mount(PatchesView, { global: testGlobal() });
+    await flushPromises();
+    const row = wrapper.find('[data-test="patch-5"]');
+    expect(row.text()).toContain('studio');
+    expect(row.find('[data-test="system-badge"]').exists()).toBe(true);
   });
 
   it('deletes a patch after confirmation', async () => {

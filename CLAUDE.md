@@ -13,9 +13,12 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
     routes / switches / pairs), expanders, panel, manuals + shared `helpers.js`
   - `routes/patches/` — core, io (import/export), instances, groups, links,
     cables, settings + shared `helpers.js` (incl. the cable-legality rules)
+- `routes/systems.js` — systems: collections of racks patched together as
+  one instrument. A rack joins/leaves via `PUT /api/racks/:id/system`; the
+  system's own routes arrange the racks on a floor plan.
 - `server/src/services/` — domain logic, one concern per file. Serializer
   shapes for module hardware facts live in `services/moduleJson.js`; patch
-  ones in `services/patchDetail.js`.
+  ones in `services/patchDetail.js`; rack ones in `services/rackJson.js`.
 - `server/src/jobs/` — `worker.js` is the queue ENGINE (claiming, leases,
   retries, quota/budget pauses); `handlers.js` holds the per-job-type logic;
   `enqueue.js` the queueing helpers. All are re-exported from `worker.js`.
@@ -93,3 +96,13 @@ that account (or the whole queue for unowned work), budgets make queued work
 wait rather than fail. Patch tables snapshot module names with SOFT integer
 refs (no FK) so patches keep rendering after modules move, re-analyze, or
 disappear; live rows are joined opportunistically at read time.
+
+A **system** is a collection of racks patched together as one instrument
+(migration 028). Racks stay the unit of inventory and physical row layout;
+`racks.system_id` (+ `system_x`/`system_y`/`system_position`) says which
+racks stand together and where. A patch built from a system snapshots EVERY
+rack in it at once — that is what makes a cable from a jack in one rack to a
+jack in another legal, with no change to the cable rules — and each
+`patch_modules` row carries the `rack_id`/`rack_name` it came from, soft like
+everything else in a patch, so `rack_layout` matches each placement to an
+instance OF THE SAME RACK and the patch outlives the system.

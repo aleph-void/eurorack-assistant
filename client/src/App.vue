@@ -93,6 +93,7 @@ async function logout() {
     <p class="nav-heading">Your system</p>
     <RouterLink to="/modules">Modules</RouterLink>
     <RouterLink to="/racks">Racks</RouterLink>
+    <RouterLink to="/systems" data-test="nav-systems">Systems</RouterLink>
     <RouterLink to="/patches">Patches</RouterLink>
     <RouterLink to="/import">Import</RouterLink>
     <RouterLink to="/search" data-test="nav-search">Search manuals</RouterLink>

@@ -28,12 +28,24 @@ beforeEach(() => {
 
 describe('RacksView', () => {
   const racksResponse = [
-    { id: 1, name: 'main rack', module_count: 3 },
-    { id: 2, name: 'travel case', module_count: 1 },
+    { id: 1, name: 'main rack', module_count: 3, system_id: 7 },
+    { id: 2, name: 'travel case', module_count: 1, system_id: null },
+  ];
+  const systemsResponse = [
+    { id: 7, name: 'studio', rack_count: 1, module_count: 3 },
+    { id: 8, name: 'live rig', rack_count: 0, module_count: 0 },
   ];
 
+  // The view loads racks and systems together; a bare mockResolvedValue would
+  // hand the rack list back for both.
+  function mockLists(racks = racksResponse) {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/systems' ? systemsResponse : racks)
+    );
+  }
+
   it('lists racks with module counts and creates a new one', async () => {
-    api.get.mockResolvedValue(racksResponse);
+    mockLists();
     api.post.mockResolvedValue({ id: 3, name: 'studio', module_count: 0 });
     const wrapper = mount(RacksView, { global: testGlobal() });
     await flushPromises();
@@ -89,7 +101,7 @@ describe('RacksView', () => {
   });
 
   it('renames a rack', async () => {
-    api.get.mockResolvedValue(racksResponse);
+    mockLists();
     api.put.mockResolvedValue({ id: 2, name: 'live case', module_count: 1 });
     const wrapper = mount(RacksView, { global: testGlobal() });
     await flushPromises();
@@ -101,7 +113,7 @@ describe('RacksView', () => {
   });
 
   it('queues a rack export and tells the user the download is automatic', async () => {
-    api.get.mockResolvedValue(racksResponse);
+    mockLists();
     api.post.mockResolvedValue({ id: 12, type: 'export_rack', status: 'pending' });
     const wrapper = mount(RacksView, { global: testGlobal() });
     await flushPromises();
@@ -117,7 +129,7 @@ describe('RacksView', () => {
   });
 
   it('deletes a rack after confirmation and surfaces errors', async () => {
-    api.get.mockResolvedValue(racksResponse);
+    mockLists();
     api.delete.mockResolvedValue({ ok: true });
     vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     const wrapper = mount(RacksView, { global: testGlobal() });
@@ -132,5 +144,54 @@ describe('RacksView', () => {
     await flushPromises();
     expect(wrapper.find('[data-test="error"]').text()).toContain('nope');
     vi.restoreAllMocks();
+  });
+});
+
+describe('RacksView systems', () => {
+  const racksResponse = [
+    { id: 1, name: 'main rack', module_count: 3, system_id: 7 },
+    { id: 2, name: 'travel case', module_count: 1, system_id: null },
+  ];
+  const systemsResponse = [
+    { id: 7, name: 'studio', rack_count: 1, module_count: 3 },
+    { id: 8, name: 'live rig', rack_count: 0, module_count: 0 },
+  ];
+
+  function mount_() {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/systems' ? systemsResponse : racksResponse)
+    );
+    return mount(RacksView, { global: testGlobal() });
+  }
+
+  it('shows which system each rack is in', async () => {
+    const wrapper = mount_();
+    await flushPromises();
+    expect(wrapper.find('[data-test="system-1"]').element.value).toBe('7');
+    // A rack in no system shows the blank option.
+    expect(wrapper.find('[data-test="system-2"]').element.value).toBe('');
+  });
+
+  it('puts a rack into a system and takes it out again', async () => {
+    api.put.mockResolvedValue({ id: 2, name: 'travel case', system_id: 8 });
+    const wrapper = mount_();
+    await flushPromises();
+
+    await wrapper.find('[data-test="system-2"]').setValue('8');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/racks/2/system', { system_id: 8 });
+
+    await wrapper.find('[data-test="system-1"]').setValue('');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/system', { system_id: null });
+  });
+
+  it('reports a refused assignment', async () => {
+    api.put.mockRejectedValue(new Error('System not found'));
+    const wrapper = mount_();
+    await flushPromises();
+    await wrapper.find('[data-test="system-2"]').setValue('8');
+    await flushPromises();
+    expect(wrapper.find('[data-test="error"]').text()).toContain('System not found');
   });
 });
