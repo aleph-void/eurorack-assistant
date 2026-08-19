@@ -298,3 +298,104 @@ export function matchVideosToModules(videos, modules) {
   }
   return matches;
 }
+
+// ---------------------------------------------------------------------------
+// Module tutorial search — the module-detail counterpart of the channel scan:
+// instead of matching one channel's uploads against a rack, YouTube is
+// searched for videos about one module. Same two backends: search.list when
+// an API key is configured, yt-dlp's ytsearch pseudo-playlist otherwise.
+
+// How many results one search request returns, and how deep 'load more' can
+// page in total. YouTube relevance decays fast; nobody scrolls past 200.
+export const SEARCH_PAGE_SIZE = 25;
+export const MAX_SEARCH_RESULTS = 200;
+
+// The query for a module's tutorials, built from the module's own fields —
+// this is the only string that reaches the API's q= or yt-dlp's ytsearch:,
+// so control characters are stripped and it is flattened to one bounded line.
+export function moduleSearchQuery(module) {
+  return [module.manufacturer, module.name, 'eurorack']
+    .map((part) => String(part ?? '').replace(/\p{C}+/gu, ' '))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120)
+    .trim();
+}
+
+// Unlike playlistItems, search.list HTML-escapes snippet titles; these are
+// the entities YouTube actually emits.
+const SEARCH_ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" };
+const decodeSearchTitle = (s) =>
+  String(s ?? '').replace(/&(?:amp|lt|gt|quot|#39);/g, (m) => SEARCH_ENTITIES[m]);
+
+// One relevance-ordered page of YouTube search results:
+// { videos, nextPageToken } — videos shaped like listChannelUploads entries
+// plus the uploader's channel title.
+export async function searchVideos(query, { apiKey, fetchImpl = fetch, pageToken = '' } = {}) {
+  const params = {
+    part: 'snippet',
+    type: 'video',
+    q: query,
+    maxResults: String(SEARCH_PAGE_SIZE),
+  };
+  if (pageToken) params.pageToken = pageToken;
+  const data = await ytApi('search', params, { apiKey, fetchImpl });
+  const videos = [];
+  for (const item of data.items ?? []) {
+    const videoId = item.id?.videoId;
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId ?? '')) continue;
+    const snippet = item.snippet ?? {};
+    videos.push({
+      video_id: videoId,
+      title: decodeSearchTitle(snippet.title),
+      description: String(snippet.description ?? ''),
+      published_at: snippet.publishedAt ?? null,
+      channel: String(snippet.channelTitle ?? ''),
+    });
+  }
+  return { videos, nextPageToken: data.nextPageToken ?? null };
+}
+
+// The keyless search: yt-dlp's ytsearch pseudo-playlist, one SEARCH_PAGE_SIZE
+// window starting at `offset`. Flat search entries carry titles and uploader
+// names but no descriptions or upload dates — the same trade the keyless
+// channel scan makes. Returns { videos, more }; `more` is a guess (a full
+// window probably has results beyond it).
+export async function searchViaYtDlp(query, { run = runCommand, offset = 0 } = {}) {
+  const end = Math.min(offset + SEARCH_PAGE_SIZE, MAX_SEARCH_RESULTS);
+  let stdout;
+  try {
+    stdout = await run(
+      'yt-dlp',
+      [
+        '--flat-playlist',
+        '--dump-single-json',
+        '--no-warnings',
+        '--playlist-items', `${offset + 1}:${end}`,
+        `ytsearch${end}:${query}`,
+      ],
+      { timeoutMs: 5 * 60 * 1000 }
+    );
+  } catch (e) {
+    throw new YoutubeError(`yt-dlp could not search YouTube: ${e.message}`);
+  }
+  let data;
+  try {
+    data = JSON.parse(String(stdout).trim());
+  } catch {
+    throw new YoutubeError('yt-dlp returned unreadable search results');
+  }
+  const videos = [];
+  for (const entry of Array.isArray(data.entries) ? data.entries : []) {
+    if (!/^[A-Za-z0-9_-]{11}$/.test(entry?.id ?? '')) continue;
+    videos.push({
+      video_id: entry.id,
+      title: String(entry.title ?? ''),
+      description: String(entry.description ?? ''),
+      published_at: null,
+      channel: String(entry.channel ?? entry.uploader ?? ''),
+    });
+  }
+  return { videos, more: videos.length >= end - offset && end < MAX_SEARCH_RESULTS };
+}

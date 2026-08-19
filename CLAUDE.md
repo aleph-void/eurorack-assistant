@@ -85,7 +85,8 @@ work files are deleted); a rack-scoped channel scan (`services/youtube.js`)
 matches a channel's uploads to the rack's module names and imports the
 picked ones through that same per-video pipeline — via the YouTube Data API
 when app_config `youtube_api_key` is set, else a titles-only yt-dlp flat
-listing. Progress
+listing; a module-scoped tutorial search on the module detail page does the
+like with a YouTube search (search.list, else yt-dlp ytsearch). Progress
 streams over a WebSocket at `/api/ws` (per-user event bus). Every job runs on
 the job owner's own LLM account (`user_llm_accounts`); quota exhaustion pauses
 that account (or the whole queue for unowned work), budgets make queued work

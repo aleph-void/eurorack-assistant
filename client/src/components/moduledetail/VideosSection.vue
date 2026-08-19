@@ -4,6 +4,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { api } from '../../api.js';
 import { dialog } from '../../dialog.js';
+import VideoSearchPanel from './VideoSearchPanel.vue';
 
 const props = defineProps({
   module: { type: Object, required: true },
@@ -172,6 +173,7 @@ const working = (status) => ['pending', 'downloading', 'downloaded', 'analyzing'
         </div>
       </div>
       <p v-if="videoError" class="error" data-test="video-add-error">{{ videoError }}</p>
+      <VideoSearchPanel :module-id="moduleId" @imported="emit('reload')" />
     </div>
   </details>
 </template>

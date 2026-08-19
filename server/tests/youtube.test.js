@@ -2,14 +2,19 @@ import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { createTestApp, insertModule } from './helpers.js';
 import {
+  MAX_SEARCH_RESULTS,
+  SEARCH_PAGE_SIZE,
   YoutubeError,
   channelRefUrl,
   channelUrl,
   listChannelUploads,
   listChannelViaYtDlp,
   matchVideosToModules,
+  moduleSearchQuery,
   parseChannelRef,
   resolveChannel,
+  searchVideos,
+  searchViaYtDlp,
 } from '../src/services/youtube.js';
 
 const CHANNEL_ID = 'UC' + 'a'.repeat(22);
@@ -572,5 +577,324 @@ describe('youtube_api_key config', () => {
       .send({ youtube_api_key: 'two words' });
     expect(bad.status).toBe(400);
     expect(bad.body.error).toMatch(/youtube_api_key/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Module tutorial search: the service pair and the /api/modules routes.
+// ---------------------------------------------------------------------------
+
+// A scripted stand-in for search.list: pages chained by pageToken, like the
+// playlistItems stub above.
+function youtubeSearchFetch({ pages = [[]] } = {}) {
+  const calls = [];
+  const fetchImpl = async (rawUrl) => {
+    const url = new URL(rawUrl);
+    calls.push(url);
+    if (url.searchParams.get('key') !== KEY) return jsonResponse({ error: { message: 'bad key' } }, 400);
+    if (!url.pathname.endsWith('/search')) return jsonResponse({ error: { message: 'unknown endpoint' } }, 404);
+    const page = Number(url.searchParams.get('pageToken')?.replace('page-', '') ?? 0);
+    const body = { items: pages[page] ?? [] };
+    if (page + 1 < pages.length) body.nextPageToken = `page-${page + 1}`;
+    return jsonResponse(body);
+  };
+  fetchImpl.calls = calls;
+  return fetchImpl;
+}
+
+const foundVideo = (
+  videoId,
+  title,
+  { description = '', publishedAt = '2026-01-01T00:00:00Z', channelTitle = 'Synth Channel' } = {}
+) => ({
+  id: { kind: 'youtube#video', videoId },
+  snippet: { title, description, publishedAt, channelTitle },
+});
+
+describe('moduleSearchQuery', () => {
+  it('builds one bounded printable line from the module fields', () => {
+    expect(moduleSearchQuery({ manufacturer: 'Make Noise', name: 'Maths' })).toBe(
+      'Make Noise Maths eurorack'
+    );
+    expect(moduleSearchQuery({ manufacturer: ' Mutable\nInstruments ', name: 'Plaits' })).toBe(
+      'Mutable Instruments Plaits eurorack'
+    );
+    expect(moduleSearchQuery({ manufacturer: null, name: 'M'.repeat(300) }).length).toBeLessThanOrEqual(120);
+  });
+});
+
+describe('searchVideos', () => {
+  it('asks search.list for one page of videos and decodes escaped titles', async () => {
+    const fetchImpl = youtubeSearchFetch({
+      pages: [
+        [
+          foundVideo('AAAAAAAAAA1', 'Maths &amp; friends'),
+          // A channel result has no videoId and is skipped.
+          { id: { kind: 'youtube#channel', channelId: CHANNEL_ID }, snippet: { title: 'not a video' } },
+        ],
+        [foundVideo('AAAAAAAAAA2', 'Part 2')],
+      ],
+    });
+    const page1 = await searchVideos('Make Noise Maths eurorack', { apiKey: KEY, fetchImpl });
+    expect(page1.videos).toEqual([
+      {
+        video_id: 'AAAAAAAAAA1',
+        title: 'Maths & friends',
+        description: '',
+        published_at: '2026-01-01T00:00:00Z',
+        channel: 'Synth Channel',
+      },
+    ]);
+    expect(page1.nextPageToken).toBe('page-1');
+    const call = fetchImpl.calls[0];
+    expect(call.searchParams.get('q')).toBe('Make Noise Maths eurorack');
+    expect(call.searchParams.get('type')).toBe('video');
+    expect(call.searchParams.get('pageToken')).toBeNull();
+
+    const page2 = await searchVideos('Make Noise Maths eurorack', {
+      apiKey: KEY,
+      fetchImpl,
+      pageToken: 'page-1',
+    });
+    expect(page2.videos.map((v) => v.video_id)).toEqual(['AAAAAAAAAA2']);
+    expect(page2.nextPageToken).toBeNull();
+  });
+});
+
+const searchEntries = (count) =>
+  Array.from({ length: count }, (_, i) => ({
+    id: `AAAAAAAAA${String(i).padStart(2, '0')}`,
+    title: `Result ${i}`,
+    channel: 'Synth Channel',
+  }));
+
+describe('searchViaYtDlp (keyless fallback)', () => {
+  it('runs one ytsearch window and reports whether more may follow', async () => {
+    const run = ytDlpRun({ entries: searchEntries(SEARCH_PAGE_SIZE) });
+    const page = await searchViaYtDlp('Make Noise Maths eurorack', { run });
+    expect(page.videos).toHaveLength(SEARCH_PAGE_SIZE);
+    expect(page.videos[0]).toEqual({
+      video_id: 'AAAAAAAAA00',
+      title: 'Result 0',
+      description: '',
+      published_at: null,
+      channel: 'Synth Channel',
+    });
+    expect(page.more).toBe(true);
+    const args = run.calls[0].args;
+    expect(args[args.length - 1]).toBe(`ytsearch${SEARCH_PAGE_SIZE}:Make Noise Maths eurorack`);
+    expect(args.join(' ')).toContain(`--playlist-items 1:${SEARCH_PAGE_SIZE}`);
+
+    // The next window extends the search and slices past the first page; a
+    // short answer means the search ran dry.
+    const more = await searchViaYtDlp('Make Noise Maths eurorack', {
+      run: ytDlpRun({ entries: searchEntries(3) }),
+      offset: SEARCH_PAGE_SIZE,
+    });
+    expect(more.videos).toHaveLength(3);
+    expect(more.more).toBe(false);
+  });
+
+  it('stops paging at the results cap and wraps yt-dlp failures', async () => {
+    const run = ytDlpRun({ entries: searchEntries(SEARCH_PAGE_SIZE) });
+    const last = await searchViaYtDlp('q', { run, offset: MAX_SEARCH_RESULTS - SEARCH_PAGE_SIZE });
+    expect(last.videos).toHaveLength(SEARCH_PAGE_SIZE);
+    expect(last.more).toBe(false);
+    expect(run.calls[0].args.join(' ')).toContain(
+      `--playlist-items ${MAX_SEARCH_RESULTS - SEARCH_PAGE_SIZE + 1}:${MAX_SEARCH_RESULTS}`
+    );
+
+    await expect(searchViaYtDlp('q', { run: ytDlpRun({ fail: 'boom' }) })).rejects.toThrow(
+      /could not search YouTube/
+    );
+  });
+});
+
+describe('POST /api/modules/:id/videos/search', () => {
+  it('searches with the API when a key is configured and reports attached status', async () => {
+    const fetchImpl = youtubeSearchFetch({
+      pages: [
+        [foundVideo('AAAAAAAAAA1', 'Maths tutorial'), foundVideo('AAAAAAAAAA2', 'Maths jam')],
+        [foundVideo('AAAAAAAAAA3', 'More Maths')],
+      ],
+    });
+    const { app, db, aliceCookie, alice, maths } = await scanFixture({ fetchImpl });
+    await db.models.ModuleVideo.create({
+      module_id: maths.id,
+      user_id: alice.id,
+      video_id: 'AAAAAAAAAA1',
+      url: 'https://www.youtube.com/watch?v=AAAAAAAAAA1',
+      status: 'complete',
+    });
+
+    const res = await request(app)
+      .post(`/api/modules/${maths.id}/videos/search`)
+      .set('Cookie', aliceCookie)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body.query).toBe('Make Noise Maths eurorack');
+    expect(res.body.source).toBe('api');
+    expect(res.body.next_page).toBe('page-1');
+    expect(res.body.videos).toEqual([
+      {
+        video_id: 'AAAAAAAAAA1',
+        url: 'https://www.youtube.com/watch?v=AAAAAAAAAA1',
+        title: 'Maths tutorial',
+        channel: 'Synth Channel',
+        published_at: '2026-01-01T00:00:00Z',
+        already_attached: true,
+        attached_status: 'complete',
+      },
+      {
+        video_id: 'AAAAAAAAAA2',
+        url: 'https://www.youtube.com/watch?v=AAAAAAAAAA2',
+        title: 'Maths jam',
+        channel: 'Synth Channel',
+        published_at: '2026-01-01T00:00:00Z',
+        already_attached: false,
+        attached_status: null,
+      },
+    ]);
+
+    // The next page goes through the token the first answer handed back.
+    const more = await request(app)
+      .post(`/api/modules/${maths.id}/videos/search`)
+      .set('Cookie', aliceCookie)
+      .send({ page: res.body.next_page });
+    expect(more.status).toBe(200);
+    expect(more.body.videos.map((v) => v.video_id)).toEqual(['AAAAAAAAAA3']);
+    expect(more.body.next_page).toBeNull();
+  });
+
+  it('falls back to yt-dlp without a key and pages by offset', async () => {
+    const runImpl = ytDlpRun({ entries: searchEntries(SEARCH_PAGE_SIZE) });
+    const { app, aliceCookie, maths } = await scanFixture({ withKey: false, runImpl });
+    const res = await request(app)
+      .post(`/api/modules/${maths.id}/videos/search`)
+      .set('Cookie', aliceCookie)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body.source).toBe('yt-dlp');
+    expect(res.body.next_page).toBe(String(SEARCH_PAGE_SIZE));
+    expect(res.body.videos).toHaveLength(SEARCH_PAGE_SIZE);
+    expect(res.body.videos[0]).toMatchObject({
+      video_id: 'AAAAAAAAA00',
+      channel: 'Synth Channel',
+      published_at: null,
+    });
+    expect(runImpl.calls).toHaveLength(1);
+
+    const more = await request(app)
+      .post(`/api/modules/${maths.id}/videos/search`)
+      .set('Cookie', aliceCookie)
+      .send({ page: res.body.next_page });
+    expect(more.status).toBe(200);
+    expect(runImpl.calls[1].args.join(' ')).toContain(
+      `--playlist-items ${SEARCH_PAGE_SIZE + 1}:${SEARCH_PAGE_SIZE * 2}`
+    );
+
+    // An API-style token is not a keyless page.
+    const bad = await request(app)
+      .post(`/api/modules/${maths.id}/videos/search`)
+      .set('Cookie', aliceCookie)
+      .send({ page: 'page-1' });
+    expect(bad.status).toBe(400);
+  });
+
+  it('is scoped to your own modules and rejects malformed page tokens', async () => {
+    const { app, aliceCookie, adminCookie, maths } = await scanFixture({
+      fetchImpl: youtubeSearchFetch(),
+    });
+    const foreign = await request(app)
+      .post(`/api/modules/${maths.id}/videos/search`)
+      .set('Cookie', adminCookie)
+      .send({});
+    expect(foreign.status).toBe(404);
+
+    const bad = await request(app)
+      .post(`/api/modules/${maths.id}/videos/search`)
+      .set('Cookie', aliceCookie)
+      .send({ page: 'not a token!' });
+    expect(bad.status).toBe(400);
+  });
+});
+
+describe('POST /api/modules/:id/videos/import', () => {
+  it('attaches picked videos, skips attached ones and re-queues failed ones', async () => {
+    const { app, db, aliceCookie, alice, maths } = await scanFixture({});
+    await db.models.ModuleVideo.create({
+      module_id: maths.id,
+      user_id: alice.id,
+      video_id: 'AAAAAAAAAA1',
+      url: 'https://www.youtube.com/watch?v=AAAAAAAAAA1',
+      status: 'complete',
+    });
+    const failed = await db.models.ModuleVideo.create({
+      module_id: maths.id,
+      user_id: alice.id,
+      video_id: 'AAAAAAAAAA2',
+      url: 'https://www.youtube.com/watch?v=AAAAAAAAAA2',
+      status: 'failed',
+      error: 'yt-dlp exploded',
+    });
+
+    const res = await request(app)
+      .post(`/api/modules/${maths.id}/videos/import`)
+      .set('Cookie', aliceCookie)
+      .send({
+        videos: [
+          { video_id: 'AAAAAAAAAA1' },
+          { video_id: 'AAAAAAAAAA2' },
+          { video_id: 'AAAAAAAAAA3', title: 'Maths tutorial part 3' },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.queued).toBe(2);
+    expect(res.body.skipped).toBe(1);
+    expect(res.body.videos.map((v) => [v.video_id, v.status])).toEqual([
+      ['AAAAAAAAAA1', 'complete'],
+      ['AAAAAAAAAA2', 'pending'],
+      ['AAAAAAAAAA3', 'pending'],
+    ]);
+    const fresh = res.body.videos[2];
+    expect(fresh.module_id).toBe(maths.id);
+    expect(fresh.title).toBe('Maths tutorial part 3');
+    expect(fresh.url).toBe('https://www.youtube.com/watch?v=AAAAAAAAAA3');
+    await failed.reload();
+    expect(failed.status).toBe('pending');
+    expect(failed.error).toBeNull();
+
+    const jobs = await db.models.Job.findAll({ where: { type: 'download_video' } });
+    expect(jobs).toHaveLength(2);
+    expect(jobs.map((j) => j.user_id)).toEqual([alice.id, alice.id]);
+    // No duplicate rows were created for the re-queued failure.
+    expect(await db.models.ModuleVideo.count()).toBe(3);
+  });
+
+  it('validates the selection list and module ownership', async () => {
+    const { app, db, aliceCookie, adminCookie, maths } = await scanFixture({});
+
+    const empty = await request(app)
+      .post(`/api/modules/${maths.id}/videos/import`)
+      .set('Cookie', aliceCookie)
+      .send({ videos: [] });
+    expect(empty.status).toBe(400);
+
+    // A malformed video id rejects the whole request — nothing was attached
+    // or queued.
+    const badId = await request(app)
+      .post(`/api/modules/${maths.id}/videos/import`)
+      .set('Cookie', aliceCookie)
+      .send({ videos: [{ video_id: 'AAAAAAAAAA1' }, { video_id: 'nope' }] });
+    expect(badId.status).toBe(400);
+    expect(await db.models.ModuleVideo.count()).toBe(0);
+    expect(await db.models.Job.count({ where: { type: 'download_video' } })).toBe(0);
+
+    // Another user cannot import onto a module that is not in their racks.
+    const foreign = await request(app)
+      .post(`/api/modules/${maths.id}/videos/import`)
+      .set('Cookie', adminCookie)
+      .send({ videos: [{ video_id: 'AAAAAAAAAA1' }] });
+    expect(foreign.status).toBe(404);
   });
 });

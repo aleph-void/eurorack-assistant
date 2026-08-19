@@ -82,7 +82,7 @@ async function scannedWrapper() {
 }
 
 describe('ChannelScanPanel', () => {
-  it('scans a channel and lists the matches grouped by module, importables pre-selected', async () => {
+  it('scans a channel and lists the matches grouped by module, nothing pre-selected', async () => {
     const wrapper = await scannedWrapper();
     expect(api.post).toHaveBeenCalledWith('/api/racks/7/videos/channel-scan', {
       url: 'https://www.youtube.com/@synthchan',
@@ -93,27 +93,22 @@ describe('ChannelScanPanel', () => {
     const maths = wrapper.find('[data-test="scan-module-1"]');
     expect(maths.text()).toContain('Make Noise Maths');
     expect(maths.text()).toContain('matched in description');
-    // The two never-imported videos start ticked; the analyzed one is
-    // disabled with its status, and the earlier failure is offered again
-    // (unticked) with its own badge.
-    expect(wrapper.find('[data-test="pick-1-AAAAAAAAAA1"]').element.checked).toBe(true);
-    expect(wrapper.find('[data-test="pick-2-AAAAAAAAAA3"]').element.checked).toBe(true);
+    // Nothing starts ticked — importing is always a deliberate choice. The
+    // analyzed video is disabled with its status, and the earlier failure is
+    // offered again with its own badge.
+    expect(wrapper.find('[data-test="pick-1-AAAAAAAAAA1"]').element.checked).toBe(false);
+    expect(wrapper.find('[data-test="pick-2-AAAAAAAAAA3"]').element.checked).toBe(false);
     const attached = wrapper.find('[data-test="pick-1-AAAAAAAAAA2"]');
     expect(attached.element.disabled).toBe(true);
     expect(wrapper.find('[data-test="attached-1-AAAAAAAAAA2"]').text()).toBe('analyzed');
     const failed = wrapper.find('[data-test="pick-1-AAAAAAAAAA4"]');
     expect(failed.element.disabled).toBe(false);
     expect(failed.element.checked).toBe(false);
-    expect(wrapper.find('[data-test="attached-1-AAAAAAAAAA4"]').text()).toBe('failed last time');
-    expect(wrapper.find('[data-test="import-selected"]').text()).toContain('Import 2 selected');
+    expect(wrapper.find('[data-test="import-selected"]').element.disabled).toBe(true);
   });
 
-  it('select none / select all and single toggles adjust the import set', async () => {
+  it('select all / select none and single toggles adjust the import set', async () => {
     const wrapper = await scannedWrapper();
-    await wrapper.find('[data-test="select-none"]').trigger('click');
-    expect(wrapper.find('[data-test="pick-1-AAAAAAAAAA1"]').element.checked).toBe(false);
-    expect(wrapper.find('[data-test="import-selected"]').element.disabled).toBe(true);
-
     await wrapper.find('[data-test="pick-2-AAAAAAAAAA3"]').setValue(true);
     expect(wrapper.find('[data-test="import-selected"]').text()).toContain('Import 1 selected');
 
@@ -121,11 +116,15 @@ describe('ChannelScanPanel', () => {
     await wrapper.find('[data-test="select-all"]').trigger('click');
     expect(wrapper.find('[data-test="import-selected"]').text()).toContain('Import 3 selected');
     expect(wrapper.find('[data-test="pick-1-AAAAAAAAAA4"]').element.checked).toBe(true);
+
+    await wrapper.find('[data-test="select-none"]').trigger('click');
+    expect(wrapper.find('[data-test="pick-1-AAAAAAAAAA4"]').element.checked).toBe(false);
+    expect(wrapper.find('[data-test="import-selected"]').element.disabled).toBe(true);
   });
 
   it('imports the selection and marks the queued videos as attached', async () => {
     const wrapper = await scannedWrapper();
-    await wrapper.find('[data-test="pick-1-AAAAAAAAAA1"]').setValue(false);
+    await wrapper.find('[data-test="pick-2-AAAAAAAAAA3"]').setValue(true);
     api.post.mockResolvedValueOnce({ queued: 1, skipped: 0, videos: [] });
     await wrapper.find('[data-test="import-selected"]').trigger('click');
     await flushPromises();

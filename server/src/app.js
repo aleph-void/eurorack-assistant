@@ -45,9 +45,9 @@ export function createApp(
 
   app.use('/api/auth', authRoutes(db));
   app.use('/api/users', userRoutes(db));
-  app.use('/api/modules', moduleRoutes(db, { manualsDir, panelsDir, videosDir, fetchImpl }));
-  // runImpl is the test seam for the keyless channel scan's yt-dlp listing,
-  // like fetchImpl is for outbound HTTP.
+  // runImpl is the test seam for the keyless yt-dlp listings (module
+  // tutorial search, channel scan), like fetchImpl is for outbound HTTP.
+  app.use('/api/modules', moduleRoutes(db, { manualsDir, panelsDir, videosDir, fetchImpl, runImpl }));
   app.use('/api/racks', rackRoutes(db, { fetchImpl, runImpl }));
   app.use('/api/manuals', manualRoutes(db, { manualsDir }));
   app.use('/api/panels', panelRoutes(db, { panelsDir }));

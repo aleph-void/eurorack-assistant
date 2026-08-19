@@ -19,6 +19,7 @@ export function moduleRoutes(
     panelsDir = process.env.PANELS_DIR || '/data/panels',
     videosDir = process.env.VIDEOS_DIR || '/data/videos',
     fetchImpl = fetch,
+    runImpl,
   } = {}
 ) {
   const router = Router();
@@ -30,6 +31,6 @@ export function moduleRoutes(
   router.use(moduleComponentRoutes(db));
   router.use(modulePanelRoutes(db, { panelsDir, fetchImpl }));
   router.use(moduleManualRoutes(db, { manualsDir }));
-  router.use(moduleVideoRoutes(db, { videosDir }));
+  router.use(moduleVideoRoutes(db, { videosDir, fetchImpl, runImpl }));
   return router;
 }
