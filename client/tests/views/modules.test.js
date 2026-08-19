@@ -226,14 +226,79 @@ describe('ModulesView', () => {
     mockLists([
       { id: 1, manufacturer: 'ALM', name: 'Pam', quantity: 1, racks: [], manual_status: 'pending', analysis_status: 'pending' },
     ]);
-    api.post.mockResolvedValue({ ok: true });
+    api.post.mockResolvedValue({ ok: true, moved: 1, left: 0 });
     const wrapper = mount(ModulesView, { global: testGlobal() });
     await flushPromises();
     await wrapper.find('[data-test="rack-select"]').setValue(1);
     await flushPromises();
+    // Only one copy is held, so there is nothing to split and no count to ask
+    // for: the whole holding goes.
+    expect(wrapper.find('[data-test="move-qty-1"]').exists()).toBe(false);
     await wrapper.find('[data-test="move-1"]').setValue(2);
     await flushPromises();
-    expect(api.post).toHaveBeenCalledWith('/api/racks/1/modules/1/move', { to_rack_id: 2 });
+    expect(api.post).toHaveBeenCalledWith('/api/racks/1/modules/1/move', {
+      to_rack_id: 2,
+      quantity: 1,
+    });
+  });
+
+  // Two of the same module can be split between racks: say how many go, and
+  // the rest stay where they are.
+  it('moves only some of the copies when a count is typed', async () => {
+    mockLists([
+      {
+        id: 1,
+        manufacturer: 'ALM',
+        name: 'Pam',
+        quantity: 3,
+        racks: [{ id: 1, name: 'main rack', quantity: 3 }],
+        manual_status: 'pending',
+        analysis_status: 'pending',
+      },
+    ]);
+    api.post.mockResolvedValue({ ok: true, moved: 2, left: 1 });
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="rack-select"]').setValue(1);
+    await flushPromises();
+    const qty = wrapper.find('[data-test="move-qty-1"]');
+    expect(qty.attributes('max')).toBe('3');
+    expect(qty.attributes('placeholder')).toBe('all 3');
+    await qty.setValue('2');
+    await wrapper.find('[data-test="move-1"]').setValue(2);
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/racks/1/modules/1/move', {
+      to_rack_id: 2,
+      quantity: 2,
+    });
+    expect(wrapper.find('[data-test="move-notice"]').text()).toContain(
+      "Moved 2 of 3 ALM Pam to 'travel case', leaving 1 here."
+    );
+    // The count is cleared, so the next move does not silently reuse it.
+    expect(wrapper.find('[data-test="move-qty-1"]').element.value).toBe('');
+  });
+
+  it('refuses a count that is not a whole number of the copies held', async () => {
+    mockLists([
+      {
+        id: 1,
+        manufacturer: 'ALM',
+        name: 'Pam',
+        quantity: 2,
+        racks: [{ id: 1, name: 'main rack', quantity: 2 }],
+        manual_status: 'pending',
+        analysis_status: 'pending',
+      },
+    ]);
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="rack-select"]').setValue(1);
+    await flushPromises();
+    await wrapper.find('[data-test="move-qty-1"]').setValue('5');
+    await wrapper.find('[data-test="move-1"]').setValue(2);
+    await flushPromises();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(wrapper.find('p.error').text()).toContain('between 1 and 2');
   });
 
   it('deletes a module after confirmation, scoped to the selected rack', async () => {

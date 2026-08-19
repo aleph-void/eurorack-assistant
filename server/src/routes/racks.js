@@ -389,37 +389,54 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
     res.json({ queued, skipped, videos });
   }));
 
-  // Move one module's whole inventory out of `from` and into `to`, merging
-  // with what the target rack already holds. The source rack's physical
-  // placements of it go with it: rack_modules is the inventory a layout draws
-  // from, so a module the rack no longer holds cannot stay standing in its
-  // rows.
-  async function moveModule(from, to, moduleId, transaction) {
+  // Drop a rack's physical placements of a module down to `keep` of them,
+  // highest positions first. rack_modules is the inventory a layout draws
+  // from, so a rack can never stand more copies in its rows than it holds:
+  // both shrinking the quantity and moving copies out come through here.
+  async function trimPlacements(rackId, moduleId, keep, transaction) {
+    const rows = await RackRow.findAll({ where: { rack_id: rackId }, transaction });
+    if (rows.length === 0) return;
+    const placements = await RackRowModule.findAll({
+      where: { row_id: rows.map((row) => row.id), module_id: moduleId },
+      order: [
+        ['position', 'DESC'],
+        ['id', 'DESC'],
+      ],
+      transaction,
+    });
+    const excess = placements.slice(0, Math.max(0, placements.length - keep));
+    for (const placement of excess) await placement.destroy({ transaction });
+  }
+
+  // Move copies of a module out of `from` and into `to`, merging with what
+  // the target rack already holds. `count` is how many copies go; null moves
+  // the lot. The copies that leave take the source rack's physical
+  // placements of them with them, so what stands in its rows never exceeds
+  // what it still holds.
+  async function moveModule(from, to, moduleId, transaction, count = null) {
     const source = await RackModule.findOne({
       where: { rack_id: from.id, module_id: moduleId },
       transaction,
     });
     if (!source) return false;
+    const moving = count === null ? source.quantity : Math.min(count, source.quantity);
+    if (moving < 1) return false;
     const target = await RackModule.findOne({
       where: { rack_id: to.id, module_id: moduleId },
       transaction,
     });
     if (target) {
-      await target.update({ quantity: target.quantity + source.quantity }, { transaction });
+      await target.update({ quantity: target.quantity + moving }, { transaction });
     } else {
       await RackModule.create(
-        { rack_id: to.id, module_id: moduleId, quantity: source.quantity },
+        { rack_id: to.id, module_id: moduleId, quantity: moving },
         { transaction }
       );
     }
-    await source.destroy({ transaction });
-    const rows = await RackRow.findAll({ where: { rack_id: from.id }, transaction });
-    if (rows.length > 0) {
-      await RackRowModule.destroy({
-        where: { row_id: rows.map((row) => row.id), module_id: moduleId },
-        transaction,
-      });
-    }
+    const left = source.quantity - moving;
+    if (left > 0) await source.update({ quantity: left }, { transaction });
+    else await source.destroy({ transaction });
+    await trimPlacements(from.id, moduleId, left, transaction);
     return true;
   }
 
@@ -444,19 +461,33 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
 
   // Move a module from this rack to another of the user's racks. If the
   // target rack already has the module, the quantities merge.
-  // Body: { to_rack_id }
+  // Body: { to_rack_id, quantity? } — quantity moves only some of the copies
+  // this rack holds and leaves the rest behind, so two of the same module can
+  // be split between racks; omitted, the whole holding moves.
   router.post('/:id/modules/:moduleId/move', asyncHandler(async (req, res) => {
     const ends = await moveEnds(req, res, Number(req.body?.to_rack_id));
     if (!ends) return;
     const moduleId = Number(req.params.moduleId);
-    if (!(await RackModule.findOne({ where: { rack_id: ends.from.id, module_id: moduleId } }))) {
-      return res.status(404).json({ error: 'Module not found in this rack' });
+    const source = await RackModule.findOne({
+      where: { rack_id: ends.from.id, module_id: moduleId },
+    });
+    if (!source) return res.status(404).json({ error: 'Module not found in this rack' });
+    const asked = req.body?.quantity;
+    let count = null;
+    if (asked !== undefined && asked !== null && asked !== '') {
+      count = Number(asked);
+      if (!Number.isInteger(count) || count < 1 || count > source.quantity) {
+        return res.status(400).json({
+          error: `quantity must be a whole number between 1 and ${source.quantity}`,
+        });
+      }
     }
     // Remove-from-source and add-to-target commit or roll back together.
     await db.sequelize.transaction((transaction) =>
-      moveModule(ends.from, ends.to, moduleId, transaction)
+      moveModule(ends.from, ends.to, moduleId, transaction, count)
     );
-    res.json({ ok: true });
+    const moved = count ?? source.quantity;
+    res.json({ ok: true, moved, left: source.quantity - moved });
   }));
 
   // Reorganizing a case is a job of many modules at once, not one dropdown at
@@ -509,21 +540,9 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
       where: { rack_id: rack.id, module_id: Number(req.params.moduleId) },
     });
     if (!mapping) return res.status(404).json({ error: 'Module not found in this rack' });
-    const rows = await RackRow.findAll({ where: { rack_id: rack.id } });
-    const placements =
-      rows.length === 0
-        ? []
-        : await RackRowModule.findAll({
-            where: { row_id: rows.map((row) => row.id), module_id: mapping.module_id },
-            order: [
-              ['position', 'DESC'],
-              ['id', 'DESC'],
-            ],
-          });
-    const excess = placements.slice(0, Math.max(0, placements.length - quantity));
     await db.sequelize.transaction(async (transaction) => {
       await mapping.update({ quantity }, { transaction });
-      for (const placement of excess) await placement.destroy({ transaction });
+      await trimPlacements(rack.id, mapping.module_id, quantity, transaction);
     });
     res.json({ ok: true, quantity });
   }));

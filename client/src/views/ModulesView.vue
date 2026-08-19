@@ -47,6 +47,10 @@ const filteredModules = computed(() => {
   });
 });
 
+// What the last move did, shown above the list — the single-module move and
+// the bulk one both report through it.
+const moveNotice = ref('');
+
 const currentRack = computed(() => racks.value.find((r) => r.id === selectedRack.value) || null);
 const otherRacks = computed(() => racks.value.filter((r) => r.id !== selectedRack.value));
 
@@ -180,6 +184,20 @@ async function removeComponent(module, component) {
   }
 }
 
+// How many copies of a module the rack being looked at holds. A module can
+// sit in several racks, so the row's own total is not the number a move out
+// of THIS rack has to work with.
+function heldIn(module, rack) {
+  if (!rack) return module.quantity;
+  const here = (module.racks || []).find((r) => r.id === rack.id);
+  return here ? here.quantity : module.quantity;
+}
+
+// How many copies to send, per module id. Blank means all of them; a number
+// splits the holding and leaves the rest in this rack — two of the same
+// module can stand in two different racks.
+const moveQty = ref({});
+
 // Move a module from the selected rack into another one (quantities merge if
 // the target rack already has it).
 async function move(module, event) {
@@ -187,10 +205,27 @@ async function move(module, event) {
   event.target.value = '';
   if (!toRackId) return;
   error.value = '';
+  moveNotice.value = '';
+  const held = heldIn(module, currentRack.value);
+  const typed = String(moveQty.value[module.id] ?? '').trim();
+  const quantity = typed === '' ? held : Number(typed);
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > held) {
+    error.value =
+      `How many ${module.manufacturer} ${module.name} to move must be a whole number ` +
+      `between 1 and ${held}.`;
+    return;
+  }
   try {
-    await api.post(`/api/racks/${selectedRack.value}/modules/${module.id}/move`, {
+    const res = await api.post(`/api/racks/${selectedRack.value}/modules/${module.id}/move`, {
       to_rack_id: toRackId,
+      quantity,
     });
+    const target = racks.value.find((r) => r.id === toRackId);
+    moveNotice.value =
+      `Moved ${res.moved} of ${held} ${module.manufacturer} ${module.name} to ` +
+      `'${target?.name ?? 'the other rack'}'` +
+      (res.left ? `, leaving ${res.left} here.` : '.');
+    moveQty.value = { ...moveQty.value, [module.id]: '' };
     await load();
   } catch (e) {
     error.value = e.message;
@@ -205,7 +240,6 @@ async function move(module, event) {
 const selection = ref({});
 const moveTarget = ref({});
 const moving = ref(false);
-const moveNotice = ref('');
 
 const selectedIn = (rackId) => selection.value[rackId] ?? [];
 const isSelected = (rackId, moduleId) => selectedIn(rackId).includes(moduleId);
@@ -520,6 +554,20 @@ onUnmounted(() => clearTimeout(refreshTimer));
                     >
                       {{ expandedComponents[module.id] ? 'Hide components' : 'Components' }}
                     </button>
+                    <!-- More than one copy in this rack can be split: say how
+                         many go before picking where they go to. Blank moves
+                         the lot, as it always did. -->
+                    <input
+                      v-if="currentRack && otherRacks.length > 0 && heldIn(module, currentRack) > 1"
+                      v-model="moveQty[module.id]"
+                      type="number"
+                      class="move-qty"
+                      min="1"
+                      :max="heldIn(module, currentRack)"
+                      :placeholder="`all ${heldIn(module, currentRack)}`"
+                      :data-test="`move-qty-${module.id}`"
+                      :aria-label="`How many ${module.manufacturer} ${module.name} to move`"
+                    />
                     <select
                       v-if="currentRack && otherRacks.length > 0"
                       class="move-select"

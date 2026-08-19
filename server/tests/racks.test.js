@@ -243,6 +243,89 @@ describe('racks API', () => {
     expect(detail.body.quantity).toBe(3);
   });
 
+  // Two of the same module are two pieces of hardware: one can travel while
+  // the other stays home.
+  it('splits a module between racks when the move asks for some of the copies', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const alice = rows[0];
+    const module = await insertModule(db, alice.id, { quantity: 3, hp: 20 });
+    const main = (await request(app).get('/api/racks').set('Cookie', aliceCookie)).body[0];
+    const travel = (
+      await request(app).post('/api/racks').set('Cookie', aliceCookie).send({ name: 'travel case' })
+    ).body;
+
+    // All three stand in the main rack's single row.
+    await request(app)
+      .put(`/api/racks/${main.id}/layout`)
+      .set('Cookie', aliceCookie)
+      .send({
+        rows: [
+          {
+            unit: 3,
+            hp: 84,
+            modules: [
+              { module_id: module.id },
+              { module_id: module.id },
+              { module_id: module.id },
+            ],
+          },
+        ],
+      });
+
+    const move = await request(app)
+      .post(`/api/racks/${main.id}/modules/${module.id}/move`)
+      .set('Cookie', aliceCookie)
+      .send({ to_rack_id: travel.id, quantity: 2 });
+    expect(move.status).toBe(200);
+    expect(move.body).toMatchObject({ ok: true, moved: 2, left: 1 });
+
+    const detail = await request(app).get(`/api/modules/${module.id}`).set('Cookie', aliceCookie);
+    expect(detail.body.racks).toEqual([
+      { id: main.id, name: 'main rack', quantity: 1 },
+      { id: travel.id, name: 'travel case', quantity: 2 },
+    ]);
+    expect(detail.body.quantity).toBe(3);
+
+    // The rack only holds one now, so only one of it can stand in its rows.
+    const rack = await request(app).get(`/api/racks/${main.id}`).set('Cookie', aliceCookie);
+    expect(rack.body.rows[0].modules).toHaveLength(1);
+
+    // Moving the rest empties the source mapping the way a whole move does.
+    const rest = await request(app)
+      .post(`/api/racks/${main.id}/modules/${module.id}/move`)
+      .set('Cookie', aliceCookie)
+      .send({ to_rack_id: travel.id, quantity: 1 });
+    expect(rest.body).toMatchObject({ moved: 1, left: 0 });
+    const after = await request(app).get(`/api/modules/${module.id}`).set('Cookie', aliceCookie);
+    expect(after.body.racks).toEqual([{ id: travel.id, name: 'travel case', quantity: 3 }]);
+  });
+
+  it('rejects a partial move of more copies than the rack holds', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const alice = rows[0];
+    const module = await insertModule(db, alice.id, { quantity: 2 });
+    const main = (await request(app).get('/api/racks').set('Cookie', aliceCookie)).body[0];
+    const travel = (
+      await request(app).post('/api/racks').set('Cookie', aliceCookie).send({ name: 'travel case' })
+    ).body;
+    const move = (quantity) =>
+      request(app)
+        .post(`/api/racks/${main.id}/modules/${module.id}/move`)
+        .set('Cookie', aliceCookie)
+        .send({ to_rack_id: travel.id, quantity });
+
+    for (const bad of [3, 0, -1, 1.5, 'two']) {
+      const res = await move(bad);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/between 1 and 2/);
+    }
+    // Nothing was written by any of the rejected attempts.
+    const detail = await request(app).get(`/api/modules/${module.id}`).set('Cookie', aliceCookie);
+    expect(detail.body.racks).toEqual([{ id: main.id, name: 'main rack', quantity: 2 }]);
+  });
+
   it('sets a rack module quantity, trimming layout placements that exceed it', async () => {
     const { app, db, aliceCookie, adminCookie } = await createTestApp();
     const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");

@@ -443,6 +443,11 @@ details.panel > .panel-body > :first-child {
 .module-row-actions .move-select {
   width: auto;
 }
+/* Just wide enough for a two-digit count next to the 'Move to…' dropdown. */
+.module-row-actions .move-qty {
+  width: 5rem;
+  margin: 0;
+}
 .component-edit-actions {
   flex-wrap: wrap;
 }
