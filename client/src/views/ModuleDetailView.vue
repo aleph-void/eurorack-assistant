@@ -177,6 +177,7 @@ const TYPE_LABELS = {
 const MANUALLY_EDITABLE_TYPES = [
   'input_jack',
   'output_jack',
+  'bidirectional_jack',
   'knob',
   'toggle',
   'button',
@@ -185,7 +186,20 @@ const MANUALLY_EDITABLE_TYPES = [
 ];
 // Which components can be isolated on the panel picture one at a time, so a
 // single marker can be dragged into place without the others in the way.
-const ARRANGEABLE_TYPES = ['input_jack', 'output_jack', 'knob', 'toggle', 'button', 'display'];
+const ARRANGEABLE_TYPES = [
+  'input_jack',
+  'output_jack',
+  'bidirectional_jack',
+  'knob',
+  'toggle',
+  'button',
+  'display',
+];
+
+// 'Input jacks' → 'input jack'; 'Bidirectional jacks (mults)' loses its
+// parenthetical before the plural s is dropped.
+const singularLabel = (group) =>
+  group.label.toLowerCase().replace(/\s*\(.*\)$/, '').replace(/s$/, '');
 
 const grouped = computed(() => {
   if (!module.value?.components) return [];
@@ -924,7 +938,7 @@ watch(() => props.id, () => {
           :data-test="`add-form-${group.type}`"
           @submit.prevent="addComponent"
         >
-          <label :for="`new-component-${group.type}`">New {{ group.label.toLowerCase().replace(/s$/, '') }} name</label>
+          <label :for="`new-component-${group.type}`">New {{ singularLabel(group) }} name</label>
           <div class="component-add-row">
             <input
               :id="`new-component-${group.type}`"

@@ -246,10 +246,17 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="add-new-output_jack"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="add-new-knob"]').exists()).toBe(true);
     // Empty supported groups stay visible so their first component can be added.
+    expect(wrapper.find('[data-test="add-new-bidirectional_jack"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="add-new-toggle"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="add-new-button"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="add-new-display"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="add-new-other"]').exists()).toBe(true);
+
+    // The mult group's add form drops the parenthetical from its label.
+    await wrapper.find('[data-test="add-new-bidirectional_jack"]').trigger('click');
+    expect(wrapper.find('[data-test="add-form-bidirectional_jack"]').text()).toContain(
+      'New bidirectional jack name'
+    );
 
     await wrapper.find('[data-test="add-new-knob"]').trigger('click');
     await wrapper.find('[data-test="component-name"]').setValue('FREQUENCY');
@@ -865,6 +872,7 @@ describe('ModuleDetailView', () => {
         { id: 5, type: 'display', name: 'Level LED', description: null, voltage_min: null, voltage_max: null, polarity: null },
         { id: 6, type: 'toggle', name: 'Range', description: null, voltage_min: null, voltage_max: null, polarity: null },
         { id: 7, type: 'switch', name: 'Mode', description: null, voltage_min: null, voltage_max: null, polarity: null },
+        { id: 8, type: 'bidirectional_jack', name: 'Mult 1', description: null, voltage_min: null, voltage_max: null, polarity: null, group_label: '1' },
       ],
       panel,
     });
@@ -875,6 +883,7 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="arrange-component-5"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="arrange-component-6"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="arrange-component-7"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="arrange-component-8"]').exists()).toBe(true);
   });
 
   it('creates a panel marker when arranging an analyzed jack the image mapper missed', async () => {
