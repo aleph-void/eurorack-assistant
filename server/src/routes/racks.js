@@ -389,43 +389,109 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
     res.json({ queued, skipped, videos });
   }));
 
+  // Move one module's whole inventory out of `from` and into `to`, merging
+  // with what the target rack already holds. The source rack's physical
+  // placements of it go with it: rack_modules is the inventory a layout draws
+  // from, so a module the rack no longer holds cannot stay standing in its
+  // rows.
+  async function moveModule(from, to, moduleId, transaction) {
+    const source = await RackModule.findOne({
+      where: { rack_id: from.id, module_id: moduleId },
+      transaction,
+    });
+    if (!source) return false;
+    const target = await RackModule.findOne({
+      where: { rack_id: to.id, module_id: moduleId },
+      transaction,
+    });
+    if (target) {
+      await target.update({ quantity: target.quantity + source.quantity }, { transaction });
+    } else {
+      await RackModule.create(
+        { rack_id: to.id, module_id: moduleId, quantity: source.quantity },
+        { transaction }
+      );
+    }
+    await source.destroy({ transaction });
+    const rows = await RackRow.findAll({ where: { rack_id: from.id }, transaction });
+    if (rows.length > 0) {
+      await RackRowModule.destroy({
+        where: { row_id: rows.map((row) => row.id), module_id: moduleId },
+        transaction,
+      });
+    }
+    return true;
+  }
+
+  // The two racks a move runs between, or the response that says why not.
+  async function moveEnds(req, res, toId) {
+    if (!Number.isInteger(toId) || toId <= 0) {
+      res.status(400).json({ error: 'to_rack_id is required' });
+      return null;
+    }
+    const from = await ownRack(req.user.id, req.params.id);
+    const to = await ownRack(req.user.id, toId);
+    if (!from || !to) {
+      res.status(404).json({ error: 'Rack not found' });
+      return null;
+    }
+    if (from.id === to.id) {
+      res.status(400).json({ error: 'to_rack_id must be a different rack' });
+      return null;
+    }
+    return { from, to };
+  }
+
   // Move a module from this rack to another of the user's racks. If the
   // target rack already has the module, the quantities merge.
   // Body: { to_rack_id }
   router.post('/:id/modules/:moduleId/move', asyncHandler(async (req, res) => {
-    const toId = Number(req.body?.to_rack_id);
-    if (!Number.isInteger(toId) || toId <= 0) {
-      return res.status(400).json({ error: 'to_rack_id is required' });
-    }
-    const from = await ownRack(req.user.id, req.params.id);
-    const to = await ownRack(req.user.id, toId);
-    if (!from || !to) return res.status(404).json({ error: 'Rack not found' });
-    if (from.id === to.id) {
-      return res.status(400).json({ error: 'to_rack_id must be a different rack' });
-    }
+    const ends = await moveEnds(req, res, Number(req.body?.to_rack_id));
+    if (!ends) return;
     const moduleId = Number(req.params.moduleId);
-    const source = await RackModule.findOne({
-      where: { rack_id: from.id, module_id: moduleId },
-    });
-    if (!source) return res.status(404).json({ error: 'Module not found in this rack' });
-
+    if (!(await RackModule.findOne({ where: { rack_id: ends.from.id, module_id: moduleId } }))) {
+      return res.status(404).json({ error: 'Module not found in this rack' });
+    }
     // Remove-from-source and add-to-target commit or roll back together.
-    await db.sequelize.transaction(async (transaction) => {
-      const target = await RackModule.findOne({
-        where: { rack_id: to.id, module_id: moduleId },
-        transaction,
-      });
-      if (target) {
-        await target.update({ quantity: target.quantity + source.quantity }, { transaction });
-      } else {
-        await RackModule.create(
-          { rack_id: to.id, module_id: moduleId, quantity: source.quantity },
-          { transaction }
-        );
-      }
-      await source.destroy({ transaction });
-    });
+    await db.sequelize.transaction((transaction) =>
+      moveModule(ends.from, ends.to, moduleId, transaction)
+    );
     res.json({ ok: true });
+  }));
+
+  // Reorganizing a case is a job of many modules at once, not one dropdown at
+  // a time. Same rules as the single move, applied to a list — and the whole
+  // list is checked before anything is written, so a mistyped id moves
+  // nothing rather than half of them.
+  // Body: { to_rack_id, module_ids: [...] }
+  router.post('/:id/modules/move', asyncHandler(async (req, res) => {
+    const ends = await moveEnds(req, res, Number(req.body?.to_rack_id));
+    if (!ends) return;
+    const ids = req.body?.module_ids;
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > 200) {
+      return res.status(400).json({ error: 'module_ids must be a list of 1 to 200 modules' });
+    }
+    const moduleIds = [...new Set(ids.map((id) => Number(id)))];
+    if (moduleIds.some((id) => !Number.isInteger(id) || id <= 0)) {
+      return res.status(400).json({ error: 'every module id must be a whole number' });
+    }
+    const held = await RackModule.findAll({
+      where: { rack_id: ends.from.id, module_id: moduleIds },
+      attributes: ['module_id'],
+    });
+    const inRack = new Set(held.map((rm) => rm.module_id));
+    const missing = moduleIds.filter((id) => !inRack.has(id));
+    if (missing.length > 0) {
+      return res.status(404).json({
+        error: `${missing.length} of the selected module(s) are not in this rack`,
+      });
+    }
+    await db.sequelize.transaction(async (transaction) => {
+      for (const moduleId of moduleIds) {
+        await moveModule(ends.from, ends.to, moduleId, transaction);
+      }
+    });
+    res.json({ ok: true, moved: moduleIds.length, to_rack_id: ends.to.id });
   }));
 
   // Set how many copies of a module this rack contains. Body: { quantity }.

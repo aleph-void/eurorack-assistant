@@ -257,3 +257,147 @@ describe('ModulesView', () => {
     vi.restoreAllMocks();
   });
 });
+
+// Reorganizing a case means moving several modules at once, per rack group —
+// a module in two racks is ticked under the rack you are moving it out of.
+describe('ModulesView bulk move', () => {
+  const racksResponse = [
+    { id: 1, name: 'main rack', module_count: 2 },
+    { id: 2, name: 'travel case', module_count: 0 },
+  ];
+  const modulesResponse = [
+    {
+      id: 10,
+      manufacturer: 'Make Noise',
+      name: 'Maths',
+      quantity: 1,
+      racks: [{ id: 1, name: 'main rack', quantity: 1 }],
+      manual_status: 'found',
+      analysis_status: 'complete',
+      panel_status: 'complete',
+    },
+    {
+      id: 11,
+      manufacturer: 'ALM',
+      name: 'Pam',
+      quantity: 1,
+      racks: [{ id: 1, name: 'main rack', quantity: 1 }],
+      manual_status: 'found',
+      analysis_status: 'complete',
+      panel_status: 'complete',
+    },
+    {
+      id: 12,
+      manufacturer: 'Mutable',
+      name: 'Plaits',
+      quantity: 1,
+      racks: [{ id: 2, name: 'travel case', quantity: 1 }],
+      manual_status: 'found',
+      analysis_status: 'complete',
+      panel_status: 'complete',
+    },
+  ];
+
+  function mountView() {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/racks' ? racksResponse : modulesResponse)
+    );
+    return mount(ModulesView, { global: testGlobal() });
+  }
+
+  it('moves the ticked modules to the chosen rack in one request', async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    api.post.mockResolvedValue({ ok: true, moved: 2, to_rack_id: 2 });
+
+    await wrapper.find('[data-test="select-1-10"]').setValue(true);
+    await wrapper.find('[data-test="select-1-11"]').setValue(true);
+    expect(wrapper.find('[data-test="bulk-move-1"]').text()).toContain('2 selected');
+
+    await wrapper.find('[data-test="bulk-target-1"]').setValue('2');
+    await wrapper.find('[data-test="bulk-move-go-1"]').trigger('click');
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith('/api/racks/1/modules/move', {
+      to_rack_id: 2,
+      module_ids: [10, 11],
+    });
+    expect(wrapper.find('[data-test="move-notice"]').text()).toContain(
+      "Moved 2 module(s) from 'main rack' to 'travel case'"
+    );
+    // The selection is emptied, so the next move does not repeat this one.
+    expect(wrapper.find('[data-test="bulk-move-1"]').text()).toContain('0 selected');
+  });
+
+  it('will not move with nothing ticked or nowhere to move to', async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    const button = wrapper.find('[data-test="bulk-move-go-1"]');
+    expect(button.attributes('disabled')).toBeDefined();
+
+    // A target with no selection is still not a move.
+    await wrapper.find('[data-test="bulk-target-1"]').setValue('2');
+    expect(wrapper.find('[data-test="bulk-move-go-1"]').attributes('disabled')).toBeDefined();
+
+    // …and a selection with no target is not one either.
+    await wrapper.find('[data-test="bulk-target-1"]').setValue('');
+    await wrapper.find('[data-test="select-1-10"]').setValue(true);
+    expect(wrapper.find('[data-test="bulk-move-go-1"]').attributes('disabled')).toBeDefined();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it('ticks and unticks a whole rack at once', async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.find('[data-test="select-all-1"]').setValue(true);
+    expect(wrapper.find('[data-test="bulk-move-1"]').text()).toContain('2 selected');
+    // The travel case has its own selection, untouched by the other group's.
+    expect(wrapper.find('[data-test="bulk-move-2"]').text()).toContain('0 selected');
+
+    await wrapper.find('[data-test="select-all-1"]').setValue(false);
+    expect(wrapper.find('[data-test="bulk-move-1"]').text()).toContain('0 selected');
+  });
+
+  it('keeps each rack’s selection to itself', async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    api.post.mockResolvedValue({ ok: true, moved: 1, to_rack_id: 1 });
+
+    await wrapper.find('[data-test="select-1-10"]').setValue(true);
+    await wrapper.find('[data-test="select-2-12"]').setValue(true);
+    await wrapper.find('[data-test="bulk-target-2"]').setValue('1');
+    await wrapper.find('[data-test="bulk-move-go-2"]').trigger('click');
+    await flushPromises();
+
+    // Only the travel case's own tick travels, out of the travel case.
+    expect(api.post).toHaveBeenCalledWith('/api/racks/2/modules/move', {
+      to_rack_id: 1,
+      module_ids: [12],
+    });
+  });
+
+  it('reports what the server refused and leaves the selection alone', async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    api.post.mockRejectedValue(new Error('1 of the selected module(s) are not in this rack'));
+
+    await wrapper.find('[data-test="select-1-10"]').setValue(true);
+    await wrapper.find('[data-test="bulk-target-1"]').setValue('2');
+    await wrapper.find('[data-test="bulk-move-go-1"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.find('.error').text()).toContain('not in this rack');
+    // Still ticked, so the user can correct the selection and try again.
+    expect(wrapper.find('[data-test="bulk-move-1"]').text()).toContain('1 selected');
+  });
+
+  it('offers no bulk move when there is nowhere to move to', async () => {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/racks' ? [racksResponse[0]] : modulesResponse.slice(0, 2))
+    );
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="bulk-move-1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="select-1-10"]').exists()).toBe(false);
+  });
+});

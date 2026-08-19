@@ -197,6 +197,68 @@ async function move(module, event) {
   }
 }
 
+// ---- moving a selection of modules at once ----
+// Reorganizing a case is a job of many modules, not one dropdown at a time.
+// The selection is per rack group and keyed by rack, because a module can sit
+// in two racks and ticking it under one says nothing about the other — and
+// the group's rack is the source the move runs from.
+const selection = ref({});
+const moveTarget = ref({});
+const moving = ref(false);
+const moveNotice = ref('');
+
+const selectedIn = (rackId) => selection.value[rackId] ?? [];
+const isSelected = (rackId, moduleId) => selectedIn(rackId).includes(moduleId);
+
+function toggleSelected(rackId, moduleId) {
+  const current = selectedIn(rackId);
+  selection.value = {
+    ...selection.value,
+    [rackId]: current.includes(moduleId)
+      ? current.filter((id) => id !== moduleId)
+      : [...current, moduleId],
+  };
+}
+
+// The header box ticks everything the filter currently shows, and unticks
+// the lot when they are already all ticked.
+function toggleAllIn(group) {
+  const ids = group.modules.map((m) => m.id);
+  const allOn = ids.length > 0 && ids.every((id) => isSelected(group.rack.id, id));
+  selection.value = { ...selection.value, [group.rack.id]: allOn ? [] : ids };
+}
+const allSelectedIn = (group) =>
+  group.modules.length > 0 && group.modules.every((m) => isSelected(group.rack.id, m.id));
+
+async function moveSelected(rack) {
+  const moduleIds = selectedIn(rack.id);
+  const toRackId = Number(moveTarget.value[rack.id]);
+  if (!moduleIds.length || !toRackId) return;
+  error.value = '';
+  moveNotice.value = '';
+  moving.value = true;
+  try {
+    const res = await api.post(`/api/racks/${rack.id}/modules/move`, {
+      to_rack_id: toRackId,
+      module_ids: moduleIds,
+    });
+    const target = racks.value.find((r) => r.id === toRackId);
+    moveNotice.value =
+      `Moved ${res.moved} module(s) from '${rack.name}' to '${target?.name ?? 'the other rack'}'.`;
+    selection.value = { ...selection.value, [rack.id]: [] };
+    moveTarget.value = { ...moveTarget.value, [rack.id]: '' };
+    await load();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    moving.value = false;
+  }
+}
+
+// A rack a module can be moved TO: any of the user's racks but the one the
+// group is showing.
+const targetsFor = (rackId) => racks.value.filter((r) => r.id !== rackId);
+
 // Fill the gaps across the whole system (or the selected rack): a module with
 // no manual, no analyzed components, no front panel picture, no HP width or
 // components lacking a description (added by hand after the import)
@@ -325,6 +387,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
     <button class="linklike" data-test="clear-filter" @click="filterText = ''">Clear filter</button>
   </p>
   <p v-if="reanalyzed" class="muted" data-test="reanalyze-result">{{ reanalyzed }}</p>
+  <p v-if="moveNotice" class="success" data-test="move-notice">{{ moveNotice }}</p>
   <!-- Rack-scoped: scanning a channel means matching against one rack's modules. -->
   <ChannelScanPanel v-if="currentRack && modules.length" :rack-id="currentRack.id" />
   <p v-if="error" class="error">{{ error }}</p>
@@ -354,10 +417,63 @@ onUnmounted(() => clearTimeout(refreshTimer));
         </span>
       </summary>
       <div class="panel-body">
+        <!-- Bulk move: tick the modules, pick where they go, move them. Only
+             offered where there is a rack to move out of and one to move
+             into. -->
+        <div
+          v-if="group.rack && group.modules.length && targetsFor(group.rack.id).length"
+          class="row bulk-move"
+          :data-test="`bulk-move-${group.rack.id}`"
+        >
+          <span class="muted shrink" style="white-space: nowrap">
+            {{ selectedIn(group.rack.id).length }} selected
+          </span>
+          <div>
+            <select
+              v-model="moveTarget[group.rack.id]"
+              :data-test="`bulk-target-${group.rack.id}`"
+              aria-label="Move selected modules to"
+            >
+              <option value="">Move selected to…</option>
+              <option v-for="rack in targetsFor(group.rack.id)" :key="rack.id" :value="rack.id">
+                {{ rack.name }}
+              </option>
+            </select>
+          </div>
+          <div class="shrink">
+            <button
+              style="margin: 0"
+              :disabled="moving || !selectedIn(group.rack.id).length || !moveTarget[group.rack.id]"
+              :data-test="`bulk-move-go-${group.rack.id}`"
+              @click="moveSelected(group.rack)"
+            >
+              {{ moving ? 'Moving…' : 'Move' }}
+            </button>
+          </div>
+          <div v-if="selectedIn(group.rack.id).length" class="shrink">
+            <button
+              class="secondary"
+              style="margin: 0"
+              :data-test="`bulk-clear-${group.rack.id}`"
+              @click="selection = { ...selection, [group.rack.id]: [] }"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
         <div v-if="group.modules.length" class="table-wrap">
           <table data-test="module-table">
             <thead>
               <tr>
+                <th v-if="group.rack && targetsFor(group.rack.id).length" class="select-cell">
+                  <input
+                    type="checkbox"
+                    :checked="allSelectedIn(group)"
+                    :data-test="`select-all-${group.rack.id}`"
+                    :aria-label="`Select every module in ${group.rack.name}`"
+                    @change="toggleAllIn(group)"
+                  />
+                </th>
                 <th>Manufacturer</th>
                 <th>Module</th>
                 <th>Qty</th>
@@ -372,6 +488,15 @@ onUnmounted(() => clearTimeout(refreshTimer));
             <tbody>
               <template v-for="module in group.modules" :key="module.id">
               <tr :data-test="`module-${module.id}`">
+                <td v-if="group.rack && targetsFor(group.rack.id).length" class="select-cell">
+                  <input
+                    type="checkbox"
+                    :checked="isSelected(group.rack.id, module.id)"
+                    :data-test="`select-${group.rack.id}-${module.id}`"
+                    :aria-label="`Select ${module.manufacturer} ${module.name}`"
+                    @change="toggleSelected(group.rack.id, module.id)"
+                  />
+                </td>
                 <td>{{ module.manufacturer }}</td>
                 <td>
                   <RouterLink :to="moduleHref(module, group.rack)">{{ module.name }}</RouterLink>
@@ -417,7 +542,12 @@ onUnmounted(() => clearTimeout(refreshTimer));
                 </td>
               </tr>
               <tr v-if="expandedComponents[module.id]" :data-test="`component-editor-${module.id}`">
-                <td :colspan="currentRack ? 8 : 9">
+                <td
+                  :colspan="
+                    (currentRack ? 8 : 9) +
+                    (group.rack && targetsFor(group.rack.id).length ? 1 : 0)
+                  "
+                >
                   <div class="row" style="align-items: end">
                     <div style="flex: 2">
                       <label :for="`component-name-${module.id}`">Component name</label>

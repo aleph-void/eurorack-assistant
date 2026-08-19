@@ -213,7 +213,9 @@ async function dropIntoAvailable() {
   </p>
   <p class="muted">
     Choose <strong>Organize rack</strong> to arrange its physical 3U and 1U rows. Racks in the same
-    <RouterLink to="/systems">system</RouterLink> can be patched to each other.
+    <RouterLink to="/systems">system</RouterLink> can be patched to each other. To shift gear
+    between racks, tick the modules on the
+    <RouterLink to="/modules">Modules</RouterLink> page and move them together.
   </p>
   <p v-if="error" class="error" data-test="error">{{ error }}</p>
   <p v-if="notice" class="success" data-test="notice">{{ notice }}</p>

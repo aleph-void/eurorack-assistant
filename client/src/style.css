@@ -902,6 +902,31 @@ button.linklike:hover {
   text-align: right;
 }
 
+/* Bulk move: the count, the target rack and the button on one line above the
+   rack's table, kept to their own widths rather than stretched across it. */
+.bulk-move {
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.6rem;
+}
+.bulk-move > * {
+  flex: 0;
+  min-width: auto;
+}
+.bulk-move select {
+  margin: 0;
+  min-width: 12rem;
+}
+/* The tick column is the width of its box and nothing more. */
+.select-cell {
+  width: 1.5rem;
+  text-align: center;
+}
+.select-cell input {
+  margin: 0;
+  cursor: pointer;
+}
+
 /* An action and the option that modifies it, on one line: "Re-analyze all"
    with its "re-discover manuals too" checkbox beside it. */
 .reanalyze-row {

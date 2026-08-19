@@ -349,6 +349,131 @@ describe('racks API', () => {
     ).toBe(400);
   });
 
+  // Reorganizing a case is a job of many modules at once.
+  it('moves a selection of modules in one go, merging quantities', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const alice = rows[0];
+    const maths = await insertModule(db, alice.id, { hp: 20 });
+    const pam = await insertModule(db, alice.id, { manufacturer: 'ALM', name: 'Pam', hp: 8 });
+    const stayed = await insertModule(db, alice.id, {
+      manufacturer: 'Mutable',
+      name: 'Plaits',
+      hp: 12,
+    });
+    const racks = (await request(app).get('/api/racks').set('Cookie', aliceCookie)).body;
+    const main = racks.find((r) => r.name === 'main rack');
+    const travel = (
+      await request(app).post('/api/racks').set('Cookie', aliceCookie).send({ name: 'travel case' })
+    ).body;
+    // The target already holds one Pam, so that one merges rather than moves.
+    await mapModule(db, alice.id, pam.id, { rack: 'travel case', quantity: 2 });
+
+    const res = await request(app)
+      .post(`/api/racks/${main.id}/modules/move`)
+      .set('Cookie', aliceCookie)
+      .send({ to_rack_id: travel.id, module_ids: [maths.id, pam.id] });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, moved: 2, to_rack_id: travel.id });
+
+    const from = await request(app).get(`/api/racks/${main.id}`).set('Cookie', aliceCookie);
+    expect(from.body.modules.map((m) => m.name)).toEqual(['Plaits']);
+    const to = await request(app).get(`/api/racks/${travel.id}`).set('Cookie', aliceCookie);
+    expect(to.body.modules.map((m) => [m.name, m.quantity]).sort()).toEqual([
+      ['Maths', 1],
+      ['Pam', 3],
+    ]);
+    void stayed;
+  });
+
+  // rack_modules is the inventory a layout draws from, so a module the rack
+  // no longer holds must not be left standing in one of its rows.
+  it('takes a moved module out of the source rack’s physical rows', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const alice = rows[0];
+    const maths = await insertModule(db, alice.id, { hp: 20 });
+    const pam = await insertModule(db, alice.id, { manufacturer: 'ALM', name: 'Pam', hp: 8 });
+    const racks = (await request(app).get('/api/racks').set('Cookie', aliceCookie)).body;
+    const main = racks.find((r) => r.name === 'main rack');
+    const travel = (
+      await request(app).post('/api/racks').set('Cookie', aliceCookie).send({ name: 'travel case' })
+    ).body;
+    await request(app)
+      .put(`/api/racks/${main.id}/layout`)
+      .set('Cookie', aliceCookie)
+      .send({
+        rows: [{ unit: 3, hp: 84, modules: [{ module_id: maths.id }, { module_id: pam.id }] }],
+      });
+
+    await request(app)
+      .post(`/api/racks/${main.id}/modules/move`)
+      .set('Cookie', aliceCookie)
+      .send({ to_rack_id: travel.id, module_ids: [maths.id] });
+
+    const detail = await request(app).get(`/api/racks/${main.id}`).set('Cookie', aliceCookie);
+    expect(detail.body.rows[0].modules.map((m) => m.name)).toEqual(['Pam']);
+    // And the placement is gone rather than merely hidden, so moving the
+    // module back does not make it reappear in its old slot.
+    const { rows: placements } = await db.query(
+      'SELECT module_id FROM rack_row_modules WHERE module_id = $1',
+      [maths.id]
+    );
+    expect(placements).toEqual([]);
+  });
+
+  it('validates a bulk move and writes nothing when any module is not in the rack', async () => {
+    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const alice = rows[0];
+    const maths = await insertModule(db, alice.id);
+    const racks = (await request(app).get('/api/racks').set('Cookie', aliceCookie)).body;
+    const main = racks.find((r) => r.name === 'main rack');
+    const travel = (
+      await request(app).post('/api/racks').set('Cookie', aliceCookie).send({ name: 'travel case' })
+    ).body;
+    const bulk = (cookie, body) =>
+      request(app).post(`/api/racks/${main.id}/modules/move`).set('Cookie', cookie).send(body);
+
+    // An empty or oversized list, a missing target, and the same rack twice.
+    expect((await bulk(aliceCookie, { to_rack_id: travel.id, module_ids: [] })).status).toBe(400);
+    expect(
+      (
+        await bulk(aliceCookie, {
+          to_rack_id: travel.id,
+          module_ids: Array.from({ length: 201 }, (_, i) => i + 1),
+        })
+      ).status
+    ).toBe(400);
+    expect((await bulk(aliceCookie, { module_ids: [maths.id] })).status).toBe(400);
+    expect((await bulk(aliceCookie, { to_rack_id: main.id, module_ids: [maths.id] })).status).toBe(
+      400
+    );
+    expect(
+      (await bulk(aliceCookie, { to_rack_id: travel.id, module_ids: ['nope'] })).status
+    ).toBe(400);
+    // Somebody else's rack is invisible either end.
+    expect((await bulk(adminCookie, { to_rack_id: travel.id, module_ids: [maths.id] })).status).toBe(
+      404
+    );
+
+    // One module in the rack and one that is not: the whole list is refused
+    // and the module that WAS movable stays put.
+    const elsewhere = await insertModule(db, alice.id, {
+      manufacturer: 'ALM',
+      name: 'Pam',
+      rack: 'travel case',
+    });
+    const partial = await bulk(aliceCookie, {
+      to_rack_id: travel.id,
+      module_ids: [maths.id, elsewhere.id],
+    });
+    expect(partial.status).toBe(404);
+    expect(partial.body.error).toMatch(/not in this rack/);
+    const after = await request(app).get(`/api/racks/${main.id}`).set('Cookie', aliceCookie);
+    expect(after.body.modules.map((m) => m.name)).toEqual(['Maths']);
+  });
+
   it('scopes module list and delete to a rack via rack_id', async () => {
     const { app, db, aliceCookie } = await createTestApp();
     const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
