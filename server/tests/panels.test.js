@@ -19,7 +19,13 @@ import {
   PDF_BYTES,
   PDF_HASH,
 } from './helpers.js';
-import { sniffImage, panelPath, saveImage } from '../src/services/image.js';
+import {
+  downloadImage,
+  readCappedBuffer,
+  panelPath,
+  saveImage,
+  sniffImage,
+} from '../src/services/image.js';
 import { loadSharp } from '../src/services/panelPixels.js';
 import {
   buildPanelForModule,
@@ -114,6 +120,217 @@ describe('image sniffing', () => {
       Buffer.alloc(16),
     ]);
     expect(sniffImage(jpeg)).toEqual({ ext: 'jpg', width: 640, height: 480 });
+  });
+
+  it('steps over JPEG padding and standalone markers on the way to the frame', () => {
+    const tricky = Buffer.concat([
+      Buffer.from([0xff, 0xd8]),
+      Buffer.from([0xff, 0xff, 0x01]), // padding run, then a standalone TEM
+      Buffer.from([0x00]), // stray byte between segments
+      Buffer.from([0xff, 0xd0]), // standalone RST0
+      Buffer.from([0xff, 0xc0, 0x00, 0x11, 0x08, 0x01, 0x00, 0x02, 0x00]),
+      Buffer.alloc(16),
+    ]);
+    expect(sniffImage(tricky)).toEqual({ ext: 'jpg', width: 512, height: 256 });
+  });
+
+  it('reads GIF headers and all three WebP flavours', () => {
+    const gif = Buffer.alloc(20);
+    gif.write('GIF89a', 0, 'latin1');
+    gif.writeUInt16LE(320, 6);
+    gif.writeUInt16LE(240, 8);
+    expect(sniffImage(gif)).toEqual({ ext: 'gif', width: 320, height: 240 });
+
+    const webp = (chunk, fill) => {
+      const buf = Buffer.alloc(40);
+      buf.write('RIFF', 0, 'latin1');
+      buf.write('WEBP', 8, 'latin1');
+      buf.write(chunk, 12, 'latin1');
+      fill(buf);
+      return buf;
+    };
+    const lossy = webp('VP8 ', (b) => {
+      b.writeUInt16LE(500, 26);
+      b.writeUInt16LE(300, 28);
+    });
+    expect(sniffImage(lossy)).toEqual({ ext: 'webp', width: 500, height: 300 });
+    // Lossless packs both dimensions minus one into a single bitfield.
+    const lossless = webp('VP8L', (b) => b.writeUInt32LE(399 | (199 << 14), 21));
+    expect(sniffImage(lossless)).toEqual({ ext: 'webp', width: 400, height: 200 });
+    const extended = webp('VP8X', (b) => {
+      b.writeUIntLE(799, 24, 3);
+      b.writeUIntLE(599, 27, 3);
+    });
+    expect(sniffImage(extended)).toEqual({ ext: 'webp', width: 800, height: 600 });
+    // A RIFF container whose first chunk is not a VP8 bitstream says nothing.
+    expect(sniffImage(webp('ALPH', () => {}))).toBe(null);
+  });
+
+  it('rejects magic numbers whose headers do not parse', () => {
+    expect(sniffImage(null)).toBe(null);
+    expect(sniffImage(Buffer.from('GIF89a'))).toBe(null); // shorter than any header
+
+    // A PNG whose first chunk is not IHDR, and one that is zero pixels wide.
+    const pngSig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const notIhdr = Buffer.alloc(24);
+    pngSig.copy(notIhdr);
+    notIhdr.write('IDAT', 12, 'latin1');
+    expect(sniffImage(notIhdr)).toBe(null);
+    const zeroWide = Buffer.alloc(24);
+    pngSig.copy(zeroWide);
+    zeroWide.write('IHDR', 12, 'latin1');
+    zeroWide.writeUInt32BE(0, 16);
+    zeroWide.writeUInt32BE(600, 20);
+    expect(sniffImage(zeroWide)).toBe(null);
+
+    // A spacer GIF with zeroed dimensions.
+    const spacer = Buffer.alloc(20);
+    spacer.write('GIF89a', 0, 'latin1');
+    expect(sniffImage(spacer)).toBe(null);
+
+    // A JPEG with a corrupt segment length, and one that runs out of bytes
+    // before any start-of-frame.
+    expect(
+      sniffImage(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(20)]))
+    ).toBe(null);
+    expect(
+      sniffImage(
+        Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x40]), Buffer.alloc(16)])
+      )
+    ).toBe(null);
+  });
+});
+
+describe('capped body reads', () => {
+  const streamed = (chunks, contentLength = null) => {
+    const state = { cancelled: false, read: false };
+    return {
+      state,
+      res: {
+        headers: { get: () => (contentLength === null ? null : String(contentLength)) },
+        body: {
+          getReader: () => {
+            state.read = true;
+            let i = 0;
+            return {
+              read: async () =>
+                i >= chunks.length
+                  ? { done: true, value: undefined }
+                  : { done: false, value: chunks[i++] },
+              cancel: async () => {
+                state.cancelled = true;
+              },
+            };
+          },
+        },
+      },
+    };
+  };
+
+  it('streams a body under the cap into one buffer', async () => {
+    const { res } = streamed([Buffer.from('front '), Buffer.from('panel')]);
+    expect((await readCappedBuffer(res, 100)).toString()).toBe('front panel');
+  });
+
+  it('aborts a stream the moment it passes the cap', async () => {
+    const { res, state } = streamed([Buffer.alloc(8), Buffer.alloc(8)]);
+    await expect(readCappedBuffer(res, 10)).rejects.toThrow(/exceeds 10 byte limit/);
+    expect(state.cancelled).toBe(true);
+  });
+
+  it('rejects an oversized Content-Length before reading a single byte', async () => {
+    const { res, state } = streamed([Buffer.alloc(8)], 999);
+    await expect(readCappedBuffer(res, 10)).rejects.toThrow(/declared length 999/);
+    expect(state.read).toBe(false);
+  });
+
+  it('caps a body that arrives without a stream too', async () => {
+    const res = {
+      headers: { get: () => null },
+      body: null,
+      arrayBuffer: async () => new Uint8Array(16).buffer,
+    };
+    await expect(readCappedBuffer(res, 10)).rejects.toThrow(/exceeds 10 byte limit/);
+  });
+});
+
+describe('downloadImage', () => {
+  const toArrayBuffer = (buf) =>
+    buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  const imageResponse = (bytes) => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    body: null,
+    arrayBuffer: async () => toArrayBuffer(bytes),
+  });
+  const refusal = { ok: false, status: 403, headers: { get: () => null }, body: null };
+
+  it('retries with Chrome desktop headers when the plain fetch is refused', async () => {
+    const calls = [];
+    const fetchImpl = async (url, opts) => {
+      calls.push(opts.headers);
+      return calls.length === 1 ? refusal : imageResponse(PANEL_PNG);
+    };
+    const logs = [];
+    const result = await downloadImage('https://example.com/panel.png', {
+      fetchImpl,
+      log: (m) => logs.push(m),
+    });
+    expect(result).toMatchObject({
+      ext: 'png',
+      width: 400,
+      height: 1200,
+      url: 'https://example.com/panel.png',
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]['User-Agent']).toBeTruthy();
+    expect(calls[0].Referer).toBeUndefined();
+    expect(calls[1].Referer).toBe('https://example.com/');
+    expect(logs.some((m) => /HTTP 403/.test(m))).toBe(true);
+    expect(logs.some((m) => /retrying with Chrome desktop headers/.test(m))).toBe(true);
+  });
+
+  it('returns null when both attempts fail, or the bytes are no panel', async () => {
+    expect(
+      await downloadImage('https://example.com/a.png', { fetchImpl: async () => refusal })
+    ).toBe(null);
+
+    const notImage = async () => imageResponse(Buffer.from('<html>a panel, honest</html>'));
+    const htmlLogs = [];
+    expect(
+      await downloadImage('https://example.com/a.png', {
+        fetchImpl: notImage,
+        log: (m) => htmlLogs.push(m),
+      })
+    ).toBe(null);
+    expect(htmlLogs.some((m) => /not a PNG, JPEG, GIF or WebP/.test(m))).toBe(true);
+
+    const thumb = async () => imageResponse(pngBytes(32, 32));
+    const thumbLogs = [];
+    expect(
+      await downloadImage('https://example.com/a.png', {
+        fetchImpl: thumb,
+        log: (m) => thumbLogs.push(m),
+      })
+    ).toBe(null);
+    expect(thumbLogs.some((m) => /too small to be a panel image/.test(m))).toBe(true);
+
+    // A blocked address logs as blocked and never reaches the fetch at all.
+    const blockedLogs = [];
+    let fetched = false;
+    expect(
+      await downloadImage('https://169.254.169.254/panel.png', {
+        fetchImpl: async () => {
+          fetched = true;
+          return refusal;
+        },
+        log: (m) => blockedLogs.push(m),
+      })
+    ).toBe(null);
+    expect(fetched).toBe(false);
+    expect(blockedLogs.filter((m) => /image download blocked/.test(m))).toHaveLength(2);
+    expect(blockedLogs.some((m) => /image download failed/.test(m))).toBe(false);
   });
 });
 

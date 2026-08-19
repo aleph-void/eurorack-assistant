@@ -297,6 +297,82 @@ describe('ScopePanel', () => {
     await flushPromises();
     expect(wrapper.find('[data-test="scope-error"]').text()).toContain('did not answer');
   });
+
+  const CAPTURE = {
+    id: 8,
+    title: 'Krell gate',
+    caption: 'before tuning',
+    captured_at: '2026-08-12T18:00:00Z',
+    device_name: 'Bench scope',
+    image_hash: null,
+    channels: [],
+  };
+
+  const mountWithCapture = async () => {
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/scope') ? { patch_id: 7, channels: [], devices: [] } : [CAPTURE]
+    );
+    const wrapper = mountPanel();
+    await flushPromises();
+    return wrapper;
+  };
+
+  it('saves a caption on a capture', async () => {
+    api.put.mockResolvedValue({ ...CAPTURE, caption: 'after tuning' });
+    const wrapper = await mountWithCapture();
+
+    await wrapper.find('[data-test="capture-caption-8"]').setValue('after tuning');
+    await wrapper.find('[data-test="capture-save-8"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/captures/8', { caption: 'after tuning' });
+    expect(wrapper.find('[data-test="scope-error"]').exists()).toBe(false);
+  });
+
+  it('shows why a caption could not be saved', async () => {
+    api.put.mockRejectedValue(new Error('capture belongs to someone else'));
+    const wrapper = await mountWithCapture();
+
+    await wrapper.find('[data-test="capture-caption-8"]').setValue('after tuning');
+    await wrapper.find('[data-test="capture-save-8"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="scope-error"]').text()).toContain('someone else');
+  });
+
+  it('deletes a capture once the user confirms', async () => {
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = await mountWithCapture();
+    expect(wrapper.find('[data-test="capture-8"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="capture-delete-8"]').trigger('click');
+    await flushPromises();
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: 'Delete capture' }));
+    expect(api.delete).toHaveBeenCalledWith('/api/captures/8');
+    expect(wrapper.find('[data-test="capture-8"]').exists()).toBe(false);
+    // The notes panel is told its list changed.
+    expect(wrapper.emitted('captured')).toBeTruthy();
+  });
+
+  it('keeps the capture when the confirm is declined', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    const wrapper = await mountWithCapture();
+
+    await wrapper.find('[data-test="capture-delete-8"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="capture-8"]').exists()).toBe(true);
+  });
+
+  it('shows why a capture could not be deleted', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.delete.mockRejectedValue(new Error('capture is attached to a question'));
+    const wrapper = await mountWithCapture();
+
+    await wrapper.find('[data-test="capture-delete-8"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="scope-error"]').text()).toContain('attached to a question');
+    expect(wrapper.find('[data-test="capture-8"]').exists()).toBe(true);
+  });
 });
 
 describe('PatchNotesPanel', () => {

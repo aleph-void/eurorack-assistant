@@ -1397,3 +1397,152 @@ describe('discrete controls with many positions', () => {
     expect(route.status).toBe(201);
   });
 });
+
+describe('managing links between instances', () => {
+  // Two 7Path panels in the rack, ready to be bridged.
+  async function bridgeable(f) {
+    await withComponents(f, {
+      manufacturer: 'Omnitone',
+      name: '7Path',
+      quantity: 2,
+      components: [
+        { type: 'bidirectional_jack', name: '1' },
+        { type: 'bidirectional_jack', name: '2' },
+      ],
+    });
+    const patch = await createPatch(f);
+    const body = await detail(f, patch.id);
+    return { patch, a: instanceOf(body, '7Path', 1), b: instanceOf(body, '7Path', 2) };
+  }
+
+  it('validates link creation and refuses the same pair twice', async () => {
+    const f = await fixture();
+    const { patch, a, b } = await bridgeable(f);
+    const post = (body) =>
+      request(f.app).post(`/api/patches/${patch.id}/links`).set('Cookie', f.aliceCookie).send(body);
+
+    const stranger = await post({ a_patch_module_id: a.id, b_patch_module_id: 99999 });
+    expect(stranger.status).toBe(400);
+    expect(stranger.body.error).toMatch(/part of this patch/);
+
+    const itself = await post({ a_patch_module_id: a.id, b_patch_module_id: a.id });
+    expect(itself.status).toBe(400);
+    expect(itself.body.error).toMatch(/linked to itself/);
+
+    const rope = await post({ a_patch_module_id: a.id, b_patch_module_id: b.id, kind: 'rope' });
+    expect(rope.status).toBe(400);
+    expect(rope.body.error).toMatch(/kind must be one of/);
+
+    // No kind means an expander pair: no jack pairing involved.
+    const made = await post({
+      a_patch_module_id: a.id,
+      b_patch_module_id: b.id,
+      description: ' ribbon ',
+    });
+    expect(made.status).toBe(201);
+    expect(made.body).toMatchObject({ kind: 'expander', description: 'ribbon', jacks: [] });
+
+    // The same pair in either order is already linked.
+    const reversed = await post({
+      a_patch_module_id: b.id,
+      b_patch_module_id: a.id,
+      kind: 'bridge',
+    });
+    expect(reversed.status).toBe(409);
+  });
+
+  it('pairs explicitly named jacks and unlinks the instances again', async () => {
+    const f = await fixture();
+    const { patch, a, b } = await bridgeable(f);
+    const post = (body) =>
+      request(f.app).post(`/api/patches/${patch.id}/links`).set('Cookie', f.aliceCookie).send(body);
+
+    // Every requested pair must name a jack on each of the two panels.
+    const half = await post({
+      a_patch_module_id: a.id,
+      b_patch_module_id: b.id,
+      kind: 'bridge',
+      jacks: [{ a_component_id: jack(a, '1').id, b_component_id: 99999 }],
+    });
+    expect(half.status).toBe(400);
+    expect(half.body.error).toMatch(/jack on each of the two modules/);
+
+    // An explicit list overrides the by-name pairing: jack 1 onto jack 2.
+    const made = await post({
+      a_patch_module_id: a.id,
+      b_patch_module_id: b.id,
+      kind: 'bridge',
+      jacks: [{ a_component_id: jack(a, '1').id, b_component_id: jack(b, '2').id }],
+    });
+    expect(made.status).toBe(201);
+    expect(made.body.jacks).toEqual([
+      {
+        a_component_id: jack(a, '1').id,
+        a_component_name: '1',
+        b_component_id: jack(b, '2').id,
+        b_component_name: '2',
+      },
+    ]);
+
+    const unlink = (linkId) =>
+      request(f.app)
+        .delete(`/api/patches/${patch.id}/links/${linkId}`)
+        .set('Cookie', f.aliceCookie);
+    expect((await unlink('abc')).status).toBe(404);
+    expect((await unlink(made.body.id)).status).toBe(200);
+    expect((await detail(f, patch.id)).links).toEqual([]);
+    const { rows } = await f.db.query(
+      'SELECT id FROM patch_module_link_jacks WHERE link_id = $1',
+      [made.body.id]
+    );
+    expect(rows).toEqual([]);
+    expect((await unlink(made.body.id)).status).toBe(404);
+  });
+
+  it('unlinks an expander pair from either side', async () => {
+    const f = await fixture();
+    const host = await withComponents(f, {
+      manufacturer: 'Intellijel',
+      name: 'Atlantix',
+      components: [{ type: 'input_jack', name: 'VCF IN' }],
+    });
+    const expander = await withComponents(f, {
+      manufacturer: 'Intellijel',
+      name: 'Atlx',
+      components: [{ type: 'output_jack', name: 'LP' }],
+    });
+    const link = () =>
+      request(f.app)
+        .post(`/api/modules/${host.module.id}/expanders`)
+        .set('Cookie', f.aliceCookie)
+        .send({ expander_module_id: expander.module.id, description: ' ribbon cable ' });
+    const unlink = (moduleId, linkId) =>
+      request(f.app)
+        .delete(`/api/modules/${moduleId}/expanders/${linkId}`)
+        .set('Cookie', f.aliceCookie);
+
+    // Only a module in one of your racks can be declared an expander.
+    const unracked = await request(f.app)
+      .post(`/api/modules/${host.module.id}/expanders`)
+      .set('Cookie', f.aliceCookie)
+      .send({ expander_module_id: 99999 });
+    expect(unracked.status).toBe(400);
+    expect(unracked.body.error).toMatch(/one of your racks/);
+
+    let made = await link();
+    expect(made.status).toBe(201);
+    expect(made.body.description).toBe('ribbon cable');
+
+    // The expander side may unlink a pair the host side declared.
+    expect((await unlink(expander.module.id, made.body.id)).status).toBe(200);
+    const after = await request(f.app)
+      .get(`/api/modules/${host.module.id}`)
+      .set('Cookie', f.aliceCookie);
+    expect(after.body.expanders).toEqual([]);
+
+    made = await link();
+    expect((await unlink(host.module.id, made.body.id)).status).toBe(200);
+    expect((await unlink(host.module.id, made.body.id)).status).toBe(404);
+    expect((await unlink(host.module.id, 'abc')).status).toBe(404);
+  });
+});

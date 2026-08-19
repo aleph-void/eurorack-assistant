@@ -134,10 +134,18 @@ const TYPE_LABELS = {
   display: 'Displays',
   other: 'Other',
 };
-const MANUALLY_EDITABLE_TYPES = ['input_jack', 'output_jack', 'knob', 'toggle'];
+const MANUALLY_EDITABLE_TYPES = [
+  'input_jack',
+  'output_jack',
+  'knob',
+  'toggle',
+  'button',
+  'display',
+  'other',
+];
 // Which components can be isolated on the panel picture one at a time, so a
 // single marker can be dragged into place without the others in the way.
-const ARRANGEABLE_TYPES = ['input_jack', 'output_jack', 'knob', 'toggle'];
+const ARRANGEABLE_TYPES = ['input_jack', 'output_jack', 'knob', 'toggle', 'button', 'display'];
 
 const grouped = computed(() => {
   if (!module.value?.components) return [];

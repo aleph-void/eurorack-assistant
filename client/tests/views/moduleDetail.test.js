@@ -218,6 +218,9 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="add-new-knob"]').exists()).toBe(true);
     // Empty supported groups stay visible so their first component can be added.
     expect(wrapper.find('[data-test="add-new-toggle"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="add-new-button"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="add-new-display"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="add-new-other"]').exists()).toBe(true);
 
     await wrapper.find('[data-test="add-new-knob"]').trigger('click');
     await wrapper.find('[data-test="component-name"]').setValue('FREQUENCY');
@@ -711,6 +714,34 @@ describe('ModuleDetailView', () => {
     expect(wrapper.findAll('.marker')).toHaveLength(3);
   });
 
+  it('offers Arrange on buttons, displays and toggles, but not on switches', async () => {
+    const panel = {
+      source: 'image',
+      url: '/api/panels/abc.png',
+      width: 400,
+      height: 1200,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      components: [],
+    };
+    api.get.mockResolvedValue({
+      ...moduleResponse,
+      components: [
+        { id: 4, type: 'button', name: 'Cycle', description: null, voltage_min: null, voltage_max: null, polarity: null },
+        { id: 5, type: 'display', name: 'Level LED', description: null, voltage_min: null, voltage_max: null, polarity: null },
+        { id: 6, type: 'toggle', name: 'Range', description: null, voltage_min: null, voltage_max: null, polarity: null },
+        { id: 7, type: 'switch', name: 'Mode', description: null, voltage_min: null, voltage_max: null, polarity: null },
+      ],
+      panel,
+    });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="arrange-component-4"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="arrange-component-5"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="arrange-component-6"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="arrange-component-7"]').exists()).toBe(false);
+  });
+
   it('creates a panel marker when arranging an analyzed jack the image mapper missed', async () => {
     const panel = {
       source: 'image',
@@ -1168,5 +1199,46 @@ describe('ModuleDetailView signal-path detail', () => {
     const suggestion = wrapper.find('[data-test="expander-suggestion-0"]');
     expect(suggestion.text()).toContain('Performer');
     expect(suggestion.text()).toContain('not in any of your racks');
+  });
+
+  it('removes a stereo pair once the user confirms', async () => {
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.get.mockResolvedValue(conditionalModule);
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-pair-61"]').trigger('click');
+    await flushPromises();
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Remove jack pair', danger: true })
+    );
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/pairs/61');
+    // The module is reloaded so the pair list reflects the server.
+    expect(api.get.mock.calls.filter(([path]) => path === '/api/modules/1')).toHaveLength(2);
+  });
+
+  it('keeps the pair when the confirm is declined', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    api.get.mockResolvedValue(conditionalModule);
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-pair-61"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(api.get.mock.calls.filter(([path]) => path === '/api/modules/1')).toHaveLength(1);
+  });
+
+  it('shows why a pair could not be removed', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.get.mockResolvedValue(conditionalModule);
+    api.delete.mockRejectedValue(new Error('pair is gone already'));
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-pair-61"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="pair-error"]').text()).toContain('gone already');
   });
 });

@@ -352,6 +352,82 @@ describe('/api/llm', () => {
     expect(res.body.effective_model).toBe('gpt-5.1');
   });
 
+  it('validates the settings body itself, and blanks mean the admin defaults', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    const put = (body) =>
+      request(app).put('/api/llm/settings').set('Cookie', aliceCookie).send(body);
+
+    const nothing = await put({});
+    expect(nothing.status).toBe(400);
+    expect(nothing.body.error).toMatch(/Nothing to update/);
+
+    const asArray = await put({ llm_models: ['claude-opus-5'] });
+    expect(asArray.status).toBe(400);
+    expect(asArray.body.error).toMatch(/object of job type/);
+
+    const unknownType = await put({ llm_models: { make_coffee: 'claude-opus-5' } });
+    expect(unknownType.status).toBe(400);
+    expect(unknownType.body.error).toMatch(/Unknown job type: make_coffee/);
+
+    // A blank per-type override means "no override" and is simply dropped.
+    await put({ llm_provider: 'codex', llm_model: 'gpt-5.1' });
+    const blanked = await put({
+      llm_models: { answer_question: 'gpt-5.1-codex', scope_question: '   ' },
+    });
+    expect(blanked.status).toBe(200);
+    expect(blanked.body.llm_models).toEqual({ answer_question: 'gpt-5.1-codex' });
+
+    // Blank provider and model fall back to whatever the admin configured.
+    const reset = await put({ llm_provider: '', llm_model: '' });
+    expect(reset.status).toBe(200);
+    expect(reset.body.llm_provider).toBe('');
+    expect(reset.body.effective_provider).toBe('claude');
+  });
+
+  it('accepts pasted credentials over HTTP and rejects malformed ones', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    const post = (path, body) =>
+      request(app).post(`/api/llm${path}`).set('Cookie', aliceCookie).send(body);
+
+    const badToken = await post('/claude/token', { token: 'nope' });
+    expect(badToken.status).toBe(400);
+    expect(badToken.body.error).toMatch(/sk-ant/);
+    const token = await post('/claude/token', { token: '  sk-ant-oat01-pasted  ' });
+    expect(token.status).toBe(200);
+    expect(token.body.accounts.claude).toMatchObject({ connected: true, kind: 'token' });
+
+    const badJson = await post('/codex/auth-json', { auth_json: 'not json' });
+    expect(badJson.status).toBe(400);
+    expect(badJson.body.error).toMatch(/not valid JSON/);
+    const authed = await post('/codex/auth-json', {
+      auth_json: JSON.stringify({ OPENAI_API_KEY: 'sk-test-12345678' }),
+    });
+    expect(authed.status).toBe(200);
+    expect(authed.body.accounts.codex).toMatchObject({ connected: true, kind: 'auth_json' });
+
+    const badKey = await post('/codex/api-key', { api_key: 'short' });
+    expect(badKey.status).toBe(400);
+    const keyed = await post('/codex/api-key', { api_key: 'sk-test-12345678' });
+    expect(keyed.status).toBe(200);
+    expect(keyed.body.accounts.codex).toMatchObject({ connected: true, kind: 'api_key' });
+    expect((await post('/gemini/api-key', { api_key: 'sk-test-12345678' })).status).toBe(400);
+
+    // With both providers connected the summary names them both, and no
+    // pasted credential ever appears in it.
+    expect(JSON.stringify(keyed.body)).not.toContain('sk-test-12345678');
+    expect(JSON.stringify(keyed.body)).not.toContain('sk-ant-oat01-pasted');
+
+    // Only real providers can be resumed or disconnected.
+    const badResume = await request(app)
+      .post('/api/llm/gemini/resume')
+      .set('Cookie', aliceCookie);
+    expect(badResume.status).toBe(400);
+    const badDelete = await request(app)
+      .delete('/api/llm/gemini')
+      .set('Cookie', aliceCookie);
+    expect(badDelete.status).toBe(400);
+  });
+
   it('shows saved settings on a fresh request, not just in the save response', async () => {
     const { app, aliceCookie } = await createTestApp();
     await request(app)

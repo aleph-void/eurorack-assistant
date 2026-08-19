@@ -766,6 +766,323 @@ describe("scope routes", () => {
       .set("Cookie", fixture.aliceCookie);
     expect(fs.existsSync(file)).toBe(false);
   });
+
+  it("lists captures newest first, filtered by patch or note", async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { capture: captureAnswer },
+    });
+    const take = (body = {}) =>
+      request(fixture.app)
+        .post(`/api/scope/patches/${fixture.patch.id}/captures`)
+        .set("Cookie", fixture.aliceCookie)
+        .send(body);
+    const first = (await take({ title: "one" })).body;
+    const second = (await take({ title: "two" })).body;
+
+    const get = (query = "") =>
+      request(fixture.app)
+        .get(`/api/captures${query}`)
+        .set("Cookie", fixture.aliceCookie);
+    const all = await get();
+    expect(all.status).toBe(200);
+    expect(all.body.map((c) => c.id)).toEqual([second.id, first.id]);
+    expect(all.body[0].channels).toHaveLength(8);
+
+    expect((await get(`?patch_id=${fixture.patch.id}`)).body).toHaveLength(2);
+    expect((await get("?patch_id=999999")).body).toEqual([]);
+    // A garbage filter matches nothing rather than everything.
+    expect((await get("?patch_id=abc")).body).toEqual([]);
+    // Each capture files under its own fresh note.
+    const filed = await get(`?note_id=${first.note_id}`);
+    expect(filed.body.map((c) => c.id)).toEqual([first.id]);
+
+    const one = await request(fixture.app)
+      .get(`/api/captures/${first.id}`)
+      .set("Cookie", fixture.aliceCookie);
+    expect(one.status).toBe(200);
+    expect(one.body.id).toBe(first.id);
+    expect(one.body.channels).toHaveLength(8);
+  });
+
+  it("edits a capture's title and caption, trimming and capping them", async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { capture: captureAnswer },
+    });
+    const captured = (
+      await request(fixture.app)
+        .post(`/api/scope/patches/${fixture.patch.id}/captures`)
+        .set("Cookie", fixture.aliceCookie)
+        .send({ title: "Krell gate" })
+    ).body;
+    const put = (body) =>
+      request(fixture.app)
+        .put(`/api/captures/${captured.id}`)
+        .set("Cookie", fixture.aliceCookie)
+        .send(body);
+
+    const titled = await put({ title: `  ${"x".repeat(300)}  ` });
+    expect(titled.status).toBe(200);
+    expect(titled.body.title).toBe("x".repeat(200));
+    expect(titled.body.channels).toHaveLength(8);
+
+    const captioned = await put({ caption: " the gate output " });
+    expect(captioned.body).toMatchObject({
+      title: "x".repeat(200),
+      caption: "the gate output",
+    });
+
+    // Blank strings clear a field; an empty body changes nothing.
+    const cleared = await put({ title: "   ", caption: "" });
+    expect(cleared.body).toMatchObject({ title: null, caption: null });
+    const noop = await put({});
+    expect(noop.status).toBe(200);
+    expect(noop.body).toMatchObject({ title: null, caption: null });
+
+    expect(
+      (
+        await request(fixture.app)
+          .put("/api/captures/999999")
+          .set("Cookie", fixture.aliceCookie)
+          .send({ title: "x" })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await request(fixture.app)
+          .delete("/api/captures/999999")
+          .set("Cookie", fixture.aliceCookie)
+      ).status,
+    ).toBe(404);
+  });
+
+  it("404s an image that was never stored or has left the disk", async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { capture: captureAnswer },
+    });
+    const captured = (
+      await request(fixture.app)
+        .post(`/api/scope/patches/${fixture.patch.id}/captures`)
+        .set("Cookie", fixture.aliceCookie)
+        .send({})
+    ).body;
+    const image = () =>
+      request(fixture.app)
+        .get(`/api/captures/${captured.id}/image`)
+        .set("Cookie", fixture.aliceCookie);
+
+    // The bytes are immutable, so the browser may cache them forever.
+    const ok = await image();
+    expect(ok.status).toBe(200);
+    expect(ok.headers["cache-control"]).toBe(
+      "private, max-age=31536000, immutable",
+    );
+
+    fs.unlinkSync(path.join(fixture.capturesDir, `${captured.image_hash}.png`));
+    const gone = await image();
+    expect(gone.status).toBe(404);
+    expect(gone.body.error).toMatch(/image not found/);
+
+    await fixture.db.query("UPDATE captures SET image_hash = NULL WHERE id = $1", [captured.id]);
+    expect((await image()).status).toBe(404);
+  });
+
+  it("validates hand-mapped channels and forgets one on demand", async () => {
+    const fixture = await withScopeFixture();
+    const put = (index, body) =>
+      request(fixture.app)
+        .put(`/api/scope/patches/${fixture.patch.id}/channels/${index}`)
+        .set("Cookie", fixture.aliceCookie)
+        .send(body);
+
+    expect(
+      (
+        await request(fixture.app)
+          .put("/api/scope/patches/999999/channels/0")
+          .set("Cookie", fixture.aliceCookie)
+          .send({})
+      ).status,
+    ).toBe(404);
+    for (const index of [-1, "abc", "1.5"]) {
+      const res = await put(index, {});
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/non-negative integer/);
+    }
+    const stranger = await put(0, { patch_module_id: 99999 });
+    expect(stranger.status).toBe(400);
+    expect(stranger.body.error).toMatch(/not in this patch/);
+    const wrongJack = await put(0, {
+      patch_module_id: fixture.es9Instance.id,
+      component_id: 99999,
+    });
+    expect(wrongJack.status).toBe(400);
+    expect(wrongJack.body.error).toMatch(/not on that module/);
+
+    // An explicit label is capped, a CV channel stays a CV channel, and a
+    // channel watching nothing keeps no label at all.
+    const labelled = await put(3, {
+      label: "y".repeat(300),
+      signal_type: "cv",
+    });
+    expect(labelled.status).toBe(200);
+    expect(labelled.body).toMatchObject({
+      channel_index: 3,
+      label: "y".repeat(200),
+      signal_type: "cv",
+      source: "manual",
+    });
+    expect((await put(4, {})).body.label).toBeNull();
+
+    // A bare component name (off-rack gear) becomes the channel's own label.
+    const named = await put(5, { component_name: "Kick out" });
+    expect(named.body).toMatchObject({ component_name: "Kick out", label: "Kick out" });
+
+    // An instance's patch label outranks its module name in the fallback.
+    await request(fixture.app)
+      .put(`/api/patches/${fixture.patch.id}/modules/${fixture.es9Instance.id}`)
+      .set("Cookie", fixture.aliceCookie)
+      .send({ label: "the interface" });
+    const input5 = fixture.es9Components.find((c) => c.name === "Input 5");
+    const auto = await put(6, {
+      patch_module_id: fixture.es9Instance.id,
+      component_id: input5.id,
+    });
+    expect(auto.body.label).toBe("the interface — Input 5");
+
+    const remove = (patchId, index) =>
+      request(fixture.app)
+        .delete(`/api/scope/patches/${patchId}/channels/${index}`)
+        .set("Cookie", fixture.aliceCookie);
+    expect((await remove(999999, 3)).status).toBe(404);
+    expect((await remove(fixture.patch.id, 3)).status).toBe(200);
+    const state = await request(fixture.app)
+      .get(`/api/scope/patches/${fixture.patch.id}`)
+      .set("Cookie", fixture.aliceCookie);
+    expect(state.body.channels.map((c) => c.channel_index).sort()).toEqual([4, 5, 6]);
+  });
+
+  it("pushes stored labels on demand and reads the live tuner", async () => {
+    const fixture = await withScopeFixture();
+    const { sent } = await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: {
+        set_labels: { ok: true },
+        tuner: (params) => ({
+          channels: params.channels.map((index) => ({ index, voltage: 1.75, note: "A2" })),
+        }),
+      },
+    });
+    const labels = () =>
+      request(fixture.app)
+        .post(`/api/scope/patches/${fixture.patch.id}/labels`)
+        .set("Cookie", fixture.aliceCookie)
+        .send({});
+    const tuner = (body = {}) =>
+      request(fixture.app)
+        .post(`/api/scope/patches/${fixture.patch.id}/tuner`)
+        .set("Cookie", fixture.aliceCookie)
+        .send(body);
+
+    expect(
+      (
+        await request(fixture.app)
+          .post("/api/scope/patches/999999/labels")
+          .set("Cookie", fixture.aliceCookie)
+          .send({})
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await request(fixture.app)
+          .post("/api/scope/patches/999999/tuner")
+          .set("Cookie", fixture.aliceCookie)
+          .send({})
+      ).status,
+    ).toBe(404);
+
+    await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/automap`)
+      .set("Cookie", fixture.aliceCookie)
+      .send({});
+    const pushed = await labels();
+    expect(pushed.status).toBe(200);
+    expect(pushed.body.ok).toBe(true);
+    expect(pushed.body.channels).toHaveLength(8);
+    expect(sent.filter((m) => m.action === "set_labels")).toHaveLength(2);
+
+    // The tuner asks about the stored channels unless the caller names some.
+    const live = await tuner();
+    expect(live.status).toBe(200);
+    expect(live.body.patch_id).toBe(fixture.patch.id);
+    expect(live.body.channels).toHaveLength(8);
+    const two = await tuner({ channels: [2, 5] });
+    expect(two.body.channels).toEqual([
+      { index: 2, voltage: 1.75, note: "A2" },
+      { index: 5, voltage: 1.75, note: "A2" },
+    ]);
+  });
+
+  it("turns a silent or failing scope into a 504 or 502-free error, not a crash", async () => {
+    const fixture = await withScopeFixture();
+
+    // No scope at all: both push endpoints say so.
+    for (const action of ["labels", "tuner"]) {
+      const res = await request(fixture.app)
+        .post(`/api/scope/patches/${fixture.patch.id}/${action}`)
+        .set("Cookie", fixture.aliceCookie)
+        .send({});
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/No oscilloscope/);
+    }
+
+    // A scope that vanishes mid-request is a gateway problem…
+    let device;
+    device = await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: {
+        set_labels: () => {
+          fixture.hub.unregister(device.connection);
+          return new Promise(() => {});
+        },
+        // …and one that answers with an error of its own is a server fault.
+        tuner: () => {
+          throw new Error("the scope is busy");
+        },
+      },
+    });
+    const silent = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/labels`)
+      .set("Cookie", fixture.aliceCookie)
+      .send({});
+    expect(silent.status).toBe(504);
+    expect(silent.body.error).toMatch(/disconnected/);
+
+    const device2 = await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: {
+        tuner: () => {
+          throw new Error("the scope is busy");
+        },
+      },
+    });
+    const failing = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/tuner`)
+      .set("Cookie", fixture.aliceCookie)
+      .send({});
+    expect(failing.status).toBe(500);
+    void device2;
+  });
 });
 
 describe("notes on patches", () => {

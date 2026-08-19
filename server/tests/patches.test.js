@@ -1186,6 +1186,170 @@ describe('patches API', () => {
       to_component_name: 'Signal In',
     });
   });
+
+  it('validates added instances and numbers repeat gear by name', async () => {
+    const fixture = await withPatchFixture();
+    const { app, aliceCookie } = fixture;
+    const patch = (await createPatch(fixture)).body;
+    const post = (body) =>
+      request(app).post(`/api/patches/${patch.id}/modules`).set('Cookie', aliceCookie).send(body);
+
+    // Only modules the user actually has racked can be referenced live.
+    const unracked = await post({ module_id: 99999 });
+    expect(unracked.status).toBe(400);
+    expect(unracked.body.error).toMatch(/one of your racks/);
+
+    const nameless = await post({ external: true });
+    expect(nameless.status).toBe(400);
+    expect(nameless.body.error).toMatch(/name for the module or piece of gear/);
+
+    // External gear ignores a module_id sent along with it, and gets the
+    // 'external' manufacturer when none is given.
+    const first = await post({
+      name: 'UMC404HD',
+      external: true,
+      module_id: fixture.module.id,
+    });
+    expect(first.status).toBe(201);
+    expect(first.body).toMatchObject({
+      external: true,
+      live: false,
+      manufacturer: 'external',
+      module_name: 'UMC404HD',
+      instance: 1,
+    });
+
+    // The same gear again — matched by name, case-insensitively — is #2.
+    const second = await post({ name: 'umc404hd', external: true });
+    expect(second.status).toBe(201);
+    expect(second.body.instance).toBe(2);
+  });
+
+  it('declares and removes connection points on off-rack gear with validation', async () => {
+    const fixture = await withPatchFixture();
+    const { app, aliceCookie, output } = fixture;
+    const patch = (await createPatch(fixture)).body;
+    const detail = async () =>
+      (await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie)).body;
+    const maths = (await detail()).modules.find((m) => m.module_name === 'Maths');
+    const gear = (
+      await request(app)
+        .post(`/api/patches/${patch.id}/modules`)
+        .set('Cookie', aliceCookie)
+        .send({ name: 'UMC404HD', external: true })
+    ).body;
+    const post = (pmId, body) =>
+      request(app)
+        .post(`/api/patches/${patch.id}/modules/${pmId}/ports`)
+        .set('Cookie', aliceCookie)
+        .send(body);
+
+    // A live module's connection points come from its analysis, not the patch.
+    const live = await post(maths.id, { name: 'IN 9' });
+    expect(live.status).toBe(400);
+    expect(live.body.error).toMatch(/analyzed components/);
+
+    expect((await post(99999, { name: 'IN 1' })).status).toBe(404);
+    expect((await post(gear.id, { name: '   ' })).status).toBe(400);
+    const badType = await post(gear.id, { name: 'IN 1', type: 'knob' });
+    expect(badType.status).toBe(400);
+    expect(badType.body.error).toMatch(/type must be one of/);
+    const badKind = await post(gear.id, { name: 'IN 1', port_kind: 'firewire' });
+    expect(badKind.status).toBe(400);
+    expect(badKind.body.error).toMatch(/port_kind must be one of/);
+
+    // Spelling variants of the connector normalize to the stored kind.
+    const midi = await post(gear.id, {
+      name: 'MIDI OUT',
+      type: 'output_jack',
+      port_kind: 'Midi Din',
+    });
+    expect(midi.status).toBe(201);
+    expect(midi.body.port_kind).toBe('midi_din');
+
+    const port = (await post(gear.id, { name: 'IN 1', description: ' left channel ' })).body;
+    expect(port).toMatchObject({
+      type: 'input_jack',
+      description: 'left channel',
+      declared: true,
+      patch_module_id: gear.id,
+    });
+    expect((await post(gear.id, { name: 'in 1' })).status).toBe(409);
+
+    // Deleting a port takes the cable patched into it along.
+    await request(app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: maths.id,
+        from_component_id: output.id,
+        to_patch_module_id: gear.id,
+        to_component_id: port.id,
+      });
+    expect((await detail()).cables).toHaveLength(1);
+    const remove = (pmId, portId) =>
+      request(app)
+        .delete(`/api/patches/${patch.id}/modules/${pmId}/ports/${portId}`)
+        .set('Cookie', aliceCookie);
+    expect((await remove(99999, port.id)).status).toBe(404);
+    expect((await remove(gear.id, 'abc')).status).toBe(404);
+    expect((await remove(gear.id, port.id)).status).toBe(200);
+    const after = await detail();
+    expect(after.cables).toEqual([]);
+    const ports = after.modules.find((m) => m.id === gear.id).components.map((c) => c.name);
+    expect(ports).toEqual(['MIDI OUT']);
+    expect((await remove(gear.id, port.id)).status).toBe(404);
+  });
+
+  it('renames groups and validates group edits', async () => {
+    const fixture = await withPatchFixture();
+    const { app, aliceCookie } = fixture;
+    const patch = (await createPatch(fixture)).body;
+    const post = (body) =>
+      request(app).post(`/api/patches/${patch.id}/groups`).set('Cookie', aliceCookie).send(body);
+    const put = (groupId, body) =>
+      request(app)
+        .put(`/api/patches/${patch.id}/groups/${groupId}`)
+        .set('Cookie', aliceCookie)
+        .send(body);
+
+    expect((await post({ name: '   ' })).status).toBe(400);
+    const made = await post({ name: 'Rhythm', description: ' the drums ', position: 5 });
+    expect(made.status).toBe(201);
+    expect(made.body).toMatchObject({ name: 'Rhythm', description: 'the drums', position: 5 });
+
+    expect((await put(99999, { name: 'x' })).status).toBe(404);
+    expect((await put(made.body.id, { name: '   ' })).status).toBe(400);
+    const renamed = await put(made.body.id, { name: ' Groove ', description: '' });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body).toMatchObject({ name: 'Groove', description: null, position: 5 });
+
+    // An empty update changes nothing and answers with the group as it is.
+    const noop = await put(made.body.id, {});
+    expect(noop.status).toBe(200);
+    expect(noop.body).toMatchObject({ name: 'Groove', position: 5 });
+
+    // An instance can only be filed under a group of its own patch.
+    const other = (await createPatch(fixture, { name: 'Other' })).body;
+    const detail = await request(app)
+      .get(`/api/patches/${other.id}`)
+      .set('Cookie', aliceCookie);
+    const pm = detail.body.modules[0];
+    const foreign = await request(app)
+      .put(`/api/patches/${other.id}/modules/${pm.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ group_id: made.body.id });
+    expect(foreign.status).toBe(400);
+    expect(foreign.body.error).toMatch(/group of this patch/);
+
+    expect(
+      (
+        await request(app)
+          .delete(`/api/patches/${patch.id}/groups/99999`)
+          .set('Cookie', aliceCookie)
+      ).status
+    ).toBe(404);
+  });
 });
 
 // Building a patch faster: copying one whole, turning a cable around, and

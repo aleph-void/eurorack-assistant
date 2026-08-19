@@ -58,6 +58,9 @@ export function patchInstanceRoutes(db) {
         .status(400)
         .json({ error: 'module_id, or a name for the module or piece of gear, is required' });
     }
+    // Count instances by the manufacturer that will actually be stored, or a
+    // second nameless piece of external gear starts over at #1.
+    manufacturer = manufacturer || (external ? 'external' : '');
     const instances = await PatchModule.findAll({
       where: { patch_id: patch.id },
     });
@@ -72,7 +75,7 @@ export function patchInstanceRoutes(db) {
     const pm = await PatchModule.create({
       patch_id: patch.id,
       module_id: moduleId,
-      manufacturer: manufacturer || (external ? 'external' : ''),
+      manufacturer,
       module_name: moduleName,
       instance,
       external,

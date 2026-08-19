@@ -71,6 +71,58 @@ describe('UsersView', () => {
     expect(text).toContain('admin');
     expect(text).toContain('alice');
   });
+
+  it('deletes a user once the admin confirms, then reloads the list', async () => {
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.get.mockResolvedValue([
+      { id: 1, username: 'admin', is_admin: true, created_at: new Date().toISOString() },
+      { id: 2, username: 'alice', is_admin: false, created_at: new Date().toISOString() },
+    ]);
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = mount(UsersView, { global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-2"]').trigger('click');
+    await flushPromises();
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Delete user', danger: true })
+    );
+    expect(api.delete).toHaveBeenCalledWith('/api/users/2');
+    expect(api.get.mock.calls.filter(([path]) => path === '/api/users')).toHaveLength(2);
+    vi.restoreAllMocks();
+  });
+
+  it('leaves the user alone when the confirm is declined', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    api.get.mockResolvedValue([
+      { id: 1, username: 'admin', is_admin: true, created_at: new Date().toISOString() },
+      { id: 2, username: 'alice', is_admin: false, created_at: new Date().toISOString() },
+    ]);
+    const wrapper = mount(UsersView, { global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-2"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(api.get.mock.calls.filter(([path]) => path === '/api/users')).toHaveLength(1);
+    vi.restoreAllMocks();
+  });
+
+  it('shows why a user could not be deleted', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.get.mockResolvedValue([
+      { id: 1, username: 'admin', is_admin: true, created_at: new Date().toISOString() },
+      { id: 2, username: 'alice', is_admin: false, created_at: new Date().toISOString() },
+    ]);
+    api.delete.mockRejectedValue(new Error('that user still owns running jobs'));
+    const wrapper = mount(UsersView, { global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-2"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="error"]').text()).toContain('still owns running jobs');
+    vi.restoreAllMocks();
+  });
 });
 
 

@@ -939,4 +939,77 @@ describe('PatchDetailView beyond the rack', () => {
       port_kind: 'audio_quarter_inch',
     });
   });
+
+  it('links two instances and reloads the patch', async () => {
+    api.get.mockResolvedValue(richPatch);
+    api.post.mockResolvedValue({ id: 82 });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="link-a"]').setValue(11);
+    await wrapper.find('[data-test="link-b"]').setValue(13);
+    await wrapper.find('[data-test="links"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/links', {
+      a_patch_module_id: 11,
+      b_patch_module_id: 13,
+      kind: 'bridge',
+    });
+    // The new link arrives with the reloaded patch.
+    expect(api.get.mock.calls.filter(([path]) => path === '/api/patches/7')).toHaveLength(2);
+  });
+
+  it('shows why two instances could not be linked', async () => {
+    api.get.mockResolvedValue(richPatch);
+    api.post.mockRejectedValue(new Error('those two are already linked'));
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="link-a"]').setValue(11);
+    await wrapper.find('[data-test="link-b"]').setValue(13);
+    await wrapper.find('[data-test="links"] form').trigger('submit');
+    await flushPromises();
+    expect(wrapper.find('[data-test="link-error"]').text()).toContain('already linked');
+    expect(api.get.mock.calls.filter(([path]) => path === '/api/patches/7')).toHaveLength(1);
+  });
+
+  it('unlinks a bridged pair once the user confirms', async () => {
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.get.mockResolvedValue(richPatch);
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-link-81"]').trigger('click');
+    await flushPromises();
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Remove link', danger: true })
+    );
+    expect(api.delete).toHaveBeenCalledWith('/api/patches/7/links/81');
+    expect(api.get.mock.calls.filter(([path]) => path === '/api/patches/7')).toHaveLength(2);
+  });
+
+  it('keeps the link when the confirm is declined', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    api.get.mockResolvedValue(richPatch);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-link-81"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(api.get.mock.calls.filter(([path]) => path === '/api/patches/7')).toHaveLength(1);
+  });
+
+  it('shows why a link could not be removed', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.get.mockResolvedValue(richPatch);
+    api.delete.mockRejectedValue(new Error('link is gone already'));
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-link-81"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="link-error"]').text()).toContain('gone already');
+  });
 });
