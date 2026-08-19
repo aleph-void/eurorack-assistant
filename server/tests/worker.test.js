@@ -291,6 +291,36 @@ describe('worker', () => {
     expect(chained).toHaveLength(1);
     expect(chained[0].status).toBe('pending');
   });
+  it('chains the description pass instead of an analysis when components exist by hand', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id);
+    // Components on a module with no manual can only have been built by
+    // hand; the analysis behind a found manual would destroy them.
+    await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'input_jack', 'IN 1')`,
+      [module.id]
+    );
+    await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
+    const backend = fakeBackend({
+      completeTextWithSearch: JSON.stringify({
+        manufacturer: 'Make Noise',
+        module: 'Maths',
+        pdf_urls: ['https://makenoise.com/maths.pdf'],
+        product_page_url: null,
+      }),
+    });
+    const fetchImpl = fakeFetch({ 'makenoise.com': { body: PDF_BYTES } });
+    const worker = makeWorker(db, backend, fetchImpl);
+    const done = await worker.tick();
+    expect(done.status).toBe('complete');
+    const { rows: jobs } = await db.query(
+      "SELECT type FROM jobs WHERE module_id = $1 AND type IN ('analyze_manual', 'describe_components')",
+      [module.id]
+    );
+    expect(jobs.map((j) => j.type)).toEqual(['describe_components']);
+  });
+
   it('chains a text extraction alongside the analysis when a manual is found', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });

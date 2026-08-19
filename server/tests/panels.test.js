@@ -27,6 +27,7 @@ import {
   sniffImage,
 } from '../src/services/image.js';
 import { loadSharp } from '../src/services/panelPixels.js';
+import { HP_MM, PANEL_MM_HEIGHT } from '../src/services/panelGeometry.js';
 import {
   buildPanelForModule,
   fallbackLayout,
@@ -1227,6 +1228,7 @@ describe('filling in what modules are missing', () => {
       module_id: module.id,
       name: 'OUT',
       type: 'output_jack',
+      description: 'The main output.',
     });
     await ctx.db.models.ModulePanel.create({
       module_id: module.id,
@@ -1254,7 +1256,13 @@ describe('filling in what modules are missing', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       modules: 4,
-      queued: { find_manual: 1, analyze_manual: 1, panel_image: 1, extract_manual: 1 },
+      queued: {
+        find_manual: 1,
+        analyze_manual: 1,
+        panel_image: 1,
+        extract_manual: 1,
+        describe_components: 0,
+      },
       skipped: 0,
       complete: 1,
     });
@@ -1288,16 +1296,31 @@ describe('filling in what modules are missing', () => {
     expect(after.analysis_status).toBe('pending');
   });
 
-  it('sends a module with a panel but no HP back to the panel step', async () => {
+  it('fills a missing HP from the documents rather than rebuilding the panel', async () => {
     const module = await completeModule();
     await ctx.db.models.Module.update({ hp: null }, { where: { id: module.id } });
     const res = await reanalyze();
+    // The panel job would replace the picture and rebuild every marker; a
+    // module that only lacks its width gets the narrow pass instead.
     expect(res.body.queued).toEqual({
       find_manual: 0,
       analyze_manual: 0,
-      panel_image: 1,
+      panel_image: 0,
       extract_manual: 0,
+      describe_components: 1,
     });
+    const jobs = await ctx.db.models.Job.findAll({ where: { type: 'describe_components' } });
+    expect(jobs.map((j) => j.module_id)).toEqual([module.id]);
+  });
+
+  it('fills a missing summary without destroying the components', async () => {
+    const module = await completeModule();
+    await ctx.db.models.Module.update({ summary: null }, { where: { id: module.id } });
+    const res = await reanalyze();
+    // A full analysis would wipe and rebuild the component inventory; a
+    // module that has components keeps them, whatever else it is missing.
+    expect(res.body.queued).toMatchObject({ analyze_manual: 0, describe_components: 1 });
+    expect((await ctx.db.models.Module.findByPk(module.id)).analysis_status).toBe('complete');
   });
 
   // How panels are built changes; the modules do not. Nothing about a
@@ -1336,6 +1359,7 @@ describe('filling in what modules are missing', () => {
       analyze_manual: 0,
       panel_image: 0,
       extract_manual: 0,
+      describe_components: 0,
     });
     const after = await ctx.db.models.Module.findByPk(module.id);
     expect(after.manual_status).toBe('pending');
@@ -1355,7 +1379,13 @@ describe('filling in what modules are missing', () => {
     const second = await reanalyze();
     expect(second.body).toEqual({
       modules: 1,
-      queued: { find_manual: 0, analyze_manual: 0, panel_image: 0, extract_manual: 0 },
+      queued: {
+        find_manual: 0,
+        analyze_manual: 0,
+        panel_image: 0,
+        extract_manual: 0,
+        describe_components: 0,
+      },
       skipped: 1,
       complete: 0,
     });
@@ -1392,6 +1422,70 @@ describe('filling in what modules are missing', () => {
 
   it('requires a session', async () => {
     expect((await request(ctx.app).post('/api/modules/reanalyze').send({})).status).toBe(401);
+  });
+
+  it('finds a manual for a hand-built module without marking it for analysis', async () => {
+    // A module built entirely by hand: components exist, no manual ever did.
+    const module = await insertModule(ctx.db, alice.id, { name: 'DIY Mixer' });
+    await ctx.db.models.ModuleComponent.create({
+      module_id: module.id,
+      name: 'IN 1',
+      type: 'input_jack',
+      description: 'First channel in.',
+    });
+    const before = (await ctx.db.models.Module.findByPk(module.id)).analysis_status;
+
+    const res = await reanalyze();
+    expect(res.body.queued).toMatchObject({ find_manual: 1, analyze_manual: 0 });
+    // No analysis is coming for it (the find job chains the narrow pass
+    // instead), so its analysis status is left exactly as it was.
+    expect((await ctx.db.models.Module.findByPk(module.id)).analysis_status).toBe(before);
+  });
+
+  it('queues a description pass for hand-added components with none', async () => {
+    // Otherwise complete, but with a hand-added jack the analysis never saw.
+    const done = await completeModule({ name: 'Maths' });
+    await ctx.db.models.ModuleComponent.create({
+      module_id: done.id,
+      name: 'Both',
+      type: 'output_jack',
+    });
+    // Missing its panel AND a description: the panel job does not write
+    // descriptions, so both jobs go out.
+    const noPanel = await completeModule({ name: 'Optomix' });
+    await ctx.db.models.ModulePanel.destroy({ where: { module_id: noPanel.id } });
+    await ctx.db.models.ModuleComponent.create({
+      module_id: noPanel.id,
+      name: 'CTRL',
+      type: 'input_jack',
+      description: '   ',
+    });
+    // Missing its analysis: the analysis rewrites every component anyway, so
+    // no separate description pass is queued behind it.
+    const noAnalysis = await insertModule(ctx.db, alice.id, {
+      name: 'Wogglebug',
+      manual_hash: PDF_HASH,
+      manual_text: '# Manual\n',
+    });
+    await ctx.db.models.ModuleComponent.destroy({ where: { module_id: noAnalysis.id } });
+
+    const res = await reanalyze();
+    expect(res.status).toBe(200);
+    expect(res.body.queued).toMatchObject({
+      describe_components: 2,
+      panel_image: 1,
+      analyze_manual: 1,
+    });
+    expect(res.body.complete).toBe(0);
+    const jobs = await ctx.db.models.Job.findAll({ where: { type: 'describe_components' } });
+    expect(jobs.map((j) => j.module_id).sort()).toEqual([done.id, noPanel.id].sort());
+    // The statuses the pipeline walks are not touched by the narrow pass.
+    expect((await ctx.db.models.Module.findByPk(done.id)).analysis_status).toBe('complete');
+
+    // Asking again queues nothing new: the pass is already waiting.
+    const second = await reanalyze();
+    expect(second.body.queued.describe_components).toBe(0);
+    expect(second.body.skipped).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -1809,5 +1903,109 @@ describe('uploading your own panel image', () => {
       .set('Cookie', ctx.aliceCookie);
     expect(res.status).toBe(404);
     expect(await ctx.db.models.ModulePanel.count({ where: { module_id: module.id } })).toBe(1);
+  });
+});
+
+describe('trimming a panel picture', () => {
+  let ctx;
+  let alice;
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    alice = await ctx.db.models.User.findOne({ where: { username: 'alice' } });
+  });
+
+  // A drawn 2HP plate on a large blank backdrop, stored as the module's
+  // panel with no crop — the state Trim exists to fix.
+  async function paddedPanel({ blank = false } = {}) {
+    const sharp = await loadSharp();
+    const pxPerMm = 4;
+    const plateW = Math.round(2 * HP_MM * pxPerMm);
+    const plateH = Math.round(PANEL_MM_HEIGHT * pxPerMm);
+    const padX = 160;
+    const padY = 60;
+    const width = plateW + padX * 2;
+    const height = plateH + padY * 2;
+    const gray = Buffer.alloc(width * height, 250);
+    if (!blank) {
+      for (let y = padY; y < padY + plateH; y++) {
+        for (let x = padX; x < padX + plateW; x++) gray[y * width + x] = 120;
+      }
+    }
+    const png = await sharp(gray, { raw: { width, height, channels: 1 } })
+      .png()
+      .toBuffer();
+    const module = await insertModule(ctx.db, alice.id, { hp: 2 });
+    const hash = saveImage(ctx.panelsDir, png, 'png');
+    const panel = await ctx.db.models.ModulePanel.create({
+      module_id: module.id,
+      source: 'image',
+      image_hash: hash,
+      image_ext: 'png',
+      width,
+      height,
+      hp: 2,
+      crop_x: 0,
+      crop_y: 0,
+      crop_w: 1,
+      crop_h: 1,
+    });
+    return { module, panel, width, height, padX, padY, plateW, plateH };
+  }
+
+  const trim = (moduleId) =>
+    request(ctx.app).post(`/api/modules/${moduleId}/panel/trim`).set('Cookie', ctx.aliceCookie);
+
+  it('crops to the plate and leaves every marker on its hardware', async () => {
+    const { module, width, height, padX, padY, plateW, plateH } = await paddedPanel();
+    const { rows: jack } = await ctx.db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'output_jack', 'OUT')
+       RETURNING id`,
+      [module.id]
+    );
+    // A marker sitting at the exact center of the plate, as whole-image
+    // fractions — the way every placement is stored.
+    const markerX = (padX + plateW / 2) / width;
+    const markerY = (padY + plateH / 2) / height;
+    const dbPanel = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    await ctx.db.models.ModulePanelComponent.create({
+      panel_id: dbPanel.id,
+      component_id: jack[0].id,
+      name: 'OUT',
+      shape: 'jack',
+      x: markerX,
+      y: markerY,
+      w: 0.06,
+      h: 0.06,
+    });
+
+    const res = await trim(module.id);
+    expect(res.status).toBe(200);
+    const crop = res.body.panel.crop;
+    // The crop closes on the plate's box…
+    expect(crop.x * width).toBeCloseTo(padX, -1);
+    expect(crop.y * height).toBeCloseTo(padY, -1);
+    expect(crop.w * width).toBeCloseTo(plateW, -1);
+    expect(crop.h * height).toBeCloseTo(plateH, -1);
+    // …while the marker's stored position is untouched, and still lands on
+    // the center of the plate once mapped through the new crop — the same
+    // arithmetic the client renders with.
+    const marker = res.body.panel.components[0];
+    expect(marker.x).toBeCloseTo(markerX, 10);
+    expect(marker.y).toBeCloseTo(markerY, 10);
+    expect((marker.x - crop.x) / crop.w).toBeCloseTo(0.5, 1);
+    expect((marker.y - crop.y) / crop.h).toBeCloseTo(0.5, 1);
+  });
+
+  it('404s without a panel or its image, and refuses a blank picture', async () => {
+    const bare = await insertModule(ctx.db, alice.id, { name: 'Rene' });
+    expect((await trim(bare.id)).status).toBe(404);
+
+    const { module, panel } = await paddedPanel({ blank: true });
+    const res = await trim(module.id);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/no panel edge|Could not find/i);
+
+    fs.rmSync(panelPath(ctx.panelsDir, panel.image_hash, 'png'));
+    expect((await trim(module.id)).status).toBe(404);
   });
 });

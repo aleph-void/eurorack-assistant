@@ -1,8 +1,10 @@
+import fs from 'node:fs';
 import { Router } from 'express';
 import {
   downloadImage,
   MAX_IMAGE_BYTES,
   MIN_PANEL_PIXELS,
+  panelPath,
   saveImage,
   sniffImage,
 } from '../../services/image.js';
@@ -190,6 +192,33 @@ export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
     }
     const panels = await loadPanels(db, [module.id]);
     res.status(201).json({ panel: panels.get(module.id) ?? null, job_id: queued ? queued.id : null });
+  }));
+
+  // Trim the blank backdrop away from the existing panel picture: work the
+  // front plate's box out of the pixels again and store it as the crop, the
+  // same way an upload is cropped on arrival. The markers store their
+  // positions as fractions of the WHOLE image and every renderer maps them
+  // through the crop, so each one stays glued to the hardware it marks —
+  // nothing about the placements needs rewriting, and the original bytes are
+  // kept untouched (no lossy re-encoding, animated formats survive).
+  router.post('/:id/panel/trim', requireOwnedModule(db), asyncHandler(async (req, res) => {
+    const module = req.module;
+    const panel = await ModulePanel.findOne({ where: { module_id: module.id } });
+    if (!panel) return res.status(404).json({ error: 'Module has no panel' });
+    const file = panel.image_hash
+      ? panelPath(panelsDir, panel.image_hash, panel.image_ext)
+      : null;
+    if (!file || !fs.existsSync(file)) {
+      return res.status(404).json({ error: 'Panel image not found' });
+    }
+    const pixels = await readPixels(file);
+    const crop = pixels ? panelCrop(pixels, { hp: panel.hp ?? module.hp ?? null }) : null;
+    if (!crop) {
+      return res.status(400).json({ error: 'Could not find a panel edge to trim to' });
+    }
+    await panel.update({ crop_x: crop.x, crop_y: crop.y, crop_w: crop.w, crop_h: crop.h });
+    const panels = await loadPanels(db, [module.id]);
+    res.json({ panel: panels.get(module.id) ?? null });
   }));
 
   // Give an analyzed component the panel marker the image-mapping pass missed.

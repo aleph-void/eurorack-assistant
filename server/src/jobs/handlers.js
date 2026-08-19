@@ -16,6 +16,9 @@
 //                     that describe panels jack by jack (Perfect Circuit,
 //                     Detroit Modular, Midwest Modular), then re-run the
 //                     manual analysis with every page that was found attached
+//   describe_components — write descriptions for components that have none
+//                     (added by hand after the import) from the module's
+//                     documents, touching nothing that is already described
 //   scope_question  — determine which modules/jacks a question applies to,
 //                     then leave the question 'scoped' for the user to review
 //   answer_question — ask the LLM with the reviewed scope and attachments
@@ -38,6 +41,10 @@ import {
   isRetailerPageName,
 } from '../services/manualFinder.js';
 import { analyzeManualForModule } from '../services/manualAnalyzer.js';
+import {
+  describeComponentsForModule,
+  moduleFactGaps,
+} from '../services/componentDescriber.js';
 import { extractManualDocument } from '../services/manualText.js';
 import { buildPanelForModule } from '../services/panelImage.js';
 import { answerQuestion, scopeQuestion } from '../services/ask.js';
@@ -117,14 +124,25 @@ export function createHandlers(
     }
     progress(`manual saved: ${hash}.pdf`);
 
-    // Chain the analysis job once the manual is on disk.
-    const pending = await db.models.Job.findOne({
-      where: { module_id: module.id, type: 'analyze_manual', status: ['pending', 'running'] },
+    // Chain the analysis job once the manual is on disk — unless the module
+    // already has components. Those can only have been built by hand (there
+    // was no manual to analyze until now), and a full analysis would destroy
+    // them; the narrow description pass reads the new manual and fills in
+    // only what is blank instead.
+    const components = await db.models.ModuleComponent.count({
+      where: { module_id: module.id },
     });
-    if (!pending) {
-      // The analysis job inherits the owner of the find job that chained it.
-      await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: job.user_id });
-      progress('queued manual analysis');
+    if (components === 0) {
+      const pending = await db.models.Job.findOne({
+        where: { module_id: module.id, type: 'analyze_manual', status: ['pending', 'running'] },
+      });
+      if (!pending) {
+        // The analysis job inherits the owner of the find job that chained it.
+        await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: job.user_id });
+        progress('queued manual analysis');
+      }
+    } else if (await enqueueModuleJob(db, 'describe_components', module, job.user_id)) {
+      progress('components already exist by hand; queued the description pass instead of a full analysis');
     }
 
     // The searchable text of the document that was just saved. Independent of
@@ -290,6 +308,56 @@ export function createHandlers(
     );
   }
 
+  // Fill in the facts the analysis never wrote — descriptions of components
+  // the user added by hand, a missing summary, a missing HP width. One
+  // narrow model pass over the same document set the analysis reads; a fact
+  // that already exists is never overwritten (services/componentDescriber.js).
+  async function handleDescribeComponents(job, backend, progress) {
+    const { Module } = db.models;
+    const record = await Module.findByPk(job.module_id);
+    if (!record) throw new Error(`Module ${job.module_id} no longer exists`);
+    const module = record.get({ plain: true });
+    const gaps = await moduleFactGaps(db, module);
+    if (gaps.components.length === 0 && !gaps.summary && !gaps.hp) {
+      progress('nothing is missing — every fact is already filled in');
+      return;
+    }
+    const missing = gaps.components;
+    const { manual } = await sharedManualDocuments(module);
+    const scoped = (await analysisScopeDocuments(module, job.user_id)).filter(
+      (m) => m.id !== manual?.id
+    );
+    const seen = new Set();
+    const candidates = (manual?.analysis_scope ? [manual, ...scoped] : scoped).filter((m) => {
+      if (seen.has(m.hash)) return false;
+      seen.add(m.hash);
+      return true;
+    });
+    if (candidates.length === 0) {
+      throw new Error('This module has no documents to read descriptions from');
+    }
+    const wanted = [
+      missing.length > 0 ? `${missing.length} component description(s)` : null,
+      gaps.summary ? 'the summary' : null,
+      gaps.hp ? 'the HP width' : null,
+    ].filter(Boolean);
+    progress(
+      `filling in ${wanted.join(', ')} from ` +
+        candidates.map((m) => m.original_name || `${m.hash}.pdf`).join(', ')
+    );
+    const result = await describeComponentsForModule(
+      db,
+      backend,
+      module,
+      candidates.map((m) => manualPath(manualsDir, m.hash))
+    );
+    progress(
+      `descriptions written: ${result.described} of ${missing.length}` +
+        (result.summary ? '; summary filled in' : '') +
+        (result.hp ? '; HP filled in' : '')
+    );
+  }
+
   async function handleAnalyzeManual(job, backend, progress) {
     const { Module } = db.models;
     const record = await Module.findByPk(job.module_id);
@@ -435,6 +503,7 @@ export function createHandlers(
     find_manual: handleFindManual,
     analyze_manual: handleAnalyzeManual,
     reanalyze_components: handleReanalyzeComponents,
+    describe_components: handleDescribeComponents,
     extract_manual: handleExtractManual,
     panel_image: handlePanelImage,
     scope_question: handleScopeQuestion,

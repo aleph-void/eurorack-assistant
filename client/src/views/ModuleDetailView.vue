@@ -293,6 +293,9 @@ async function arrangeComponent(c) {
       if (panel && module.value) module.value = { ...module.value, panel };
     }
     arrangedComponentId.value = c.id;
+    // Arranging happens at the picture: bring it into view so the marker can
+    // be dragged without hunting for it.
+    scrollToPanel();
   } catch (e) {
     componentError.value = e.message;
   }
@@ -300,6 +303,27 @@ async function arrangeComponent(c) {
 
 function showAllPanelComponents() {
   arrangedComponentId.value = null;
+}
+
+const panelSection = ref(null);
+
+function scrollToPanel() {
+  const el = panelSection.value;
+  if (!el) return;
+  el.open = true;
+  el.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+}
+
+// A click on a marker jumps back down to that component's row in the list —
+// where its Arrange button and everything else about it live.
+function scrollToComponentRow({ component_id: componentId }) {
+  const button =
+    document.querySelector(`[data-test="arrange-component-${componentId}"]`) ||
+    document.querySelector(`[data-test="edit-component-${componentId}"]`);
+  if (!button) return;
+  const group = button.closest('details');
+  if (group) group.open = true;
+  (button.closest('tr') || button).scrollIntoView?.({ behavior: 'smooth', block: 'center' });
 }
 
 function startEditComponent(c) {
@@ -492,6 +516,25 @@ async function onPanelChosen(event) {
 // the pointer happened to be.
 const panelStatus = ref('');
 
+// Cut the blank backdrop away from the panel picture. The server only moves
+// the stored crop — the bytes and every marker position stay as they are, so
+// the markers keep pointing at the same hardware.
+const trimmingPanel = ref(false);
+async function trimPanel() {
+  panelError.value = '';
+  panelStatus.value = '';
+  trimmingPanel.value = true;
+  try {
+    const { panel } = await api.post(`/api/modules/${props.id}/panel/trim`);
+    if (panel && module.value) module.value = { ...module.value, panel };
+    panelStatus.value = 'Trimmed the blank space around the panel.';
+  } catch (e) {
+    panelError.value = e.message;
+  } finally {
+    trimmingPanel.value = false;
+  }
+}
+
 async function movePanelMarker({ id, name, x, y }) {
   panelError.value = '';
   panelStatus.value = '';
@@ -637,7 +680,7 @@ watch(() => props.id, () => {
     <p v-if="rebuildNotice" class="muted" data-test="rebuild-notice">{{ rebuildNotice }}</p>
     <p v-if="rebuildError" class="error" data-test="rebuild-error">{{ rebuildError }}</p>
 
-    <details open class="panel" data-test="panel">
+    <details ref="panelSection" open class="panel" data-test="panel">
       <summary>
         <h2>Front panel</h2>
         <span class="summary-count">
@@ -652,6 +695,7 @@ watch(() => props.id, () => {
           :only-component-id="arrangedComponentId"
           editable
           @move="movePanelMarker"
+          @select="scrollToComponentRow"
         />
         <div
           v-if="arrangedComponent"
@@ -659,8 +703,25 @@ watch(() => props.id, () => {
           data-test="panel-arrangement-filter"
         >
           <span>Arranging only <strong>{{ arrangedComponent.name }}</strong>.</span>
-          <button type="button" class="secondary" data-test="panel-show-all" @click="showAllPanelComponents">
-            Show all components
+          <button
+            type="button"
+            class="secondary"
+            data-test="panel-disable-arranging"
+            @click="showAllPanelComponents"
+          >
+            Disable arranging
+          </button>
+        </div>
+        <div v-if="module.panel && ['upload', 'image'].includes(module.panel.source)" class="row">
+          <button
+            type="button"
+            class="secondary"
+            data-test="panel-trim"
+            :disabled="trimmingPanel"
+            title="Crop the picture to the front plate — the markers stay on the hardware they point at"
+            @click="trimPanel"
+          >
+            {{ trimmingPanel ? 'Trimming…' : 'Trim panel' }}
           </button>
         </div>
         <p v-if="panelStatus" class="muted" data-test="panel-status">{{ panelStatus }}</p>

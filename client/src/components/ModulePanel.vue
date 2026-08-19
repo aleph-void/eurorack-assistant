@@ -49,7 +49,7 @@ const props = defineProps({
   onlyComponentId: { type: Number, default: null },
 });
 
-const emit = defineEmits(['move']);
+const emit = defineEmits(['move', 'select']);
 
 const svg = ref(null);
 const schemeAt = ref(storedScheme());
@@ -149,7 +149,14 @@ function startDrag(marker, event) {
     fx: marker.cx / width.value,
     fy: marker.cy / props.height,
   };
-  dragging.value = { id: marker.id, name: marker.name, ...at, from: at, moved: false };
+  dragging.value = {
+    id: marker.id,
+    component_id: marker.component_id,
+    name: marker.name,
+    ...at,
+    from: at,
+    moved: false,
+  };
 }
 
 // Held down and moved somewhere else. A press that never actually goes
@@ -172,7 +179,13 @@ function onDrag(event) {
 function endDrag() {
   const held = dragging.value;
   dragging.value = null;
-  if (!held?.moved) return;
+  if (!held) return;
+  if (!held.moved) {
+    // A press that never went anywhere is a click, not a correction: hand it
+    // up so the page can jump to this component's row in the list below.
+    emit('select', { id: held.id, component_id: held.component_id, name: held.name });
+    return;
+  }
   const c = crop.value;
   emit('move', {
     id: held.id,

@@ -197,7 +197,8 @@ async function move(module, event) {
 }
 
 // Fill the gaps across the whole system (or the selected rack): a module with
-// no manual, no analyzed components, no front panel picture or no HP width
+// no manual, no analyzed components, no front panel picture, no HP width or
+// components lacking a description (added by hand after the import)
 // gets the one job that would supply what it is missing, and a module that
 // already has all of it is left alone — re-running a complete analysis costs
 // a model run and overwrites corrections made by hand. Re-discovering the
@@ -225,7 +226,8 @@ async function reanalyzeAll() {
     title: 'Fill in missing details',
     message:
       `Queue work for every module ${where} that is missing a manual, an analysis, ` +
-      `a panel image, an HP width or the searchable text of its manual?${extra}${panels}`,
+      `a panel image, an HP width, the searchable text of its manual, or descriptions ` +
+      `for components added by hand?${extra}${panels}`,
     confirmLabel: 'Fill in',
   });
   if (!ok) return;

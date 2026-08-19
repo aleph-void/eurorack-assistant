@@ -76,10 +76,14 @@ export function moduleCoreRoutes(db, { manualsDir }) {
   // Fill in what the pipeline never managed to work out, across a whole
   // system. Runs which are needed rather than everything: a module whose
   // manual was never found, whose analysis produced no components, or which
-  // has no front panel picture or HP width gets the one job that would
-  // supply the gap, and a module that already has all of it is left alone.
-  // Redoing complete work costs a model run per module and overwrites
-  // corrections made by hand, so it is not the default.
+  // has no front panel picture gets the one job that would supply the gap;
+  // a module that merely lacks its summary, its HP width or descriptions on
+  // hand-added components gets the narrow describe_components pass, which
+  // fills blanks and touches nothing else. A module that already has all of
+  // it is left alone. Nothing here overwrites existing data: redoing
+  // complete work costs a model run per module and destroys corrections
+  // made by hand, so it only happens through the explicit escape hatches
+  // below (or the per-module re-analysis buttons).
   //
   // Body: { rack_id?, rediscover_manuals?: boolean, rebuild_panels?: boolean }.
   // Re-discovery is off by default: a module missing its analysis usually has
@@ -125,7 +129,10 @@ export function moduleCoreRoutes(db, { manualsDir }) {
               where: { module_id: moduleIds, user_id: null },
               attributes: ['id', 'module_id', 'user_id', 'hash'],
             }),
-            ModuleComponent.findAll({ where: { module_id: moduleIds }, attributes: ['module_id'] }),
+            ModuleComponent.findAll({
+              where: { module_id: moduleIds },
+              attributes: ['module_id', 'description'],
+            }),
             ModulePanel.findAll({ where: { module_id: moduleIds }, attributes: ['module_id'] }),
             ManualDocument.findAll({
               where: { module_id: moduleIds },
@@ -136,19 +143,44 @@ export function moduleCoreRoutes(db, { manualsDir }) {
     const hasText = new Set(documents.map((d) => d.manual_id));
     const hasComponents = new Set(components.map((c) => c.module_id));
     const hasPanel = new Set(panels.map((p) => p.module_id));
+    // Components with no description: the ones the user added by hand after
+    // the import missed them. Their gap is filled by a narrow model pass that
+    // touches nothing else (jobs describe_components).
+    const undescribed = new Set(
+      components
+        .filter((c) => !String(c.description ?? '').trim())
+        .map((c) => c.module_id)
+    );
 
     // The earliest incomplete step of the pipeline, or null when the module
-    // has everything. A missing HP is the panel step's business: both the
-    // analysis and the panel job record it, but the panel job is the one
-    // that researches a width when the manual never states it.
+    // has everything. Every step here only ever CREATES what is missing —
+    // the analysis (which destroys and rebuilds the component inventory)
+    // runs only for a module with no components at all, and the panel job
+    // (which rebuilds every marker) only for a module with no panel. A
+    // module that merely lacks its summary, its HP or some descriptions is
+    // filled in by the narrow describe_components pass below, which touches
+    // nothing that already has a value.
     function missingStep(module) {
       if (!hasManual.has(module.id)) return 'find_manual';
-      if (!hasComponents.has(module.id) || !module.summary) return 'analyze_manual';
-      if (rebuildPanels || !hasPanel.has(module.id) || module.hp == null) return 'panel_image';
+      if (!hasComponents.has(module.id)) return 'analyze_manual';
+      if (rebuildPanels || !hasPanel.has(module.id)) return 'panel_image';
       return null;
     }
+    // The facts the narrow pass can fill: blank component descriptions, a
+    // blank summary, a missing width. A module going back to the panel step
+    // has its width researched there, so only the first two count then.
+    const factGaps = (module, step) =>
+      undescribed.has(module.id) ||
+      !String(module.summary ?? '').trim() ||
+      (step === null && module.hp == null);
 
-    const queued = { find_manual: 0, analyze_manual: 0, panel_image: 0, extract_manual: 0 };
+    const queued = {
+      find_manual: 0,
+      analyze_manual: 0,
+      panel_image: 0,
+      extract_manual: 0,
+      describe_components: 0,
+    };
     let skipped = 0;
     let complete = 0;
     // A manual that was found before the app extracted text (or whose
@@ -167,10 +199,20 @@ export function moduleCoreRoutes(db, { manualsDir }) {
     }
     for (const module of modules) {
       const step = missingStep(module);
-      if (!step) {
+      // Missing facts ride alongside the pipeline: an analysis (or a manual
+      // search on a component-less module, which chains one) rewrites every
+      // component anyway, so the narrow pass only queues when nothing
+      // upstream of it will run.
+      if (factGaps(module, step) && (step === null || step === 'panel_image')) {
+        if (await enqueueModuleJob(db, 'describe_components', module, req.user.id)) {
+          queued.describe_components += 1;
+        } else if (step === null) {
+          skipped += 1;
+        }
+      } else if (!step) {
         complete += 1;
-        continue;
       }
+      if (!step) continue;
       const type = rediscover && step === 'analyze_manual' ? 'find_manual' : step;
       // A module already queued for (or in the middle of) that job is left
       // alone rather than made to do the work twice.
@@ -180,7 +222,13 @@ export function moduleCoreRoutes(db, { manualsDir }) {
       }
       queued[type] += 1;
       const statuses = {
-        find_manual: { manual_status: 'pending', analysis_status: 'pending' },
+        // A found manual only chains an analysis when the module has no
+        // components (jobs/handlers.js) — hand-built ones get the narrow
+        // description pass instead, so their analysis is not 'pending'.
+        find_manual: {
+          manual_status: 'pending',
+          ...(hasComponents.has(module.id) ? {} : { analysis_status: 'pending' }),
+        },
         analyze_manual: { analysis_status: 'pending' },
         panel_image: { panel_status: 'pending' },
       };

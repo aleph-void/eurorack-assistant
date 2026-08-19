@@ -710,8 +710,87 @@ describe('ModuleDetailView', () => {
 
     await wrapper.find('[data-test="arrange-component-2"]').trigger('click');
     expect(wrapper.findAll('.marker')).toHaveLength(1);
-    await wrapper.find('[data-test="panel-show-all"]').trigger('click');
+    await wrapper.find('[data-test="panel-disable-arranging"]').trigger('click');
     expect(wrapper.findAll('.marker')).toHaveLength(3);
+  });
+
+  it('scrolls to the panel when arranging, and back to the row from the marker', async () => {
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+    const panel = {
+      source: 'image',
+      url: '/api/panels/abc.png',
+      width: 400,
+      height: 1200,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      components: [{ id: 5, component_id: 1, name: 'Signal In', shape: 'jack', x: 0.4, y: 0.8 }],
+    };
+    api.get.mockResolvedValue({ ...moduleResponse, panel });
+    const wrapper = mount(ModuleDetailView, {
+      props: { id: '1' },
+      global: testGlobal(),
+      attachTo: document.body,
+    });
+    await flushPromises();
+
+    // Arranging brings the panel picture into view.
+    await wrapper.find('[data-test="arrange-component-1"]').trigger('click');
+    await flushPromises();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.calls[0][0]).toMatchObject({ block: 'start' });
+
+    // A click on the marker (a press that never moves) jumps back down to
+    // the component's row in the list.
+    await wrapper.find('[data-test="panel-marker-1"]').trigger('pointerdown', {
+      clientX: 10,
+      clientY: 10,
+    });
+    await wrapper.find('[data-test="module-panel-svg"]').trigger('pointerup');
+    await flushPromises();
+    expect(scrolled).toHaveBeenCalledTimes(2);
+    expect(scrolled.mock.calls[1][0]).toMatchObject({ block: 'center' });
+    wrapper.unmount();
+  });
+
+  it('trims the panel picture and keeps the markers', async () => {
+    const panel = {
+      source: 'upload',
+      url: '/api/panels/abc.png',
+      width: 400,
+      height: 1200,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      components: [{ id: 5, component_id: 1, name: 'Signal In', shape: 'jack', x: 0.5, y: 0.5 }],
+    };
+    api.get.mockResolvedValue({ ...moduleResponse, panel });
+    const trimmed = {
+      ...panel,
+      crop: { x: 0.25, y: 0.1, w: 0.5, h: 0.8 },
+    };
+    api.post.mockResolvedValue({ panel: trimmed });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="panel-trim"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/panel/trim');
+    expect(wrapper.find('[data-test="panel-status"]').text()).toContain('Trimmed');
+    // The marker survives the new crop, mapped through it by the renderer.
+    expect(wrapper.find('[data-test="panel-marker-1"]').exists()).toBe(true);
+  });
+
+  it('offers no trim on a panel the app drew itself', async () => {
+    const panel = {
+      source: 'generated',
+      url: '/api/panels/abc.svg',
+      width: 400,
+      height: 1200,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      components: [],
+    };
+    api.get.mockResolvedValue({ ...moduleResponse, panel });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="panel-trim"]').exists()).toBe(false);
   });
 
   it('offers Arrange on buttons, displays and toggles, but not on switches', async () => {
