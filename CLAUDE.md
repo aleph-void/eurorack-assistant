@@ -70,7 +70,9 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   chrome never launches.
 - The server Docker image must keep `poppler-utils` (pdftotext), `chromium`
   (product-page rendering), `ffmpeg` (video frame sampling) and `yt-dlp`
-  (YouTube downloads) installed.
+  (YouTube downloads) installed — plus `deno` (yt-dlp's JS challenge solver;
+  without it YouTube offers only storyboards) and the bgutil PO-token plugin
+  zip, whose version is pinned to the `potprovider` compose sidecar.
 
 ## Big-picture flow
 

@@ -17,6 +17,19 @@ RUN apt-get update \
 ADD https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux /usr/local/bin/yt-dlp
 RUN chmod 0755 /usr/local/bin/yt-dlp
 
+# What it takes to keep YouTube serving that yt-dlp from a datacenter IP
+# (services/videos.js chooses the player clients to match):
+#   - deno solves the player's JS signature challenges; without a JS runtime
+#     yt-dlp drops every real format and offers only storyboards. (The image's
+#     node is too old for this — yt-dlp wants node >= 22 — and deno is the
+#     runtime yt-dlp enables by default.)
+#   - the bgutil plugin fetches "proof of origin" tokens from the potprovider
+#     sidecar (docker-compose.yml); its version is pinned to the sidecar's
+#     image tag — bump the two together.
+COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
+ADD https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/download/1.3.1/bgutil-ytdlp-pot-provider.zip /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider.zip
+RUN chmod 0644 /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider.zip
+
 # The LLM provider CLIs the server shells out to (configurable in the admin
 # UI). Each run is pointed at the job owner's own credentials via environment
 # variables (services/llmAccounts.js) — no login lives in the image or the

@@ -98,12 +98,36 @@ export function runCommand(cmd, args, { cwd = undefined, timeoutMs = 20 * 60 * 1
   });
 }
 
+// YouTube refuses its default clients from a server IP: the android_vr
+// stream URLs come back 403 no matter what, and the web client hides every
+// format behind SABR streaming. The tv_simply and mweb clients do serve
+// plain formats — provided yt-dlp can solve the player's JS signature
+// challenges, which is why the image carries deno (yt-dlp drops every real
+// format without a JS runtime, leaving only storyboards). mweb additionally
+// wants a "proof of origin" token; the bgutil plugin (also baked into the
+// image) fetches those from the potprovider sidecar when POT_PROVIDER_URL
+// points at it, and tv_simply keeps working without one.
+export function ytDlpNetworkArgs(env = process.env) {
+  const args = ['--extractor-args', 'youtube:player_client=tv_simply,mweb'];
+  if (env.POT_PROVIDER_URL) {
+    args.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${env.POT_PROVIDER_URL}`);
+  }
+  return args;
+}
+
 // The video's own metadata, without downloading it. Also the existence check:
 // a dead or private link fails here, before any bytes move.
 export async function fetchVideoMetadata(videoId, { run = runCommand } = {}) {
   const stdout = await run(
     'yt-dlp',
-    ['--dump-single-json', '--no-download', '--no-playlist', '--no-warnings', youtubeUrl(videoId)],
+    [
+      '--dump-single-json',
+      '--no-download',
+      '--no-playlist',
+      '--no-warnings',
+      ...ytDlpNetworkArgs(),
+      youtubeUrl(videoId),
+    ],
     { timeoutMs: 2 * 60 * 1000 }
   );
   let meta;
@@ -172,18 +196,24 @@ export async function downloadVideoForModule(video, videosDir, { run = runComman
 
   // Capped at 480p: the frames are downscaled to 640px anyway, and the
   // download is the slow part. English captions (hand-written or
-  // auto-generated) ride along when the video has them.
+  // auto-generated) ride along when the video has them. The languages are an
+  // exact list, not `en.*`: the mweb client offers an auto-translated track
+  // per source language (en-de-DE, en-fr-FR, …), and fetching that pile got
+  // the caption endpoint 429ing mid-job — which the sleep also guards the
+  // remaining few tracks against.
   log('downloading video and captions');
   await run(
     'yt-dlp',
     [
       '--no-playlist',
       '--no-warnings',
+      ...ytDlpNetworkArgs(),
       '-f', 'bv*[height<=480]+ba/b[height<=480]/b',
       '-o', 'video.%(ext)s',
       '--write-subs',
       '--write-auto-subs',
-      '--sub-langs', 'en.*,en',
+      '--sub-langs', 'en,en-orig,en-US,en-GB',
+      '--sleep-subtitles', '1',
       '--sub-format', 'vtt',
       youtubeUrl(video.video_id),
     ],
@@ -193,7 +223,12 @@ export async function downloadVideoForModule(video, videosDir, { run = runComman
   const media = files.find((f) => f.startsWith('video.') && !f.endsWith('.vtt'));
   if (!media) throw new Error('yt-dlp finished without producing a video file');
 
-  const caption = files.find((f) => f.endsWith('.vtt'));
+  // Several tracks can land; hand-written or original-language English
+  // beats en-orig's raw auto-captions, and directory order decides nothing.
+  const caption =
+    ['video.en.vtt', 'video.en-US.vtt', 'video.en-GB.vtt', 'video.en-orig.vtt'].find((f) =>
+      files.includes(f)
+    ) ?? files.find((f) => f.endsWith('.vtt'));
   let transcriptChars = 0;
   if (caption) {
     const transcript = vttToTranscript(fs.readFileSync(path.join(dir, caption), 'utf-8'));

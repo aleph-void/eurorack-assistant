@@ -25,6 +25,10 @@ services:
       # Set to 1 by setup.sh when the TLS override is active, so the session
       # cookie gets the Secure attribute only where HTTPS is actually served.
       SECURE_COOKIES: ${SECURE_COOKIES:-0}
+      # Where yt-dlp's bgutil plugin fetches YouTube "proof of origin"
+      # tokens (services/videos.js). The tv_simply client works without one,
+      # so a dead sidecar degrades to a warning, not a failure.
+      POT_PROVIDER_URL: http://potprovider:4416
     volumes:
       - manuals:/data/manuals
       # Finished rack-export zips; each is deleted after its one download.
@@ -46,6 +50,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Generates the "proof of origin" tokens YouTube demands before it will
+  # serve video data to a datacenter IP; the bgutil yt-dlp plugin in the
+  # server image calls it over HTTP. The tag is pinned to the plugin zip
+  # version in server/Dockerfile — bump the two together.
+  potprovider:
+    image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
+    init: true
     restart: unless-stopped
 
   nginx:
