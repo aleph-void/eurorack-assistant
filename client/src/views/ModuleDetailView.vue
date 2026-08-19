@@ -260,6 +260,8 @@ const COMPONENT_TYPES = [
   'other',
 ];
 const editingComponentId = ref(null);
+const editName = ref('');
+const editDescription = ref('');
 const editType = ref('');
 const editGroup = ref('');
 const editPortKind = ref('');
@@ -329,6 +331,8 @@ function scrollToComponentRow({ component_id: componentId }) {
 
 function startEditComponent(c) {
   editingComponentId.value = c.id;
+  editName.value = c.name;
+  editDescription.value = c.description || '';
   editType.value = c.type;
   editGroup.value = c.group_label || '';
   editPortKind.value = c.port_kind || '';
@@ -339,6 +343,8 @@ async function saveComponent(c) {
   editError.value = '';
   try {
     await api.put(`/api/modules/${props.id}/components/${c.id}`, {
+      name: editName.value,
+      description: editDescription.value,
       type: editType.value,
       group_label: editGroup.value,
       port_kind: editPortKind.value,
@@ -893,8 +899,24 @@ watch(() => props.id, () => {
             </thead>
             <tbody>
               <tr v-for="c in group.components" :key="c.id">
-                <td>{{ c.name }}</td>
-                <td>{{ c.description || '—' }}</td>
+                <td>
+                  <input
+                    v-if="editingComponentId === c.id"
+                    v-model="editName"
+                    placeholder="Name"
+                    :data-test="`edit-name-${c.id}`"
+                  />
+                  <template v-else>{{ c.name }}</template>
+                </td>
+                <td>
+                  <input
+                    v-if="editingComponentId === c.id"
+                    v-model="editDescription"
+                    placeholder="Description"
+                    :data-test="`edit-description-${c.id}`"
+                  />
+                  <template v-else>{{ c.description || '—' }}</template>
+                </td>
                 <td v-if="group.type.endsWith('_jack')">{{ portKindLabel(c.port_kind) }}</td>
                 <td v-if="group.type.endsWith('_jack')">{{ voltageRange(c) }}</td>
                 <td v-if="group.type.endsWith('_jack')">{{ c.polarity || '—' }}</td>
@@ -924,7 +946,11 @@ watch(() => props.id, () => {
                         {{ portKindLabel(k) }}
                       </option>
                     </select>
-                    <button :data-test="`edit-save-${c.id}`" @click="saveComponent(c)">
+                    <button
+                      :disabled="!editName.trim()"
+                      :data-test="`edit-save-${c.id}`"
+                      @click="saveComponent(c)"
+                    >
                       Save
                     </button>
                     <button @click="editingComponentId = null">Cancel</button>

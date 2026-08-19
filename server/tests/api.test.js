@@ -104,6 +104,61 @@ describe('modules API', () => {
     expect(withoutJack.body.panel.components.some((c) => c.component_id === created.body.id)).toBe(false);
   });
 
+  it('lets a racked user rename a component and edit its description', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, users[0].id, { manufacturer: 'Make Noise', name: 'Maths' });
+    const { rows: components } = await db.query(
+      `INSERT INTO module_components (module_id, type, name, description)
+       VALUES ($1, 'input_jack', 'IN 1', 'Signal input') RETURNING id`,
+      [module.id]
+    );
+    const componentId = components[0].id;
+    const { rows: panels } = await db.query(
+      `INSERT INTO module_panels (module_id, image_hash, image_ext, width, height)
+       VALUES ($1, 'test-panel', 'svg', 100, 500) RETURNING id`,
+      [module.id]
+    );
+    await db.query(
+      `INSERT INTO module_panel_components (panel_id, component_id, name, shape, x, y, w, h)
+       VALUES ($1, $2, 'IN 1', 'jack', 10, 10, 8, 8)`,
+      [panels[0].id, componentId]
+    );
+
+    const renamed = await request(app)
+      .put(`/api/modules/${module.id}/components/${componentId}`)
+      .set('Cookie', aliceCookie)
+      .send({ name: '  CH 1 SIGNAL  ', description: 'Channel 1 signal input' });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body).toMatchObject({
+      name: 'CH 1 SIGNAL',
+      description: 'Channel 1 signal input',
+      type: 'input_jack',
+    });
+    // The panel marker labels itself with a snapshot of the name; a rename
+    // keeps it in step.
+    expect(
+      (await db.query('SELECT name FROM module_panel_components WHERE component_id = $1', [componentId])).rows
+    ).toEqual([{ name: 'CH 1 SIGNAL' }]);
+
+    // Clearing the description stores NULL; a blank name is rejected.
+    const cleared = await request(app)
+      .put(`/api/modules/${module.id}/components/${componentId}`)
+      .set('Cookie', aliceCookie)
+      .send({ description: '' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.description).toBe(null);
+
+    const blank = await request(app)
+      .put(`/api/modules/${module.id}/components/${componentId}`)
+      .set('Cookie', aliceCookie)
+      .send({ name: '   ' });
+    expect(blank.status).toBe(400);
+    expect(
+      (await db.query('SELECT name FROM module_components WHERE id = $1', [componentId])).rows
+    ).toEqual([{ name: 'CH 1 SIGNAL' }]);
+  });
+
   it('adds a missing panel marker for an existing analyzed jack', async () => {
     const { app, db, aliceCookie } = await createTestApp();
     const { rows: users } = await db.query("SELECT id FROM users WHERE username = 'alice'");

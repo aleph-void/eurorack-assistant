@@ -16,11 +16,12 @@ export function moduleComponentRoutes(db) {
   } = db.models;
   const router = Router();
 
-  // Reclassify a component the analysis got wrong — most commonly turning a
-  // mult's jacks into 'bidirectional_jack' (any of them can take the input;
-  // the rest copy it out) and grouping them into sections via group_label.
+  // Correct a component the analysis got wrong — a misread name or
+  // description, or a wrong type (most commonly turning a mult's jacks into
+  // 'bidirectional_jack': any of them can take the input; the rest copy it
+  // out) and grouping them into sections via group_label.
   // Shared hardware fact: any user with the module racked may correct it.
-  // Body: { type?, group_label? } (at least one).
+  // Body: { name?, description?, type?, group_label? } (at least one).
   router.put('/:id/components/:componentId', requireOwnedModule(db), asyncHandler(async (req, res) => {
     const module = req.module;
     const component = await ModuleComponent.findOne({
@@ -28,6 +29,14 @@ export function moduleComponentRoutes(db) {
     });
     if (!component) return res.status(404).json({ error: 'Component not found' });
     const updates = {};
+    if (req.body?.name !== undefined) {
+      const name = String(req.body.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'name cannot be empty' });
+      updates.name = name;
+    }
+    if (req.body?.description !== undefined) {
+      updates.description = String(req.body.description || '').trim() || null;
+    }
     if (req.body?.type !== undefined) {
       const type = String(req.body.type || '').trim().toLowerCase();
       if (!COMPONENT_TYPES.includes(type)) {
@@ -53,9 +62,19 @@ export function moduleComponentRoutes(db) {
       updates.port_kind = portKind || null;
     }
     if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ error: 'type, group_label or port_kind is required' });
+      return res
+        .status(400)
+        .json({ error: 'name, description, type, group_label or port_kind is required' });
     }
     await component.update(updates);
+    // Panel markers snapshot the component name for their labels — keep them
+    // reading the corrected name.
+    if (updates.name) {
+      await ModulePanelComponent.update(
+        { name: updates.name },
+        { where: { component_id: component.id } }
+      );
+    }
     res.json(componentJson(component));
   }));
 

@@ -1049,12 +1049,49 @@ describe('ModuleDetailView component values', () => {
     await wrapper.find('[data-test="edit-save-4"]').trigger('click');
     await flushPromises();
     expect(api.put).toHaveBeenCalledWith('/api/modules/1/components/4', {
+      // The unchanged name and description ride along with the correction.
+      name: 'Mode',
+      description: '',
       type: 'bidirectional_jack',
       group_label: '1',
       // Jacks also carry the physical connector; '' keeps it an ordinary
       // 3.5mm patch point.
       port_kind: '',
     });
+  });
+
+  it('renames a component and edits its description', async () => {
+    api.get.mockResolvedValue(moduleResponse);
+    api.put.mockResolvedValue({ id: 3, name: 'Rise Time', description: 'Attack slope' });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    // The row shows text until it is put into edit mode.
+    expect(wrapper.find('[data-test="edit-name-3"]').exists()).toBe(false);
+    await wrapper.find('[data-test="edit-component-3"]').trigger('click');
+    // The existing wording is what you start from.
+    expect(wrapper.find('[data-test="edit-name-3"]').element.value).toBe('Rise');
+    await wrapper.find('[data-test="edit-name-3"]').setValue('Rise Time');
+    await wrapper.find('[data-test="edit-description-3"]').setValue('Attack slope');
+    await wrapper.find('[data-test="edit-save-3"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/modules/1/components/3', {
+      name: 'Rise Time',
+      description: 'Attack slope',
+      type: 'knob',
+      group_label: '',
+      port_kind: '',
+    });
+  });
+
+  it('will not save a component with a blank name', async () => {
+    api.get.mockResolvedValue(moduleResponse);
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="edit-component-3"]').trigger('click');
+    await wrapper.find('[data-test="edit-name-3"]').setValue('   ');
+    expect(wrapper.find('[data-test="edit-save-3"]').attributes('disabled')).toBeDefined();
   });
 
   it('adds and removes a value', async () => {
