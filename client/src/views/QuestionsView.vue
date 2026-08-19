@@ -67,7 +67,7 @@ async function remove(q) {
             <td class="muted">{{ formatDate(q.created_at) }}</td>
             <td class="actions-cell">
               <div class="actions nowrap">
-                <ShareButton type="question" :id="q.id" :label="q.prompt" small />
+                <ShareButton :id="q.id" type="question" :label="q.prompt" small />
                 <button
                   class="danger"
                   :data-test="`delete-question-${q.id}`"

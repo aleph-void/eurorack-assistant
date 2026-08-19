@@ -232,7 +232,7 @@ onUnmounted(() => clearTimeout(pollTimer));
     <h1 data-test="prompt">{{ question.prompt }}</h1>
     <p class="actions">
       <span class="badge" :class="question.status">{{ question.status }}</span>
-      <ShareButton type="question" :id="props.id" :label="question.prompt" small />
+      <ShareButton :id="props.id" type="question" :label="question.prompt" small />
       <button class="danger" data-test="delete-question" @click="removeQuestion">
         Delete
       </button>
@@ -297,7 +297,7 @@ onUnmounted(() => clearTimeout(pollTimer));
             <ul v-else class="check-list">
               <li v-for="m in scopedModules" :key="m.id">
                 <label>
-                  <input type="checkbox" :value="m.id" v-model="selectedModules" data-test="module-option" />
+                  <input v-model="selectedModules" type="checkbox" :value="m.id" data-test="module-option" />
                   <span>
                     {{ m.manufacturer }} {{ m.name }}
                     <span v-if="m.in_scope" class="badge scoped">suggested</span>
@@ -317,7 +317,7 @@ onUnmounted(() => clearTimeout(pollTimer));
             <ul v-else class="check-list">
               <li v-for="m in otherModules" :key="m.id">
                 <label>
-                  <input type="checkbox" :value="m.id" v-model="selectedModules" data-test="module-option" />
+                  <input v-model="selectedModules" type="checkbox" :value="m.id" data-test="module-option" />
                   <span>
                     {{ m.manufacturer }} {{ m.name }}
                     <span v-if="m.in_scope" class="badge scoped">suggested</span>
@@ -340,9 +340,9 @@ onUnmounted(() => clearTimeout(pollTimer));
               <li v-for="c in visibleComponents" :key="c.id">
                 <label>
                   <input
+                    v-model="selectedComponents"
                     type="checkbox"
                     :value="c.id"
-                    v-model="selectedComponents"
                     data-test="component-option"
                   />
                   <span>
@@ -370,7 +370,7 @@ onUnmounted(() => clearTimeout(pollTimer));
             <ul v-else class="check-list">
               <li v-for="m in visibleManuals" :key="m.id">
                 <label>
-                  <input type="checkbox" :value="m.id" v-model="selectedManuals" data-test="manual-option" />
+                  <input v-model="selectedManuals" type="checkbox" :value="m.id" data-test="manual-option" />
                   <span>
                     {{ moduleLabel(m.module_id) }} — {{ manualLabel(m) }}
                     <span v-if="m.source === 'upload'" class="badge">upload</span>
@@ -392,7 +392,7 @@ onUnmounted(() => clearTimeout(pollTimer));
             <ul class="check-list">
               <li v-for="a in visibleAnswers" :key="a.id">
                 <label>
-                  <input type="checkbox" :value="a.id" v-model="selectedAnswers" data-test="answer-option" />
+                  <input v-model="selectedAnswers" type="checkbox" :value="a.id" data-test="answer-option" />
                   <span>{{ a.prompt }}</span>
                 </label>
               </li>
@@ -411,7 +411,7 @@ onUnmounted(() => clearTimeout(pollTimer));
             <ul class="check-list">
               <li v-for="n in visibleNotes" :key="n.id">
                 <label>
-                  <input type="checkbox" :value="n.id" v-model="selectedNotes" data-test="note-option" />
+                  <input v-model="selectedNotes" type="checkbox" :value="n.id" data-test="note-option" />
                   <span>{{ n.title || n.body.slice(0, 80) }}</span>
                 </label>
               </li>
@@ -431,9 +431,9 @@ onUnmounted(() => clearTimeout(pollTimer));
               <li v-for="c in visibleCaptures" :key="c.id">
                 <label>
                   <input
+                    v-model="selectedCaptures"
                     type="checkbox"
                     :value="c.id"
-                    v-model="selectedCaptures"
                     data-test="capture-option"
                   />
                   <span>

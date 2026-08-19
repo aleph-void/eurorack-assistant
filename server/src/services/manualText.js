@@ -83,6 +83,7 @@ export function normalizeText(raw) {
     // split, so a PDF that split one leaves it behind in the middle of a word.
     .replace(/[\u00ad\u200b-\u200f\u2028\u2029\ufeff]/g, '')
     // Control characters other than the newline and the page break.
+    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u0008\u000b\u000e-\u001f\u007f]/g, '')
     // Any remaining exotic whitespace (nbsp, thin space, tab) is just a space.
     .replace(/[^\S\n\f]/g, ' ')

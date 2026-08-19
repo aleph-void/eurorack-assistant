@@ -385,7 +385,7 @@ describe('a share does not leak the owner\'s other private records', () => {
 
   it('hides the rack layout behind a shared patch from the recipient but not the owner', async () => {
     const fixture = await withUsers();
-    const { app, aliceCookie, adminCookie, admin, db, alice } = fixture;
+    const { app, aliceCookie, adminCookie, admin, db } = fixture;
     const { patch, rackId } = await createPatch(fixture);
     // Give the rack a physical row so a layout exists to leak.
     await db.query(

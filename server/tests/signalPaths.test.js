@@ -377,7 +377,7 @@ describe('expander panels', () => {
       .get(`/api/modules/${host.module.id}`)
       .set('Cookie', f.aliceCookie);
     expect(res.body.expanders).toMatchObject([
-      { role: 'expander', manufacturer: 'Intellijel', name: 'Atlx' }, // eslint-disable-line
+      { role: 'expander', manufacturer: 'Intellijel', name: 'Atlx' },  
     ]);
     expect(res.body.expander_components.map((c) => c.name)).toEqual(['LP']);
   });
@@ -456,7 +456,7 @@ describe('bridged instances (7Path)', () => {
         { type: 'bidirectional_jack', name: '2', group: '2' },
       ],
     });
-    const { module: osc } = await withComponents(f, {
+    await withComponents(f, {
       manufacturer: 'Doepfer',
       name: 'A-110',
       components: [{ type: 'output_jack', name: 'SAW' }],
@@ -925,7 +925,7 @@ describe('modules a patch does not use', () => {
         input_component_id: filter.components['AUDIO IN'].id,
         output_component_id: filter.components['AUDIO OUT'].id,
       });
-    const osc = await withComponents(f, {
+    await withComponents(f, {
       manufacturer: 'Doepfer',
       name: 'A-110',
       components: [{ type: 'output_jack', name: 'SAW' }],

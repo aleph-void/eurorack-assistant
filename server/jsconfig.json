@@ -1,0 +1,14 @@
+{
+  // checkJs stays off for now: turning it on today reports ~3k implicit-any
+  // style errors across the untyped codebase. Files can opt in one at a time
+  // with a leading `// @ts-check` comment; flip checkJs on once enough have.
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2022",
+    "checkJs": false,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.js"]
+}

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { userHasModule } from '../services/racks.js';
 import { readableResource, removeShares } from '../services/sharing.js';
+import { asyncHandler } from './asyncHandler.js';
 
 // Per-user notes, attachable to any number of the user's modules, module
 // components and patches. Attachments can be added or removed after creation
@@ -154,157 +155,129 @@ export function noteRoutes(db) {
 
   // Optional ?patch_id= narrows the list to one patch's notes (what the patch
   // page shows).
-  router.get('/', async (req, res, next) => {
-    try {
-      const where = { user_id: req.user.id };
-      if (req.query.patch_id) {
-        const links = await NotePatch.findAll({
-          where: { patch_id: Number(req.query.patch_id) || 0 },
-        });
-        where.id = links.map((l) => l.note_id);
-      }
-      const notes = await Note.findAll({
-        where,
-        order: [
-          ['updated_at', 'DESC'],
-          ['id', 'DESC'],
-        ],
+  router.get('/', asyncHandler(async (req, res) => {
+    const where = { user_id: req.user.id };
+    if (req.query.patch_id) {
+      const links = await NotePatch.findAll({
+        where: { patch_id: Number(req.query.patch_id) || 0 },
       });
-      res.json(await Promise.all(notes.map((n) => noteWithAttachments(n))));
-    } catch (e) {
-      next(e);
+      where.id = links.map((l) => l.note_id);
     }
-  });
+    const notes = await Note.findAll({
+      where,
+      order: [
+        ['updated_at', 'DESC'],
+        ['id', 'DESC'],
+      ],
+    });
+    res.json(await Promise.all(notes.map((n) => noteWithAttachments(n))));
+  }));
 
   // Body: { body, title?, module_ids?, component_ids?, patch_ids? }
-  router.post('/', async (req, res, next) => {
-    try {
-      const body = String(req.body?.body || '').trim();
-      if (!body) return res.status(400).json({ error: 'body is required' });
-      const title = req.body?.title ? String(req.body.title).trim() : null;
+  router.post('/', asyncHandler(async (req, res) => {
+    const body = String(req.body?.body || '').trim();
+    if (!body) return res.status(400).json({ error: 'body is required' });
+    const title = req.body?.title ? String(req.body.title).trim() : null;
 
-      const modules = await validModuleIds(req.user.id, req.body?.module_ids);
-      if (modules.error) return res.status(400).json({ error: modules.error });
-      const components = await validComponentIds(req.user.id, req.body?.component_ids);
-      if (components.error) return res.status(400).json({ error: components.error });
-      const patches = await validPatchIds(req.user.id, req.body?.patch_ids);
-      if (patches.error) return res.status(400).json({ error: patches.error });
+    const modules = await validModuleIds(req.user.id, req.body?.module_ids);
+    if (modules.error) return res.status(400).json({ error: modules.error });
+    const components = await validComponentIds(req.user.id, req.body?.component_ids);
+    if (components.error) return res.status(400).json({ error: components.error });
+    const patches = await validPatchIds(req.user.id, req.body?.patch_ids);
+    if (patches.error) return res.status(400).json({ error: patches.error });
 
-      // The note and its attachments are written across four tables; they
-      // commit or roll back together.
-      const note = await db.sequelize.transaction(async (transaction) => {
-        const created = await Note.create(
-          { user_id: req.user.id, title, body },
-          { transaction }
-        );
-        await attach(created.id, modules.ids, components.ids, patches.ids, transaction);
-        return created;
-      });
-      res.status(201).json(await noteWithAttachments(note));
-    } catch (e) {
-      next(e);
-    }
-  });
+    // The note and its attachments are written across four tables; they
+    // commit or roll back together.
+    const note = await db.sequelize.transaction(async (transaction) => {
+      const created = await Note.create(
+        { user_id: req.user.id, title, body },
+        { transaction }
+      );
+      await attach(created.id, modules.ids, components.ids, patches.ids, transaction);
+      return created;
+    });
+    res.status(201).json(await noteWithAttachments(note));
+  }));
 
   // One note: yours, or one somebody shared with you (which is read-only —
   // every other route here finds the note under its owner and nowhere else).
-  router.get('/:id', async (req, res, next) => {
-    try {
-      const found = await readableResource(db, req.user.id, 'note', req.params.id);
-      if (!found) return res.status(404).json({ error: 'Note not found' });
-      const owner = found.shared ? await db.models.User.findByPk(found.row.user_id) : null;
-      res.json({
-        ...(await noteWithAttachments(found.row, { includePrivate: !found.shared })),
-        shared: found.shared,
-        owner_username: owner?.username ?? req.user.username,
-      });
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.get('/:id', asyncHandler(async (req, res) => {
+    const found = await readableResource(db, req.user.id, 'note', req.params.id);
+    if (!found) return res.status(404).json({ error: 'Note not found' });
+    const owner = found.shared ? await db.models.User.findByPk(found.row.user_id) : null;
+    res.json({
+      ...(await noteWithAttachments(found.row, { includePrivate: !found.shared })),
+      shared: found.shared,
+      owner_username: owner?.username ?? req.user.username,
+    });
+  }));
 
-  router.put('/:id', async (req, res, next) => {
-    try {
-      const note = await ownNote(req.user.id, req.params.id);
-      if (!note) return res.status(404).json({ error: 'Note not found' });
-      const body = req.body?.body !== undefined ? String(req.body.body).trim() : note.body;
-      if (!body) return res.status(400).json({ error: 'body cannot be empty' });
-      const title =
-        req.body?.title !== undefined
-          ? String(req.body.title).trim() || null
-          : note.title;
-      await note.update({ title, body });
-      res.json(await noteWithAttachments(note));
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.put('/:id', asyncHandler(async (req, res) => {
+    const note = await ownNote(req.user.id, req.params.id);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+    const body = req.body?.body !== undefined ? String(req.body.body).trim() : note.body;
+    if (!body) return res.status(400).json({ error: 'body cannot be empty' });
+    const title =
+      req.body?.title !== undefined
+        ? String(req.body.title).trim() || null
+        : note.title;
+    await note.update({ title, body });
+    res.json(await noteWithAttachments(note));
+  }));
 
-  router.delete('/:id', async (req, res, next) => {
-    try {
-      const note = await ownNote(req.user.id, req.params.id);
-      if (!note) return res.status(404).json({ error: 'Note not found' });
-      await note.destroy();
-      await removeShares(db, 'note', note.id);
-      res.json({ ok: true });
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.delete('/:id', asyncHandler(async (req, res) => {
+    const note = await ownNote(req.user.id, req.params.id);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+    await note.destroy();
+    await removeShares(db, 'note', note.id);
+    res.json({ ok: true });
+  }));
 
   // Attach an existing note to more modules/components/patches.
   // Body: { module_ids?, component_ids?, patch_ids? }
-  router.post('/:id/attach', async (req, res, next) => {
-    try {
-      const note = await ownNote(req.user.id, req.params.id);
-      if (!note) return res.status(404).json({ error: 'Note not found' });
+  router.post('/:id/attach', asyncHandler(async (req, res) => {
+    const note = await ownNote(req.user.id, req.params.id);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
 
-      const modules = await validModuleIds(req.user.id, req.body?.module_ids);
-      if (modules.error) return res.status(400).json({ error: modules.error });
-      const components = await validComponentIds(req.user.id, req.body?.component_ids);
-      if (components.error) return res.status(400).json({ error: components.error });
-      const patches = await validPatchIds(req.user.id, req.body?.patch_ids);
-      if (patches.error) return res.status(400).json({ error: patches.error });
-      if (modules.ids.length === 0 && components.ids.length === 0 && patches.ids.length === 0) {
-        return res.status(400).json({ error: 'module_ids, component_ids or patch_ids required' });
-      }
-
-      await db.sequelize.transaction((transaction) =>
-        attach(note.id, modules.ids, components.ids, patches.ids, transaction)
-      );
-      res.json(await noteWithAttachments(note));
-    } catch (e) {
-      next(e);
+    const modules = await validModuleIds(req.user.id, req.body?.module_ids);
+    if (modules.error) return res.status(400).json({ error: modules.error });
+    const components = await validComponentIds(req.user.id, req.body?.component_ids);
+    if (components.error) return res.status(400).json({ error: components.error });
+    const patches = await validPatchIds(req.user.id, req.body?.patch_ids);
+    if (patches.error) return res.status(400).json({ error: patches.error });
+    if (modules.ids.length === 0 && components.ids.length === 0 && patches.ids.length === 0) {
+      return res.status(400).json({ error: 'module_ids, component_ids or patch_ids required' });
     }
-  });
+
+    await db.sequelize.transaction((transaction) =>
+      attach(note.id, modules.ids, components.ids, patches.ids, transaction)
+    );
+    res.json(await noteWithAttachments(note));
+  }));
 
   // Detach from one module, component or patch.
   // Body: { module_id? , component_id?, patch_id? }
-  router.post('/:id/detach', async (req, res, next) => {
-    try {
-      const note = await ownNote(req.user.id, req.params.id);
-      if (!note) return res.status(404).json({ error: 'Note not found' });
-      const { module_id: moduleId, component_id: componentId, patch_id: patchId } = req.body || {};
-      if (moduleId) {
-        await NoteModule.destroy({
-          where: { note_id: note.id, module_id: Number(moduleId) },
-        });
-      } else if (componentId) {
-        await NoteComponent.destroy({
-          where: { note_id: note.id, component_id: Number(componentId) },
-        });
-      } else if (patchId) {
-        await NotePatch.destroy({
-          where: { note_id: note.id, patch_id: Number(patchId) },
-        });
-      } else {
-        return res.status(400).json({ error: 'module_id, component_id or patch_id required' });
-      }
-      res.json(await noteWithAttachments(note));
-    } catch (e) {
-      next(e);
+  router.post('/:id/detach', asyncHandler(async (req, res) => {
+    const note = await ownNote(req.user.id, req.params.id);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+    const { module_id: moduleId, component_id: componentId, patch_id: patchId } = req.body || {};
+    if (moduleId) {
+      await NoteModule.destroy({
+        where: { note_id: note.id, module_id: Number(moduleId) },
+      });
+    } else if (componentId) {
+      await NoteComponent.destroy({
+        where: { note_id: note.id, component_id: Number(componentId) },
+      });
+    } else if (patchId) {
+      await NotePatch.destroy({
+        where: { note_id: note.id, patch_id: Number(patchId) },
+      });
+    } else {
+      return res.status(400).json({ error: 'module_id, component_id or patch_id required' });
     }
-  });
+    res.json(await noteWithAttachments(note));
+  }));
 
   return router;
 }

@@ -139,7 +139,6 @@ const allAnchors = computed(() =>
     return { key, patchModuleId, componentId, component, ...anchor };
   })
 );
-const outputs = computed(() => allAnchors.value.filter((a) => a.component?.type === 'output_jack'));
 const inputs = computed(() => allAnchors.value.filter((a) => a.component?.type === 'input_jack'));
 
 const svg = ref(null);
@@ -219,11 +218,11 @@ const draftCable = computed(() =>
       <template v-else>
         <div class="diagram-wrap">
           <svg
+            ref="svg"
             class="patch-diagram"
             :viewBox="`0 0 ${diagram.width} ${diagram.height}`"
             :style="{ width: '100%', maxWidth: `${diagram.width}px` }"
             data-test="diagram-svg"
-            ref="svg"
             @pointermove="moveCable"
             @pointerup="finishCable"
             @pointercancel="dragging = null"

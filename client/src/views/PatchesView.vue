@@ -162,7 +162,7 @@ onMounted(load);
                 >
                   Export
                 </a>
-                <ShareButton type="patch" :id="patch.id" :label="patch.name" small />
+                <ShareButton :id="patch.id" type="patch" :label="patch.name" small />
                 <button
                   class="secondary"
                   :data-test="`duplicate-${patch.id}`"

@@ -1193,7 +1193,7 @@ describe('patches API', () => {
 describe('patch shortcuts', () => {
   it('clones a patch with its cables, settings, buses, labels and links', async () => {
     const fixture = await withPatchFixture();
-    const { app, db, aliceCookie, input, output, knob } = fixture;
+    const { app, aliceCookie, input, output, knob } = fixture;
     const patch = (await createPatch(fixture)).body;
     const detail = async (id) =>
       (await request(app).get(`/api/patches/${id}`).set('Cookie', aliceCookie)).body;

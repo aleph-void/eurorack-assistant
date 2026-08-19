@@ -4,6 +4,7 @@ import { enqueueJob } from '../jobs/worker.js';
 import { DEFAULT_RACK_NAME } from '../services/racks.js';
 import { requireBudget } from '../services/budgets.js';
 import { requireLlmAccount } from '../services/llmAccounts.js';
+import { asyncHandler } from './asyncHandler.js';
 
 // Imports are fully asynchronous: the request only validates the input shape
 // and queues an `import` job. The worker parses the list, creates module
@@ -16,31 +17,27 @@ export function importRoutes(db) {
   // Body: { type: 'csv' | 'text' | 'modulargrid', content?, url?, rack? }
   // Modules land in the named rack (created on first use); a missing or blank
   // rack name falls back to the default 'main rack'.
-  router.post('/', requireBudget(db), requireLlmAccount(db), async (req, res, next) => {
-    try {
-      const { type, content, url } = req.body || {};
-      const rack = String(req.body?.rack ?? '').trim() || DEFAULT_RACK_NAME;
-      if (type === 'csv' || type === 'text') {
-        if (!content || !String(content).trim()) {
-          return res.status(400).json({ error: 'content is required' });
-        }
-      } else if (type === 'modulargrid') {
-        if (!url || !String(url).includes('modulargrid')) {
-          return res.status(400).json({ error: 'a ModularGrid rack url is required' });
-        }
-      } else {
-        return res.status(400).json({ error: "type must be 'csv', 'text', or 'modulargrid'" });
+  router.post('/', requireBudget(db), requireLlmAccount(db), asyncHandler(async (req, res) => {
+    const { type, content, url } = req.body || {};
+    const rack = String(req.body?.rack ?? '').trim() || DEFAULT_RACK_NAME;
+    if (type === 'csv' || type === 'text') {
+      if (!content || !String(content).trim()) {
+        return res.status(400).json({ error: 'content is required' });
       }
-
-      const job = await enqueueJob(db, 'import', {
-        userId: req.user.id,
-        payload: { type, content, url, rack },
-      });
-      res.status(202).json({ job_id: job.id, status: job.status });
-    } catch (e) {
-      next(e);
+    } else if (type === 'modulargrid') {
+      if (!url || !String(url).includes('modulargrid')) {
+        return res.status(400).json({ error: 'a ModularGrid rack url is required' });
+      }
+    } else {
+      return res.status(400).json({ error: "type must be 'csv', 'text', or 'modulargrid'" });
     }
-  });
+
+    const job = await enqueueJob(db, 'import', {
+      userId: req.user.id,
+      payload: { type, content, url, rack },
+    });
+    res.status(202).json({ job_id: job.id, status: job.status });
+  }));
 
   return router;
 }

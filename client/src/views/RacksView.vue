@@ -236,7 +236,7 @@ async function dropIntoAvailable() {
             </td>
             <td class="actions-cell">
               <div class="actions nowrap">
-                <ShareButton type="rack" :id="rack.id" :label="rack.name" small />
+                <ShareButton :id="rack.id" type="rack" :label="rack.name" small />
                 <button
                   v-if="renamingId !== rack.id"
                   :data-test="`rename-${rack.id}`"

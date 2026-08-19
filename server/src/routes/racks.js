@@ -4,6 +4,7 @@ import { findRackByName } from '../services/racks.js';
 import { readableResource, removeShares } from '../services/sharing.js';
 import { enqueueJob } from '../jobs/worker.js';
 import { loadPanels } from '../services/panelImage.js';
+import { asyncHandler } from './asyncHandler.js';
 
 // A user's racks. Every route operates on the requesting user's racks only —
 // racks (and their module lists) are never visible to other users.
@@ -57,101 +58,85 @@ export function rackRoutes(db) {
     }));
   }
 
-  router.get('/', async (req, res, next) => {
-    try {
-      const racks = await Rack.findAll({
-        where: { user_id: req.user.id },
-        order: [
-          ['name', 'ASC'],
-          ['id', 'ASC'],
-        ],
-      });
-      // Module counts, grouped in JS (pg-mem-friendly flat query).
-      const mappings =
-        racks.length === 0
-          ? []
-          : await RackModule.findAll({ where: { rack_id: racks.map((r) => r.id) } });
-      const counts = new Map();
-      for (const m of mappings) counts.set(m.rack_id, (counts.get(m.rack_id) ?? 0) + 1);
-      res.json(racks.map((r) => rackJson(r, counts.get(r.id) ?? 0)));
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.get('/', asyncHandler(async (req, res) => {
+    const racks = await Rack.findAll({
+      where: { user_id: req.user.id },
+      order: [
+        ['name', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
+    // Module counts, grouped in JS (pg-mem-friendly flat query).
+    const mappings =
+      racks.length === 0
+        ? []
+        : await RackModule.findAll({ where: { rack_id: racks.map((r) => r.id) } });
+    const counts = new Map();
+    for (const m of mappings) counts.set(m.rack_id, (counts.get(m.rack_id) ?? 0) + 1);
+    res.json(racks.map((r) => rackJson(r, counts.get(r.id) ?? 0)));
+  }));
 
   // One rack and what is in it: yours, or one somebody shared with you. This
   // is the whole of a shared rack — the module list, as it stands — and it is
   // read-only, every other route here being the owner's alone.
-  router.get('/:id', async (req, res, next) => {
-    try {
-      const found = await readableResource(db, req.user.id, 'rack', req.params.id);
-      if (!found) return res.status(404).json({ error: 'Rack not found' });
-      const rack = found.row;
-      const mappings = await RackModule.findAll({
-        where: { rack_id: rack.id },
-        include: Module,
-        order: [
-          [Module, 'manufacturer', 'ASC'],
-          [Module, 'name', 'ASC'],
-        ],
-      });
-      const owner = found.shared ? await User.findByPk(rack.user_id) : null;
-      const panels = await loadPanels(db, mappings.map((mapping) => mapping.module_id));
-      res.json({
-        ...rackJson(rack, mappings.length),
-        shared: found.shared,
-        owner_username: owner?.username ?? req.user.username,
-        modules: mappings
-          .filter((rm) => rm.Module)
-          .map((rm) => ({
-            id: rm.Module.id,
-            manufacturer: rm.Module.manufacturer,
-            name: rm.Module.name,
-            hp: rm.Module.hp,
-            panel: panels.get(rm.Module.id) ?? null,
-            summary: rm.Module.summary,
-            quantity: rm.quantity,
-          })),
-        rows: await layoutJson(rack, mappings, panels),
-      });
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.get('/:id', asyncHandler(async (req, res) => {
+    const found = await readableResource(db, req.user.id, 'rack', req.params.id);
+    if (!found) return res.status(404).json({ error: 'Rack not found' });
+    const rack = found.row;
+    const mappings = await RackModule.findAll({
+      where: { rack_id: rack.id },
+      include: Module,
+      order: [
+        [Module, 'manufacturer', 'ASC'],
+        [Module, 'name', 'ASC'],
+      ],
+    });
+    const owner = found.shared ? await User.findByPk(rack.user_id) : null;
+    const panels = await loadPanels(db, mappings.map((mapping) => mapping.module_id));
+    res.json({
+      ...rackJson(rack, mappings.length),
+      shared: found.shared,
+      owner_username: owner?.username ?? req.user.username,
+      modules: mappings
+        .filter((rm) => rm.Module)
+        .map((rm) => ({
+          id: rm.Module.id,
+          manufacturer: rm.Module.manufacturer,
+          name: rm.Module.name,
+          hp: rm.Module.hp,
+          panel: panels.get(rm.Module.id) ?? null,
+          summary: rm.Module.summary,
+          quantity: rm.quantity,
+        })),
+      rows: await layoutJson(rack, mappings, panels),
+    });
+  }));
 
   // Body: { name }
-  router.post('/', async (req, res, next) => {
-    try {
-      const name = String(req.body?.name || '').trim();
-      if (!name) return res.status(400).json({ error: 'name is required' });
-      if (await findRackByName(db, req.user.id, name)) {
-        return res.status(409).json({ error: `you already have a rack named '${name}'` });
-      }
-      const rack = await Rack.create({ user_id: req.user.id, name });
-      res.status(201).json(rackJson(rack, 0));
-    } catch (e) {
-      next(e);
+  router.post('/', asyncHandler(async (req, res) => {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    if (await findRackByName(db, req.user.id, name)) {
+      return res.status(409).json({ error: `you already have a rack named '${name}'` });
     }
-  });
+    const rack = await Rack.create({ user_id: req.user.id, name });
+    res.status(201).json(rackJson(rack, 0));
+  }));
 
   // Rename. Body: { name }
-  router.put('/:id', async (req, res, next) => {
-    try {
-      const rack = await ownRack(req.user.id, req.params.id);
-      if (!rack) return res.status(404).json({ error: 'Rack not found' });
-      const name = String(req.body?.name || '').trim();
-      if (!name) return res.status(400).json({ error: 'name is required' });
-      const clash = await findRackByName(db, req.user.id, name);
-      if (clash && clash.id !== rack.id) {
-        return res.status(409).json({ error: `you already have a rack named '${name}'` });
-      }
-      await rack.update({ name });
-      const moduleCount = await RackModule.count({ where: { rack_id: rack.id } });
-      res.json(rackJson(rack, moduleCount));
-    } catch (e) {
-      next(e);
+  router.put('/:id', asyncHandler(async (req, res) => {
+    const rack = await ownRack(req.user.id, req.params.id);
+    if (!rack) return res.status(404).json({ error: 'Rack not found' });
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    const clash = await findRackByName(db, req.user.id, name);
+    if (clash && clash.id !== rack.id) {
+      return res.status(409).json({ error: `you already have a rack named '${name}'` });
     }
-  });
+    await rack.update({ name });
+    const moduleCount = await RackModule.count({ where: { rack_id: rack.id } });
+    res.json(rackJson(rack, moduleCount));
+  }));
 
   // Replace the physical layout of a rack. Rack modules remain the inventory;
   // every placement here consumes one copy from that inventory.
@@ -224,93 +209,81 @@ export function rackRoutes(db) {
   // records themselves are kept, in no rack at all if this was their last
   // one, so that importing them again restores the manual, analysis and
   // panel work rather than repeating it.
-  router.delete('/:id', async (req, res, next) => {
-    try {
-      const rack = await ownRack(req.user.id, req.params.id);
-      if (!rack) return res.status(404).json({ error: 'Rack not found' });
-      await rack.destroy();
-      await removeShares(db, 'rack', rack.id);
-      res.json({ ok: true });
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.delete('/:id', asyncHandler(async (req, res) => {
+    const rack = await ownRack(req.user.id, req.params.id);
+    if (!rack) return res.status(404).json({ error: 'Rack not found' });
+    await rack.destroy();
+    await removeShares(db, 'rack', rack.id);
+    res.json({ ok: true });
+  }));
 
   // Queue a background export of everything about the rack's modules —
   // manual PDFs plus the user's notes and questions rendered to PDF — into
   // one zip. The client auto-downloads the zip when the job's 'completed'
   // event arrives over the WebSocket (the link also shows on the Jobs page).
-  router.post('/:id/export', async (req, res, next) => {
-    try {
-      const rack = await ownRack(req.user.id, req.params.id);
-      if (!rack) return res.status(404).json({ error: 'Rack not found' });
-      // Re-use a queued/running export of the same rack instead of stacking
-      // duplicates (payload is TEXT, so filter the few live rows in JS).
-      const live = (
-        await Job.findAll({
-          where: { type: 'export_rack', user_id: req.user.id, status: ['pending', 'running'] },
-        })
-      ).find((j) => {
-        try {
-          return JSON.parse(j.payload || '{}').rack_id === rack.id;
-        } catch {
-          return false;
-        }
-      });
-      const job = live
-        ? live.get({ plain: true })
-        : await enqueueJob(db, 'export_rack', {
-            userId: req.user.id,
-            payload: { rack_id: rack.id, rack_name: rack.name },
-          });
-      res.status(202).json({ id: job.id, type: job.type, status: job.status, reused: !!live });
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.post('/:id/export', asyncHandler(async (req, res) => {
+    const rack = await ownRack(req.user.id, req.params.id);
+    if (!rack) return res.status(404).json({ error: 'Rack not found' });
+    // Re-use a queued/running export of the same rack instead of stacking
+    // duplicates (payload is TEXT, so filter the few live rows in JS).
+    const live = (
+      await Job.findAll({
+        where: { type: 'export_rack', user_id: req.user.id, status: ['pending', 'running'] },
+      })
+    ).find((j) => {
+      try {
+        return JSON.parse(j.payload || '{}').rack_id === rack.id;
+      } catch {
+        return false;
+      }
+    });
+    const job = live
+      ? live.get({ plain: true })
+      : await enqueueJob(db, 'export_rack', {
+          userId: req.user.id,
+          payload: { rack_id: rack.id, rack_name: rack.name },
+        });
+    res.status(202).json({ id: job.id, type: job.type, status: job.status, reused: !!live });
+  }));
 
   // Move a module from this rack to another of the user's racks. If the
   // target rack already has the module, the quantities merge.
   // Body: { to_rack_id }
-  router.post('/:id/modules/:moduleId/move', async (req, res, next) => {
-    try {
-      const toId = Number(req.body?.to_rack_id);
-      if (!Number.isInteger(toId) || toId <= 0) {
-        return res.status(400).json({ error: 'to_rack_id is required' });
-      }
-      const from = await ownRack(req.user.id, req.params.id);
-      const to = await ownRack(req.user.id, toId);
-      if (!from || !to) return res.status(404).json({ error: 'Rack not found' });
-      if (from.id === to.id) {
-        return res.status(400).json({ error: 'to_rack_id must be a different rack' });
-      }
-      const moduleId = Number(req.params.moduleId);
-      const source = await RackModule.findOne({
-        where: { rack_id: from.id, module_id: moduleId },
-      });
-      if (!source) return res.status(404).json({ error: 'Module not found in this rack' });
-
-      // Remove-from-source and add-to-target commit or roll back together.
-      await db.sequelize.transaction(async (transaction) => {
-        const target = await RackModule.findOne({
-          where: { rack_id: to.id, module_id: moduleId },
-          transaction,
-        });
-        if (target) {
-          await target.update({ quantity: target.quantity + source.quantity }, { transaction });
-        } else {
-          await RackModule.create(
-            { rack_id: to.id, module_id: moduleId, quantity: source.quantity },
-            { transaction }
-          );
-        }
-        await source.destroy({ transaction });
-      });
-      res.json({ ok: true });
-    } catch (e) {
-      next(e);
+  router.post('/:id/modules/:moduleId/move', asyncHandler(async (req, res) => {
+    const toId = Number(req.body?.to_rack_id);
+    if (!Number.isInteger(toId) || toId <= 0) {
+      return res.status(400).json({ error: 'to_rack_id is required' });
     }
-  });
+    const from = await ownRack(req.user.id, req.params.id);
+    const to = await ownRack(req.user.id, toId);
+    if (!from || !to) return res.status(404).json({ error: 'Rack not found' });
+    if (from.id === to.id) {
+      return res.status(400).json({ error: 'to_rack_id must be a different rack' });
+    }
+    const moduleId = Number(req.params.moduleId);
+    const source = await RackModule.findOne({
+      where: { rack_id: from.id, module_id: moduleId },
+    });
+    if (!source) return res.status(404).json({ error: 'Module not found in this rack' });
+
+    // Remove-from-source and add-to-target commit or roll back together.
+    await db.sequelize.transaction(async (transaction) => {
+      const target = await RackModule.findOne({
+        where: { rack_id: to.id, module_id: moduleId },
+        transaction,
+      });
+      if (target) {
+        await target.update({ quantity: target.quantity + source.quantity }, { transaction });
+      } else {
+        await RackModule.create(
+          { rack_id: to.id, module_id: moduleId, quantity: source.quantity },
+          { transaction }
+        );
+      }
+      await source.destroy({ transaction });
+    });
+    res.json({ ok: true });
+  }));
 
   return router;
 }

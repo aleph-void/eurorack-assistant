@@ -4,6 +4,7 @@ import { QueryTypes } from 'sequelize';
 import { requireAuth } from '../auth.js';
 import { manualPath, safeManualName } from '../services/pdf.js';
 import { readableIds } from '../services/sharing.js';
+import { asyncHandler } from './asyncHandler.js';
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
@@ -96,95 +97,91 @@ export function manualRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
   //
   // Each hit carries a snippet with the matched words wrapped in [[ ]], which
   // the client renders as highlighting.
-  router.get('/search', async (req, res, next) => {
-    try {
-      const query = String(req.query.q ?? '').trim().slice(0, MAX_QUERY_CHARS);
-      if (!query) return res.status(400).json({ error: 'q is required' });
-      const limit = Math.min(
-        MAX_LIMIT,
-        Math.max(1, Number(req.query.limit) || DEFAULT_LIMIT)
-      );
-      const offset = Math.max(0, Number(req.query.offset) || 0);
+  router.get('/search', asyncHandler(async (req, res) => {
+    const query = String(req.query.q ?? '').trim().slice(0, MAX_QUERY_CHARS);
+    if (!query) return res.status(400).json({ error: 'q is required' });
+    const limit = Math.min(
+      MAX_LIMIT,
+      Math.max(1, Number(req.query.limit) || DEFAULT_LIMIT)
+    );
+    const offset = Math.max(0, Number(req.query.offset) || 0);
 
-      // $1 the query, $2 the requesting user, $3/$4 the window, $5 the
-      // optional module filter. The tsvector expression is written exactly as
-      // the index in migration 018 declares it.
-      const bind = [query, req.user.id, limit + 1, offset];
-      let moduleFilter = '';
-      if (req.query.module_id !== undefined && String(req.query.module_id).trim() !== '') {
-        bind.push(Number(req.query.module_id) || 0);
-        moduleFilter = `AND d.module_id = $${bind.length}`;
-      }
-      // Documents other people shared with this user join the searchable set.
-      // Their ids are written into the SQL rather than bound because they are
-      // a list of unknown length (and they are integers this server read out
-      // of its own database a moment ago). The whole visibility test is one
-      // CASE rather than the OR it reads as, for the pg-mem reason below.
-      const shared = [...(await sharedManualIds(req.user.id))].map(Number).filter(Number.isInteger);
-      const sharedTest = shared.length ? `WHEN d.manual_id IN (${shared.join(',')}) THEN 1` : '';
-      const rows = await db.sequelize.query(
-        `SELECT d.id, d.manual_id, d.module_id, d.user_id, d.hash, d.title,
-                d.pages, d.chars, d.created_at,
-                m.name AS manual_name, m.original_name, m.source,
-                mo.manufacturer AS module_manufacturer, mo.name AS module_name,
-                ts_rank(to_tsvector('${TS_CONFIG}', d.content),
-                        websearch_to_tsquery('${TS_CONFIG}', $1)) AS rank,
-                ts_headline('${TS_CONFIG}', d.content,
-                            websearch_to_tsquery('${TS_CONFIG}', $1),
-                            '${HEADLINE_OPTIONS}') AS snippet
-           FROM manual_documents d
-           JOIN manuals m ON m.id = d.manual_id
-           JOIN modules mo ON mo.id = d.module_id
-          -- The match comes first and the filters narrow it: the index answers
-          -- the match, and the rows it returns are few enough that the rest is
-          -- free. Visibility is written as a CASE rather than the more obvious
-          -- "user_id IS NULL OR user_id = $2 OR manual_id IN (...)" — the two
-          -- say exactly the same thing (the document is the shared manual, or
-          -- yours, or one shared with you), and pg-mem, the test database,
-          -- drops rows when an OR is ANDed with anything else (see
-          -- tests/helpers.js).
-          WHERE to_tsvector('${TS_CONFIG}', d.content)
-                @@ websearch_to_tsquery('${TS_CONFIG}', $1)
-            AND (CASE WHEN COALESCE(d.user_id, $2) = $2 THEN 1 ${sharedTest} ELSE 0 END) = 1
-            ${moduleFilter}
-          ORDER BY rank DESC, d.id ASC
-          LIMIT $3 OFFSET $4`,
-        { bind, type: QueryTypes.SELECT }
-      );
-
-      const hasMore = rows.length > limit;
-      res.json({
-        query,
-        limit,
-        offset,
-        has_more: hasMore,
-        results: rows.slice(0, limit).map((row) => ({
-          manual_id: row.manual_id,
-          module_id: row.module_id,
-          hash: row.hash,
-          title: row.title,
-          name: row.manual_name,
-          original_name: row.original_name,
-          source: row.source,
-          // Whose document this is: null for the shared manual every user
-          // sees, the owner's id for an upload.
-          user_id: row.user_id ?? null,
-          manufacturer: row.module_manufacturer,
-          module_name: row.module_name,
-          pages: row.pages,
-          chars: row.chars,
-          rank: Number(row.rank) || 0,
-          // A fragment cut out of the middle of the markdown, so it arrives
-          // with the line breaks (and sometimes the heading marks) it had
-          // there. It is shown as one line of context, so it is flattened
-          // here rather than in every consumer.
-          snippet: String(row.snippet || '').replace(/\s+/g, ' ').trim(),
-        })),
-      });
-    } catch (e) {
-      next(e);
+    // $1 the query, $2 the requesting user, $3/$4 the window, $5 the
+    // optional module filter. The tsvector expression is written exactly as
+    // the index in migration 018 declares it.
+    const bind = [query, req.user.id, limit + 1, offset];
+    let moduleFilter = '';
+    if (req.query.module_id !== undefined && String(req.query.module_id).trim() !== '') {
+      bind.push(Number(req.query.module_id) || 0);
+      moduleFilter = `AND d.module_id = $${bind.length}`;
     }
-  });
+    // Documents other people shared with this user join the searchable set.
+    // Their ids are written into the SQL rather than bound because they are
+    // a list of unknown length (and they are integers this server read out
+    // of its own database a moment ago). The whole visibility test is one
+    // CASE rather than the OR it reads as, for the pg-mem reason below.
+    const shared = [...(await sharedManualIds(req.user.id))].map(Number).filter(Number.isInteger);
+    const sharedTest = shared.length ? `WHEN d.manual_id IN (${shared.join(',')}) THEN 1` : '';
+    const rows = await db.sequelize.query(
+      `SELECT d.id, d.manual_id, d.module_id, d.user_id, d.hash, d.title,
+              d.pages, d.chars, d.created_at,
+              m.name AS manual_name, m.original_name, m.source,
+              mo.manufacturer AS module_manufacturer, mo.name AS module_name,
+              ts_rank(to_tsvector('${TS_CONFIG}', d.content),
+                      websearch_to_tsquery('${TS_CONFIG}', $1)) AS rank,
+              ts_headline('${TS_CONFIG}', d.content,
+                          websearch_to_tsquery('${TS_CONFIG}', $1),
+                          '${HEADLINE_OPTIONS}') AS snippet
+         FROM manual_documents d
+         JOIN manuals m ON m.id = d.manual_id
+         JOIN modules mo ON mo.id = d.module_id
+        -- The match comes first and the filters narrow it: the index answers
+        -- the match, and the rows it returns are few enough that the rest is
+        -- free. Visibility is written as a CASE rather than the more obvious
+        -- "user_id IS NULL OR user_id = $2 OR manual_id IN (...)" — the two
+        -- say exactly the same thing (the document is the shared manual, or
+        -- yours, or one shared with you), and pg-mem, the test database,
+        -- drops rows when an OR is ANDed with anything else (see
+        -- tests/helpers.js).
+        WHERE to_tsvector('${TS_CONFIG}', d.content)
+              @@ websearch_to_tsquery('${TS_CONFIG}', $1)
+          AND (CASE WHEN COALESCE(d.user_id, $2) = $2 THEN 1 ${sharedTest} ELSE 0 END) = 1
+          ${moduleFilter}
+        ORDER BY rank DESC, d.id ASC
+        LIMIT $3 OFFSET $4`,
+      { bind, type: QueryTypes.SELECT }
+    );
+
+    const hasMore = rows.length > limit;
+    res.json({
+      query,
+      limit,
+      offset,
+      has_more: hasMore,
+      results: rows.slice(0, limit).map((row) => ({
+        manual_id: row.manual_id,
+        module_id: row.module_id,
+        hash: row.hash,
+        title: row.title,
+        name: row.manual_name,
+        original_name: row.original_name,
+        source: row.source,
+        // Whose document this is: null for the shared manual every user
+        // sees, the owner's id for an upload.
+        user_id: row.user_id ?? null,
+        manufacturer: row.module_manufacturer,
+        module_name: row.module_name,
+        pages: row.pages,
+        chars: row.chars,
+        rank: Number(row.rank) || 0,
+        // A fragment cut out of the middle of the markdown, so it arrives
+        // with the line breaks (and sometimes the heading marks) it had
+        // there. It is shown as one line of context, so it is flattened
+        // here rather than in every consumer.
+        snippet: String(row.snippet || '').replace(/\s+/g, ' ').trim(),
+      })),
+    });
+  }));
 
   // The extracted markdown behind a document hash, for reading in the browser.
   // Visibility is the document row's own (shared, or this user's upload); the
@@ -230,63 +227,47 @@ export function manualRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
     updated_at: document.updated_at,
   });
 
-  router.get('/:hash/text', async (req, res, next) => {
-    try {
-      const document = await accessibleDocument(req, res);
-      if (!document) return;
-      res.json(documentJson(document));
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.get('/:hash/text', asyncHandler(async (req, res) => {
+    const document = await accessibleDocument(req, res);
+    if (!document) return;
+    res.json(documentJson(document));
+  }));
 
   // The same markdown as a file, named after the module the way the PDF export
   // is — so a manual can be kept alongside its own text.
-  router.get('/:hash/text/export', async (req, res, next) => {
-    try {
-      const document = await accessibleDocument(req, res);
-      if (!document) return;
-      const module = document.Module;
-      const filename = safeManualName(
-        module?.manufacturer ?? '',
-        module?.name ?? 'module',
-        'Manual'
-      ).replace(/\.pdf$/, '.md');
-      res.set('Content-Type', 'text/markdown; charset=utf-8');
-      res.set(
-        'Content-Disposition',
-        `attachment; filename="${filename.replace(/["\\\r\n]/g, '_')}"`
-      );
-      res.send(document.content);
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.get('/:hash/text/export', asyncHandler(async (req, res) => {
+    const document = await accessibleDocument(req, res);
+    if (!document) return;
+    const module = document.Module;
+    const filename = safeManualName(
+      module?.manufacturer ?? '',
+      module?.name ?? 'module',
+      'Manual'
+    ).replace(/\.pdf$/, '.md');
+    res.set('Content-Type', 'text/markdown; charset=utf-8');
+    res.set(
+      'Content-Disposition',
+      `attachment; filename="${filename.replace(/["\\\r\n]/g, '_')}"`
+    );
+    res.send(document.content);
+  }));
 
-  router.get('/:hash', async (req, res, next) => {
-    try {
-      const found = await accessibleManual(req, res);
-      if (!found) return;
-      const { manual, file } = found;
-      sendPdf(res, file, 'inline', manual.original_name || `${manual.hash}.pdf`);
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.get('/:hash', asyncHandler(async (req, res) => {
+    const found = await accessibleManual(req, res);
+    if (!found) return;
+    const { manual, file } = found;
+    sendPdf(res, file, 'inline', manual.original_name || `${manual.hash}.pdf`);
+  }));
 
   // Export downloads the document as an attachment named after the module it
   // belongs to and the document's database name.
-  router.get('/:hash/export', async (req, res, next) => {
-    try {
-      const found = await accessibleManual(req, res);
-      if (!found) return;
-      const { manual, file } = found;
-      const module = manual.Module;
-      sendPdf(res, file, 'attachment', safeManualName(module.manufacturer, module.name, manual.name));
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.get('/:hash/export', asyncHandler(async (req, res) => {
+    const found = await accessibleManual(req, res);
+    if (!found) return;
+    const { manual, file } = found;
+    const module = manual.Module;
+    sendPdf(res, file, 'attachment', safeManualName(module.manufacturer, module.name, manual.name));
+  }));
 
   return router;
 }

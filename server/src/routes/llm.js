@@ -24,6 +24,7 @@ import {
   saveClaudeToken,
   saveCodexAuthJson,
 } from '../services/llmAccounts.js';
+import { asyncHandler } from './asyncHandler.js';
 
 // A started authorization is only good for so long; a verifier that sat
 // around for an hour is a flow the user abandoned.
@@ -62,75 +63,63 @@ export function llmRoutes(db, { fetchImpl = fetch, oauth = undefined } = {}) {
     };
   };
 
-  router.get('/', async (req, res, next) => {
-    try {
-      res.json(await status(req.user));
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.get('/', asyncHandler(async (req, res) => {
+    res.json(await status(req.user));
+  }));
 
   // The user's own provider/model choice. Blank means "whatever the admin
   // configured", which is also what every account starts as.
-  router.put('/settings', async (req, res, next) => {
-    try {
-      const updates = {};
-      if (req.body?.llm_provider !== undefined) {
-        const provider = String(req.body.llm_provider).trim();
-        if (provider !== '' && !PROVIDERS.includes(provider)) {
-          return res.status(400).json({ error: `Invalid llm_provider: ${provider}` });
-        }
-        updates.llm_provider = provider;
+  router.put('/settings', asyncHandler(async (req, res) => {
+    const updates = {};
+    if (req.body?.llm_provider !== undefined) {
+      const provider = String(req.body.llm_provider).trim();
+      if (provider !== '' && !PROVIDERS.includes(provider)) {
+        return res.status(400).json({ error: `Invalid llm_provider: ${provider}` });
       }
-      if (req.body?.llm_model !== undefined) {
-        const model = String(req.body.llm_model).trim();
-        if (model !== '') {
-          const problem = modelNameProblem(model);
-          if (problem) return res.status(400).json({ error: `llm_model: ${problem}` });
-        }
-        updates.llm_model = model;
-      }
-      if (req.body?.llm_models !== undefined) {
-        const given = req.body.llm_models;
-        if (!given || typeof given !== 'object' || Array.isArray(given)) {
-          return res.status(400).json({ error: 'llm_models must be an object of job type → model' });
-        }
-        const models = {};
-        for (const [type, model] of Object.entries(given)) {
-          if (!LLM_JOB_TYPES.includes(type)) {
-            return res.status(400).json({ error: `Unknown job type: ${type}` });
-          }
-          const value = String(model ?? '').trim();
-          if (value) {
-            const problem = modelNameProblem(value);
-            if (problem) return res.status(400).json({ error: `llm_models.${type}: ${problem}` });
-            models[type] = value; // blank means "no override"
-          }
-        }
-        updates.llm_models = JSON.stringify(models);
-      }
-      if (Object.keys(updates).length === 0) {
-        return res.status(400).json({ error: 'Nothing to update' });
-      }
-      await db.models.User.update(updates, { where: { id: req.user.id } });
-      Object.assign(req.user, updates);
-      res.json(await status(req.user));
-    } catch (e) {
-      next(e);
+      updates.llm_provider = provider;
     }
-  });
+    if (req.body?.llm_model !== undefined) {
+      const model = String(req.body.llm_model).trim();
+      if (model !== '') {
+        const problem = modelNameProblem(model);
+        if (problem) return res.status(400).json({ error: `llm_model: ${problem}` });
+      }
+      updates.llm_model = model;
+    }
+    if (req.body?.llm_models !== undefined) {
+      const given = req.body.llm_models;
+      if (!given || typeof given !== 'object' || Array.isArray(given)) {
+        return res.status(400).json({ error: 'llm_models must be an object of job type → model' });
+      }
+      const models = {};
+      for (const [type, model] of Object.entries(given)) {
+        if (!LLM_JOB_TYPES.includes(type)) {
+          return res.status(400).json({ error: `Unknown job type: ${type}` });
+        }
+        const value = String(model ?? '').trim();
+        if (value) {
+          const problem = modelNameProblem(value);
+          if (problem) return res.status(400).json({ error: `llm_models.${type}: ${problem}` });
+          models[type] = value; // blank means "no override"
+        }
+      }
+      updates.llm_models = JSON.stringify(models);
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+    await db.models.User.update(updates, { where: { id: req.user.id } });
+    Object.assign(req.user, updates);
+    res.json(await status(req.user));
+  }));
 
   // Claude, step 1: mint the authorization URL the user opens in their own
   // browser. Approving there shows them a code to paste back into step 2.
-  router.post('/claude/oauth/start', async (req, res, next) => {
-    try {
-      const { url, verifier } = beginClaudeOauth(oauth ? { oauth } : {});
-      pendingOauth.set(req.user.id, { verifier, at: Date.now() });
-      res.json({ url });
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.post('/claude/oauth/start', asyncHandler(async (req, res) => {
+    const { url, verifier } = beginClaudeOauth(oauth ? { oauth } : {});
+    pendingOauth.set(req.user.id, { verifier, at: Date.now() });
+    res.json({ url });
+  }));
 
   // Claude, step 2: exchange the pasted code for tokens and keep them.
   router.post('/claude/oauth/finish', async (req, res, next) => {
@@ -191,29 +180,21 @@ export function llmRoutes(db, { fetchImpl = fetch, oauth = undefined } = {}) {
 
   // Lift a quota pause by hand — the stored reset time is the provider's
   // word, not gospel.
-  router.post('/:provider/resume', async (req, res, next) => {
-    try {
-      if (!PROVIDERS.includes(req.params.provider)) {
-        return res.status(400).json({ error: `Invalid provider: ${req.params.provider}` });
-      }
-      await clearAccountPause(db, req.user.id, req.params.provider);
-      res.json(await status(req.user));
-    } catch (e) {
-      next(e);
+  router.post('/:provider/resume', asyncHandler(async (req, res) => {
+    if (!PROVIDERS.includes(req.params.provider)) {
+      return res.status(400).json({ error: `Invalid provider: ${req.params.provider}` });
     }
-  });
+    await clearAccountPause(db, req.user.id, req.params.provider);
+    res.json(await status(req.user));
+  }));
 
-  router.delete('/:provider', async (req, res, next) => {
-    try {
-      if (!PROVIDERS.includes(req.params.provider)) {
-        return res.status(400).json({ error: `Invalid provider: ${req.params.provider}` });
-      }
-      await deleteAccount(db, req.user.id, req.params.provider);
-      res.json(await status(req.user));
-    } catch (e) {
-      next(e);
+  router.delete('/:provider', asyncHandler(async (req, res) => {
+    if (!PROVIDERS.includes(req.params.provider)) {
+      return res.status(400).json({ error: `Invalid provider: ${req.params.provider}` });
     }
-  });
+    await deleteAccount(db, req.user.id, req.params.provider);
+    res.json(await status(req.user));
+  }));
 
   return router;
 }

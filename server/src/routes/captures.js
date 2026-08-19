@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { capturePath, deleteCaptureImageIfOrphaned } from '../services/captures.js';
+import { asyncHandler } from './asyncHandler.js';
 
 export function captureRoutes(
   db,
@@ -36,79 +37,59 @@ export function captureRoutes(
   }
 
   // Optional filters: ?patch_id= / ?note_id=
-  router.get('/', async (req, res, next) => {
-    try {
-      const where = { user_id: req.user.id };
-      if (req.query.patch_id) where.patch_id = Number(req.query.patch_id) || 0;
-      if (req.query.note_id) where.note_id = Number(req.query.note_id) || 0;
-      const captures = await Capture.findAll({ where, order: [['id', 'DESC']] });
-      res.json(await withChannels(captures));
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.get('/', asyncHandler(async (req, res) => {
+    const where = { user_id: req.user.id };
+    if (req.query.patch_id) where.patch_id = Number(req.query.patch_id) || 0;
+    if (req.query.note_id) where.note_id = Number(req.query.note_id) || 0;
+    const captures = await Capture.findAll({ where, order: [['id', 'DESC']] });
+    res.json(await withChannels(captures));
+  }));
 
-  router.get('/:id', async (req, res, next) => {
-    try {
-      const capture = await ownCapture(req.user.id, req.params.id);
-      if (!capture) return res.status(404).json({ error: 'Capture not found' });
-      const [json] = await withChannels([capture]);
-      res.json(json);
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.get('/:id', asyncHandler(async (req, res) => {
+    const capture = await ownCapture(req.user.id, req.params.id);
+    if (!capture) return res.status(404).json({ error: 'Capture not found' });
+    const [json] = await withChannels([capture]);
+    res.json(json);
+  }));
 
-  router.get('/:id/image', async (req, res, next) => {
-    try {
-      const capture = await ownCapture(req.user.id, req.params.id);
-      if (!capture || !capture.image_hash) {
-        return res.status(404).json({ error: 'Capture not found' });
-      }
-      const file = capturePath(capturesDir, capture.image_hash);
-      if (!fs.existsSync(file)) return res.status(404).json({ error: 'Capture image not found' });
-      res.set('Content-Type', 'image/png');
-      // The bytes are addressed by their own hash, so they can never change.
-      res.set('Cache-Control', 'private, max-age=31536000, immutable');
-      fs.createReadStream(file).pipe(res);
-    } catch (e) {
-      next(e);
+  router.get('/:id/image', asyncHandler(async (req, res) => {
+    const capture = await ownCapture(req.user.id, req.params.id);
+    if (!capture || !capture.image_hash) {
+      return res.status(404).json({ error: 'Capture not found' });
     }
-  });
+    const file = capturePath(capturesDir, capture.image_hash);
+    if (!fs.existsSync(file)) return res.status(404).json({ error: 'Capture image not found' });
+    res.set('Content-Type', 'image/png');
+    // The bytes are addressed by their own hash, so they can never change.
+    res.set('Cache-Control', 'private, max-age=31536000, immutable');
+    fs.createReadStream(file).pipe(res);
+  }));
 
   // Body: { title?, caption? }
-  router.put('/:id', async (req, res, next) => {
-    try {
-      const capture = await ownCapture(req.user.id, req.params.id);
-      if (!capture) return res.status(404).json({ error: 'Capture not found' });
-      const values = {};
-      if (req.body?.title !== undefined) {
-        values.title = String(req.body.title).trim().slice(0, 200) || null;
-      }
-      if (req.body?.caption !== undefined) {
-        values.caption = String(req.body.caption).trim().slice(0, 2000) || null;
-      }
-      await capture.update(values);
-      const [json] = await withChannels([capture]);
-      res.json(json);
-    } catch (e) {
-      next(e);
+  router.put('/:id', asyncHandler(async (req, res) => {
+    const capture = await ownCapture(req.user.id, req.params.id);
+    if (!capture) return res.status(404).json({ error: 'Capture not found' });
+    const values = {};
+    if (req.body?.title !== undefined) {
+      values.title = String(req.body.title).trim().slice(0, 200) || null;
     }
-  });
+    if (req.body?.caption !== undefined) {
+      values.caption = String(req.body.caption).trim().slice(0, 2000) || null;
+    }
+    await capture.update(values);
+    const [json] = await withChannels([capture]);
+    res.json(json);
+  }));
 
-  router.delete('/:id', async (req, res, next) => {
-    try {
-      const capture = await ownCapture(req.user.id, req.params.id);
-      if (!capture) return res.status(404).json({ error: 'Capture not found' });
-      const hash = capture.image_hash;
-      await capture.destroy();
-      // The file goes only once nothing else points at those bytes.
-      await deleteCaptureImageIfOrphaned(db, capturesDir, hash);
-      res.json({ ok: true });
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.delete('/:id', asyncHandler(async (req, res) => {
+    const capture = await ownCapture(req.user.id, req.params.id);
+    if (!capture) return res.status(404).json({ error: 'Capture not found' });
+    const hash = capture.image_hash;
+    await capture.destroy();
+    // The file goes only once nothing else points at those bytes.
+    await deleteCaptureImageIfOrphaned(db, capturesDir, hash);
+    res.json({ ok: true });
+  }));
 
   return router;
 }

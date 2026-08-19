@@ -2,24 +2,21 @@ import { Router } from 'express';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { getConfig, setConfig } from '../services/config.js';
 import { PROVIDERS, KNOWN_MODELS, DEFAULT_MODELS } from '../services/llm.js';
+import { asyncHandler } from './asyncHandler.js';
 
 export function configRoutes(db) {
   const router = Router();
   router.use(requireAuth(db), requireAdmin());
 
-  router.get('/', async (req, res, next) => {
-    try {
-      const config = await getConfig(db);
-      res.json({
-        ...config,
-        providers: PROVIDERS,
-        known_models: KNOWN_MODELS,
-        default_models: DEFAULT_MODELS,
-      });
-    } catch (e) {
-      next(e);
-    }
-  });
+  router.get('/', asyncHandler(async (req, res) => {
+    const config = await getConfig(db);
+    res.json({
+      ...config,
+      providers: PROVIDERS,
+      known_models: KNOWN_MODELS,
+      default_models: DEFAULT_MODELS,
+    });
+  }));
 
   router.put('/', async (req, res, next) => {
     try {

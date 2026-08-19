@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createPatchSounds, CUE_NAMES } from '../src/patchSounds.js';
 
 // An audio context that writes down what it was asked to play.

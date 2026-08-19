@@ -328,7 +328,7 @@ describe('building a module panel', () => {
     const cropped = { x0: 194, y0: 61, w: 114, h: 1363 };
     const backend = fakeBackend({
       completeTextWithSearch: research,
-      analyzeImage: (prompt) =>
+      analyzeImage: () =>
         JSON.stringify({
           is_panel: true,
           components: fixture.controls.map((c) => ({

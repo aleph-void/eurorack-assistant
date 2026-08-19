@@ -266,8 +266,7 @@ watch(connected, (isConnected) => {
       </span>
     </summary>
     <div class="panel-body">
-
-      <p v-if="!connected" class="muted" data-test="scope-disconnected">
+<p v-if="!connected" class="muted" data-test="scope-disconnected">
         No oscilloscope is connected.
         <RouterLink to="/devices">Link one</RouterLink> and it will appear here.
       </p>
@@ -450,37 +449,37 @@ watch(connected, (isConnected) => {
       <!-- Captures carry a waveform image each, so all but the one just
            taken stay folded away. -->
       <details
-        v-for="(capture, i) in captures"
-        :key="capture.id"
+        v-for="(row, i) in captures"
+        :key="row.id"
         class="expander"
         :open="i === 0"
-        :data-test="`capture-${capture.id}`"
+        :data-test="`capture-${row.id}`"
       >
         <summary>
-          <h3>{{ capture.title || `Capture #${capture.id}` }}</h3>
+          <h3>{{ row.title || `Capture #${row.id}` }}</h3>
           <span class="summary-count">
-            {{ new Date(capture.captured_at).toLocaleString() }}
+            {{ new Date(row.captured_at).toLocaleString() }}
           </span>
         </summary>
         <div class="expander-body">
           <p class="muted">
-            <span v-if="capture.device_name">{{ capture.device_name }}</span>
-            <span v-if="capture.audio_device_name"> · {{ capture.audio_device_name }}</span>
+            <span v-if="row.device_name">{{ row.device_name }}</span>
+            <span v-if="row.audio_device_name"> · {{ row.audio_device_name }}</span>
           </p>
           <img
-            v-if="capture.image_hash"
-            :src="`/api/captures/${capture.id}/image`"
-            :alt="capture.title || `Capture ${capture.id}`"
+            v-if="row.image_hash"
+            :src="`/api/captures/${row.id}/image`"
+            :alt="row.title || `Capture ${row.id}`"
             style="max-width: 100%; height: auto"
-            :data-test="`capture-image-${capture.id}`"
+            :data-test="`capture-image-${row.id}`"
           />
-          <div v-if="capture.channels?.length" class="table-wrap">
+          <div v-if="row.channels?.length" class="table-wrap">
             <table>
               <thead>
                 <tr><th>Channel</th><th>Showing</th><th>Reading</th></tr>
               </thead>
               <tbody>
-                <tr v-for="channel in capture.channels" :key="channel.id">
+                <tr v-for="channel in row.channels" :key="channel.id">
                   <td>{{ channel.channel_index + 1 }}</td>
                   <td>
                     {{ channel.label || channel.component_name || '—' }}
@@ -495,18 +494,18 @@ watch(connected, (isConnected) => {
           </div>
           <div class="row">
             <input
-              :value="captionDraft[capture.id] ?? capture.caption ?? ''"
+              :value="captionDraft[row.id] ?? row.caption ?? ''"
               placeholder="Caption"
-              :data-test="`capture-caption-${capture.id}`"
-              @input="captionDraft[capture.id] = $event.target.value"
+              :data-test="`capture-caption-${row.id}`"
+              @input="captionDraft[row.id] = $event.target.value"
             />
-            <button class="shrink" :data-test="`capture-save-${capture.id}`" @click="saveCaption(capture)">
+            <button class="shrink" :data-test="`capture-save-${row.id}`" @click="saveCaption(row)">
               Save
             </button>
             <button
               class="danger shrink"
-              :data-test="`capture-delete-${capture.id}`"
-              @click="removeCapture(capture)"
+              :data-test="`capture-delete-${row.id}`"
+              @click="removeCapture(row)"
             >
               Delete
             </button>

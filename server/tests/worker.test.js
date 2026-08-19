@@ -17,7 +17,6 @@ import {
   createWorker,
   enqueueJob,
   enqueueExtractManual,
-  enqueueFindManual,
   MAX_ATTEMPTS,
 } from '../src/jobs/worker.js';
 import {
@@ -28,7 +27,6 @@ import {
 } from '../src/services/config.js';
 import { noteQuotaExhaustion, takeQuotaExhaustion } from '../src/services/llm.js';
 import { createBus } from '../src/events.js';
-
 let manualsDir;
 beforeEach(() => {
   manualsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-manuals-'));
@@ -36,7 +34,6 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(manualsDir, { recursive: true, force: true });
 });
-
 // Stands in for pdftotext: the extraction is exercised for real in
 // manualText.test.js, and no test should need poppler installed.
 const fakeExtract = async (db, manual, module) => {
@@ -54,7 +51,6 @@ const fakeExtract = async (db, manual, module) => {
   });
   return row.get({ plain: true });
 };
-
 function makeWorker(db, backend, fetchImpl, bus, options = {}) {
   return createWorker(db, {
     manualsDir,
@@ -68,7 +64,6 @@ function makeWorker(db, backend, fetchImpl, bus, options = {}) {
     ...options,
   });
 }
-
 async function enqueue(db, type, fields) {
   const { rows } = await db.query(
     `INSERT INTO jobs (type, user_id, module_id, question_id, payload, status)
@@ -83,14 +78,12 @@ async function enqueue(db, type, fields) {
   );
   return rows[0];
 }
-
 describe('worker', () => {
   it('returns null when there is nothing to do', async () => {
     const db = await createTestDb();
     const worker = makeWorker(db, fakeBackend());
     expect(await worker.tick()).toBeNull();
   });
-
   it('processes an import job: creates modules and queues find_manual jobs', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -98,11 +91,9 @@ describe('worker', () => {
       userId: user.id,
       payload: { type: 'text', content: 'Make Noise,Maths\nMutable Instruments,Beads' },
     });
-
     const worker = makeWorker(db, fakeBackend());
     const done = await worker.tick();
     expect(done.status).toBe('complete');
-
     const { rows: modules } = await db.query('SELECT * FROM modules ORDER BY manufacturer');
     expect(modules).toHaveLength(2);
     const { rows: mappings } = await db.query(
@@ -113,13 +104,11 @@ describe('worker', () => {
     // Without a rack in the payload, modules land in the default rack.
     const { rows: racks } = await db.query('SELECT name FROM racks WHERE user_id = $1', [user.id]);
     expect(racks.map((r) => r.name)).toEqual(['main rack']);
-
     const { rows: jobs } = await db.query(
       "SELECT * FROM jobs WHERE type = 'find_manual' AND status = 'pending'"
     );
     expect(jobs).toHaveLength(2);
   });
-
   it('processes a modulargrid import job via fetch', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -132,25 +121,21 @@ describe('worker', () => {
       JSON.stringify({ rack: { Module: [{ name: 'Maths', Vendor: { name: 'Make Noise' } }] } }) +
       '</html>';
     const worker = makeWorker(db, fakeBackend(), fakeFetch({ 'modulargrid.net': { text: html } }));
-
     const done = await worker.tick();
     expect(done.status).toBe('complete');
     const { rows: modules } = await db.query('SELECT * FROM modules');
     expect(modules).toHaveLength(1);
     expect(modules[0].name).toBe('Maths');
   });
-
   it('does not queue duplicate find_manual jobs on re-import', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const worker = makeWorker(db, fakeBackend());
-
     await enqueueJob(db, 'import', {
       userId: user.id,
       payload: { type: 'text', content: 'Make Noise,Maths' },
     });
     await worker.tick();
-
     // Simulate the queued find_manual job being in flight, then re-import.
     await db.query("UPDATE jobs SET status = 'running' WHERE type = 'find_manual'");
     await enqueueJob(db, 'import', {
@@ -158,7 +143,6 @@ describe('worker', () => {
       payload: { type: 'text', content: 'Make Noise,Maths' },
     });
     await worker.tick();
-
     const { rows: modules } = await db.query('SELECT * FROM modules');
     expect(modules).toHaveLength(1);
     const { rows: mappings } = await db.query('SELECT quantity FROM rack_modules');
@@ -166,7 +150,6 @@ describe('worker', () => {
     const { rows: finds } = await db.query("SELECT * FROM jobs WHERE type = 'find_manual'");
     expect(finds).toHaveLength(1);
   });
-
   it('publishes per-user progress events on the bus', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -174,14 +157,11 @@ describe('worker', () => {
       userId: user.id,
       payload: { type: 'text', content: 'Make Noise,Maths' },
     });
-
     const bus = createBus();
     const events = [];
     bus.subscribe((e) => events.push(e));
-
     const worker = makeWorker(db, fakeBackend(), undefined, bus);
     await worker.tick();
-
     expect(events.length).toBeGreaterThanOrEqual(3);
     expect(events.every((e) => e.userId === user.id)).toBe(true);
     expect(events[0].event).toBe('started');
@@ -190,7 +170,6 @@ describe('worker', () => {
       true
     );
   });
-
   it('labels published job events with their module/question target', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -201,14 +180,12 @@ describe('worker', () => {
     );
     await enqueue(db, 'scope_question', { question_id: q[0].id, user_id: user.id });
     await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
-
     const bus = createBus();
     const events = [];
     bus.subscribe((e) => events.push(e));
     const worker = makeWorker(db, fakeBackend({ completeText: '[]' }), undefined, bus);
     await worker.tick(); // scope_question
     await worker.tick(); // analyze_manual (fails: no manual — labels still set)
-
     const questionEvents = events.filter((e) => e.job.question_id === q[0].id);
     expect(questionEvents.length).toBeGreaterThan(0);
     expect(questionEvents.every((e) => e.job.question_prompt === 'How?')).toBe(true);
@@ -220,7 +197,6 @@ describe('worker', () => {
       )
     ).toBe(true);
   });
-
   it('re-searches on import even when the manual was already found', async () => {
     const db = await createTestDb();
     const u1 = await createUser(db, { username: 'u1' });
@@ -228,14 +204,12 @@ describe('worker', () => {
     // u1 already has the module with a found manual; imports still always
     // re-try retrieval (an unchanged manual dedupes by content hash).
     await insertModule(db, u1.id, { manual_hash: PDF_HASH, manual_status: 'found' });
-
     await enqueueJob(db, 'import', {
       userId: u2.id,
       payload: { type: 'text', content: 'Make Noise,Maths' },
     });
     const worker = makeWorker(db, fakeBackend());
     await worker.tick();
-
     // u2 is mapped to the same shared module and a fresh search job is queued.
     const { rows: modules } = await db.query('SELECT * FROM modules');
     expect(modules).toHaveLength(1);
@@ -246,7 +220,6 @@ describe('worker', () => {
     const { rows: finds } = await db.query("SELECT * FROM jobs WHERE type = 'find_manual'");
     expect(finds).toHaveLength(1);
   });
-
   it('publishes module job events only to the user who caused the job', async () => {
     const db = await createTestDb();
     const u1 = await createUser(db, { username: 'u1' });
@@ -256,7 +229,6 @@ describe('worker', () => {
     // u2 has the same shared module, but u1 triggered the job.
     await mapModule(db, u2.id, module.id);
     await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: u1.id });
-
     const bus = createBus();
     const events = [];
     bus.subscribe((e) => events.push(e));
@@ -264,18 +236,15 @@ describe('worker', () => {
       analyzeDocument: '{"summary": "S", "components": [{"type": "knob", "name": "Rise"}]}',
     });
     await makeWorker(db, backend, undefined, bus).tick();
-
     expect(events.length).toBeGreaterThan(0);
     const userIds = new Set(events.map((e) => e.userId));
     expect(userIds).toEqual(new Set([u1.id]));
   });
-
   it('chained analyze jobs inherit the find job owner', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id);
     await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
-
     const backend = fakeBackend({
       completeTextWithSearch: JSON.stringify({
         manufacturer: 'Make Noise',
@@ -286,18 +255,15 @@ describe('worker', () => {
     });
     const fetchImpl = fakeFetch({ 'makenoise.com': { body: PDF_BYTES } });
     await makeWorker(db, backend, fetchImpl).tick();
-
     const { rows } = await db.query("SELECT * FROM jobs WHERE type = 'analyze_manual'");
     expect(rows).toHaveLength(1);
     expect(rows[0].user_id).toBe(user.id);
   });
-
   it('processes a find_manual job and chains an analyze_manual job', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id);
     await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
-
     const backend = fakeBackend({
       completeTextWithSearch: JSON.stringify({
         manufacturer: 'Make Noise',
@@ -308,20 +274,16 @@ describe('worker', () => {
     });
     const fetchImpl = fakeFetch({ 'makenoise.com': { body: PDF_BYTES } });
     const worker = makeWorker(db, backend, fetchImpl);
-
     const done = await worker.tick();
     expect(done.status).toBe('complete');
-
     const { rows: modules } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
     expect(modules[0].manual_status).toBe('found');
-
     // The found manual arrives marked in scope for the analysis it chains.
     const { rows: manuals } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [
       module.id,
     ]);
     expect(manuals).toHaveLength(1);
     expect(manuals[0].analysis_scope).toBe(true);
-
     const { rows: chained } = await db.query(
       `SELECT * FROM jobs WHERE type = 'analyze_manual' AND module_id = $1`,
       [module.id]
@@ -329,13 +291,11 @@ describe('worker', () => {
     expect(chained).toHaveLength(1);
     expect(chained[0].status).toBe('pending');
   });
-
   it('chains a text extraction alongside the analysis when a manual is found', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id);
     await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
-
     const backend = fakeBackend({
       completeTextWithSearch: JSON.stringify({
         manufacturer: 'Make Noise',
@@ -347,7 +307,6 @@ describe('worker', () => {
     });
     const worker = makeWorker(db, backend, fakeFetch({ 'makenoise.com': { body: PDF_BYTES } }));
     await worker.tick(); // find_manual
-
     const { rows: queued } = await db.query(
       `SELECT * FROM jobs WHERE type = 'extract_manual' AND module_id = $1`,
       [module.id]
@@ -356,7 +315,6 @@ describe('worker', () => {
     const manual = await db.models.Manual.findOne({ where: { module_id: module.id } });
     // The job names the document it is to extract, not just the module.
     expect(JSON.parse(queued[0].payload)).toEqual({ manual_id: manual.id });
-
     // Running it stores the manual's text against that document.
     await worker.tick(); // analyze_manual (queued first)
     await worker.tick(); // extract_manual
@@ -365,16 +323,13 @@ describe('worker', () => {
     expect(document.user_id).toBeNull();
     expect(document.hash).toBe(manual.hash);
   });
-
   it('does not queue a second extraction for a document already queued', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id, { manual_hash: PDF_HASH });
     const manual = await db.models.Manual.findOne({ where: { module_id: module.id } });
-
     expect(await enqueueExtractManual(db, manual.get({ plain: true }), user.id)).toBeTruthy();
     expect(await enqueueExtractManual(db, manual.get({ plain: true }), user.id)).toBeNull();
-
     // A different document of the same module is its own job, though.
     const upload = await db.models.Manual.create({
       module_id: module.id,
@@ -386,7 +341,6 @@ describe('worker', () => {
     expect(await enqueueExtractManual(db, upload.get({ plain: true }), user.id)).toBeTruthy();
     expect(await db.models.Job.count({ where: { type: 'extract_manual' } })).toBe(2);
   });
-
   it('fails an extraction whose document has gone', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -396,7 +350,6 @@ describe('worker', () => {
     const done = await worker.tick();
     expect(done.error).toMatch(/no document to extract text from/);
   });
-
   it('builds the backend with the job type model override', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -407,7 +360,6 @@ describe('worker', () => {
     );
     await enqueueJob(db, 'import', { userId: user.id, payload: { type: 'text', content: 'A,B' } });
     await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
-
     const backend = fakeBackend({
       completeTextWithSearch: JSON.stringify({
         manufacturer: 'Make Noise',
@@ -425,19 +377,16 @@ describe('worker', () => {
     });
     await worker.tick(); // import: no override key, global default applies
     await worker.tick(); // find_manual: per-type override applies
-
     expect(seen).toEqual([
       { provider: 'claude', model: 'claude-fable-5' },
       { provider: 'claude', model: 'claude-haiku-4-5' },
     ]);
   });
-
   it('find_manual falls back to rendering the product page as a PDF', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id);
     await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
-
     const backend = fakeBackend({
       completeTextWithSearch: JSON.stringify({
         manufacturer: 'Make Noise',
@@ -453,17 +402,14 @@ describe('worker', () => {
       return true;
     };
     const worker = makeWorker(db, backend, fakeFetch({}), null, { renderImpl });
-
     const done = await worker.tick();
     expect(done.status).toBe('complete');
     expect(rendered).toEqual(['https://makenoise.com/maths']);
-
     const { rows } = await db.query('SELECT * FROM manuals WHERE module_id = $1', [module.id]);
     expect(rows).toHaveLength(1);
     expect(rows[0].original_name).toBe('Make_Noise_Maths_Product_Page.pdf');
     expect(fs.existsSync(path.join(manualsDir, `${PDF_HASH}.pdf`))).toBe(true);
   });
-
   it('processes an analyze_manual job into components', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -473,13 +419,11 @@ describe('worker', () => {
       manual_status: 'found',
     });
     await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
-
     const backend = fakeBackend({
       analyzeDocument:
         '{"summary": "A function generator.", "components": [{"type": "output_jack", "name": "Out", "voltage_min": -10, "voltage_max": 10, "polarity": "bipolar"}]}',
     });
     const worker = makeWorker(db, backend);
-
     const done = await worker.tick();
     expect(done.status).toBe('complete');
     const { rows } = await db.query('SELECT * FROM module_components WHERE module_id = $1', [
@@ -487,7 +431,6 @@ describe('worker', () => {
     ]);
     expect(rows).toHaveLength(1);
   });
-
   it('uses product-page jack inference for a rendered stand-in', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -515,16 +458,13 @@ describe('worker', () => {
       analyzeDocument:
         '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
     });
-
     const done = await makeWorker(db, backend).tick();
-
     expect(done.status).toBe('complete');
     expect(backend.calls.analyzeDocument).toHaveLength(0);
     expect(backend.calls.analyzeDocuments[0][0]).toContain('rendered PRODUCT PAGES');
     expect(backend.calls.analyzeDocuments[0][0]).toContain('For JACKS ONLY');
     expect(backend.calls.analyzeDocuments[0][1]).toHaveLength(2);
   });
-
   // No Perfect Circuit listing for an open-source module, so the build document
   // the finder downloaded is what goes in beside the product page.
   it('analyzes the build document alongside a product page when there is no Perfect Circuit page', async () => {
@@ -556,9 +496,7 @@ describe('worker', () => {
       analyzeDocument:
         '{"summary":"A sample player.","components":[{"type":"output_jack","name":"OUT"}]}',
     });
-
     expect((await makeWorker(db, backend).tick()).status).toBe('complete');
-
     const [prompt, submitted] = backend.calls.analyzeDocuments[0];
     expect(submitted).toEqual([
       path.join(manualsDir, `${PDF_HASH}.pdf`),
@@ -570,7 +508,6 @@ describe('worker', () => {
     expect(prompt).toContain('part on the PCB is not a jack');
     expect(prompt).not.toContain("Perfect\nCircuit's page");
   });
-
   it('processes a reanalyze_components job: fetches retailer pages and re-analyzes with them', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -580,7 +517,6 @@ describe('worker', () => {
       manual_status: 'found',
     });
     await enqueue(db, 'reanalyze_components', { module_id: module.id, user_id: user.id });
-
     const backend = fakeBackend({
       completeTextWithSearch: JSON.stringify({
         perfect_circuit_url: 'https://www.perfectcircuit.com/make-noise-maths.html',
@@ -600,7 +536,6 @@ describe('worker', () => {
     };
     const done = await makeWorker(db, backend, fakeFetch({}), null, { renderImpl }).tick();
     expect(done.status).toBe('complete');
-
     expect(rendered).toEqual([
       'https://www.perfectcircuit.com/make-noise-maths.html',
       'https://detroitmodular.com/make-noise/maths',
@@ -617,7 +552,6 @@ describe('worker', () => {
     for (const page of manuals.slice(1)) {
       expect(fs.existsSync(path.join(manualsDir, `${page.hash}.pdf`))).toBe(true);
     }
-
     // The analysis got the manual AND both fetched pages, with the prompt
     // saying what the extra documents are.
     const [prompt, submitted] = backend.calls.analyzeDocuments[0];
@@ -628,14 +562,12 @@ describe('worker', () => {
       [module.id]
     );
     expect(components).toHaveLength(1);
-
     // The new pages get searchable text and the panel is rebuilt behind the
     // fresh component list.
     const { rows: jobs } = await db.query('SELECT type, payload FROM jobs ORDER BY id');
     expect(jobs.filter((j) => j.type === 'extract_manual')).toHaveLength(2);
     expect(jobs.filter((j) => j.type === 'panel_image')).toHaveLength(1);
   });
-
   it('reanalyze_components falls back to the manual alone when research fails', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -645,7 +577,6 @@ describe('worker', () => {
       manual_status: 'found',
     });
     await enqueue(db, 'reanalyze_components', { module_id: module.id, user_id: user.id });
-
     const backend = fakeBackend({
       completeTextWithSearch: new Error('LLM down'),
       analyzeDocument:
@@ -653,7 +584,6 @@ describe('worker', () => {
     });
     const done = await makeWorker(db, backend).tick();
     expect(done.status).toBe('complete');
-
     // One document, so the single-document analysis path was used and no
     // retailer guidance was injected.
     expect(backend.calls.analyzeDocuments).toHaveLength(0);
@@ -661,7 +591,6 @@ describe('worker', () => {
     expect(backend.calls.analyzeDocument[0][0]).not.toContain('retailer PRODUCT PAGES');
     expect((await db.query('SELECT * FROM manuals')).rows).toHaveLength(1);
   });
-
   // The user-requested rebuild: nothing is fetched, the manual goes in with
   // every vendor page already saved, and the fresh analysis replaces the old
   // component inventory.
@@ -697,13 +626,11 @@ describe('worker', () => {
       user_id: user.id,
       payload: JSON.stringify({ rebuild: true }),
     });
-
     const backend = fakeBackend({
       analyzeDocuments:
         '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
     });
     expect((await makeWorker(db, backend).tick()).status).toBe('complete');
-
     // Nothing was researched or fetched — the saved page went in as-is.
     expect(backend.calls.completeTextWithSearch).toHaveLength(0);
     const [prompt, submitted] = backend.calls.analyzeDocuments[0];
@@ -712,7 +639,6 @@ describe('worker', () => {
       path.join(manualsDir, `${pageHash}.pdf`),
     ]);
     expect(prompt).toContain('retailer PRODUCT PAGES');
-
     const { rows: components } = await db.query(
       'SELECT name FROM module_components WHERE module_id = $1',
       [module.id]
@@ -721,7 +647,6 @@ describe('worker', () => {
     const { rows: jobs } = await db.query('SELECT type FROM jobs ORDER BY id');
     expect(jobs.filter((j) => j.type === 'panel_image')).toHaveLength(1);
   });
-
   // A marked upload joins the analysis — but only the job owner's own.
   // Another user's marked upload never rides along on someone else's job.
   it("sends the user's own marked build document, never another user's", async () => {
@@ -767,9 +692,7 @@ describe('worker', () => {
       analyzeDocument:
         '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
     });
-
     expect((await makeWorker(db, backend).tick()).status).toBe('complete');
-
     const [prompt, submitted] = backend.calls.analyzeDocuments[0];
     expect(submitted).toEqual([
       path.join(manualsDir, `${PDF_HASH}.pdf`),
@@ -777,7 +700,6 @@ describe('worker', () => {
     ]);
     expect(prompt).toContain('BUILD DOCUMENT');
   });
-
   // Every document marked in scope goes in together; when one of them is a
   // retailer page the prompt keeps the retailer guidance rather than the
   // build-document guidance.
@@ -821,9 +743,7 @@ describe('worker', () => {
       analyzeDocument:
         '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
     });
-
     expect((await makeWorker(db, backend).tick()).status).toBe('complete');
-
     const [prompt, submitted] = backend.calls.analyzeDocuments[0];
     expect(submitted).toEqual([
       path.join(manualsDir, `${PDF_HASH}.pdf`),
@@ -832,7 +752,6 @@ describe('worker', () => {
     ]);
     expect(prompt).not.toContain('BUILD DOCUMENT');
   });
-
   it('sends only marked documents, and only the shared ones and your own', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -899,16 +818,13 @@ describe('worker', () => {
       analyzeDocument:
         '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
     });
-
     expect((await makeWorker(db, backend).tick()).status).toBe('complete');
-
     const submitted = backend.calls.analyzeDocuments[0][1];
     expect(submitted).toEqual([
       path.join(manualsDir, `${PDF_HASH}.pdf`),
       path.join(manualsDir, `${ownHash}.pdf`),
     ]);
   });
-
   // The manual arrives marked in scope; unmarking it takes it out of the
   // analysis like any other document, and the remaining marked documents are
   // analyzed on their own.
@@ -937,15 +853,12 @@ describe('worker', () => {
       analyzeDocument:
         '{"summary":"A function generator.","components":[{"type":"output_jack","name":"OUT"}]}',
     });
-
     expect((await makeWorker(db, backend).tick()).status).toBe('complete');
-
     // One remaining document → the single-document backend call, without
     // the manual.
     expect(backend.calls.analyzeDocument).toHaveLength(1);
     expect(backend.calls.analyzeDocument[0][1]).toBe(path.join(manualsDir, `${ownHash}.pdf`));
   });
-
   it('fails the analysis clearly when no document at all is marked in scope', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -958,7 +871,6 @@ describe('worker', () => {
     const job = await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
     // Exhaust all attempts so the job fails permanently.
     await db.query('UPDATE jobs SET attempts = $2 WHERE id = $1', [job.id, MAX_ATTEMPTS - 1]);
-
     const backend = fakeBackend();
     const done = await makeWorker(db, backend).tick();
     expect(done.status).toBe('failed');
@@ -966,7 +878,6 @@ describe('worker', () => {
     expect(backend.calls.analyzeDocument).toHaveLength(0);
     expect(backend.calls.analyzeDocuments).toHaveLength(0);
   });
-
   it('processes a scope_question job and leaves the question awaiting review', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -976,12 +887,10 @@ describe('worker', () => {
       [user.id]
     );
     await enqueue(db, 'scope_question', { question_id: q[0].id, user_id: user.id });
-
     const backend = fakeBackend({
       completeText: '[{"manufacturer": "Make Noise", "module": "Maths"}]',
     });
     const worker = makeWorker(db, backend);
-
     const done = await worker.tick();
     expect(done.status).toBe('complete');
     const { rows } = await db.query('SELECT * FROM questions WHERE id = $1', [q[0].id]);
@@ -993,7 +902,6 @@ describe('worker', () => {
     expect(links.map((l) => l.module_id)).toEqual([module.id]);
     expect(backend.calls.answerWithDocuments).toHaveLength(0);
   });
-
   it('processes an answer_question job end to end', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -1018,17 +926,14 @@ describe('worker', () => {
       manual[0].id,
     ]);
     await enqueue(db, 'answer_question', { question_id: q[0].id });
-
     const backend = fakeBackend({ answerWithDocuments: 'Like this.' });
     const worker = makeWorker(db, backend);
-
     const done = await worker.tick();
     expect(done.status).toBe('complete');
     const { rows } = await db.query('SELECT * FROM questions WHERE id = $1', [q[0].id]);
     expect(rows[0].status).toBe('answered');
     expect(rows[0].answer).toBe('Like this.');
   });
-
   it('marks the question failed when answering fails', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
@@ -1040,28 +945,23 @@ describe('worker', () => {
     const job = await enqueue(db, 'answer_question', { question_id: q[0].id });
     // Exhaust all attempts so the job fails permanently.
     await db.query('UPDATE jobs SET attempts = $2 WHERE id = $1', [job.id, MAX_ATTEMPTS - 1]);
-
     const backend = fakeBackend({ completeText: '[]' });
     const worker = makeWorker(db, backend);
     const done = await worker.tick();
     expect(done.status).toBe('failed');
     expect(done.error).toMatch(/in scope/);
-
     const { rows } = await db.query('SELECT * FROM questions WHERE id = $1', [q[0].id]);
     expect(rows[0].status).toBe('failed');
     expect(rows[0].error).toMatch(/in scope/);
   });
-
   it('retries a failed job until MAX_ATTEMPTS then fails permanently', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id);
     await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
-
     const backend = fakeBackend({ completeTextWithSearch: new Error('LLM down') });
     const fetchImpl = fakeFetch({ 'archive.org/advancedsearch.php': { json: { response: { docs: [] } } } });
     const worker = makeWorker(db, backend, fetchImpl);
-
     for (let i = 1; i < MAX_ATTEMPTS; i++) {
       const result = await worker.tick();
       expect(result.status).toBe('pending');
@@ -1071,27 +971,23 @@ describe('worker', () => {
     expect(final.status).toBe('failed');
     expect(final.attempts).toBe(MAX_ATTEMPTS);
   });
-
   it('fails cleanly when the module was deleted', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     const module = await insertModule(db, user.id);
     const job = await enqueue(db, 'find_manual', { module_id: module.id, user_id: user.id });
     await db.query('UPDATE jobs SET module_id = NULL WHERE id = $1', [job.id]);
-
     const worker = makeWorker(db, fakeBackend());
     const done = await worker.tick();
     expect(['pending', 'failed']).toContain(done.status);
     expect(done.error).toBeTruthy();
   });
-
   it('start/stop polls the queue in the background', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u' });
     fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
     const module = await insertModule(db, user.id, { manual_hash: PDF_HASH });
     await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
-
     const backend = fakeBackend({
       analyzeDocument: '{"summary": "S", "components": [{"type": "knob", "name": "Rise"}]}',
     });
@@ -1110,7 +1006,6 @@ describe('worker', () => {
     const { rows } = await db.query('SELECT status FROM jobs');
     expect(rows[0].status).toBe('complete');
   });
-
   it('processes jobs concurrently with the configured number of workers', async () => {
     const db = await createTestDb();
     await db.query("INSERT INTO app_config (key, value) VALUES ('import_workers', '3')");
@@ -1120,7 +1015,6 @@ describe('worker', () => {
       const module = await insertModule(db, user.id, { name: `Module ${i}`, manual_hash: PDF_HASH });
       await enqueue(db, 'analyze_manual', { module_id: module.id, user_id: user.id });
     }
-
     let inFlight = 0;
     let maxInFlight = 0;
     const backend = fakeBackend({
@@ -1152,7 +1046,6 @@ describe('worker', () => {
     }
     expect(maxInFlight).toBe(3);
   });
-
   it('runs jobs chained mid-drain (import → find_manual) at full concurrency', async () => {
     const db = await createTestDb();
     await db.query("INSERT INTO app_config (key, value) VALUES ('import_workers', '3')");
@@ -1161,7 +1054,6 @@ describe('worker', () => {
       userId: user.id,
       payload: { type: 'text', content: 'Make Noise,Maths\nMake Noise,Rene\nMake Noise,Wogglebug' },
     });
-
     let inFlight = 0;
     let maxInFlight = 0;
     const backend = fakeBackend({
@@ -1203,7 +1095,6 @@ describe('worker', () => {
     // running; they must still be spread across the worker pool.
     expect(maxInFlight).toBe(3);
   });
-
   // A process killed mid-job (a redeploy recreating the container is enough)
   // leaves its jobs 'running' with nobody working on them. Without a lease
   // they stayed that way for good: never retried, and never re-queued either,
@@ -1217,7 +1108,6 @@ describe('worker', () => {
       );
       return rows[0];
     }
-
     it('requeues a running job whose worker stopped reporting progress', async () => {
       const db = await createTestDb();
       const user = await createUser(db, { username: 'u' });
@@ -1226,10 +1116,8 @@ describe('worker', () => {
       const stale = await insertRunning(db, module.id, {
         heartbeatAt: new Date(Date.now() - 60 * 60 * 1000),
       });
-
       const worker = makeWorker(db, fakeBackend());
       const reclaimed = await worker.reclaimStaleJobs();
-
       expect(reclaimed.map((j) => j.id)).toEqual([stale.id]);
       const { rows } = await db.query('SELECT * FROM jobs WHERE id = $1', [stale.id]);
       expect(rows[0].status).toBe('pending');
@@ -1241,7 +1129,6 @@ describe('worker', () => {
       const { rows: mods } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
       expect(mods[0].analysis_status).toBe('pending');
     });
-
     it('fails an orphaned job that has no attempts left', async () => {
       const db = await createTestDb();
       const user = await createUser(db, { username: 'u' });
@@ -1250,26 +1137,21 @@ describe('worker', () => {
         heartbeatAt: new Date(Date.now() - 60 * 60 * 1000),
         attempts: MAX_ATTEMPTS,
       });
-
       await makeWorker(db, fakeBackend()).reclaimStaleJobs();
-
       const { rows } = await db.query('SELECT * FROM jobs WHERE id = $1', [stale.id]);
       expect(rows[0].status).toBe('failed');
       const { rows: mods } = await db.query('SELECT * FROM modules WHERE id = $1', [module.id]);
       expect(mods[0].analysis_status).toBe('failed');
     });
-
     it('leaves a job alone while its worker is still reporting', async () => {
       const db = await createTestDb();
       const user = await createUser(db, { username: 'u' });
       const module = await insertModule(db, user.id);
       const fresh = await insertRunning(db, module.id, { heartbeatAt: new Date() });
-
       expect(await makeWorker(db, fakeBackend()).reclaimStaleJobs()).toHaveLength(0);
       const { rows } = await db.query('SELECT * FROM jobs WHERE id = $1', [fresh.id]);
       expect(rows[0].status).toBe('running');
     });
-
     it('never reclaims a job this worker is running right now', async () => {
       const db = await createTestDb();
       const user = await createUser(db, { username: 'u' });
@@ -1281,7 +1163,6 @@ describe('worker', () => {
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
-
       let reclaimedMidRun = null;
       // Even with every running job counting as stale, the one in flight here
       // must survive — reclaiming it would run the analysis twice.
@@ -1298,11 +1179,9 @@ describe('worker', () => {
         { staleJobMs: 0 }
       );
       const done = await worker.tick();
-
       expect(reclaimedMidRun).toEqual([]);
       expect(done.status).toBe('complete');
     });
-
     it('hands in-flight jobs back to the queue when the worker is stopped', async () => {
       const db = await createTestDb();
       const user = await createUser(db, { username: 'u' });
@@ -1314,7 +1193,6 @@ describe('worker', () => {
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
-
       // The analysis never returns: the job is still genuinely in flight when
       // the process is told to shut down, exactly as during a deploy.
       let midAnalysis;
@@ -1331,7 +1209,6 @@ describe('worker', () => {
       worker.start();
       await analysing;
       await worker.stop();
-
       const { rows } = await db.query('SELECT * FROM jobs WHERE id = $1', [job.id]);
       expect(rows[0].status).toBe('pending');
       // A deploy is not the job's fault, so the interrupted attempt is
@@ -1339,7 +1216,6 @@ describe('worker', () => {
       expect(rows[0].attempts).toBe(0);
       expect(rows[0].error).toMatch(/shut down/);
     });
-
     it('picks orphaned jobs up again on the next poll', async () => {
       const db = await createTestDb();
       const user = await createUser(db, { username: 'u' });
@@ -1354,7 +1230,6 @@ describe('worker', () => {
         heartbeatAt: new Date(Date.now() - 60 * 60 * 1000),
         userId: user.id,
       });
-
       const worker = makeWorker(
         db,
         fakeBackend({ analyzeDocument: '{"summary": "S", "components": []}' }),
@@ -1375,7 +1250,6 @@ describe('worker', () => {
         await worker.stop();
       }
     });
-
     it('gives up on a job that never finishes, freeing the runner', async () => {
       const db = await createTestDb();
       const user = await createUser(db, { username: 'u' });
@@ -1387,7 +1261,6 @@ describe('worker', () => {
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
-
       const worker = makeWorker(
         db,
         fakeBackend({ analyzeDocument: () => new Promise(() => {}) }),
@@ -1396,12 +1269,10 @@ describe('worker', () => {
         { jobTimeoutMs: 50 }
       );
       const result = await worker.tick();
-
       expect(result.id).toBe(job.id);
       expect(result.status).toBe('pending'); // attempts left, so it goes back
       expect(result.error).toMatch(/time limit/);
     });
-
     it('widens the time limit with every attempt', () => {
       expect(attemptTimeoutMs(1000, 1)).toBe(1000);
       expect(attemptTimeoutMs(1000, 2)).toBe(2000);
@@ -1409,19 +1280,17 @@ describe('worker', () => {
       // A row from before attempts were counted still gets one full limit.
       expect(attemptTimeoutMs(1000, 0)).toBe(1000);
     });
-
     it('lets a retry finish work that was too slow for the first attempt', async () => {
       const db = await createTestDb();
       const user = await createUser(db, { username: 'u' });
       const module = await insertModule(db, user.id);
-      const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
+      await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
       await db.query(
         `INSERT INTO manuals (module_id, hash, source, original_name, analysis_scope)
          VALUES ($1, $2, 'found', 'm.pdf', TRUE)`,
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
-
       // Work that takes longer than one limit but well inside two of them.
       const slow = () =>
         new Promise((resolve) => {
@@ -1430,18 +1299,15 @@ describe('worker', () => {
       const worker = makeWorker(db, fakeBackend({ analyzeDocument: slow }), null, null, {
         jobTimeoutMs: 300,
       });
-
       const first = await worker.tick();
       expect(first.attempts).toBe(1);
       expect(first.status).toBe('pending');
       expect(first.error).toMatch(/time limit/);
-
       // Second attempt: 600ms of room, so the same work lands.
       const second = await worker.tick();
       expect(second.attempts).toBe(2);
       expect(second.status).toBe('complete');
     });
-
     it('keeps the heartbeat fresh while a long job runs', async () => {
       const db = await createTestDb();
       const user = await createUser(db, { username: 'u' });
@@ -1453,7 +1319,6 @@ describe('worker', () => {
         [module.id, PDF_HASH]
       );
       fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
-
       let beat = null;
       const worker = makeWorker(
         db,
@@ -1473,12 +1338,10 @@ describe('worker', () => {
       worker.start();
       await new Promise((resolve) => setTimeout(resolve, 400));
       await worker.stop();
-
       expect(beat).toBeTruthy();
       expect(new Date(beat).getTime()).toBeGreaterThanOrEqual(claimedAt.getTime());
     });
   });
-
   // Stopping a job cannot interrupt its runner — handlers have no
   // cancellation to offer — so the row is taken off the queue instead and the
   // runner has to notice on its way out.
@@ -1495,54 +1358,44 @@ describe('worker', () => {
       const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
       return { user, module, job };
     }
-
     it('leaves a job cancelled rather than completing it', async () => {
       const db = await createTestDb();
       const { job } = await analyzeJob(db);
-
       // Cancel the row while the analysis is in the model's hands.
       const analyzeDocument = async () => {
         await db.query("UPDATE jobs SET status = 'cancelled' WHERE id = $1", [job.id]);
         return JSON.stringify({ summary: 'done anyway', components: [] });
       };
       const result = await makeWorker(db, fakeBackend({ analyzeDocument })).tick();
-
       expect(result.status).toBe('cancelled');
       const { rows } = await db.query('SELECT status FROM jobs WHERE id = $1', [job.id]);
       expect(rows[0].status).toBe('cancelled');
     });
-
     it('leaves a cancelled job cancelled when its attempt fails too', async () => {
       const db = await createTestDb();
       const { job } = await analyzeJob(db);
-
       const analyzeDocument = async () => {
         await db.query("UPDATE jobs SET status = 'cancelled' WHERE id = $1", [job.id]);
         throw new Error('boom');
       };
       const result = await makeWorker(db, fakeBackend({ analyzeDocument })).tick();
-
       expect(result.status).toBe('cancelled');
       // Not 'pending': a stopped job must not put itself back on the queue.
       const { rows } = await db.query('SELECT status FROM jobs WHERE id = $1', [job.id]);
       expect(rows[0].status).toBe('cancelled');
     });
-
     it('survives the row being deleted out from under a running job', async () => {
       const db = await createTestDb();
       const { job } = await analyzeJob(db);
-
       const analyzeDocument = async () => {
         await db.query('DELETE FROM jobs WHERE id = $1', [job.id]);
         return JSON.stringify({ summary: 'done anyway', components: [] });
       };
       const result = await makeWorker(db, fakeBackend({ analyzeDocument })).tick();
-
       expect(result).toBeNull();
       expect((await db.query('SELECT id FROM jobs')).rows).toHaveLength(0);
     });
   });
-
   // One exhausted subscription would otherwise take the whole queue down with
   // it three attempts at a time, and leave every module it touched 'failed'.
   describe('the provider running out of tokens', () => {
@@ -1560,21 +1413,16 @@ describe('worker', () => {
       const job = await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
       return { user, module, job };
     }
-
     const outOfTokens = () =>
       new Error('claude failed (exit 1):\nClaude AI usage limit reached|1893456000');
-
     beforeEach(() => {
       takeQuotaExhaustion(); // no leftovers from another test
     });
-
     it("pauses the owner's account until the limit lifts, not the queue", async () => {
       const db = await createTestDb();
       const { user } = await analyzeJob(db);
       const worker = makeWorker(db, fakeBackend({ analyzeDocument: outOfTokens() }));
-
       await worker.tick();
-
       // The wall is the owner's, so the pause is the owner's too.
       expect((await getQueuePause(db)).paused).toBe(false);
       const account = await db.models.UserLlmAccount.findOne({
@@ -1585,18 +1433,15 @@ describe('worker', () => {
       );
       expect(account.paused_reason).toMatch(/usage limit reached/);
     });
-
     it("holds the paused user's jobs while other users' jobs keep running", async () => {
       const db = await createTestDb();
-      const { user } = await analyzeJob(db);
+      await analyzeJob(db);
       const worker = makeWorker(db, fakeBackend({ analyzeDocument: outOfTokens() }), null, null, {
         budgetCacheMs: 0,
       });
       await worker.tick(); // hits the wall, pauses the account, requeues
-
       // The paused user's requeued job is passed over…
       expect(await worker.tick()).toBeNull();
-
       // …while another user's identical job runs to completion.
       const other = await analyzeJob(db, { username: 'v' });
       const okBackend = fakeBackend({ analyzeDocument: '{"summary": "S", "components": []}' });
@@ -1605,30 +1450,24 @@ describe('worker', () => {
       expect(done.id).toBe(other.job.id);
       expect(done.status).toBe('complete');
     });
-
     it('fails a job for good when its user has no account for the provider', async () => {
       const db = await createTestDb();
       const user = await createUser(db, { username: 'w', llmAccount: false });
       const module = await insertModule(db, user.id);
       await enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
-
       const backend = fakeBackend({ analyzeDocument: '{"summary": "S", "components": []}' });
       const result = await makeWorker(db, backend).tick();
-
       // Failed on the first attempt — no retry will conjure an account —
       // and without the model ever being run.
       expect(result.status).toBe('failed');
       expect(result.error).toMatch(/no claude account is connected/);
       expect(backend.calls.analyzeDocument ?? []).toHaveLength(0);
     });
-
     it('puts the job back on the queue without spending an attempt on it', async () => {
       const db = await createTestDb();
       const { job } = await analyzeJob(db);
       const worker = makeWorker(db, fakeBackend({ analyzeDocument: outOfTokens() }));
-
       const result = await worker.tick();
-
       expect(result.status).toBe('pending');
       // Claiming it counted an attempt; running out of tokens is not one of
       // the three tries the work itself gets.
@@ -1638,32 +1477,26 @@ describe('worker', () => {
       expect(rows[0].status).toBe('pending');
       expect(Number(rows[0].attempts)).toBe(0);
     });
-
     it('claims nothing while the queue is paused', async () => {
       const db = await createTestDb();
       await analyzeJob(db);
       await pauseQueue(db, { until: Date.now() + 60 * 60 * 1000, reason: 'out of tokens' });
-
       const backend = fakeBackend({ analyzeDocument: '{"summary": "S", "components": []}' });
       expect(await makeWorker(db, backend).tick()).toBeNull();
       expect(backend.calls.analyzeDocument).toHaveLength(0);
       const { rows } = await db.query('SELECT status FROM jobs');
       expect(rows[0].status).toBe('pending');
     });
-
     it('starts again by itself once the pause has run its course', async () => {
       const db = await createTestDb();
       await analyzeJob(db);
       await pauseQueue(db, { until: Date.now() - 1000, reason: 'out of tokens' });
-
       const backend = fakeBackend({ analyzeDocument: '{"summary": "S", "components": []}' });
       const done = await makeWorker(db, backend).tick();
-
       expect(done.status).toBe('complete');
       // And the spent pause is cleared out rather than left to be re-read.
       expect((await getQueuePause(db)).paused).toBe(false);
     });
-
     it('pauses even when the job that spent the tokens got away with it', async () => {
       const db = await createTestDb();
       await analyzeJob(db);
@@ -1677,9 +1510,7 @@ describe('worker', () => {
       const worker = makeWorker(db, fakeBackend({ analyzeDocument }), null, null, {
         quotaPauseMs: 30 * 60 * 1000,
       });
-
       const done = await worker.tick();
-
       expect(done.status).toBe('complete');
       expect((await getQueuePause(db)).paused).toBe(false);
       const account = await db.models.UserLlmAccount.findOne({
@@ -1691,7 +1522,6 @@ describe('worker', () => {
         Date.now() + 25 * 60 * 1000
       );
     });
-
     it('tells the owner of the account, and nobody else', async () => {
       const db = await createTestDb();
       const { user } = await analyzeJob(db);
@@ -1702,7 +1532,6 @@ describe('worker', () => {
         publishAll: (e) => toAll.push(e),
       };
       await makeWorker(db, fakeBackend({ analyzeDocument: outOfTokens() }), null, bus).tick();
-
       // The pause is the owner's own subscription, not shared queue state.
       expect(toAll).toHaveLength(0);
       const paused = toUser.filter((e) => e.kind === 'llm_account');
@@ -1714,20 +1543,16 @@ describe('worker', () => {
         paused: true,
       });
     });
-
     it('leaves an ordinary failure to the usual retries', async () => {
       const db = await createTestDb();
       await analyzeJob(db);
       const worker = makeWorker(db, fakeBackend({ analyzeDocument: new Error('LLM down') }));
-
       const result = await worker.tick();
-
       expect(result.status).toBe('pending');
       expect(result.attempts).toBe(1);
       expect((await getQueuePause(db)).paused).toBe(false);
     });
   });
-
   it('falls back to the default worker count when the stored value is unusable', async () => {
     const db = await createTestDb();
     expect(await getImportWorkerCount(db)).toBe(DEFAULT_IMPORT_WORKERS);

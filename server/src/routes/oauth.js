@@ -18,6 +18,7 @@ import {
   refreshDeviceToken,
   resolveScopes,
 } from '../services/deviceAuth.js';
+import { asyncHandler } from './asyncHandler.js';
 
 // RFC 8628 §3.5 error codes that mean "keep polling"; everything else is
 // terminal for the app.
@@ -61,99 +62,87 @@ export function oauthRoutes(db, { verificationPath = '/link' } = {}) {
   router.use(express.urlencoded({ extended: false }));
 
   // Step 1. Body: { client_id, scope?, device_name? }
-  router.post('/device_authorization', async (req, res, next) => {
-    try {
-      const clientId = String(req.body?.client_id || '').trim();
-      const client = await findClient(db, clientId);
-      if (!client) return oauthError(res, 'invalid_client');
+  router.post('/device_authorization', asyncHandler(async (req, res) => {
+    const clientId = String(req.body?.client_id || '').trim();
+    const client = await findClient(db, clientId);
+    if (!client) return oauthError(res, 'invalid_client');
 
-      const scopes = resolveScopes(req.body?.scope, client.scopes);
-      if (scopes === null) {
-        return oauthError(res, 'invalid_request', 'Requested scope exceeds the client registration.');
-      }
-
-      const deviceName = req.body?.device_name ? String(req.body.device_name).slice(0, 200) : null;
-      const { authorization, deviceCode } = await createDeviceAuthorization(db, {
-        clientId: client.client_id,
-        scopes,
-        deviceName,
-      });
-
-      const verificationUri = `${baseUrl(req)}${verificationPath}`;
-      res.json({
-        device_code: deviceCode,
-        user_code: authorization.user_code,
-        verification_uri: verificationUri,
-        // The convenience form for a device that can open a browser or show
-        // a QR code; the plain URI plus the code always works too.
-        verification_uri_complete: `${verificationUri}?code=${encodeURIComponent(
-          authorization.user_code
-        )}`,
-        expires_in: Math.max(
-          0,
-          Math.floor((new Date(authorization.expires_at).getTime() - Date.now()) / 1000)
-        ),
-        interval: authorization.interval_seconds,
-        scope: authorization.scopes,
-      });
-    } catch (e) {
-      next(e);
+    const scopes = resolveScopes(req.body?.scope, client.scopes);
+    if (scopes === null) {
+      return oauthError(res, 'invalid_request', 'Requested scope exceeds the client registration.');
     }
-  });
+
+    const deviceName = req.body?.device_name ? String(req.body.device_name).slice(0, 200) : null;
+    const { authorization, deviceCode } = await createDeviceAuthorization(db, {
+      clientId: client.client_id,
+      scopes,
+      deviceName,
+    });
+
+    const verificationUri = `${baseUrl(req)}${verificationPath}`;
+    res.json({
+      device_code: deviceCode,
+      user_code: authorization.user_code,
+      verification_uri: verificationUri,
+      // The convenience form for a device that can open a browser or show
+      // a QR code; the plain URI plus the code always works too.
+      verification_uri_complete: `${verificationUri}?code=${encodeURIComponent(
+        authorization.user_code
+      )}`,
+      expires_in: Math.max(
+        0,
+        Math.floor((new Date(authorization.expires_at).getTime() - Date.now()) / 1000)
+      ),
+      interval: authorization.interval_seconds,
+      scope: authorization.scopes,
+    });
+  }));
 
   // Step 3 (and refresh). Body: { grant_type, client_id, device_code | refresh_token }
-  router.post('/token', async (req, res, next) => {
-    try {
-      const grantType = String(req.body?.grant_type || '').trim();
-      const clientId = String(req.body?.client_id || '').trim();
-      const client = await findClient(db, clientId);
-      if (!client) return oauthError(res, 'invalid_client');
+  router.post('/token', asyncHandler(async (req, res) => {
+    const grantType = String(req.body?.grant_type || '').trim();
+    const clientId = String(req.body?.client_id || '').trim();
+    const client = await findClient(db, clientId);
+    if (!client) return oauthError(res, 'invalid_client');
 
-      if (grantType === DEVICE_CODE_GRANT) {
-        const result = await claimDeviceToken(db, {
-          deviceCode: String(req.body?.device_code || ''),
-          clientId: client.client_id,
-        });
-        if (result.error) return oauthError(res, result.error);
-        const { ok, ...token } = result;
-        return res.json(token);
-      }
-
-      if (grantType === 'refresh_token') {
-        const result = await refreshDeviceToken(db, {
-          refreshToken: String(req.body?.refresh_token || ''),
-          clientId: client.client_id,
-        });
-        if (result.error) return oauthError(res, result.error);
-        const { ok, ...token } = result;
-        return res.json(token);
-      }
-
-      return oauthError(res, 'unsupported_grant_type', `${grantType || '(none)'} is not supported.`);
-    } catch (e) {
-      next(e);
+    if (grantType === DEVICE_CODE_GRANT) {
+      const result = await claimDeviceToken(db, {
+        deviceCode: String(req.body?.device_code || ''),
+        clientId: client.client_id,
+      });
+      if (result.error) return oauthError(res, result.error);
+      const { ok, ...token } = result;
+      return res.json(token);
     }
-  });
+
+    if (grantType === 'refresh_token') {
+      const result = await refreshDeviceToken(db, {
+        refreshToken: String(req.body?.refresh_token || ''),
+        clientId: client.client_id,
+      });
+      if (result.error) return oauthError(res, result.error);
+      const { ok, ...token } = result;
+      return res.json(token);
+    }
+
+    return oauthError(res, 'unsupported_grant_type', `${grantType || '(none)'} is not supported.`);
+  }));
 
   // A device retiring its own credential (RFC 7009-shaped). Revoking from the
   // other side — the user pulling the plug — is DELETE /api/devices/:id.
-  router.post('/revoke', async (req, res, next) => {
-    try {
-      const token = String(req.body?.token || '');
-      if (!token) return oauthError(res, 'invalid_request', 'token is required');
-      const hash = hashToken(token);
-      const row = await db.models.DeviceToken.findOne({
-        where: { [Op.or]: [{ access_token_hash: hash }, { refresh_token_hash: hash }] },
-      });
-      // RFC 7009: revocation of an unknown token is still a success.
-      if (row && !row.revoked_at) {
-        await row.update({ revoked_at: new Date(), refresh_token_hash: null });
-      }
-      res.json({ ok: true });
-    } catch (e) {
-      next(e);
+  router.post('/revoke', asyncHandler(async (req, res) => {
+    const token = String(req.body?.token || '');
+    if (!token) return oauthError(res, 'invalid_request', 'token is required');
+    const hash = hashToken(token);
+    const row = await db.models.DeviceToken.findOne({
+      where: { [Op.or]: [{ access_token_hash: hash }, { refresh_token_hash: hash }] },
+    });
+    // RFC 7009: revocation of an unknown token is still a success.
+    if (row && !row.revoked_at) {
+      await row.update({ revoked_at: new Date(), refresh_token_hash: null });
     }
-  });
+    res.json({ ok: true });
+  }));
 
   return router;
 }

@@ -7,7 +7,7 @@ import { getQueuePause, pauseQueue } from '../src/services/config.js';
 
 describe('modules API', () => {
   it('lists only the current user’s modules', async () => {
-    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { app, db, aliceCookie } = await createTestApp();
     const { rows: users } = await db.query('SELECT id, username FROM users');
     const alice = users.find((u) => u.username === 'alice');
     const admin = users.find((u) => u.username === 'admin');
@@ -1170,7 +1170,7 @@ describe('questions API', () => {
 
   it('offers review options: rack, components, documents, answers, notes', async () => {
     const { app, db, aliceCookie, alice, moduleId, question } = await withScopedQuestion();
-    const other = await insertModule(db, alice.id, { manufacturer: '2hp', name: 'Pluck' });
+    await insertModule(db, alice.id, { manufacturer: '2hp', name: 'Pluck' });
     const { rows: jack } = await db.query(
       `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'output_jack', 'EOR')
        RETURNING id`,
@@ -1650,7 +1650,7 @@ describe('jobs API', () => {
   });
 
   it("hides other users' jobs — even for a shared module — except from admins", async () => {
-    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { app, db, adminCookie } = await createTestApp();
     const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
     const module = await insertModule(db, rows[0].id);
     const { rows: jobs } = await db.query(
@@ -1751,7 +1751,7 @@ describe('jobs API', () => {
   });
 
   it('stops and deletes only the caller\'s own jobs in bulk', async () => {
-    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { app, db, aliceCookie } = await createTestApp();
     const { rows: alice } = await db.query("SELECT id FROM users WHERE username = 'alice'");
     const { rows: admin } = await db.query('SELECT id FROM users WHERE is_admin = true');
     const module = await insertModule(db, alice[0].id);

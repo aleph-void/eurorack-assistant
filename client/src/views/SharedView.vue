@@ -114,8 +114,8 @@ const audience = (item) => {
               <span>{{ item.label }}</span>
               <span class="muted"> — with {{ audience(item) }}</span>
               <ShareButton
-                :type="item.type"
                 :id="item.id"
+                :type="item.type"
                 :label="item.label"
                 small
                 @changed="load"
