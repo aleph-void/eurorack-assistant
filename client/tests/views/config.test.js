@@ -35,6 +35,7 @@ describe('ConfigView', () => {
     default_models: { claude: 'claude-fable-5', codex: 'gpt-5.1-codex' },
     token_budget_default: '0',
     token_budget_period: 'month',
+    youtube_api_key: '',
   };
 
   it('loads current config and saves changes', async () => {
@@ -54,6 +55,7 @@ describe('ConfigView', () => {
     expect(wrapper.find('[data-test="token-budget-default"]').element.value).toBe('0');
     await wrapper.find('[data-test="token-budget-default"]').setValue('250000');
     await wrapper.find('[data-test="token-budget-period"]').setValue('week');
+    await wrapper.find('[data-test="youtube-api-key"]').setValue('AIzaTestKey123');
     await wrapper.find('form').trigger('submit');
     await flushPromises();
     expect(api.put).toHaveBeenCalledWith('/api/config', {
@@ -62,6 +64,7 @@ describe('ConfigView', () => {
       import_workers: 6,
       token_budget_default: 250000,
       token_budget_period: 'week',
+      youtube_api_key: 'AIzaTestKey123',
     });
     expect(wrapper.find('[data-test="saved"]').exists()).toBe(true);
   });

@@ -2,14 +2,25 @@ import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { findRackByName } from '../services/racks.js';
 import { readableResource, removeShares } from '../services/sharing.js';
-import { enqueueJob } from '../jobs/worker.js';
+import { enqueueJob, enqueueVideoJob } from '../jobs/worker.js';
 import { loadPanels } from '../services/panelImage.js';
+import { getConfig } from '../services/config.js';
+import { requireBudget } from '../services/budgets.js';
+import { videoJson, youtubeUrl } from '../services/videos.js';
+import {
+  YoutubeError,
+  channelUrl,
+  listChannelUploads,
+  matchVideosToModules,
+  parseChannelRef,
+  resolveChannel,
+} from '../services/youtube.js';
 import { asyncHandler } from './asyncHandler.js';
 
 // A user's racks. Every route operates on the requesting user's racks only —
 // racks (and their module lists) are never visible to other users.
-export function rackRoutes(db) {
-  const { Rack, RackModule, RackRow, RackRowModule, Module, User, Job } = db.models;
+export function rackRoutes(db, { fetchImpl } = {}) {
+  const { Rack, RackModule, RackRow, RackRowModule, Module, ModuleVideo, User, Job } = db.models;
   const router = Router();
   router.use(requireAuth(db));
 
@@ -244,6 +255,143 @@ export function rackRoutes(db) {
           payload: { rack_id: rack.id, rack_name: rack.name },
         });
     res.status(202).json({ id: job.id, type: job.type, status: job.status, reused: !!live });
+  }));
+
+  // Scan a YouTube channel for videos about this rack's modules. Body:
+  // { url } — a channel link (/@handle, /channel/UC…, /user/…, /c/…), a bare
+  // @handle, or a channel id. The channel's uploads are listed through the
+  // YouTube Data API (admin-configured key) and matched against the rack's
+  // module names; nothing is imported here — the client shows the matches
+  // and the user picks which ones the import route below queues.
+  router.post('/:id/videos/channel-scan', asyncHandler(async (req, res) => {
+    const rack = await ownRack(req.user.id, req.params.id);
+    if (!rack) return res.status(404).json({ error: 'Rack not found' });
+    const config = await getConfig(db);
+    const apiKey = String(config.youtube_api_key || '').trim();
+    if (!apiKey) {
+      return res.status(400).json({
+        error: 'No YouTube API key is configured — an admin can add one on the Config page.',
+      });
+    }
+    const ref = parseChannelRef(req.body?.url);
+    if (!ref) {
+      return res.status(400).json({
+        error: 'url must be a YouTube channel link (youtube.com/@handle, /channel/…, /user/… or /c/…)',
+      });
+    }
+    const mappings = await RackModule.findAll({
+      where: { rack_id: rack.id },
+      include: Module,
+      order: [
+        [Module, 'manufacturer', 'ASC'],
+        [Module, 'name', 'ASC'],
+      ],
+    });
+    const modules = mappings.filter((rm) => rm.Module).map((rm) => rm.Module);
+    let channel;
+    let videos;
+    try {
+      channel = await resolveChannel(ref, { apiKey, fetchImpl });
+      videos = await listChannelUploads(channel, { apiKey, fetchImpl });
+    } catch (e) {
+      if (e instanceof YoutubeError) return res.status(e.status).json({ error: e.message });
+      throw e;
+    }
+    const matches = matchVideosToModules(videos, modules);
+    // A video the user already has (in any state but failed) is flagged so
+    // the client can show it pre-imported rather than re-queue it.
+    const attached = modules.length
+      ? await ModuleVideo.findAll({
+          where: { user_id: req.user.id, module_id: modules.map((m) => m.id) },
+        })
+      : [];
+    const attachedKeys = new Set(
+      attached.filter((v) => v.status !== 'failed').map((v) => `${v.module_id}:${v.video_id}`)
+    );
+    res.json({
+      channel: { id: channel.id, title: channel.title, url: channelUrl(channel.id) },
+      scanned: videos.length,
+      modules: modules
+        .map((module) => ({
+          module_id: module.id,
+          manufacturer: module.manufacturer,
+          name: module.name,
+          videos: (matches.get(module.id) ?? []).map((video) => ({
+            video_id: video.video_id,
+            url: youtubeUrl(video.video_id),
+            title: video.title,
+            published_at: video.published_at,
+            matched_on: video.matched_on,
+            already_attached: attachedKeys.has(`${module.id}:${video.video_id}`),
+          })),
+        }))
+        .filter((module) => module.videos.length > 0),
+    });
+  }));
+
+  // Import the channel videos the user picked from a scan. Body:
+  // { videos: [{ module_id, video_id, title? }] }. Each selection becomes an
+  // attached module video and goes through the existing pipeline
+  // (download_video → analyze_video), so the analysis runs on the user's LLM
+  // account and the budget gate applies — exactly as if each link had been
+  // pasted on the module page. Already-attached videos are skipped; a failed
+  // one is reset and re-queued, like the paste route's retry.
+  router.post('/:id/videos/import', requireBudget(db), asyncHandler(async (req, res) => {
+    const rack = await ownRack(req.user.id, req.params.id);
+    if (!rack) return res.status(404).json({ error: 'Rack not found' });
+    const items = req.body?.videos;
+    if (!Array.isArray(items) || items.length === 0 || items.length > 100) {
+      return res.status(400).json({ error: 'videos must be a list of 1 to 100 selections' });
+    }
+    const mappings = await RackModule.findAll({ where: { rack_id: rack.id } });
+    const inRack = new Set(mappings.map((rm) => rm.module_id));
+    // Validate the whole list before touching anything, so a bad entry never
+    // half-imports a selection.
+    const selections = [];
+    for (const item of items) {
+      const moduleId = Number(item?.module_id);
+      if (!inRack.has(moduleId)) {
+        return res.status(400).json({ error: 'every selection must name a module in this rack' });
+      }
+      if (!/^[A-Za-z0-9_-]{11}$/.test(item?.video_id ?? '')) {
+        return res.status(400).json({ error: 'every selection needs a YouTube video_id' });
+      }
+      const title = typeof item.title === 'string' ? item.title.trim().slice(0, 300) : '';
+      selections.push({ moduleId, videoId: item.video_id, title: title || null });
+    }
+    let queued = 0;
+    let skipped = 0;
+    const videos = [];
+    for (const { moduleId, videoId, title } of selections) {
+      const existing = await ModuleVideo.findOne({
+        where: { module_id: moduleId, user_id: req.user.id, video_id: videoId },
+      });
+      if (existing && existing.status !== 'failed') {
+        skipped += 1;
+        videos.push(videoJson(existing));
+        continue;
+      }
+      let video = existing;
+      if (video) {
+        await video.update({ status: 'pending', error: null });
+      } else {
+        // The scan's title is provisional — download_video overwrites it
+        // with what yt-dlp reports — but it keeps the row readable while
+        // the job is still queued.
+        video = await ModuleVideo.create({
+          module_id: moduleId,
+          user_id: req.user.id,
+          video_id: videoId,
+          url: youtubeUrl(videoId),
+          title,
+          status: 'pending',
+        });
+      }
+      await enqueueVideoJob(db, 'download_video', video.get({ plain: true }), req.user.id);
+      queued += 1;
+      videos.push(videoJson(video));
+    }
+    res.json({ queued, skipped, videos });
   }));
 
   // Move a module from this rack to another of the user's racks. If the

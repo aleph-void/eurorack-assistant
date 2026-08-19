@@ -16,6 +16,10 @@ export const CONFIG_DEFAULTS = {
   // surprise, so the admin turns this on when they want it.
   token_budget_default: '0',
   token_budget_period: 'month',
+  // YouTube Data API v3 key for the channel-scan feature (routes/racks.js).
+  // Blank disables the scan; the per-video attach flow (yt-dlp) never needs
+  // a key, so nothing else breaks without one.
+  youtube_api_key: '',
 };
 
 export const DEFAULT_IMPORT_WORKERS = Number(CONFIG_DEFAULTS.import_workers);
@@ -56,6 +60,10 @@ export async function setConfig(db, updates) {
     }
     if (key === 'token_budget_period' && !['day', 'week', 'month'].includes(String(value))) {
       throw new Error(`Invalid token_budget_period: ${value}`);
+    }
+    if (key === 'youtube_api_key') {
+      value = String(value ?? '').trim();
+      if (/\s/.test(value)) throw new Error('Invalid youtube_api_key: must not contain spaces');
     }
     if (key === 'import_workers') {
       const n = Number(value);

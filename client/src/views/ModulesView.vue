@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import { useJobsStore } from '../stores/jobs.js';
+import ChannelScanPanel from '../components/ChannelScanPanel.vue';
 
 const route = useRoute();
 const modules = ref([]);
@@ -324,6 +325,8 @@ onUnmounted(() => clearTimeout(refreshTimer));
     <button class="linklike" data-test="clear-filter" @click="filterText = ''">Clear filter</button>
   </p>
   <p v-if="reanalyzed" class="muted" data-test="reanalyze-result">{{ reanalyzed }}</p>
+  <!-- Rack-scoped: scanning a channel means matching against one rack's modules. -->
+  <ChannelScanPanel v-if="currentRack && modules.length" :rack-id="currentRack.id" />
   <p v-if="error" class="error">{{ error }}</p>
   <p v-if="loading" class="muted">Loading…</p>
   <div v-else-if="modules.length === 0" class="panel">

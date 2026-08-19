@@ -49,12 +49,15 @@ describe('config service', () => {
     const queueDefaults = { queue_paused_until: '', queue_paused_reason: '' };
     // Token budgets ship off: 0 is no ceiling (services/budgets.js).
     const budgetDefaults = { token_budget_default: '0', token_budget_period: 'month' };
+    // The channel scan is off until an admin pastes a YouTube API key.
+    const youtubeDefaults = { youtube_api_key: '' };
     expect(await getConfig(db)).toEqual({
       llm_provider: 'claude',
       llm_model: '',
       import_workers: '4',
       ...queueDefaults,
       ...budgetDefaults,
+      ...youtubeDefaults,
     });
     await setConfig(db, { llm_provider: 'codex', llm_model: 'gpt-5.1' });
     expect(await getConfig(db)).toEqual({
@@ -63,6 +66,7 @@ describe('config service', () => {
       import_workers: '4',
       ...queueDefaults,
       ...budgetDefaults,
+      ...youtubeDefaults,
     });
     await setConfig(db, { llm_model: '' });
     expect((await getLlmSettings(db)).model).toBe('gpt-5.1-codex');

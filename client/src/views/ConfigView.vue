@@ -8,6 +8,7 @@ const model = ref('');
 const importWorkers = ref(4);
 const budgetDefault = ref(0);
 const budgetPeriod = ref('month');
+const youtubeApiKey = ref('');
 const error = ref('');
 const saved = ref(false);
 const busy = ref(false);
@@ -22,6 +23,7 @@ onMounted(async () => {
     importWorkers.value = Number(config.value.import_workers);
     budgetDefault.value = Number(config.value.token_budget_default) || 0;
     budgetPeriod.value = config.value.token_budget_period || 'month';
+    youtubeApiKey.value = config.value.youtube_api_key || '';
   } catch (e) {
     error.value = e.message;
   }
@@ -38,6 +40,7 @@ async function save() {
       import_workers: importWorkers.value,
       token_budget_default: budgetDefault.value,
       token_budget_period: budgetPeriod.value,
+      youtube_api_key: youtubeApiKey.value,
     })) };
     saved.value = true;
   } catch (e) {
@@ -106,6 +109,23 @@ async function save() {
           <option value="week">last 7 days</option>
           <option value="month">last 30 days</option>
         </select>
+      </fieldset>
+
+      <fieldset>
+        <legend>YouTube</legend>
+        <p class="muted" style="margin-top: 0">
+          A YouTube Data API v3 key enables scanning a channel for videos about a rack's modules
+          (Modules page, with a rack selected). Attaching individual video links works without
+          one. Blank disables the scan.
+        </p>
+        <label for="youtube-api-key">API key</label>
+        <input
+          id="youtube-api-key"
+          v-model="youtubeApiKey"
+          data-test="youtube-api-key"
+          autocomplete="off"
+          placeholder="AIza…"
+        />
       </fieldset>
 
       <p v-if="error" class="error" data-test="error">{{ error }}</p>

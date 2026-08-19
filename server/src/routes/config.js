@@ -27,6 +27,7 @@ export function configRoutes(db) {
         'import_workers',
         'token_budget_default',
         'token_budget_period',
+        'youtube_api_key',
       ];
       for (const key of allowed) {
         if (req.body?.[key] !== undefined) updates[key] = req.body[key];

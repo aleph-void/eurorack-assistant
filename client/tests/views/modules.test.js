@@ -210,6 +210,18 @@ describe('ModulesView', () => {
     expect(api.get).toHaveBeenCalledWith('/api/modules?rack_id=2');
   });
 
+  it('offers the channel video scan only when a rack is selected', async () => {
+    mockLists([
+      { id: 1, manufacturer: 'ALM', name: 'Pam', quantity: 1, racks: [], manual_status: 'pending', analysis_status: 'pending' },
+    ]);
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="channel-scan"]').exists()).toBe(false);
+    await wrapper.find('[data-test="rack-select"]').setValue(1);
+    await flushPromises();
+    expect(wrapper.find('[data-test="channel-scan"]').exists()).toBe(true);
+  });
+
   it('moves a module to another rack from the rack-scoped view', async () => {
     mockLists([
       { id: 1, manufacturer: 'ALM', name: 'Pam', quantity: 1, racks: [], manual_status: 'pending', analysis_status: 'pending' },
