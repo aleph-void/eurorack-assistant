@@ -1,11 +1,15 @@
-// Scanning a YouTube channel for videos about the modules in a rack. Unlike
-// the per-video pipeline (services/videos.js, which shells out to yt-dlp),
-// listing a whole channel goes through the YouTube Data API v3 with the
-// admin-configured key (app_config.youtube_api_key): one channels.list call
-// to resolve whatever the user pasted into a channel id, then playlistItems
-// pages over the channel's uploads playlist. Nothing the user typed reaches
-// the API un-parsed — a pasted link is reduced to a handle / id / username
-// first, and the API host is fixed.
+// Scanning a YouTube channel for videos about the modules in a rack. With an
+// admin-configured key (app_config.youtube_api_key) the listing goes through
+// the YouTube Data API v3: one channels.list call to resolve whatever the
+// user pasted into a channel id, then playlistItems pages over the channel's
+// uploads playlist. Without a key it falls back to the yt-dlp the per-video
+// pipeline already relies on (listChannelViaYtDlp) — keyless, but slower and
+// titles-only, since a flat playlist listing carries no descriptions. Either
+// way nothing the user typed reaches the API or yt-dlp un-parsed — a pasted
+// link is reduced to a handle / id / username first, and the API host is
+// fixed.
+
+import { runCommand } from './videos.js';
 
 export const API_BASE = 'https://www.googleapis.com/youtube/v3';
 
@@ -28,12 +32,24 @@ export class YoutubeError extends Error {
 }
 
 // Reduce whatever the user pasted to something channels.list can look up:
-// a channel id (UC…), an @handle, or a legacy /user/ or /c/ name. Bare
-// '@handle' and 'UC…' strings work as well as full URLs; trailing path
-// segments (/videos, /featured) are ignored. Anything else is null.
+// a channel id (UC…), an @handle, a legacy /user/ or /c/ name, or a bare
+// vanity URL (youtube.com/SomeName). Bare '@handle' and 'UC…' strings work
+// as well as full URLs; trailing path segments (/videos, /featured) are
+// ignored. Anything else is null.
 const HANDLE = /^@[A-Za-z0-9._-]{3,30}$/;
 const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
 const LEGACY_NAME = /^[A-Za-z0-9._-]{1,100}$/;
+// First path segments that are YouTube pages, not channel names.
+const RESERVED_PATHS = new Set([
+  'watch', 'shorts', 'live', 'embed', 'v', 'playlist', 'feed', 'results',
+  'gaming', 'music', 'premium', 'about', 'account', 'upload', 'hashtag',
+  'source', 'post', 'clip', 'podcasts', 'shopping', 'trending',
+]);
+// The tabs of a channel page — the only thing allowed after a vanity name.
+const CHANNEL_TABS = new Set([
+  'videos', 'featured', 'streams', 'shorts', 'playlists', 'community',
+  'podcasts', 'releases', 'about',
+]);
 
 export function parseChannelRef(input) {
   const raw = String(input ?? '').trim();
@@ -50,10 +66,21 @@ export function parseChannelRef(input) {
   const host = parsed.hostname.toLowerCase().replace(/^www\.|^m\./, '');
   if (host !== 'youtube.com' && host !== 'music.youtube.com') return null;
   const [first, second] = parsed.pathname.split('/').filter(Boolean);
-  if (first?.startsWith('@')) return HANDLE.test(first) ? { kind: 'handle', value: first } : null;
+  if (!first) return null;
+  if (first.startsWith('@')) return HANDLE.test(first) ? { kind: 'handle', value: first } : null;
   if (first === 'channel') return CHANNEL_ID.test(second ?? '') ? { kind: 'id', value: second } : null;
   if (first === 'user' || first === 'c') {
     return LEGACY_NAME.test(second ?? '') ? { kind: first === 'user' ? 'user' : 'custom', value: second } : null;
+  }
+  // youtube.com/SomeName — the oldest vanity form, one path segment that is
+  // not one of YouTube's own routes. Resolved like a /c/ name (handle first,
+  // then legacy username).
+  if (
+    !RESERVED_PATHS.has(first.toLowerCase()) &&
+    LEGACY_NAME.test(first) &&
+    (!second || CHANNEL_TABS.has(second.toLowerCase()))
+  ) {
+    return { kind: 'custom', value: first };
   }
   return null;
 }
@@ -162,6 +189,67 @@ export async function listChannelUploads(channel, { apiKey, fetchImpl = fetch, m
     if (!pageToken) break;
   }
   return videos;
+}
+
+// The canonical URL of a parsed channel ref's videos tab — what yt-dlp is
+// pointed at. Rebuilt from the validated parts, so like the per-video flow,
+// nothing the user typed reaches yt-dlp.
+export function channelRefUrl(ref) {
+  if (ref.kind === 'id') return `https://www.youtube.com/channel/${ref.value}/videos`;
+  if (ref.kind === 'handle') return `https://www.youtube.com/${ref.value}/videos`;
+  if (ref.kind === 'user') return `https://www.youtube.com/user/${ref.value}/videos`;
+  return `https://www.youtube.com/c/${ref.value}/videos`;
+}
+
+// The keyless listing: yt-dlp enumerates the channel's videos tab as a flat
+// playlist (no per-video fetches). Flat entries carry no descriptions or
+// upload dates, so matching against these is titles-only — the trade an
+// installation makes by not configuring an API key. Returns
+// { channel: { id, title }, videos } shaped like the API path's results.
+export async function listChannelViaYtDlp(ref, { run = runCommand, maxVideos = MAX_SCAN_VIDEOS } = {}) {
+  let stdout;
+  try {
+    stdout = await run(
+      'yt-dlp',
+      [
+        '--flat-playlist',
+        '--dump-single-json',
+        '--no-warnings',
+        '--playlist-items', `1:${maxVideos}`,
+        channelRefUrl(ref),
+      ],
+      { timeoutMs: 5 * 60 * 1000 }
+    );
+  } catch (e) {
+    if (/does not exist|HTTP Error 404|Not Found/i.test(e.message)) {
+      throw new YoutubeError(`no YouTube channel found for '${ref.value}'`, 404);
+    }
+    throw new YoutubeError(`yt-dlp could not list the channel: ${e.message}`);
+  }
+  let data;
+  try {
+    data = JSON.parse(String(stdout).trim());
+  } catch {
+    throw new YoutubeError('yt-dlp returned unreadable channel data');
+  }
+  const videos = [];
+  for (const entry of Array.isArray(data.entries) ? data.entries : []) {
+    if (!/^[A-Za-z0-9_-]{11}$/.test(entry?.id ?? '')) continue;
+    videos.push({
+      video_id: entry.id,
+      title: String(entry.title ?? ''),
+      description: String(entry.description ?? ''),
+      published_at: null,
+    });
+    if (videos.length >= maxVideos) break;
+  }
+  return {
+    channel: {
+      id: CHANNEL_ID.test(data.channel_id ?? '') ? data.channel_id : null,
+      title: String(data.channel ?? data.uploader ?? data.title ?? '').trim() || ref.value,
+    },
+    videos,
+  };
 }
 
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

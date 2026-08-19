@@ -9,8 +9,10 @@ import { requireBudget } from '../services/budgets.js';
 import { videoJson, youtubeUrl } from '../services/videos.js';
 import {
   YoutubeError,
+  channelRefUrl,
   channelUrl,
   listChannelUploads,
+  listChannelViaYtDlp,
   matchVideosToModules,
   parseChannelRef,
   resolveChannel,
@@ -19,7 +21,7 @@ import { asyncHandler } from './asyncHandler.js';
 
 // A user's racks. Every route operates on the requesting user's racks only —
 // racks (and their module lists) are never visible to other users.
-export function rackRoutes(db, { fetchImpl } = {}) {
+export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
   const { Rack, RackModule, RackRow, RackRowModule, Module, ModuleVideo, User, Job } = db.models;
   const router = Router();
   router.use(requireAuth(db));
@@ -258,21 +260,18 @@ export function rackRoutes(db, { fetchImpl } = {}) {
   }));
 
   // Scan a YouTube channel for videos about this rack's modules. Body:
-  // { url } — a channel link (/@handle, /channel/UC…, /user/…, /c/…), a bare
-  // @handle, or a channel id. The channel's uploads are listed through the
-  // YouTube Data API (admin-configured key) and matched against the rack's
-  // module names; nothing is imported here — the client shows the matches
-  // and the user picks which ones the import route below queues.
+  // { url } — a channel link (/@handle, /channel/UC…, /user/…, /c/…, or a
+  // vanity URL), a bare @handle, or a channel id. With an admin-configured
+  // key the channel's uploads are listed through the YouTube Data API;
+  // without one, yt-dlp lists them keylessly (titles only — flat listings
+  // carry no descriptions). Either way the list is matched against the
+  // rack's module names; nothing is imported here — the client shows the
+  // matches and the user picks which ones the import route below queues.
   router.post('/:id/videos/channel-scan', asyncHandler(async (req, res) => {
     const rack = await ownRack(req.user.id, req.params.id);
     if (!rack) return res.status(404).json({ error: 'Rack not found' });
     const config = await getConfig(db);
     const apiKey = String(config.youtube_api_key || '').trim();
-    if (!apiKey) {
-      return res.status(400).json({
-        error: 'No YouTube API key is configured — an admin can add one on the Config page.',
-      });
-    }
     const ref = parseChannelRef(req.body?.url);
     if (!ref) {
       return res.status(400).json({
@@ -291,8 +290,12 @@ export function rackRoutes(db, { fetchImpl } = {}) {
     let channel;
     let videos;
     try {
-      channel = await resolveChannel(ref, { apiKey, fetchImpl });
-      videos = await listChannelUploads(channel, { apiKey, fetchImpl });
+      if (apiKey) {
+        channel = await resolveChannel(ref, { apiKey, fetchImpl });
+        videos = await listChannelUploads(channel, { apiKey, fetchImpl });
+      } else {
+        ({ channel, videos } = await listChannelViaYtDlp(ref, { run: runImpl }));
+      }
     } catch (e) {
       if (e instanceof YoutubeError) return res.status(e.status).json({ error: e.message });
       throw e;
@@ -309,7 +312,15 @@ export function rackRoutes(db, { fetchImpl } = {}) {
       attached.filter((v) => v.status !== 'failed').map((v) => `${v.module_id}:${v.video_id}`)
     );
     res.json({
-      channel: { id: channel.id, title: channel.title, url: channelUrl(channel.id) },
+      channel: {
+        id: channel.id,
+        title: channel.title,
+        // yt-dlp can come back without a channel id; the ref's own URL is
+        // still a working link.
+        url: channel.id ? channelUrl(channel.id) : channelRefUrl(ref),
+      },
+      // Tells the client to explain titles-only matching on keyless scans.
+      source: apiKey ? 'api' : 'yt-dlp',
       scanned: videos.length,
       modules: modules
         .map((module) => ({

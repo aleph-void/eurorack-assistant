@@ -114,9 +114,10 @@ async function save() {
       <fieldset>
         <legend>YouTube</legend>
         <p class="muted" style="margin-top: 0">
-          A YouTube Data API v3 key enables scanning a channel for videos about a rack's modules
-          (Modules page, with a rack selected). Attaching individual video links works without
-          one. Blank disables the scan.
+          A YouTube Data API v3 key speeds up scanning a channel for videos about a rack's
+          modules (Modules page, with a rack selected) and lets the scan match video
+          descriptions. Without a key the scan still works — it falls back to yt-dlp and
+          matches titles only. Attaching individual video links never needs a key.
         </p>
         <label for="youtube-api-key">API key</label>
         <input

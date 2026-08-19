@@ -79,10 +79,11 @@ module) → analyze_manual → panel_image; extract_manual runs alongside;
 questions run scope_question → user review → answer_question; attached
 YouTube videos run download_video (yt-dlp + ffmpeg frames/transcript, no
 LLM) → analyze_video (techniques summary onto `module_videos`, then the
-work files are deleted); a rack-scoped channel scan (`services/youtube.js`,
-YouTube Data API key in app_config `youtube_api_key`) matches a channel's
-uploads to the rack's module names and imports the picked ones through that
-same per-video pipeline. Progress
+work files are deleted); a rack-scoped channel scan (`services/youtube.js`)
+matches a channel's uploads to the rack's module names and imports the
+picked ones through that same per-video pipeline — via the YouTube Data API
+when app_config `youtube_api_key` is set, else a titles-only yt-dlp flat
+listing. Progress
 streams over a WebSocket at `/api/ws` (per-user event bus). Every job runs on
 the job owner's own LLM account (`user_llm_accounts`); quota exhaustion pauses
 that account (or the whole queue for unowned work), budgets make queued work

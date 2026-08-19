@@ -3,8 +3,10 @@ import request from 'supertest';
 import { createTestApp, insertModule } from './helpers.js';
 import {
   YoutubeError,
+  channelRefUrl,
   channelUrl,
   listChannelUploads,
+  listChannelViaYtDlp,
   matchVideosToModules,
   parseChannelRef,
   resolveChannel,
@@ -52,6 +54,19 @@ function youtubeFetch({
   return fetchImpl;
 }
 
+// A scripted stand-in for yt-dlp's flat channel listing: answers the
+// --dump-single-json call with `entries`, or throws `fail`.
+function ytDlpRun({ entries = [], channelId = CHANNEL_ID, fail = null } = {}) {
+  const calls = [];
+  const run = async (cmd, args, opts) => {
+    calls.push({ cmd, args, opts });
+    if (fail) throw new Error(fail);
+    return JSON.stringify({ channel_id: channelId, channel: 'Synth Channel', entries });
+  };
+  run.calls = calls;
+  return run;
+}
+
 describe('parseChannelRef', () => {
   it('reads every common channel link shape', () => {
     expect(parseChannelRef('@synthchan')).toEqual({ kind: 'handle', value: '@synthchan' });
@@ -61,6 +76,9 @@ describe('parseChannelRef', () => {
     expect(parseChannelRef(`https://youtube.com/channel/${CHANNEL_ID}`)).toEqual({ kind: 'id', value: CHANNEL_ID });
     expect(parseChannelRef('https://www.youtube.com/user/synthguy')).toEqual({ kind: 'user', value: 'synthguy' });
     expect(parseChannelRef('https://www.youtube.com/c/SynthChannel')).toEqual({ kind: 'custom', value: 'SynthChannel' });
+    // The oldest vanity form: the name is the whole path, tab suffix or not.
+    expect(parseChannelRef('https://www.youtube.com/DivKidVideo')).toEqual({ kind: 'custom', value: 'DivKidVideo' });
+    expect(parseChannelRef('https://www.youtube.com/DivKidVideo/videos')).toEqual({ kind: 'custom', value: 'DivKidVideo' });
   });
 
   it('rejects everything that is not a channel reference', () => {
@@ -71,6 +89,10 @@ describe('parseChannelRef', () => {
       `ftp://youtube.com/channel/${CHANNEL_ID}`,
       'https://www.youtube.com/channel/not-a-channel-id',
       'https://www.youtube.com/',
+      'https://www.youtube.com/playlist?list=PL123',
+      'https://www.youtube.com/feed/subscriptions',
+      'https://www.youtube.com/results?search_query=maths',
+      'https://www.youtube.com/DivKidVideo/not-a-tab',
       'not a url',
       '@x', // too short for a handle
       '',
@@ -166,6 +188,63 @@ describe('listChannelUploads', () => {
   });
 });
 
+describe('listChannelViaYtDlp (keyless fallback)', () => {
+  const ref = { kind: 'handle', value: '@synthchan' };
+
+  it('builds the videos-tab URL from the validated ref parts', () => {
+    expect(channelRefUrl({ kind: 'handle', value: '@synthchan' })).toBe('https://www.youtube.com/@synthchan/videos');
+    expect(channelRefUrl({ kind: 'id', value: CHANNEL_ID })).toBe(`https://www.youtube.com/channel/${CHANNEL_ID}/videos`);
+    expect(channelRefUrl({ kind: 'user', value: 'synthguy' })).toBe('https://www.youtube.com/user/synthguy/videos');
+    expect(channelRefUrl({ kind: 'custom', value: 'SynthChannel' })).toBe('https://www.youtube.com/c/SynthChannel/videos');
+  });
+
+  it('lists the flat playlist titles-only and skips unusable entries', async () => {
+    const run = ytDlpRun({
+      entries: [
+        { id: 'AAAAAAAAAA1', title: 'Maths tutorial' },
+        { id: 'not-an-id', title: 'junk row' },
+        { id: 'AAAAAAAAAA2', title: 'Plaits deep dive' },
+      ],
+    });
+    const { channel, videos } = await listChannelViaYtDlp(ref, { run });
+    expect(channel).toEqual({ id: CHANNEL_ID, title: 'Synth Channel' });
+    expect(videos).toEqual([
+      { video_id: 'AAAAAAAAAA1', title: 'Maths tutorial', description: '', published_at: null },
+      { video_id: 'AAAAAAAAAA2', title: 'Plaits deep dive', description: '', published_at: null },
+    ]);
+    const { cmd, args } = run.calls[0];
+    expect(cmd).toBe('yt-dlp');
+    expect(args).toContain('--flat-playlist');
+    expect(args).toContain('https://www.youtube.com/@synthchan/videos');
+  });
+
+  it('caps the listing via --playlist-items and in the parsed result', async () => {
+    const run = ytDlpRun({
+      entries: [
+        { id: 'AAAAAAAAAA1', title: 'one' },
+        { id: 'AAAAAAAAAA2', title: 'two' },
+        { id: 'AAAAAAAAAA3', title: 'three' },
+      ],
+    });
+    const { videos } = await listChannelViaYtDlp(ref, { run, maxVideos: 2 });
+    expect(videos).toHaveLength(2);
+    expect(run.calls[0].args).toContain('1:2');
+  });
+
+  it('maps yt-dlp failures onto YoutubeErrors', async () => {
+    await expect(
+      listChannelViaYtDlp(ref, { run: ytDlpRun({ fail: 'ERROR: This channel does not exist.' }) })
+    ).rejects.toMatchObject({ name: 'YoutubeError', status: 404 });
+    await expect(
+      listChannelViaYtDlp(ref, { run: ytDlpRun({ fail: 'network unreachable' }) })
+    ).rejects.toMatchObject({ name: 'YoutubeError', status: 502 });
+    await expect(listChannelViaYtDlp(ref, { run: async () => 'not json' })).rejects.toMatchObject({
+      name: 'YoutubeError',
+      status: 502,
+    });
+  });
+});
+
 describe('matchVideosToModules', () => {
   const maths = { id: 1, manufacturer: 'Make Noise', name: 'Maths' };
   const rings = { id: 2, manufacturer: 'Mutable Instruments', name: 'Rings' };
@@ -218,8 +297,8 @@ describe('matchVideosToModules', () => {
 // Routes: POST /api/racks/:id/videos/channel-scan and .../videos/import
 // ---------------------------------------------------------------------------
 
-async function scanFixture({ fetchImpl, withKey = true } = {}) {
-  const context = await createTestApp({ fetchImpl });
+async function scanFixture({ fetchImpl, runImpl, withKey = true } = {}) {
+  const context = await createTestApp({ fetchImpl, runImpl });
   const { app, db, adminCookie } = context;
   if (withKey) {
     const set = await request(app)
@@ -285,15 +364,36 @@ describe('POST /api/racks/:id/videos/channel-scan', () => {
     ]);
   });
 
-  it('requires a configured API key and a recognizable channel link', async () => {
-    const noKey = await scanFixture({ fetchImpl: youtubeFetch(), withKey: false });
-    const missing = await request(noKey.app)
-      .post(`/api/racks/${noKey.rackId}/videos/channel-scan`)
-      .set('Cookie', noKey.aliceCookie)
+  it('falls back to a yt-dlp listing when no API key is configured', async () => {
+    const runImpl = ytDlpRun({
+      entries: [
+        { id: 'AAAAAAAAAA1', title: 'Maths tutorial part 1' },
+        { id: 'AAAAAAAAAA2', title: 'Unrelated modular talk' },
+      ],
+    });
+    const { app, aliceCookie, maths, rackId } = await scanFixture({ withKey: false, runImpl });
+    const res = await request(app)
+      .post(`/api/racks/${rackId}/videos/channel-scan`)
+      .set('Cookie', aliceCookie)
       .send({ url: 'https://www.youtube.com/@synthchan' });
-    expect(missing.status).toBe(400);
-    expect(missing.body.error).toMatch(/YouTube API key/);
+    expect(res.status).toBe(200);
+    expect(res.body.source).toBe('yt-dlp');
+    expect(res.body.channel).toEqual({
+      id: CHANNEL_ID,
+      title: 'Synth Channel',
+      url: `https://www.youtube.com/channel/${CHANNEL_ID}`,
+    });
+    expect(res.body.scanned).toBe(2);
+    expect(res.body.modules).toHaveLength(1);
+    expect(res.body.modules[0].module_id).toBe(maths.id);
+    expect(res.body.modules[0].videos).toMatchObject([
+      { video_id: 'AAAAAAAAAA1', matched_on: 'title', published_at: null },
+    ]);
+    // Only yt-dlp was consulted — no API traffic without a key.
+    expect(runImpl.calls).toHaveLength(1);
+  });
 
+  it('rejects links that are not channels, with either backend', async () => {
     const { app, aliceCookie, rackId } = await scanFixture({ fetchImpl: youtubeFetch() });
     const bad = await request(app)
       .post(`/api/racks/${rackId}/videos/channel-scan`)
@@ -301,6 +401,15 @@ describe('POST /api/racks/:id/videos/channel-scan', () => {
       .send({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
     expect(bad.status).toBe(400);
     expect(bad.body.error).toMatch(/channel link/);
+
+    const keylessRun = ytDlpRun({});
+    const keyless = await scanFixture({ withKey: false, runImpl: keylessRun });
+    const alsoBad = await request(keyless.app)
+      .post(`/api/racks/${keyless.rackId}/videos/channel-scan`)
+      .set('Cookie', keyless.aliceCookie)
+      .send({ url: 'https://vimeo.com/synthchan' });
+    expect(alsoBad.status).toBe(400);
+    expect(keylessRun.calls).toHaveLength(0);
   });
 
   it('answers with the YouTube error for unknown channels and is scoped to your own racks', async () => {

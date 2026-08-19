@@ -116,6 +116,21 @@ describe('ChannelScanPanel', () => {
     expect(wrapper.find('[data-test="import-selected"]').element.disabled).toBe(true);
   });
 
+  it('explains titles-only matching when the scan ran without an API key', async () => {
+    api.post.mockResolvedValueOnce({ ...scanResponse, source: 'yt-dlp' });
+    const wrapper = mount(ChannelScanPanel, { props: { rackId: 7 }, global: testGlobal() });
+    await wrapper.find('[data-test="channel-url"]').setValue('@synthchan');
+    await wrapper.find('[data-test="channel-scan-button"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="channel-scan-keyless"]').text()).toContain('titles');
+
+    // A keyed scan carries no such caveat.
+    api.post.mockResolvedValueOnce({ ...scanResponse, source: 'api' });
+    await wrapper.find('[data-test="channel-scan-button"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="channel-scan-keyless"]').exists()).toBe(false);
+  });
+
   it('shows scan errors and the empty-match state', async () => {
     api.post.mockRejectedValueOnce(new Error('No YouTube API key is configured'));
     const wrapper = mount(ChannelScanPanel, { props: { rackId: 7 }, global: testGlobal() });

@@ -24,7 +24,7 @@ import { shareRoutes } from './routes/shares.js';
 
 export function createApp(
   db,
-  { manualsDir, exportsDir, capturesDir, panelsDir, videosDir, rateLimit, hub, bus = null, fetchImpl } = {}
+  { manualsDir, exportsDir, capturesDir, panelsDir, videosDir, rateLimit, hub, bus = null, fetchImpl, runImpl } = {}
 ) {
   const app = express();
   // nginx is the only hop in front of the server and it sets X-Forwarded-For.
@@ -46,7 +46,9 @@ export function createApp(
   app.use('/api/auth', authRoutes(db));
   app.use('/api/users', userRoutes(db));
   app.use('/api/modules', moduleRoutes(db, { manualsDir, panelsDir, videosDir, fetchImpl }));
-  app.use('/api/racks', rackRoutes(db, { fetchImpl }));
+  // runImpl is the test seam for the keyless channel scan's yt-dlp listing,
+  // like fetchImpl is for outbound HTTP.
+  app.use('/api/racks', rackRoutes(db, { fetchImpl, runImpl }));
   app.use('/api/manuals', manualRoutes(db, { manualsDir }));
   app.use('/api/panels', panelRoutes(db, { panelsDir }));
   app.use('/api/imports', importRoutes(db));
