@@ -22,6 +22,7 @@
 // so nothing here changes behaviour until the image opts in.
 
 import fs from 'node:fs';
+import path from 'node:path';
 
 // { user, gid } when a sandbox user is configured, otherwise null. gid is the
 // shared group (LLM_SANDBOX_GID) that both `node` and the sandbox user belong
@@ -48,6 +49,18 @@ export function wrapForSandbox(cmd, args, envObj, config = sandboxConfig()) {
   };
 }
 
+// A handoff that cannot be completed must stop the job before the CLI runs:
+// letting the run proceed spends a full model call that ends in an EACCES the
+// agent can only describe in prose, which the caller then reports as "No JSON
+// object found in response" — an error nobody can act on. This throw is the
+// actionable version.
+function handoffError(target, config, cause) {
+  return new Error(
+    `cannot hand ${target} to the LLM sandbox user '${config.user}' (${cause.message}); ` +
+      `the server user must own it and be a member of group ${config.gid ?? '(LLM_SANDBOX_GID unset)'}`
+  );
+}
+
 // A directory the sandbox user must be able to enter and write (a document
 // jail, the codex output dir, a per-user credential home). Hands it across the
 // uid boundary via the shared group with the setgid bit, so files created
@@ -58,9 +71,8 @@ export function prepareDirForSandbox(dir, config = sandboxConfig()) {
   try {
     if (config.gid !== null) fs.chownSync(dir, -1, config.gid);
     fs.chmodSync(dir, 0o2770);
-  } catch {
-    // Best effort: a deployment whose group/ownership is not what this expects
-    // should fail loudly at the CLI, not here — the run will simply be denied.
+  } catch (e) {
+    throw handoffError(dir, config, e);
   }
 }
 
@@ -73,7 +85,38 @@ export function prepareFileForSandbox(file, config = sandboxConfig(), { writable
   try {
     if (config.gid !== null) fs.chownSync(file, -1, config.gid);
     fs.chmodSync(file, writable ? 0o660 : 0o640);
-  } catch {
-    /* best effort — see prepareDirForSandbox */
+  } catch (e) {
+    throw handoffError(file, config, e);
   }
+}
+
+// A directory tree the sandbox user must fully own the use of — the per-user
+// CLI home. Enabling the sandbox on a deployment that already ran without one
+// leaves the CLI's own state (.claude.json, projects/, sessions/, …) owned by
+// the server user with private modes, and the CLI — now running as the sandbox
+// uid — gets EACCES on its own files. Repair the whole tree: every dir and
+// file the server user owns is opened to the shared group (files writable —
+// this is state the CLI rewrites). Entries owned by anyone else are skipped:
+// they are the sandbox user's own (already usable, and not ours to chmod).
+// Runs on every job start so an upgrade or a flipped-on sandbox fixes itself.
+export function prepareTreeForSandbox(dir, config = sandboxConfig()) {
+  if (!config) return;
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const walk = (p) => {
+    let st;
+    try {
+      st = fs.lstatSync(p);
+    } catch {
+      return; // vanished mid-walk (the CLI prunes its own state)
+    }
+    if (uid !== null && st.uid !== uid) return;
+    if (st.isDirectory()) {
+      prepareDirForSandbox(p, config);
+      for (const entry of fs.readdirSync(p)) walk(path.join(p, entry));
+    } else if (st.isFile()) {
+      prepareFileForSandbox(p, config, { writable: true });
+    }
+    // Symlinks and anything else: not the CLI's state, leave untouched.
+  };
+  walk(dir);
 }

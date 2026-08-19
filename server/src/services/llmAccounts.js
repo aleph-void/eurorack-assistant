@@ -33,7 +33,12 @@ import path from 'node:path';
 import { Op } from 'sequelize';
 import { PROVIDERS } from './llm.js';
 import { getConfig, getLlmSettings } from './config.js';
-import { sandboxConfig, prepareDirForSandbox, prepareFileForSandbox } from './sandbox.js';
+import {
+  sandboxConfig,
+  prepareDirForSandbox,
+  prepareFileForSandbox,
+  prepareTreeForSandbox,
+} from './sandbox.js';
 
 // ---------------------------------------------------------------------------
 // Encryption at rest
@@ -354,13 +359,21 @@ export function resolveLlmDataDir(env = process.env) {
   return env.LLM_DIR || '/data/llm';
 }
 
-function ensurePrivateDir(dir) {
+function ensurePrivateDir(dataDir, provider, userId, config = sandboxConfig()) {
+  const providerDir = path.join(dataDir, provider);
+  const dir = path.join(providerDir, String(userId));
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   // When the CLI runs as a separate sandbox user, it still has to read its own
   // credential home (and, for codex, rewrite the auth.json it rotates), so the
-  // directory is handed across the uid boundary via the shared group. Without a
-  // sandbox this is a no-op and the dir stays 0700.
-  prepareDirForSandbox(dir, sandboxConfig());
+  // home is handed across the uid boundary via the shared group — EVERY level
+  // of it. The sandbox uid needs traverse rights on the whole path (a 0700
+  // provider dir between the root and the home denies everything below it),
+  // and a home that predates the sandbox is full of CLI state owned privately
+  // by the server user, which the tree repair opens up. Without a sandbox all
+  // of this is a no-op and the dirs stay 0700.
+  prepareDirForSandbox(dataDir, config);
+  prepareDirForSandbox(providerDir, config);
+  prepareTreeForSandbox(dir, config);
   return dir;
 }
 
@@ -370,10 +383,11 @@ function ensurePrivateDir(dir) {
 // state never mixes between users — or with the server's own login.
 export async function accountRuntime(db, account, opts = {}) {
   const dataDir = opts.dataDir || resolveLlmDataDir(opts.env || process.env);
-  const home = ensurePrivateDir(path.join(dataDir, account.provider, String(account.user_id)));
+  const sandbox = sandboxConfig(opts.env || process.env);
+  const home = ensurePrivateDir(dataDir, account.provider, account.user_id, sandbox);
   // Under a sandbox the CLI runs as a uid that cannot write the server user's
   // $HOME, so point HOME at the per-user dir it can write. No effect otherwise.
-  const homeEnv = sandboxConfig(opts.env || process.env) ? { HOME: home } : {};
+  const homeEnv = sandbox ? { HOME: home } : {};
 
   if (account.provider === 'claude') {
     const env = { CLAUDE_CONFIG_DIR: home, ...homeEnv };
@@ -408,7 +422,7 @@ export async function accountRuntime(db, account, opts = {}) {
       fs.writeFileSync(file, JSON.stringify(secrets.auth, null, 2), { mode: 0o600 });
       // codex (running as the sandbox user) rotates this file in place, so it
       // needs group read/write when a sandbox is configured.
-      prepareFileForSandbox(file, sandboxConfig(), { writable: true });
+      prepareFileForSandbox(file, sandbox, { writable: true });
     }
     return {
       env: { CODEX_HOME: home, ...homeEnv },

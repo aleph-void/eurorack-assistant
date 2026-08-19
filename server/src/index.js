@@ -38,7 +38,14 @@ async function main() {
   if (sandbox) {
     const llmDir = resolveLlmDataDir();
     fs.mkdirSync(llmDir, { recursive: true });
-    prepareDirForSandbox(llmDir, sandbox);
+    try {
+      prepareDirForSandbox(llmDir, sandbox);
+    } catch (e) {
+      // A volume this process cannot hand over shouldn't stop the whole app —
+      // every LLM job repeats this preparation and fails with the same
+      // (actionable) error, while the rest of the server keeps serving.
+      console.error(e.message);
+    }
   }
 
   const bus = createBus();

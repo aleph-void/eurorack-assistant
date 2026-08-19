@@ -189,6 +189,34 @@ describe('account runtime environments', () => {
     expect(runtime.sync).toBeNull();
   });
 
+  it('hands a home that predates the sandbox across the uid boundary, every level of it', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u', llmAccount: false });
+    const account = await saveClaudeToken(db, user.id, 'sk-ant-oat01-abc');
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-rt-'));
+    // What non-sandboxed runs leave behind: a provider dir nobody else can
+    // traverse, and CLI state owned privately by the server user. Turning the
+    // sandbox on over this exact layout is what broke analyze jobs in prod.
+    const home = path.join(dataDir, 'claude', String(user.id));
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    fs.chmodSync(path.join(dataDir, 'claude'), 0o700);
+    fs.mkdirSync(path.join(home, 'projects'), { mode: 0o755 });
+    fs.writeFileSync(path.join(home, '.claude.json'), '{}', { mode: 0o600 });
+
+    const env = {
+      ...process.env,
+      LLM_SANDBOX_USER: 'agent',
+      LLM_SANDBOX_GID: String(process.getgid()),
+    };
+    const runtime = await accountRuntime(db, account, { dataDir, env });
+    expect(runtime.env.HOME).toBe(home);
+    const mode = (p) => fs.statSync(p).mode & 0o7777;
+    expect(mode(path.join(dataDir, 'claude'))).toBe(0o2770);
+    expect(mode(home)).toBe(0o2770);
+    expect(mode(path.join(home, 'projects'))).toBe(0o2770);
+    expect(mode(path.join(home, '.claude.json'))).toBe(0o660);
+  });
+
   it('erases the materialized credential from disk when the account is deleted', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u', llmAccount: false });
