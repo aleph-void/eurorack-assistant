@@ -92,6 +92,35 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="edit-naming"]').exists()).toBe(false);
   });
 
+  it('edits the per-rack quantities inline, saving only the changed racks', async () => {
+    api.get.mockResolvedValue(structuredClone(moduleResponse));
+    api.put.mockResolvedValue({ ok: true, quantity: 4 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="edit-quantities"]').exists()).toBe(false);
+    await wrapper.find('[data-test="edit-quantities-button"]').trigger('click');
+    const main = wrapper.find('[data-test="edit-quantity-1"]');
+    const travel = wrapper.find('[data-test="edit-quantity-2"]');
+    expect(main.element.value).toBe('2');
+    expect(travel.element.value).toBe('1');
+
+    // A bad value blocks the save without touching the API.
+    await main.setValue('0');
+    await wrapper.find('[data-test="save-quantities"]').trigger('click');
+    await flushPromises();
+    expect(api.put).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="quantity-error"]').text()).toContain('main rack');
+
+    await main.setValue('4');
+    await wrapper.find('[data-test="save-quantities"]').trigger('click');
+    await flushPromises();
+    // Only the changed rack is saved; the untouched one is left alone.
+    expect(api.put).toHaveBeenCalledTimes(1);
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/modules/1', { quantity: 4 });
+    expect(wrapper.find('[data-test="edit-quantities"]').exists()).toBe(false);
+  });
+
   it('reports an edit conflict and keeps the form open', async () => {
     api.get.mockResolvedValue(structuredClone(moduleResponse));
     api.patch.mockRejectedValue(new Error('A module named "ALM Pam" already exists'));

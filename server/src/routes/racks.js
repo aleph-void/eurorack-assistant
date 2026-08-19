@@ -452,5 +452,39 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
     res.json({ ok: true });
   }));
 
+  // Set how many copies of a module this rack contains. Body: { quantity }.
+  // Rack modules are the inventory the layout consumes, so shrinking below
+  // the number already placed also removes the excess placements (highest
+  // positions first) to keep the layout within the inventory.
+  router.put('/:id/modules/:moduleId', asyncHandler(async (req, res) => {
+    const rack = await ownRack(req.user.id, req.params.id);
+    if (!rack) return res.status(404).json({ error: 'Rack not found' });
+    const quantity = Number(req.body?.quantity);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+      return res.status(400).json({ error: 'quantity must be a whole number between 1 and 99' });
+    }
+    const mapping = await RackModule.findOne({
+      where: { rack_id: rack.id, module_id: Number(req.params.moduleId) },
+    });
+    if (!mapping) return res.status(404).json({ error: 'Module not found in this rack' });
+    const rows = await RackRow.findAll({ where: { rack_id: rack.id } });
+    const placements =
+      rows.length === 0
+        ? []
+        : await RackRowModule.findAll({
+            where: { row_id: rows.map((row) => row.id), module_id: mapping.module_id },
+            order: [
+              ['position', 'DESC'],
+              ['id', 'DESC'],
+            ],
+          });
+    const excess = placements.slice(0, Math.max(0, placements.length - quantity));
+    await db.sequelize.transaction(async (transaction) => {
+      await mapping.update({ quantity }, { transaction });
+      for (const placement of excess) await placement.destroy({ transaction });
+    });
+    res.json({ ok: true, quantity });
+  }));
+
   return router;
 }

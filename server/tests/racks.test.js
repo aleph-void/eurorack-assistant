@@ -243,6 +243,62 @@ describe('racks API', () => {
     expect(detail.body.quantity).toBe(3);
   });
 
+  it('sets a rack module quantity, trimming layout placements that exceed it', async () => {
+    const { app, db, aliceCookie, adminCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const alice = rows[0];
+    const module = await insertModule(db, alice.id, { quantity: 3, hp: 20 });
+    const list = await request(app).get('/api/racks').set('Cookie', aliceCookie);
+    const main = list.body[0];
+
+    // Two of the three copies are placed in the layout.
+    const layout = await request(app)
+      .put(`/api/racks/${main.id}/layout`)
+      .set('Cookie', aliceCookie)
+      .send({ rows: [{ unit: 3, hp: 84, modules: [{ module_id: module.id }, { module_id: module.id }] }] });
+    expect(layout.status).toBe(200);
+
+    // Not the owner, bad quantities, and unknown mappings are rejected.
+    expect(
+      (
+        await request(app)
+          .put(`/api/racks/${main.id}/modules/${module.id}`)
+          .set('Cookie', adminCookie)
+          .send({ quantity: 5 })
+      ).status
+    ).toBe(404);
+    for (const quantity of [0, 1.5, 'many', 100]) {
+      expect(
+        (
+          await request(app)
+            .put(`/api/racks/${main.id}/modules/${module.id}`)
+            .set('Cookie', aliceCookie)
+            .send({ quantity })
+        ).status
+      ).toBe(400);
+    }
+    expect(
+      (
+        await request(app)
+          .put(`/api/racks/${main.id}/modules/${module.id + 1}`)
+          .set('Cookie', aliceCookie)
+          .send({ quantity: 2 })
+      ).status
+    ).toBe(404);
+
+    const res = await request(app)
+      .put(`/api/racks/${main.id}/modules/${module.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ quantity: 1 });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, quantity: 1 });
+
+    // The quantity shrank and the layout kept only one placement.
+    const detail = await request(app).get(`/api/racks/${main.id}`).set('Cookie', aliceCookie);
+    expect(detail.body.modules.map((m) => m.quantity)).toEqual([1]);
+    expect(detail.body.rows[0].modules).toHaveLength(1);
+  });
+
   it('rejects moves involving racks or modules that are not yours', async () => {
     const { app, db, aliceCookie, adminCookie } = await createTestApp();
     const { rows: users } = await db.query('SELECT id, username FROM users');

@@ -62,6 +62,45 @@ async function saveNaming() {
   }
 }
 
+// --- Rack quantity correction (how many copies each rack contains) ---
+const editingQuantities = ref(false);
+const editQuantities = ref({});
+const savingQuantities = ref(false);
+const quantityError = ref('');
+
+function startEditQuantities() {
+  editQuantities.value = Object.fromEntries(
+    module.value.racks.map((r) => [r.id, String(r.quantity)])
+  );
+  quantityError.value = '';
+  editingQuantities.value = true;
+}
+
+async function saveQuantities() {
+  const changes = [];
+  for (const rack of module.value.racks) {
+    const quantity = Number(String(editQuantities.value[rack.id] ?? '').trim());
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+      quantityError.value = `Quantity in ${rack.name} must be a whole number between 1 and 99`;
+      return;
+    }
+    if (quantity !== rack.quantity) changes.push({ rack, quantity });
+  }
+  savingQuantities.value = true;
+  quantityError.value = '';
+  try {
+    for (const { rack, quantity } of changes) {
+      await api.put(`/api/racks/${rack.id}/modules/${props.id}`, { quantity });
+    }
+    editingQuantities.value = false;
+    await load();
+  } catch (e) {
+    quantityError.value = e.message;
+  } finally {
+    savingQuantities.value = false;
+  }
+}
+
 // --- Component re-analysis with fresh retailer product pages ---
 const reanalyzing = ref(false);
 const reanalyzeNotice = ref('');
@@ -656,11 +695,47 @@ watch(() => props.id, () => {
         <span class="badge" data-test="module-hp">{{ module.hp }}HP</span>
       </template>
     </p>
-    <p v-if="module.racks?.length" data-test="racks">
+    <div v-if="editingQuantities" class="row reanalyze-row" data-test="edit-quantities">
+      <label v-for="r in module.racks" :key="r.id" style="flex: 0 0 auto">
+        {{ r.name }} ×
+        <input
+          v-model="editQuantities[r.id]"
+          :aria-label="`Quantity in ${r.name}`"
+          style="width: 4rem"
+          :data-test="`edit-quantity-${r.id}`"
+        />
+      </label>
+      <button
+        style="margin: 0"
+        :disabled="savingQuantities"
+        data-test="save-quantities"
+        @click="saveQuantities"
+      >
+        {{ savingQuantities ? 'Saving…' : 'Save' }}
+      </button>
+      <button
+        style="margin: 0"
+        class="secondary"
+        data-test="cancel-quantities"
+        @click="editingQuantities = false"
+      >
+        Cancel
+      </button>
+    </div>
+    <p v-else-if="module.racks?.length" data-test="racks">
       In {{ module.racks.length === 1 ? 'rack' : 'racks' }}:
       {{ module.racks.map((r) => `${r.name} (×${r.quantity})`).join(', ') }}
+      <button
+        class="linklike"
+        title="Change how many copies of this module each rack contains"
+        data-test="edit-quantities-button"
+        @click="startEditQuantities"
+      >
+        Edit
+      </button>
       — <RouterLink to="/racks">manage racks</RouterLink>
     </p>
+    <p v-if="quantityError" class="error" data-test="quantity-error">{{ quantityError }}</p>
 
     <div class="row reanalyze-row">
       <button
