@@ -521,6 +521,71 @@ describe('video jobs', () => {
     expect(job.attempts).toBe(1);
   });
 
+  it('runs downloads one at a time while other job types keep flowing', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u' });
+    const module = await insertModule(db, user.id, {});
+    const mkVideo = async (videoId) =>
+      (
+        await db.models.ModuleVideo.create({
+          module_id: module.id,
+          user_id: user.id,
+          video_id: videoId,
+          url: youtubeUrl(videoId),
+          status: 'pending',
+        })
+      ).get({ plain: true });
+    const video1 = await mkVideo('AAAAAAAAAA1');
+    const video2 = await mkVideo('AAAAAAAAAA2');
+
+    // The first download parks on this gate so the queue state is stable
+    // while the lane is probed.
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    const worker = makeWorker(db, fakeBackend(), {
+      downloadVideoImpl: async (v, dirRoot) => {
+        concurrent += 1;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        await gate;
+        concurrent -= 1;
+        const d = videoWorkDir(dirRoot, v);
+        fs.mkdirSync(d, { recursive: true });
+        fs.writeFileSync(path.join(d, 'frame-01.jpg'), 'f');
+        return { title: 'T', channel: 'C', duration_seconds: 10, frames: [path.join(d, 'frame-01.jpg')], transcriptChars: 0 };
+      },
+      analyzeVideoImpl: async () => {},
+    });
+    await enqueueVideoJob(db, 'download_video', video1, user.id);
+    await enqueueVideoJob(db, 'download_video', video2, user.id);
+    // An unrelated job type queued behind both downloads.
+    await enqueueVideoJob(db, 'analyze_video', video1, user.id);
+
+    const first = worker.tick(); // claims video1's download and blocks in it
+    for (let i = 0; i < 200; i += 1) {
+      if (await db.models.Job.findOne({ where: { type: 'download_video', status: 'running' } })) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // The second download is held back while the first is live, but the
+    // analyze job behind it still gets a worker.
+    const other = await worker.tick();
+    expect(other.type).toBe('analyze_video');
+    expect(
+      (await db.models.Job.findOne({ where: { type: 'download_video', status: 'pending' } })).id
+    ).toBeTruthy();
+    expect(await worker.tick()).toBeNull();
+
+    release();
+    expect((await first).status).toBe('complete');
+    // With the lane free again the second download runs.
+    const second = await worker.tick();
+    expect(second.type).toBe('download_video');
+    expect(second.status).toBe('complete');
+    expect(maxConcurrent).toBe(1);
+  });
+
   it('does not queue a second job for the same video while one is live', async () => {
     const db = await createTestDb();
     const { user, video } = await fixture(db);

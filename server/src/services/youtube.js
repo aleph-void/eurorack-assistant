@@ -13,9 +13,11 @@ import { runCommand } from './videos.js';
 
 export const API_BASE = 'https://www.googleapis.com/youtube/v3';
 
-// How much of a channel one scan reads: 10 playlist pages of 50. Beyond that
-// a channel's back catalogue is more cheaply searched one module at a time.
-export const MAX_SCAN_VIDEOS = 500;
+// How much of a channel one scan reads — the scan runs inside the HTTP
+// request, so it has to stop somewhere. 2000 newest-first uploads covers
+// even the prolific eurorack channels (DivKid is ~1000+); the response's
+// `truncated` flag tells the client when a channel actually hit this.
+export const MAX_SCAN_VIDEOS = 2000;
 
 // How many matches one module reports; a channel with 30 videos about the
 // same module is a channel the user should just browse.

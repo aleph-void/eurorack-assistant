@@ -355,6 +355,7 @@ describe('POST /api/racks/:id/videos/channel-scan', () => {
       url: `https://www.youtube.com/channel/${CHANNEL_ID}`,
     });
     expect(res.body.scanned).toBe(3);
+    expect(res.body.truncated).toBe(false);
     expect(res.body.modules).toHaveLength(2);
     const mathsGroup = res.body.modules.find((m) => m.module_id === maths.id);
     expect(mathsGroup.videos).toEqual([

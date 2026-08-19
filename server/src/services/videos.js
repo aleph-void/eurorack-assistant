@@ -88,7 +88,10 @@ export function runCommand(cmd, args, { cwd = undefined, timeoutMs = 20 * 60 * 1
     child.on('close', (code) => {
       clearTimeout(timer);
       if (code === 0) return resolve(stdout);
-      const said = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n').trim();
+      // stderr goes LAST: the detail is tail-truncated, and yt-dlp/ffmpeg
+      // write the actual ERROR line to stderr while stdout is pages of
+      // progress ticks — stderr-first buried the error beyond the cut.
+      const said = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n').trim();
       const detail = said.length > 800 ? `…${said.slice(-800)}` : said;
       reject(new Error(`${cmd} failed (exit ${code})${detail ? `:\n${detail}` : ''}`));
     });

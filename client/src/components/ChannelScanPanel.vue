@@ -170,6 +170,10 @@ async function importSelected() {
           <a :href="result.channel.url" target="_blank" rel="noopener">{{ result.channel.title }}</a>
           — {{ matchCount }} match(es) across {{ result.modules.length }} module(s).
         </p>
+        <p v-if="result.truncated" class="muted" data-test="channel-scan-truncated">
+          This channel has more uploads than one scan reads — only the
+          {{ result.scanned }} most recent were searched.
+        </p>
         <p v-if="result.source === 'yt-dlp'" class="muted" data-test="channel-scan-keyless">
           Scanned without a YouTube API key, so only video titles were matched — a video that
           mentions a module only in its description is not found. An admin can add a key on the

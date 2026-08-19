@@ -405,6 +405,22 @@ export function createWorker(db, options = {}) {
     return exhausted;
   }
 
+  // Video downloads run one at a time, however many workers the pool has:
+  // several concurrent yt-dlp downloads from one address look like scraping
+  // to YouTube and get every one of them throttled or blocked mid-transfer.
+  // 'Busy' means a live run — a stalled row is an orphan about to be
+  // reclaimed and must not hold the lane shut for its whole stale window.
+  async function downloadLaneBusy(excludeId = null) {
+    const running = await db.models.Job.findAll({
+      where: { type: 'download_video', status: 'running' },
+    });
+    const now = Date.now();
+    return running.some((record) => {
+      const job = record.get({ plain: true });
+      return job.id !== excludeId && !isStalled(job, staleJobMs, now);
+    });
+  }
+
   async function claimNextJob() {
     const { Job } = db.models;
     const exhausted = await heldForBudget();
@@ -425,6 +441,9 @@ export function createWorker(db, options = {}) {
       if (page.length === 0) return null;
       for (const next of page) {
         if (next.user_id && (exhausted.has(next.user_id) || paused.has(next.user_id))) continue;
+        // The serialized download lane: skip a download while another runs.
+        // Other job types keep flowing past it.
+        if (next.type === 'download_video' && (await downloadLaneBusy())) continue;
         // Concurrent workers can race for the same pending row; the guarded
         // update decides the winner and the loser moves on to the next row.
         const now = new Date();
@@ -438,7 +457,27 @@ export function createWorker(db, options = {}) {
           },
           { where: { id: next.id, status: 'pending' }, returning: true }
         );
-        if (claimed[0]) return claimed[0].get({ plain: true });
+        if (claimed[0]) {
+          const job = claimed[0].get({ plain: true });
+          // Two runners can pass the lane check together and both claim a
+          // download. The one that sees a rival hands its job straight back
+          // (attempt refunded — nothing ran) and keeps scanning; the lane
+          // sits idle for at most one poll in the both-release race.
+          if (job.type === 'download_video' && (await downloadLaneBusy(job.id))) {
+            await Job.update(
+              {
+                status: 'pending',
+                attempts: next.attempts,
+                worker_id: null,
+                heartbeat_at: null,
+                started_at: null,
+              },
+              { where: { id: job.id, status: 'running' } }
+            );
+            continue;
+          }
+          return job;
+        }
       }
       if (page.length < pageSize) return null;
     }

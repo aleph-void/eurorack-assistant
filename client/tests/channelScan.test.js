@@ -16,6 +16,7 @@ beforeEach(() => {
 const scanResponse = {
   channel: { id: 'UCx', title: 'Synth Channel', url: 'https://www.youtube.com/channel/UCx' },
   scanned: 40,
+  truncated: false,
   modules: [
     {
       module_id: 1,
@@ -136,6 +137,15 @@ describe('ChannelScanPanel', () => {
     expect(wrapper.find('[data-test="pick-2-AAAAAAAAAA3"]').element.disabled).toBe(true);
     expect(wrapper.find('[data-test="attached-2-AAAAAAAAAA3"]').text()).toBe('in progress');
     expect(wrapper.find('[data-test="import-selected"]').element.disabled).toBe(true);
+  });
+
+  it('says when the scan hit the channel-size cap', async () => {
+    api.post.mockResolvedValueOnce({ ...scanResponse, scanned: 2000, truncated: true });
+    const wrapper = mount(ChannelScanPanel, { props: { rackId: 7 }, global: testGlobal() });
+    await wrapper.find('[data-test="channel-url"]').setValue('@synthchan');
+    await wrapper.find('[data-test="channel-scan-button"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="channel-scan-truncated"]').text()).toContain('2000 most recent');
   });
 
   it('explains titles-only matching when the scan ran without an API key', async () => {

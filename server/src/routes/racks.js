@@ -8,6 +8,7 @@ import { getConfig } from '../services/config.js';
 import { requireBudget } from '../services/budgets.js';
 import { videoJson, youtubeUrl } from '../services/videos.js';
 import {
+  MAX_SCAN_VIDEOS,
   YoutubeError,
   channelRefUrl,
   channelUrl,
@@ -321,6 +322,8 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
       // Tells the client to explain titles-only matching on keyless scans.
       source: apiKey ? 'api' : 'yt-dlp',
       scanned: videos.length,
+      // A listing that filled the cap probably has older uploads beyond it.
+      truncated: videos.length >= MAX_SCAN_VIDEOS,
       modules: modules
         .map((module) => ({
           module_id: module.id,
