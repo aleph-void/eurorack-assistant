@@ -11,6 +11,7 @@ import {
   vttToTranscript,
   downloadVideoForModule,
   fetchVideoMetadata,
+  ytDlpNetworkArgs,
   MAX_VIDEO_SECONDS,
   FRAME_COUNT,
 } from '../src/services/videos.js';
@@ -162,6 +163,26 @@ describe('fetchVideoMetadata', () => {
   it('rejects unreadable metadata', async () => {
     const run = async () => 'not json';
     await expect(fetchVideoMetadata(YT_ID, { run })).rejects.toThrow(/unreadable/);
+  });
+});
+
+describe('ytDlpNetworkArgs', () => {
+  it('backs off on 429s instead of hammering a throttling endpoint', () => {
+    const args = ytDlpNetworkArgs({});
+    const flag = (name) => args[args.indexOf(name) + 1];
+    expect(flag('--retries')).toBe('5');
+    expect(flag('--fragment-retries')).toBe('5');
+    expect(args.filter((a) => a === '--retry-sleep')).toHaveLength(2);
+    expect(args).toContain('http:exp=1:120');
+    expect(args).toContain('fragment:exp=1:120');
+    expect(flag('--sleep-requests')).toBe('0.75');
+  });
+
+  it('adds the POT provider only when the sidecar is configured', () => {
+    expect(ytDlpNetworkArgs({}).join(' ')).not.toContain('youtubepot');
+    expect(ytDlpNetworkArgs({ POT_PROVIDER_URL: 'http://pot:4416' }).join(' ')).toContain(
+      'youtubepot-bgutilhttp:base_url=http://pot:4416'
+    );
   });
 });
 

@@ -107,8 +107,23 @@ export function runCommand(cmd, args, { cwd = undefined, timeoutMs = 20 * 60 * 1
 // wants a "proof of origin" token; the bgutil plugin (also baked into the
 // image) fetches those from the potprovider sidecar when POT_PROVIDER_URL
 // points at it, and tv_simply keeps working without one.
+//
+// YouTube also 429s a server IP that asks too fast, and yt-dlp's default is
+// to retry a refused request almost immediately — hammering an endpoint that
+// just asked for a pause, until the whole run fails. Back off exponentially
+// instead (1s doubling toward a 2-minute cap, for whole-request and fragment
+// errors both), and pace requests a touch so the throttle is less likely to
+// trigger at all. All of this stays inside one yt-dlp run: a 429 that
+// outlasts these retries is an IP-level block no in-process wait will fix.
 export function ytDlpNetworkArgs(env = process.env) {
-  const args = ['--extractor-args', 'youtube:player_client=tv_simply,mweb'];
+  const args = [
+    '--extractor-args', 'youtube:player_client=tv_simply,mweb',
+    '--retries', '5',
+    '--fragment-retries', '5',
+    '--retry-sleep', 'http:exp=1:120',
+    '--retry-sleep', 'fragment:exp=1:120',
+    '--sleep-requests', '0.75',
+  ];
   if (env.POT_PROVIDER_URL) {
     args.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${env.POT_PROVIDER_URL}`);
   }
