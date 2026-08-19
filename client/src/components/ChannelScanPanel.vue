@@ -38,6 +38,13 @@ const selectable = computed(() =>
     module.videos.filter((video) => !video.already_attached).map((video) => key(module, video))
   )
 );
+// Selectable minus earlier failures: a failed import can be re-picked (that
+// is the retry) but should be a deliberate choice, not a default.
+const fresh = computed(() =>
+  (result.value?.modules ?? []).flatMap((module) =>
+    module.videos.filter((video) => !video.attached_status).map((video) => key(module, video))
+  )
+);
 const matchCount = computed(() =>
   (result.value?.modules ?? []).reduce((sum, module) => sum + module.videos.length, 0)
 );
@@ -53,9 +60,10 @@ async function scan() {
     result.value = await api.post(`/api/racks/${props.rackId}/videos/channel-scan`, {
       url: url.value.trim(),
     });
-    // Everything importable starts ticked: 'select none' is one click away,
-    // and the common case is wanting the channel's coverage of the rack.
-    selected.value = new Set(selectable.value);
+    // Everything not seen before starts ticked: 'select none' is one click
+    // away, and the common case is wanting the channel's coverage of the
+    // rack — including just its new videos on a re-scan.
+    selected.value = new Set(fresh.value);
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -74,6 +82,15 @@ function toggle(module, video) {
 const selectAll = () => (selected.value = new Set(selectable.value));
 const selectNone = () => (selected.value = new Set());
 
+// What an earlier import of this video came to, as a badge: done, still in
+// the queue, or failed (and therefore re-selectable as a retry).
+function attachedLabel(video) {
+  if (!video.attached_status) return '';
+  if (video.attached_status === 'complete') return 'analyzed';
+  if (video.attached_status === 'failed') return 'failed last time';
+  return 'in progress';
+}
+
 async function importSelected() {
   const picks = (result.value?.modules ?? []).flatMap((module) =>
     module.videos
@@ -89,7 +106,10 @@ async function importSelected() {
     // Flag what was just queued so the list reflects it without a re-scan.
     for (const module of result.value?.modules ?? []) {
       for (const video of module.videos) {
-        if (selected.value.has(key(module, video))) video.already_attached = true;
+        if (selected.value.has(key(module, video))) {
+          video.already_attached = true;
+          video.attached_status = 'pending';
+        }
       }
     }
     selected.value = new Set();
@@ -115,6 +135,8 @@ async function importSelected() {
         Paste a YouTube channel and the channel's uploads are searched for videos about the
         modules in this rack. Pick the ones you want and each is downloaded, watched by the
         model, and summarized onto its module — the same pipeline as attaching a link by hand.
+        Scanning a channel again shows what each earlier import came to and pre-selects only
+        the videos you don't have yet.
       </p>
       <div class="row">
         <div style="flex: 2">
@@ -207,11 +229,12 @@ async function importSelected() {
                     — matched in description
                   </span>
                   <span
-                    v-if="video.already_attached"
-                    class="badge complete"
+                    v-if="video.attached_status"
+                    class="badge"
+                    :class="video.attached_status"
                     :data-test="`attached-${module.module_id}-${video.video_id}`"
                   >
-                    attached
+                    {{ attachedLabel(video) }}
                   </span>
                 </label>
               </li>

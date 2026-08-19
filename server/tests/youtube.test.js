@@ -326,13 +326,22 @@ describe('POST /api/racks/:id/videos/channel-scan', () => {
       ],
     });
     const { app, db, aliceCookie, alice, maths, plaits, rackId } = await scanFixture({ fetchImpl });
-    // One match is already attached — the scan flags it instead of hiding it.
+    // One match is already analyzed and one failed earlier — the scan
+    // reports both with their status instead of hiding them.
     await db.models.ModuleVideo.create({
       module_id: maths.id,
       user_id: alice.id,
       video_id: 'AAAAAAAAAA1',
       url: 'https://www.youtube.com/watch?v=AAAAAAAAAA1',
       status: 'complete',
+    });
+    await db.models.ModuleVideo.create({
+      module_id: plaits.id,
+      user_id: alice.id,
+      video_id: 'AAAAAAAAAA2',
+      url: 'https://www.youtube.com/watch?v=AAAAAAAAAA2',
+      status: 'failed',
+      error: 'yt-dlp exploded',
     });
 
     const res = await request(app)
@@ -356,11 +365,19 @@ describe('POST /api/racks/:id/videos/channel-scan', () => {
         published_at: '2026-01-01T00:00:00Z',
         matched_on: 'title',
         already_attached: true,
+        attached_status: 'complete',
       },
     ]);
+    // A failed earlier import is reported but stays importable — re-queueing
+    // it is the retry.
     const plaitsGroup = res.body.modules.find((m) => m.module_id === plaits.id);
     expect(plaitsGroup.videos).toMatchObject([
-      { video_id: 'AAAAAAAAAA2', matched_on: 'description', already_attached: false },
+      {
+        video_id: 'AAAAAAAAAA2',
+        matched_on: 'description',
+        already_attached: false,
+        attached_status: 'failed',
+      },
     ]);
   });
 

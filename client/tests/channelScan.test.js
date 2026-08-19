@@ -29,6 +29,7 @@ const scanResponse = {
           published_at: '2026-01-05T00:00:00Z',
           matched_on: 'title',
           already_attached: false,
+          attached_status: null,
         },
         {
           video_id: 'AAAAAAAAAA2',
@@ -37,6 +38,16 @@ const scanResponse = {
           published_at: '2026-01-02T00:00:00Z',
           matched_on: 'description',
           already_attached: true,
+          attached_status: 'complete',
+        },
+        {
+          video_id: 'AAAAAAAAAA4',
+          url: 'https://www.youtube.com/watch?v=AAAAAAAAAA4',
+          title: 'Maths quadrature tricks',
+          published_at: '2026-01-01T00:00:00Z',
+          matched_on: 'title',
+          already_attached: false,
+          attached_status: 'failed',
         },
       ],
     },
@@ -52,6 +63,7 @@ const scanResponse = {
           published_at: '2026-01-03T00:00:00Z',
           matched_on: 'title',
           already_attached: false,
+          attached_status: null,
         },
       ],
     },
@@ -59,7 +71,8 @@ const scanResponse = {
 };
 
 async function scannedWrapper() {
-  api.post.mockResolvedValueOnce(scanResponse);
+  // Cloned per test: the panel mutates the scan result after an import.
+  api.post.mockResolvedValueOnce(structuredClone(scanResponse));
   const wrapper = mount(ChannelScanPanel, { props: { rackId: 7 }, global: testGlobal() });
   await wrapper.find('[data-test="channel-url"]').setValue('https://www.youtube.com/@synthchan');
   await wrapper.find('[data-test="channel-scan-button"]').trigger('click');
@@ -74,17 +87,23 @@ describe('ChannelScanPanel', () => {
       url: 'https://www.youtube.com/@synthchan',
     });
     expect(wrapper.find('[data-test="channel-scan-summary"]').text()).toContain('Scanned 40 video(s)');
-    expect(wrapper.find('[data-test="channel-scan-summary"]').text()).toContain('3 match(es) across 2 module(s)');
+    expect(wrapper.find('[data-test="channel-scan-summary"]').text()).toContain('4 match(es) across 2 module(s)');
 
     const maths = wrapper.find('[data-test="scan-module-1"]');
     expect(maths.text()).toContain('Make Noise Maths');
     expect(maths.text()).toContain('matched in description');
-    // The two importable videos start ticked; the attached one is disabled.
+    // The two never-imported videos start ticked; the analyzed one is
+    // disabled with its status, and the earlier failure is offered again
+    // (unticked) with its own badge.
     expect(wrapper.find('[data-test="pick-1-AAAAAAAAAA1"]').element.checked).toBe(true);
     expect(wrapper.find('[data-test="pick-2-AAAAAAAAAA3"]').element.checked).toBe(true);
     const attached = wrapper.find('[data-test="pick-1-AAAAAAAAAA2"]');
     expect(attached.element.disabled).toBe(true);
-    expect(wrapper.find('[data-test="attached-1-AAAAAAAAAA2"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="attached-1-AAAAAAAAAA2"]').text()).toBe('analyzed');
+    const failed = wrapper.find('[data-test="pick-1-AAAAAAAAAA4"]');
+    expect(failed.element.disabled).toBe(false);
+    expect(failed.element.checked).toBe(false);
+    expect(wrapper.find('[data-test="attached-1-AAAAAAAAAA4"]').text()).toBe('failed last time');
     expect(wrapper.find('[data-test="import-selected"]').text()).toContain('Import 2 selected');
   });
 
@@ -97,8 +116,10 @@ describe('ChannelScanPanel', () => {
     await wrapper.find('[data-test="pick-2-AAAAAAAAAA3"]').setValue(true);
     expect(wrapper.find('[data-test="import-selected"]').text()).toContain('Import 1 selected');
 
+    // Select all covers the earlier failure too — that is how it is retried.
     await wrapper.find('[data-test="select-all"]').trigger('click');
-    expect(wrapper.find('[data-test="import-selected"]').text()).toContain('Import 2 selected');
+    expect(wrapper.find('[data-test="import-selected"]').text()).toContain('Import 3 selected');
+    expect(wrapper.find('[data-test="pick-1-AAAAAAAAAA4"]').element.checked).toBe(true);
   });
 
   it('imports the selection and marks the queued videos as attached', async () => {
@@ -111,8 +132,9 @@ describe('ChannelScanPanel', () => {
       videos: [{ module_id: 2, video_id: 'AAAAAAAAAA3', title: 'Plaits deep dive' }],
     });
     expect(wrapper.find('[data-test="channel-scan-notice"]').text()).toContain('Queued 1 video(s)');
-    // The imported video now reads as attached and cannot be re-picked.
+    // The imported video now reads as in progress and cannot be re-picked.
     expect(wrapper.find('[data-test="pick-2-AAAAAAAAAA3"]').element.disabled).toBe(true);
+    expect(wrapper.find('[data-test="attached-2-AAAAAAAAAA3"]').text()).toBe('in progress');
     expect(wrapper.find('[data-test="import-selected"]').element.disabled).toBe(true);
   });
 

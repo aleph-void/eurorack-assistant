@@ -301,16 +301,15 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
       throw e;
     }
     const matches = matchVideosToModules(videos, modules);
-    // A video the user already has (in any state but failed) is flagged so
-    // the client can show it pre-imported rather than re-queue it.
+    // What the user already has of these: the row's pipeline status rides
+    // along so a re-scan of the same channel shows each earlier import as
+    // analyzed / still in progress / failed, instead of a bare 'attached'.
     const attached = modules.length
       ? await ModuleVideo.findAll({
           where: { user_id: req.user.id, module_id: modules.map((m) => m.id) },
         })
       : [];
-    const attachedKeys = new Set(
-      attached.filter((v) => v.status !== 'failed').map((v) => `${v.module_id}:${v.video_id}`)
-    );
+    const attachedStatus = new Map(attached.map((v) => [`${v.module_id}:${v.video_id}`, v.status]));
     res.json({
       channel: {
         id: channel.id,
@@ -327,14 +326,20 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
           module_id: module.id,
           manufacturer: module.manufacturer,
           name: module.name,
-          videos: (matches.get(module.id) ?? []).map((video) => ({
-            video_id: video.video_id,
-            url: youtubeUrl(video.video_id),
-            title: video.title,
-            published_at: video.published_at,
-            matched_on: video.matched_on,
-            already_attached: attachedKeys.has(`${module.id}:${video.video_id}`),
-          })),
+          videos: (matches.get(module.id) ?? []).map((video) => {
+            const status = attachedStatus.get(`${module.id}:${video.video_id}`) ?? null;
+            return {
+              video_id: video.video_id,
+              url: youtubeUrl(video.video_id),
+              title: video.title,
+              published_at: video.published_at,
+              matched_on: video.matched_on,
+              // A failed attachment is not 'attached': re-importing it is
+              // the retry, so it stays selectable.
+              already_attached: status !== null && status !== 'failed',
+              attached_status: status,
+            };
+          }),
         }))
         .filter((module) => module.videos.length > 0),
     });
