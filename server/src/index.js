@@ -16,6 +16,7 @@ const MANUALS_DIR = process.env.MANUALS_DIR || '/data/manuals';
 const EXPORTS_DIR = process.env.EXPORTS_DIR || '/data/exports';
 const CAPTURES_DIR = process.env.CAPTURES_DIR || '/data/captures';
 const PANELS_DIR = process.env.PANELS_DIR || '/data/panels';
+const VIDEOS_DIR = process.env.VIDEOS_DIR || '/data/videos';
 // Lapsed device codes and long-revoked tokens are swept hourly.
 const DEVICE_AUTH_PRUNE_MS = 60 * 60 * 1000;
 
@@ -26,6 +27,7 @@ async function main() {
   fs.mkdirSync(EXPORTS_DIR, { recursive: true });
   fs.mkdirSync(CAPTURES_DIR, { recursive: true });
   fs.mkdirSync(PANELS_DIR, { recursive: true });
+  fs.mkdirSync(VIDEOS_DIR, { recursive: true });
 
   // When the agent sandbox is enabled, the CLI runs as a separate uid that has
   // to traverse the LLM data root to reach its own credential dir. A volume
@@ -48,6 +50,7 @@ async function main() {
     exportsDir: EXPORTS_DIR,
     capturesDir: CAPTURES_DIR,
     panelsDir: PANELS_DIR,
+    videosDir: VIDEOS_DIR,
     hub,
     bus,
   });
@@ -59,6 +62,7 @@ async function main() {
     exportsDir: EXPORTS_DIR,
     capturesDir: CAPTURES_DIR,
     panelsDir: PANELS_DIR,
+    videosDir: VIDEOS_DIR,
     bus,
   });
   worker.start();

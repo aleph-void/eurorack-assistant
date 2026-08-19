@@ -68,14 +68,18 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
 - LLM backends (`services/llm.js`) shell out to `claude -p` / `codex exec`
   CLIs; tests inject a fake `run`. Worker tests stub `renderImpl` so headless
   chrome never launches.
-- The server Docker image must keep `poppler-utils` (pdftotext) and
-  `chromium` (product-page rendering) installed.
+- The server Docker image must keep `poppler-utils` (pdftotext), `chromium`
+  (product-page rendering), `ffmpeg` (video frame sampling) and `yt-dlp`
+  (YouTube downloads) installed.
 
 ## Big-picture flow
 
 Everything slow is a DB-backed job (`jobs` table): import → find_manual (per
 module) → analyze_manual → panel_image; extract_manual runs alongside;
-questions run scope_question → user review → answer_question. Progress
+questions run scope_question → user review → answer_question; attached
+YouTube videos run download_video (yt-dlp + ffmpeg frames/transcript, no
+LLM) → analyze_video (techniques summary onto `module_videos`, then the
+work files are deleted). Progress
 streams over a WebSocket at `/api/ws` (per-user event bus). Every job runs on
 the job owner's own LLM account (`user_llm_accounts`); quota exhaustion pauses
 that account (or the whole queue for unowned work), budgets make queued work

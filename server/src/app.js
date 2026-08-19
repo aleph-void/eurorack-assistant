@@ -24,7 +24,7 @@ import { shareRoutes } from './routes/shares.js';
 
 export function createApp(
   db,
-  { manualsDir, exportsDir, capturesDir, panelsDir, rateLimit, hub, bus = null, fetchImpl } = {}
+  { manualsDir, exportsDir, capturesDir, panelsDir, videosDir, rateLimit, hub, bus = null, fetchImpl } = {}
 ) {
   const app = express();
   // nginx is the only hop in front of the server and it sets X-Forwarded-For.
@@ -45,7 +45,7 @@ export function createApp(
 
   app.use('/api/auth', authRoutes(db));
   app.use('/api/users', userRoutes(db));
-  app.use('/api/modules', moduleRoutes(db, { manualsDir, panelsDir, fetchImpl }));
+  app.use('/api/modules', moduleRoutes(db, { manualsDir, panelsDir, videosDir, fetchImpl }));
   app.use('/api/racks', rackRoutes(db));
   app.use('/api/manuals', manualRoutes(db, { manualsDir }));
   app.use('/api/panels', panelRoutes(db, { panelsDir }));

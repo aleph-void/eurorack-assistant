@@ -714,6 +714,33 @@ describe('ModuleDetailView', () => {
     expect(wrapper.findAll('.marker')).toHaveLength(3);
   });
 
+  it('keeps Trim panel and Disable arranging beside the re-analyze buttons', async () => {
+    const panel = {
+      source: 'image',
+      url: '/api/panels/abc.png',
+      width: 400,
+      height: 1200,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      components: [{ id: 5, component_id: 1, name: 'Signal In', shape: 'jack', x: 0.4, y: 0.8 }],
+    };
+    api.get.mockResolvedValue({ ...moduleResponse, panel });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    // Both live in the action row at the top of the page, with the two
+    // re-analyze buttons — not buried inside the Front panel section.
+    const row = wrapper.find('[data-test="rebuild-analysis"]').element.parentElement;
+    for (const test of ['panel-trim', 'panel-disable-arranging']) {
+      const button = wrapper.find(`[data-test="${test}"]`);
+      expect(button.exists()).toBe(true);
+      expect(button.element.parentElement).toBe(row);
+    }
+    // Nothing is being arranged yet, so the button is visible but inert.
+    expect(wrapper.find('[data-test="panel-disable-arranging"]').attributes('disabled')).toBeDefined();
+    await wrapper.find('[data-test="arrange-component-1"]').trigger('click');
+    expect(wrapper.find('[data-test="panel-disable-arranging"]').attributes('disabled')).toBeUndefined();
+  });
+
   it('scrolls to the panel when arranging, and back to the row from the marker', async () => {
     const scrolled = vi.fn();
     Element.prototype.scrollIntoView = scrolled;
@@ -1319,5 +1346,140 @@ describe('ModuleDetailView signal-path detail', () => {
     await wrapper.find('[data-test="delete-pair-61"]').trigger('click');
     await flushPromises();
     expect(wrapper.find('[data-test="pair-error"]').text()).toContain('gone already');
+  });
+});
+
+describe('ModuleDetailView videos', () => {
+  const moduleResponse = {
+    id: 1,
+    manufacturer: 'Make Noise',
+    name: 'Maths',
+    manual_status: 'found',
+    analysis_status: 'complete',
+    summary: 'x',
+    quantity: 1,
+    racks: [{ id: 1, name: 'main rack', quantity: 1 }],
+    manuals: [],
+    components: [],
+    videos: [
+      {
+        id: 5,
+        video_id: 'dQw4w9WgXcQ',
+        url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        title: 'Maths tricks',
+        channel: 'Synth Channel',
+        duration_seconds: 300,
+        status: 'complete',
+        summary: '## Slew plucks\n\nPatch the EOR out into…',
+        error: null,
+      },
+      {
+        id: 6,
+        video_id: 'AAAAAAAAAAA',
+        url: 'https://www.youtube.com/watch?v=AAAAAAAAAAA',
+        title: null,
+        channel: null,
+        duration_seconds: null,
+        status: 'downloading',
+        summary: null,
+        error: null,
+      },
+      {
+        id: 7,
+        video_id: 'BBBBBBBBBBB',
+        url: 'https://www.youtube.com/watch?v=BBBBBBBBBBB',
+        title: 'broken one',
+        channel: 'Someone',
+        duration_seconds: 60,
+        status: 'failed',
+        summary: null,
+        error: 'yt-dlp failed (exit 1): video unavailable',
+      },
+    ],
+  };
+
+  it('lists the videos with status, rendered summary, progress and failure notes', async () => {
+    api.get.mockResolvedValue(structuredClone(moduleResponse));
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const row = wrapper.find('[data-test="video-5"]');
+    expect(row.text()).toContain('Maths tricks');
+    expect(row.text()).toContain('Synth Channel');
+    expect(row.text()).toContain('5 min');
+    expect(row.find('a').attributes('href')).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    expect(wrapper.find('[data-test="video-status-5"]').text()).toBe('complete');
+    // The summary is markdown, rendered (and sanitized) to HTML.
+    expect(wrapper.find('[data-test="video-summary-5"] h2').text()).toBe('Slew plucks');
+
+    // A video mid-pipeline says so; its link falls back to the URL.
+    const pending = wrapper.find('[data-test="video-6"]');
+    expect(pending.find('a').text()).toContain('youtube.com/watch?v=AAAAAAAAAAA');
+    expect(wrapper.find('[data-test="video-working-6"]').exists()).toBe(true);
+
+    // A failed one shows the error and offers a retry.
+    expect(wrapper.find('[data-test="video-error-7"]').text()).toContain('video unavailable');
+    expect(wrapper.find('[data-test="retry-video-7"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="retry-video-5"]').exists()).toBe(false);
+  });
+
+  it('attaches a YouTube link and reloads', async () => {
+    api.get.mockResolvedValue({ ...structuredClone(moduleResponse), videos: [] });
+    api.post.mockResolvedValue({ id: 9, job_id: 4 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="video-send"]').attributes('disabled')).toBeDefined();
+    await wrapper.find('[data-test="video-url"]').setValue('https://youtu.be/dQw4w9WgXcQ');
+    expect(wrapper.find('[data-test="video-send"]').attributes('disabled')).toBeUndefined();
+    await wrapper.find('[data-test="video-send"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/videos', {
+      url: 'https://youtu.be/dQw4w9WgXcQ',
+    });
+    expect(wrapper.find('[data-test="video-url"]').element.value).toBe('');
+    expect(api.get.mock.calls.filter(([path]) => path === '/api/modules/1').length).toBeGreaterThan(1);
+  });
+
+  it('shows the server refusal for a link that is not a video', async () => {
+    api.get.mockResolvedValue({ ...structuredClone(moduleResponse), videos: [] });
+    api.post.mockRejectedValue(new Error('url must be a link to a YouTube video'));
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="video-url"]').setValue('https://vimeo.com/123');
+    await wrapper.find('[data-test="video-send"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="video-add-error"]').text()).toContain('YouTube');
+  });
+
+  it('retries a failed video by re-posting its URL', async () => {
+    api.get.mockResolvedValue(structuredClone(moduleResponse));
+    api.post.mockResolvedValue({ id: 7, job_id: 8 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="retry-video-7"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/videos', {
+      url: 'https://www.youtube.com/watch?v=BBBBBBBBBBB',
+    });
+  });
+
+  it('removes a video after confirming, and not without', async () => {
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    api.get.mockResolvedValue(structuredClone(moduleResponse));
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-video-5"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).not.toHaveBeenCalled();
+
+    confirm.mockResolvedValue(true);
+    await wrapper.find('[data-test="delete-video-5"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/videos/5');
   });
 });

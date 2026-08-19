@@ -96,33 +96,108 @@ export function backgroundLevel({ width, height, gray }) {
   return samples[samples.length >> 1];
 }
 
-// The box of everything that is not backdrop, as fractions of the image. A
-// row or column has to carry a few content pixels before it counts, so JPEG
-// ringing along the backdrop does not widen the box to the whole frame.
+// The box of everything that is not backdrop, as fractions of the image.
+//
+// A line (row or column) is backdrop when it is LOCALLY UNIFORM — every
+// pixel sits within tolerance of its own ~TRIM_BLOCK-pixel stretch's median —
+// AND CONTINUOUS with the line peeled just before it, block for block. Two
+// tests because backdrop has to beat two impostors, and each test catches
+// the one the other cannot:
+//
+//   - One global background level failed on gradients: real product shots
+//     put the module on falloff lighting, and measured against the
+//     frame-wide median a darker band across the bottom of the photograph
+//     read as content (so the bottom edge never trimmed) and donated its
+//     pixels to every column crossing it (so the sides never trimmed
+//     either) — only the clean top edge ever moved. Locally, a gradient
+//     drifts a level or two per line and is as uniform as any backdrop;
+//     that is what the uniformity test accepts.
+//   - Uniformity alone then over-trims from the other side: a featureless
+//     stretch of plate is exactly as uniform as backdrop. What it cannot be
+//     is continuous — stepping from backdrop onto the plate jumps the level
+//     in one line, where a gradient never does. That is what the
+//     continuity test stops at.
+//
+// A line still has to carry a few contrasting pixels before it counts as
+// content, so JPEG ringing along the backdrop does not widen the box to the
+// whole frame. The peel works from the outside in and stops at the first
+// content line, which is what lets a blank stretch of plate in the middle
+// stay inside the box: it is never reached.
+const TRIM_BLOCK = 32;
+
 export function trimBox(px, { tolerance = TRIM_TOLERANCE } = {}) {
   const { width, height, gray } = px;
-  const bg = backgroundLevel(px);
-  const rows = new Int32Array(height);
-  const cols = new Int32Array(width);
-  for (let y = 0; y < height; y++) {
-    const row = y * width;
-    for (let x = 0; x < width; x++) {
-      if (Math.abs(gray[row + x] - bg) > tolerance) {
-        rows[y] += 1;
-        cols[x] += 1;
+
+  // One line's per-stretch medians, and its contrasting pixel count —
+  // pixels that deviate from their own stretch's median by more than the
+  // tolerance. Stretch boundaries depend only on [from, to), so adjacent
+  // lines' medians line up block for block for the continuity test.
+  const block = new Uint8Array(TRIM_BLOCK);
+  const lineStats = (line, isRow, from, to) => {
+    const stride = isRow ? 1 : width;
+    const base = isRow ? line * width : line;
+    const medians = [];
+    let content = 0;
+    for (let start = from; start < to; start += TRIM_BLOCK) {
+      const size = Math.min(TRIM_BLOCK, to - start);
+      for (let i = 0; i < size; i++) block[i] = gray[base + (start + i) * stride];
+      const median = block.slice(0, size).sort()[size >> 1];
+      medians.push(median);
+      for (let i = 0; i < size; i++) {
+        if (Math.abs(block[i] - median) > tolerance) content += 1;
       }
     }
-  }
-  const span = (counts, min) => {
+    return { medians, content };
+  };
+
+  const jumps = (a, b) => {
+    for (let i = 0; i < a.length; i++) {
+      if (Math.abs(a[i] - b[i]) > tolerance) return true;
+    }
+    return false;
+  };
+
+  const span = (length, isRow, from, to) => {
+    const min = Math.max(2, Math.round((to - from) * 0.002));
+    const isBackdrop = (line, prev) => {
+      const stats = lineStats(line, isRow, from, to);
+      if (stats.content >= min) return null;
+      if (prev && jumps(prev.medians, stats.medians)) return null;
+      return stats;
+    };
     let a = 0;
-    while (a < counts.length && counts[a] < min) a += 1;
-    let b = counts.length - 1;
-    while (b >= a && counts[b] < min) b -= 1;
+    for (let prev = null; a < length; a += 1) {
+      const stats = isBackdrop(a, prev);
+      if (!stats) break;
+      prev = stats;
+    }
+    let b = length - 1;
+    for (let prev = null; b >= a; b -= 1) {
+      const stats = isBackdrop(b, prev);
+      if (!stats) break;
+      prev = stats;
+    }
     return b >= a ? [a, b] : null;
   };
-  const ys = span(rows, Math.max(2, Math.round(width * 0.002)));
-  const xs = span(cols, Math.max(2, Math.round(height * 0.002)));
-  if (!ys || !xs) return null;
+
+  // Rows and columns take turns, each measured only inside the other's
+  // current span: once the row pass has peeled a full-width band off the
+  // bottom, the column pass no longer sees that band's pixels and can peel
+  // the sides it was holding open. One extra round each way settles it;
+  // the cap is a guard, not a tuning knob.
+  let ys = [0, height - 1];
+  let xs = [0, width - 1];
+  for (let pass = 0; pass < 4; pass++) {
+    const nextYs = span(height, true, xs[0], xs[1] + 1);
+    if (!nextYs) return null;
+    const nextXs = span(width, false, nextYs[0], nextYs[1] + 1);
+    if (!nextXs) return null;
+    const settled =
+      nextYs[0] === ys[0] && nextYs[1] === ys[1] && nextXs[0] === xs[0] && nextXs[1] === xs[1];
+    ys = nextYs;
+    xs = nextXs;
+    if (settled) break;
+  }
   return {
     x: xs[0] / width,
     y: ys[0] / height,

@@ -11,6 +11,7 @@ import PairsSection from '../components/moduledetail/PairsSection.vue';
 import ExpandersSection from '../components/moduledetail/ExpandersSection.vue';
 import ValuesSection from '../components/moduledetail/ValuesSection.vue';
 import DocumentsSection from '../components/moduledetail/DocumentsSection.vue';
+import VideosSection from '../components/moduledetail/VideosSection.vue';
 import NotesSection from '../components/moduledetail/NotesSection.vue';
 import { useModuleFacts } from '../components/moduledetail/useModuleFacts.js';
 import { fileToBase64 } from '../files.js';
@@ -674,6 +675,34 @@ watch(() => props.id, () => {
       >
         {{ rebuilding ? 'Queuing…' : 'Rebuild analysis' }}
       </button>
+      <button
+        v-if="module.panel && ['upload', 'image'].includes(module.panel.source)"
+        type="button"
+        class="secondary"
+        style="margin: 0; white-space: nowrap"
+        data-test="panel-trim"
+        :disabled="trimmingPanel"
+        title="Crop the picture to the front plate — the markers stay on the hardware they point at"
+        @click="trimPanel"
+      >
+        {{ trimmingPanel ? 'Trimming…' : 'Trim panel' }}
+      </button>
+      <button
+        v-if="module.panel"
+        type="button"
+        class="secondary"
+        style="margin: 0; white-space: nowrap"
+        data-test="panel-disable-arranging"
+        :disabled="!arrangedComponent"
+        :title="
+          arrangedComponent
+            ? `Show every marker again — only ${arrangedComponent.name} is on the picture right now`
+            : 'Nothing is being arranged — press Arrange on a component row to isolate its marker on the picture'
+        "
+        @click="showAllPanelComponents"
+      >
+        Disable arranging
+      </button>
     </div>
     <p v-if="reanalyzeNotice" class="muted" data-test="reanalyze-notice">{{ reanalyzeNotice }}</p>
     <p v-if="reanalyzeError" class="error" data-test="reanalyze-error">{{ reanalyzeError }}</p>
@@ -697,32 +726,15 @@ watch(() => props.id, () => {
           @move="movePanelMarker"
           @select="scrollToComponentRow"
         />
+        <!-- Trim panel and Disable arranging act on this picture but sit in
+             the action row at the top of the page, beside the re-analyze
+             buttons, so every module-wide action is in one place. -->
         <div
           v-if="arrangedComponent"
           class="panel-arrangement-filter"
           data-test="panel-arrangement-filter"
         >
           <span>Arranging only <strong>{{ arrangedComponent.name }}</strong>.</span>
-          <button
-            type="button"
-            class="secondary"
-            data-test="panel-disable-arranging"
-            @click="showAllPanelComponents"
-          >
-            Disable arranging
-          </button>
-        </div>
-        <div v-if="module.panel && ['upload', 'image'].includes(module.panel.source)" class="row">
-          <button
-            type="button"
-            class="secondary"
-            data-test="panel-trim"
-            :disabled="trimmingPanel"
-            title="Crop the picture to the front plate — the markers stay on the hardware they point at"
-            @click="trimPanel"
-          >
-            {{ trimmingPanel ? 'Trimming…' : 'Trim panel' }}
-          </button>
         </div>
         <p v-if="panelStatus" class="muted" data-test="panel-status">{{ panelStatus }}</p>
         <p v-else class="muted" data-test="no-panel">
@@ -807,6 +819,7 @@ watch(() => props.id, () => {
     />
     <ValuesSection :module="module" :module-id="id" @reload="load" />
     <DocumentsSection :module="module" :module-id="id" @reload="load" />
+    <VideosSection :module="module" :module-id="id" @reload="load" />
     <NotesSection :module="module" :module-id="id" @reload="load" />
 
     <details v-for="group in grouped" :key="group.type" class="panel" :data-test="`group-${group.type}`">

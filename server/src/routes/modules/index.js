@@ -7,6 +7,7 @@ import { moduleExpanderRoutes } from './expanders.js';
 import { moduleComponentRoutes } from './components.js';
 import { modulePanelRoutes } from './panel.js';
 import { moduleManualRoutes } from './manuals.js';
+import { moduleVideoRoutes } from './videos.js';
 
 // /api/modules, one router per sub-resource. A request falls through the
 // sub-routers in order until one matches; every route sits behind the same
@@ -16,6 +17,7 @@ export function moduleRoutes(
   {
     manualsDir = process.env.MANUALS_DIR || '/data/manuals',
     panelsDir = process.env.PANELS_DIR || '/data/panels',
+    videosDir = process.env.VIDEOS_DIR || '/data/videos',
     fetchImpl = fetch,
   } = {}
 ) {
@@ -28,5 +30,6 @@ export function moduleRoutes(
   router.use(moduleComponentRoutes(db));
   router.use(modulePanelRoutes(db, { panelsDir, fetchImpl }));
   router.use(moduleManualRoutes(db, { manualsDir }));
+  router.use(moduleVideoRoutes(db, { videosDir }));
   return router;
 }

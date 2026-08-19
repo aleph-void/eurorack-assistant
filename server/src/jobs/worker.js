@@ -104,6 +104,23 @@ export async function resetJobTarget(db, job, status, message) {
       { panel_status: status === 'failed' ? 'failed' : 'pending' },
       { where: { id: job.module_id } }
     );
+    // A video job carries its row in the payload; that row's status has to
+    // walk back with the job, or a video sits on 'downloading'/'analyzing'
+    // with nothing working on it.
+  } else if (job.type === 'download_video' || job.type === 'analyze_video') {
+    let videoId = null;
+    try {
+      videoId = JSON.parse(job.payload || '{}').video_id ?? null;
+    } catch {
+      // no payload, no row to walk back
+    }
+    if (videoId) {
+      const back = job.type === 'download_video' ? 'pending' : 'downloaded';
+      await db.models.ModuleVideo.update(
+        settled ? { status: 'failed', error: message } : { status: back },
+        { where: { id: videoId } }
+      );
+    }
     // A question whose job is never going to finish would otherwise spin on
     // 'scoping'/'answering' for good; 'failed' carries the reason and lets the
     // user ask again.
@@ -118,6 +135,7 @@ export function createWorker(db, options = {}) {
     exportsDir = process.env.EXPORTS_DIR || '/data/exports',
     capturesDir = process.env.CAPTURES_DIR || '/data/captures',
     panelsDir = process.env.PANELS_DIR || '/data/panels',
+    videosDir = process.env.VIDEOS_DIR || '/data/videos',
     pollIntervalMs = 5000,
     heartbeatMs = HEARTBEAT_MS,
     staleJobMs = STALE_JOB_MS,
@@ -499,9 +517,12 @@ export function createWorker(db, options = {}) {
     exportsDir,
     capturesDir,
     panelsDir,
+    videosDir,
     fetchImpl,
     renderImpl,
     extractImpl,
+    ...(options.downloadVideoImpl ? { downloadVideoImpl: options.downloadVideoImpl } : {}),
+    ...(options.analyzeVideoImpl ? { analyzeVideoImpl: options.analyzeVideoImpl } : {}),
   });
 
   // Process a single pending job if there is one. Returns the finished job row
@@ -545,11 +566,11 @@ export function createWorker(db, options = {}) {
       const ownerUser = owners[0] ? await db.models.User.findByPk(owners[0]) : null;
       settings = await getLlmSettings(db, job.type, ownerUser);
       // Model runs happen on the job owner's own authorized account — there
-      // is no shared login to fall back to. import and export_rack are the
-      // two types that never call the model; everything else may, and fails
-      // for good (not three times) when no account is connected, because no
-      // retry will conjure one.
-      if (job.type !== 'import' && job.type !== 'export_rack') {
+      // is no shared login to fall back to. import, export_rack and
+      // download_video (yt-dlp + ffmpeg, no model) never call the model;
+      // everything else may, and fails for good (not three times) when no
+      // account is connected, because no retry will conjure one.
+      if (!['import', 'export_rack', 'download_video'].includes(job.type)) {
         const account = ownerUser && (await getAccount(db, ownerUser.id, settings.provider));
         if (!account) {
           const missing = new Error(

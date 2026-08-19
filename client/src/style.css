@@ -717,6 +717,8 @@ button.linklike:hover {
 .badge.analyzing,
 .badge.answering,
 .badge.scoping,
+.badge.downloading,
+.badge.downloaded,
 .badge.running {
   color: var(--accent-2);
   border-color: var(--accent);

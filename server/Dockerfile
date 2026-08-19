@@ -4,10 +4,18 @@ FROM node:20-bookworm-slim
 # (pdftotext + the poppler renderer used by Claude Code's Read tool).
 # chromium lets the find_manual job save a module's product page as a PDF
 # when no manual PDF can be found (headless render in services/pdf.js).
+# ffmpeg samples still frames out of attached YouTube videos so the model
+# can look at them (jobs download_video, services/videos.js).
 # sudo lets the unprivileged server drop to the `agent` uid for CLI runs.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends poppler-utils ca-certificates chromium sudo \
+    && apt-get install -y --no-install-recommends poppler-utils ca-certificates chromium ffmpeg sudo \
     && rm -rf /var/lib/apt/lists/*
+
+# yt-dlp downloads attached YouTube videos (jobs download_video). The
+# standalone release binary rather than Debian's package: yt-dlp has to move
+# as fast as YouTube changes, and a year-old copy simply stops downloading.
+ADD https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux /usr/local/bin/yt-dlp
+RUN chmod 0755 /usr/local/bin/yt-dlp
 
 # The LLM provider CLIs the server shells out to (configurable in the admin
 # UI). Each run is pointed at the job owner's own credentials via environment
@@ -49,7 +57,7 @@ COPY migrations ./migrations
 # credential dir the agent needs can be handed across the uid boundary. The
 # other data dirs are touched only by the server (the agent reads staged copies
 # in a jail, never the originals), so they stay node-only.
-RUN mkdir -p /data/manuals /data/exports /data/captures /data/panels /data/llm /data/keys \
+RUN mkdir -p /data/manuals /data/exports /data/captures /data/panels /data/videos /data/llm /data/keys \
     && chown -R node:node /data /app \
     && chmod 700 /data/keys \
     && chown node:llmjail /data/llm \

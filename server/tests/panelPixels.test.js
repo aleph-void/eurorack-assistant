@@ -163,6 +163,36 @@ describe('finding the front plate in a photograph', () => {
     expect(panelCrop(FIXTURE, { hp: 2 })).not.toBeNull();
   });
 
+  // The failure this shape of backdrop used to cause: lit with falloff, the
+  // backdrop darkens smoothly down the frame by twice the trim tolerance.
+  // Against the frame-wide background level the darker lower reaches read as
+  // content — the bottom edge never trimmed, and every column inherited
+  // those pixels so the sides never trimmed either. Only the clean top edge
+  // ever moved. Locally the gradient is as uniform as any backdrop, so the
+  // whole frame peels; the plate is drawn bolted in (mounting slots at both
+  // ends, like every real panel) because down where the falloff meets the
+  // plate's own level it is the bottom screws, not the bare metal, that the
+  // peel stops at.
+  it('trims all four edges of a shot on a gradient backdrop', () => {
+    const gray = drawFixture({ slots: true });
+    for (let y = 0; y < IMAGE_H; y++) {
+      const shade = BACKDROP - Math.round((y / IMAGE_H) * 40);
+      for (let x = 0; x < IMAGE_W; x++) {
+        if (gray[y * IMAGE_W + x] === BACKDROP) gray[y * IMAGE_W + x] = shade;
+      }
+    }
+    const box = trimBox({ width: IMAGE_W, height: IMAGE_H, gray });
+    expect(box.x * IMAGE_W).toBeCloseTo(PAD_X, 0);
+    expect(box.y * IMAGE_H).toBeCloseTo(PAD_Y, 0);
+    expect(box.w * IMAGE_W).toBeCloseTo(PLATE_W, 0);
+    // The bottom may rest on the bottom mounting slot rather than the last
+    // millimetres of bare plate — within 5mm of the true edge is a trim, not
+    // the miss this exercises (the box used to run to the frame's edge).
+    const bottom = (box.y + box.h) * IMAGE_H;
+    expect(bottom).toBeGreaterThan(PAD_Y + PLATE_H - 5 * PX_PER_MM);
+    expect(bottom).toBeLessThanOrEqual(PAD_Y + PLATE_H + 1);
+  });
+
   it('rejects one that is nothing like the shape of the module it claims to be', () => {
     // Told it is 20HP, the same thin strip cannot be the plate — the picture
     // is of something else as well, and the whole image is the safer crop.

@@ -53,3 +53,25 @@ export async function enqueueExtractManual(db, manual, userId) {
     payload: { manual_id: manual.id },
   });
 }
+
+// Queue a job about ONE attached video (download_video / analyze_video).
+// Like extract_manual, a module may have several videos in flight at once,
+// so the dedupe is on the video row named in the payload.
+export async function enqueueVideoJob(db, type, video, userId) {
+  const live = await db.models.Job.findAll({
+    where: { module_id: video.module_id, type, status: ['pending', 'running'] },
+  });
+  const queued = live.some((job) => {
+    try {
+      return JSON.parse(job.payload || '{}').video_id === video.id;
+    } catch {
+      return false;
+    }
+  });
+  if (queued) return null;
+  return enqueueJob(db, type, {
+    moduleId: video.module_id,
+    userId,
+    payload: { video_id: video.id },
+  });
+}

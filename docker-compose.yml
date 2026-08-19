@@ -21,6 +21,7 @@ services:
       EXPORTS_DIR: /data/exports
       CAPTURES_DIR: /data/captures
       PANELS_DIR: /data/panels
+      VIDEOS_DIR: /data/videos
       # Set to 1 by setup.sh when the TLS override is active, so the session
       # cookie gets the Secure attribute only where HTTPS is actually served.
       SECURE_COOKIES: ${SECURE_COOKIES:-0}
@@ -33,6 +34,9 @@ services:
       # Module front-panel images: the ones found on the web, and the logical
       # panels the server draws when no usable picture exists.
       - panels:/data/panels
+      # Work files of attached YouTube videos (frames + transcript), deleted
+      # once their analysis lands; a volume so a redeploy mid-job keeps them.
+      - videos:/data/videos
       # Per-user LLM provider credentials: a CLI home directory per user
       # (claude config dirs, codex auth.json files) …
       - llm:/data/llm
@@ -60,5 +64,6 @@ volumes:
   exports:
   captures:
   panels:
+  videos:
   llm:
   llmkeys:

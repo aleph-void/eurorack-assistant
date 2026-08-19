@@ -54,6 +54,7 @@ export const LLM_JOB_TYPES = [
   'extract_manual',
   'panel_image',
   'describe_components',
+  'analyze_video',
   'scope_question',
   'answer_question',
 ];
@@ -563,6 +564,18 @@ export class ClaudeBackend {
         `${prompt}\n\nLook at the following image and base the output on it:\n- ${staged}\n`
     );
   }
+
+  // Look at a set of related images together (used for the video analysis:
+  // the frames sampled out of one video, read in order).
+  analyzeImages(prompt, imagePaths) {
+    return this._run(
+      imagePaths,
+      ['--allowedTools', 'Read'],
+      (staged) =>
+        `${prompt}\n\nLook at the following images, in order, and base the output on them:\n` +
+        `${staged.map((file) => `- ${file}`).join('\n')}\n`
+    );
+  }
 }
 
 export class CodexBackend {
@@ -688,6 +701,17 @@ export class CodexBackend {
         `${prompt}\n\nThe image to look at is at:\n- ${staged}\n\n` +
         `If you cannot view the image, say so by answering with ` +
         `{"is_panel": false, "components": []} rather than guessing at positions.\n`
+    );
+  }
+
+  analyzeImages(prompt, imagePaths) {
+    return this._run(
+      imagePaths,
+      [],
+      (staged) =>
+        `${prompt}\n\nLook at the following images, in order, and base the output on them ` +
+        `(if you cannot view images, work from the rest of the material and say so):\n` +
+        `${staged.map((file) => `- ${file}`).join('\n')}\n`
     );
   }
 }

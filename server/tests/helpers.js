@@ -185,11 +185,13 @@ export async function createTestApp({ hub = createDeviceHub(), bus = null, fetch
   const exportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-exports-'));
   const capturesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-captures-'));
   const panelsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-panels-'));
+  const videosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-videos-'));
   const app = createApp(db, {
     manualsDir,
     exportsDir,
     capturesDir,
     panelsDir,
+    videosDir,
     hub,
     bus,
     fetchImpl,
@@ -207,6 +209,7 @@ export async function createTestApp({ hub = createDeviceHub(), bus = null, fetch
     exportsDir,
     capturesDir,
     panelsDir,
+    videosDir,
     adminCookie,
     aliceCookie,
   };
@@ -372,6 +375,7 @@ export function fakeBackend(responses = {}) {
     analyzeDocument: [],
     analyzeDocuments: [],
     analyzeImage: [],
+    analyzeImages: [],
   };
   const respond = (value, args) => {
     if (typeof value === 'function') return Promise.resolve(value(...args));
@@ -403,6 +407,10 @@ export function fakeBackend(responses = {}) {
     analyzeImage(...args) {
       calls.analyzeImage.push(args);
       return respond(responses.analyzeImage, args);
+    },
+    analyzeImages(...args) {
+      calls.analyzeImages.push(args);
+      return respond(responses.analyzeImages, args);
     },
   };
 }

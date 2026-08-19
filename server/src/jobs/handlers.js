@@ -12,6 +12,12 @@
 //                     only a model can read
 //   panel_image     — find (or draw) the module's front panel and place every
 //                     analyzed component on it
+//   download_video  — yt-dlp an attached YouTube video, sample frames and
+//                     pull the caption track, delete the video file, then
+//                     queue analyze_video. No LLM involved
+//   analyze_video   — LLM summary of the techniques the video demonstrates,
+//                     written to the video row; the frames and transcript are
+//                     deleted once it lands
 //   reanalyze_components — fetch the module's product page from the retailers
 //                     that describe panels jack by jack (Perfect Circuit,
 //                     Detroit Modular, Midwest Modular), then re-run the
@@ -47,9 +53,11 @@ import {
 } from '../services/componentDescriber.js';
 import { extractManualDocument } from '../services/manualText.js';
 import { buildPanelForModule } from '../services/panelImage.js';
+import { downloadVideoForModule, removeVideoFiles } from '../services/videos.js';
+import { analyzeVideoForModule } from '../services/videoAnalyzer.js';
 import { answerQuestion, scopeQuestion } from '../services/ask.js';
 import { safeSegment, writeRackExport } from '../services/rackExport.js';
-import { enqueueExtractManual, enqueueFindManual, enqueueJob, enqueueModuleJob } from './enqueue.js';
+import { enqueueExtractManual, enqueueFindManual, enqueueJob, enqueueModuleJob, enqueueVideoJob } from './enqueue.js';
 
 // User uploads have a free-form display name and retain their original file
 // name. Accept either spelling style people naturally use for a saved
@@ -74,9 +82,12 @@ export function createHandlers(
     exportsDir,
     capturesDir,
     panelsDir,
+    videosDir,
     fetchImpl = fetch,
     renderImpl = renderPageToPdf,
     extractImpl = extractManualDocument,
+    downloadVideoImpl = downloadVideoForModule,
+    analyzeVideoImpl = analyzeVideoForModule,
   }
 ) {
   async function handleImport(job, backend, progress) {
@@ -437,6 +448,69 @@ export function createHandlers(
     }
   }
 
+  // The video row a video job is about. Both video handlers walk the row's
+  // own status, like the question handlers walk the question's.
+  async function jobVideo(job) {
+    const payload = JSON.parse(job.payload || '{}');
+    const record = await db.models.ModuleVideo.findByPk(payload.video_id);
+    if (!record) throw new Error(`Video ${payload.video_id} no longer exists`);
+    return record.get({ plain: true });
+  }
+
+  async function handleDownloadVideo(job, backend, progress) {
+    const { ModuleVideo } = db.models;
+    const video = await jobVideo(job);
+    await ModuleVideo.update({ status: 'downloading', error: null }, { where: { id: video.id } });
+    try {
+      progress(`downloading video: ${video.url}`);
+      const result = await downloadVideoImpl(video, videosDir, { log: progress });
+      await ModuleVideo.update(
+        {
+          title: result.title,
+          channel: result.channel,
+          duration_seconds: result.duration_seconds,
+          status: 'downloaded',
+        },
+        { where: { id: video.id } }
+      );
+    } catch (e) {
+      await ModuleVideo.update(
+        { status: 'failed', error: e.message },
+        { where: { id: video.id } }
+      );
+      throw e;
+    }
+    // The analysis needs the frames and transcript this job just wrote, so it
+    // is chained rather than run alongside.
+    if (await enqueueVideoJob(db, 'analyze_video', video, job.user_id)) {
+      progress('queued video analysis');
+    }
+  }
+
+  async function handleAnalyzeVideo(job, backend, progress) {
+    const { Module, ModuleVideo } = db.models;
+    const video = await jobVideo(job);
+    const record = await Module.findByPk(video.module_id);
+    if (!record) throw new Error(`Module ${video.module_id} no longer exists`);
+    const module = record.get({ plain: true });
+    await ModuleVideo.update({ status: 'analyzing', error: null }, { where: { id: video.id } });
+    progress(`analyzing video: '${video.title || video.url}'`);
+    try {
+      await analyzeVideoImpl(db, backend, module, video, videosDir, { log: progress });
+    } catch (e) {
+      await ModuleVideo.update(
+        { status: 'failed', error: e.message },
+        { where: { id: video.id } }
+      );
+      throw e;
+    }
+    // What the user keeps is the row: the link and the summary. The frames
+    // and transcript have served their purpose (kept until now so a failed
+    // attempt could retry without re-downloading).
+    removeVideoFiles(videosDir, video);
+    progress('summary saved; the downloaded video files are deleted');
+  }
+
   async function handleScopeQuestion(job, backend, progress) {
     const { Question } = db.models;
     const record = await Question.findByPk(job.question_id);
@@ -506,6 +580,8 @@ export function createHandlers(
     describe_components: handleDescribeComponents,
     extract_manual: handleExtractManual,
     panel_image: handlePanelImage,
+    download_video: handleDownloadVideo,
+    analyze_video: handleAnalyzeVideo,
     scope_question: handleScopeQuestion,
     answer_question: handleAnswerQuestion,
     export_rack: handleExportRack,

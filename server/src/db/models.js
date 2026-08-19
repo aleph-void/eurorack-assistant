@@ -129,6 +129,31 @@ export function defineModels(sequelize) {
     { tableName: 'manual_documents', createdAt: 'created_at', updatedAt: 'updated_at' }
   );
 
+  // A YouTube video a user attached to a module (migration 026). The video
+  // file itself is transient — downloaded, analyzed, deleted — so the row
+  // holds what survives: the link, the video's metadata and the techniques
+  // summary the analysis wrote. Owned by (and visible to) the attaching user.
+  const ModuleVideo = define(
+    'ModuleVideo',
+    {
+      id,
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      user_id: { type: DataTypes.INTEGER, allowNull: false },
+      // The 11-character YouTube id; `url` is rebuilt from it (services/
+      // videos.js), so yt-dlp is only ever pointed at a real YouTube video.
+      video_id: { type: DataTypes.TEXT, allowNull: false },
+      url: { type: DataTypes.TEXT, allowNull: false },
+      title: { type: DataTypes.TEXT },
+      channel: { type: DataTypes.TEXT },
+      duration_seconds: { type: DataTypes.INTEGER },
+      // pending → downloading → downloaded → analyzing → complete / failed
+      status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'pending' },
+      summary: { type: DataTypes.TEXT },
+      error: { type: DataTypes.TEXT },
+    },
+    { tableName: 'module_videos', createdAt: 'created_at', updatedAt: 'updated_at' }
+  );
+
   // The module's front plate: either a real image found on the web or the
   // logical panel the server draws from the layout the LLM read out of the
   // manual (migration 016). The file itself is content-addressed in
@@ -841,6 +866,10 @@ export function defineModels(sequelize) {
   Module.hasMany(ManualDocument, { foreignKey: 'module_id' });
   ManualDocument.belongsTo(Module, { foreignKey: 'module_id' });
 
+  Module.hasMany(ModuleVideo, { foreignKey: 'module_id' });
+  ModuleVideo.belongsTo(Module, { foreignKey: 'module_id' });
+  ModuleVideo.belongsTo(User, { foreignKey: 'user_id' });
+
   Module.hasMany(ModuleComponent, { foreignKey: 'module_id' });
   ModuleComponent.belongsTo(Module, { foreignKey: 'module_id' });
 
@@ -987,6 +1016,7 @@ export function defineModels(sequelize) {
     Module,
     Manual,
     ManualDocument,
+    ModuleVideo,
     Rack,
     RackModule,
     RackRow,

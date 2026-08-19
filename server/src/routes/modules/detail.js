@@ -3,6 +3,7 @@ import { Op } from 'sequelize';
 import { loadPanels } from '../../services/panelImage.js';
 import { unlinkedExpanderHints } from '../../services/moduleLinks.js';
 import { readableIds } from '../../services/sharing.js';
+import { videoJson } from '../../services/videos.js';
 import { requireOwnedModule } from './helpers.js';
 import {
   componentJson,
@@ -28,6 +29,7 @@ export function moduleDetailRoutes(db) {
     ModuleExpander,
     Manual,
     ManualDocument,
+    ModuleVideo,
     Note,
     NoteModule,
     NoteComponent,
@@ -234,6 +236,13 @@ export function moduleDetailRoutes(db) {
         shared_by: documentOwners.get(m.user_id) ?? null,
       };
     });
+    // The requesting user's attached YouTube videos and their analysis
+    // summaries. Like uploads, a video (and what the model wrote about it)
+    // belongs to whoever attached it.
+    const videoRows = await ModuleVideo.findAll({
+      where: { module_id: module.id, user_id: req.user.id },
+      order: [['id', 'ASC']],
+    });
     // The requesting user's notes attached to this module (component_id NULL)
     // or to one of its components. Notes are strictly private per user.
     const moduleNotes = await NoteModule.findAll({
@@ -272,6 +281,7 @@ export function moduleDetailRoutes(db) {
       // record — usually because the expander has not been imported yet.
       expander_suggestions: await unlinkedExpanderHints(db, module),
       manuals,
+      videos: videoRows.map(videoJson),
       notes: [
         ...moduleNotes.map((nm) => noteJson(nm.Note, null)),
         ...componentNotes.map((nc) => noteJson(nc.Note, nc.component_id)),
