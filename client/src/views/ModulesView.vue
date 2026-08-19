@@ -193,9 +193,10 @@ function heldIn(module, rack) {
   return here ? here.quantity : module.quantity;
 }
 
-// How many copies to send, per module id. Blank means all of them; a number
-// splits the holding and leaves the rest in this rack — two of the same
-// module can stand in two different racks.
+// How many copies to send, per module id. Ticking a module fills it with
+// everything the rack holds of that module; editing it down splits the
+// holding and leaves the rest behind, so two of the same module can stand in
+// two different racks. Blank means all of them.
 const moveQty = ref({});
 
 // Move a module from the selected rack into another one (quantities merge if
@@ -207,9 +208,8 @@ async function move(module, event) {
   error.value = '';
   moveNotice.value = '';
   const held = heldIn(module, currentRack.value);
-  const typed = String(moveQty.value[module.id] ?? '').trim();
-  const quantity = typed === '' ? held : Number(typed);
-  if (!Number.isInteger(quantity) || quantity < 1 || quantity > held) {
+  const quantity = askedQty(module, currentRack.value);
+  if (quantity === null) {
     error.value =
       `How many ${module.manufacturer} ${module.name} to move must be a whole number ` +
       `between 1 and ${held}.`;
@@ -244,14 +244,32 @@ const moving = ref(false);
 const selectedIn = (rackId) => selection.value[rackId] ?? [];
 const isSelected = (rackId, moduleId) => selectedIn(rackId).includes(moduleId);
 
-function toggleSelected(rackId, moduleId) {
+// Picking a module to move is also picking how many of it to move: its
+// quantity turns into a box holding the number the rack has, ready to be
+// changed. Letting it go again takes the box, and whatever was typed in it,
+// away with the selection.
+function openQty(rack, modules) {
+  const next = { ...moveQty.value };
+  for (const module of modules) next[module.id] = String(heldIn(module, rack));
+  moveQty.value = next;
+}
+
+function closeQty(moduleIds) {
+  const next = { ...moveQty.value };
+  for (const id of moduleIds) delete next[id];
+  moveQty.value = next;
+}
+
+function toggleSelected(group, module) {
+  const rackId = group.rack.id;
   const current = selectedIn(rackId);
+  const dropping = current.includes(module.id);
   selection.value = {
     ...selection.value,
-    [rackId]: current.includes(moduleId)
-      ? current.filter((id) => id !== moduleId)
-      : [...current, moduleId],
+    [rackId]: dropping ? current.filter((id) => id !== module.id) : [...current, module.id],
   };
+  if (dropping) closeQty([module.id]);
+  else openQty(group.rack, [module]);
 }
 
 // The header box ticks everything the filter currently shows, and unticks
@@ -260,26 +278,63 @@ function toggleAllIn(group) {
   const ids = group.modules.map((m) => m.id);
   const allOn = ids.length > 0 && ids.every((id) => isSelected(group.rack.id, id));
   selection.value = { ...selection.value, [group.rack.id]: allOn ? [] : ids };
+  if (allOn) closeQty(ids);
+  else openQty(group.rack, group.modules);
+}
+
+// Letting a whole rack's selection go closes its count boxes with it, so a
+// number typed and then abandoned never rides along with a later move.
+function clearSelection(rackId) {
+  closeQty(selectedIn(rackId));
+  selection.value = { ...selection.value, [rackId]: [] };
+}
+
+// The count typed against a module, as a number of copies to move, or null
+// when what is in the box is not one of the copies the rack holds.
+function askedQty(module, rack) {
+  const held = heldIn(module, rack);
+  const typed = String(moveQty.value[module.id] ?? '').trim();
+  if (typed === '') return held;
+  const count = Number(typed);
+  return Number.isInteger(count) && count >= 1 && count <= held ? count : null;
 }
 const allSelectedIn = (group) =>
   group.modules.length > 0 && group.modules.every((m) => isSelected(group.rack.id, m.id));
 
-async function moveSelected(rack) {
+async function moveSelected(group) {
+  const rack = group.rack;
   const moduleIds = selectedIn(rack.id);
   const toRackId = Number(moveTarget.value[rack.id]);
   if (!moduleIds.length || !toRackId) return;
   error.value = '';
   moveNotice.value = '';
+  // Every count is checked before anything is sent, so one bad box moves
+  // nothing rather than some of them.
+  const quantities = {};
+  for (const module of group.modules) {
+    if (!moduleIds.includes(module.id)) continue;
+    const count = askedQty(module, rack);
+    if (count === null) {
+      error.value =
+        `How many ${module.manufacturer} ${module.name} to move must be a whole number ` +
+        `between 1 and ${heldIn(module, rack)}.`;
+      return;
+    }
+    quantities[module.id] = count;
+  }
   moving.value = true;
   try {
     const res = await api.post(`/api/racks/${rack.id}/modules/move`, {
       to_rack_id: toRackId,
       module_ids: moduleIds,
+      quantities,
     });
     const target = racks.value.find((r) => r.id === toRackId);
+    const copies = res.copies ?? res.moved;
     moveNotice.value =
-      `Moved ${res.moved} module(s) from '${rack.name}' to '${target?.name ?? 'the other rack'}'.`;
-    selection.value = { ...selection.value, [rack.id]: [] };
+      `Moved ${copies} copies of ${res.moved} module(s) from '${rack.name}' to ` +
+      `'${target?.name ?? 'the other rack'}'.`;
+    clearSelection(rack.id);
     moveTarget.value = { ...moveTarget.value, [rack.id]: '' };
     await load();
   } catch (e) {
@@ -479,7 +534,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
               style="margin: 0"
               :disabled="moving || !selectedIn(group.rack.id).length || !moveTarget[group.rack.id]"
               :data-test="`bulk-move-go-${group.rack.id}`"
-              @click="moveSelected(group.rack)"
+              @click="moveSelected(group)"
             >
               {{ moving ? 'Moving…' : 'Move' }}
             </button>
@@ -489,7 +544,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
               class="secondary"
               style="margin: 0"
               :data-test="`bulk-clear-${group.rack.id}`"
-              @click="selection = { ...selection, [group.rack.id]: [] }"
+              @click="clearSelection(group.rack.id)"
             >
               Clear
             </button>
@@ -528,14 +583,27 @@ onUnmounted(() => clearTimeout(refreshTimer));
                     :checked="isSelected(group.rack.id, module.id)"
                     :data-test="`select-${group.rack.id}-${module.id}`"
                     :aria-label="`Select ${module.manufacturer} ${module.name}`"
-                    @change="toggleSelected(group.rack.id, module.id)"
+                    @change="toggleSelected(group, module)"
                   />
                 </td>
                 <td>{{ module.manufacturer }}</td>
                 <td>
                   <RouterLink :to="moduleHref(module, group.rack)">{{ module.name }}</RouterLink>
                 </td>
-                <td>{{ module.quantity }}</td>
+                <!-- Picked for a move, the count becomes editable: send some
+                     of the copies and leave the rest in this rack. -->
+                <td class="qty-cell">
+                  <input
+                    v-if="group.rack && isSelected(group.rack.id, module.id)"
+                    v-model="moveQty[module.id]"
+                    type="number"
+                    min="1"
+                    :max="heldIn(module, group.rack)"
+                    :data-test="`move-qty-${module.id}`"
+                    :aria-label="`How many ${module.manufacturer} ${module.name} to move`"
+                  />
+                  <template v-else>{{ module.quantity }}</template>
+                </td>
                 <td>{{ module.hp ? `${module.hp}HP` : '—' }}</td>
                 <td v-if="!currentRack">{{ rackNames(module) }}</td>
                 <td><span class="badge" :class="module.manual_status">{{ module.manual_status }}</span></td>
@@ -554,20 +622,6 @@ onUnmounted(() => clearTimeout(refreshTimer));
                     >
                       {{ expandedComponents[module.id] ? 'Hide components' : 'Components' }}
                     </button>
-                    <!-- More than one copy in this rack can be split: say how
-                         many go before picking where they go to. Blank moves
-                         the lot, as it always did. -->
-                    <input
-                      v-if="currentRack && otherRacks.length > 0 && heldIn(module, currentRack) > 1"
-                      v-model="moveQty[module.id]"
-                      type="number"
-                      class="move-qty"
-                      min="1"
-                      :max="heldIn(module, currentRack)"
-                      :placeholder="`all ${heldIn(module, currentRack)}`"
-                      :data-test="`move-qty-${module.id}`"
-                      :aria-label="`How many ${module.manufacturer} ${module.name} to move`"
-                    />
                     <select
                       v-if="currentRack && otherRacks.length > 0"
                       class="move-select"

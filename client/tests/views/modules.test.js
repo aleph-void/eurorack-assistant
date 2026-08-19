@@ -231,8 +231,7 @@ describe('ModulesView', () => {
     await flushPromises();
     await wrapper.find('[data-test="rack-select"]').setValue(1);
     await flushPromises();
-    // Only one copy is held, so there is nothing to split and no count to ask
-    // for: the whole holding goes.
+    // Untouched, the count stays a plain number and the whole holding goes.
     expect(wrapper.find('[data-test="move-qty-1"]').exists()).toBe(false);
     await wrapper.find('[data-test="move-1"]').setValue(2);
     await flushPromises();
@@ -261,9 +260,12 @@ describe('ModulesView', () => {
     await flushPromises();
     await wrapper.find('[data-test="rack-select"]').setValue(1);
     await flushPromises();
+
+    // Picking the module turns its count into a box holding all three.
+    await wrapper.find('[data-test="select-1-1"]').setValue(true);
     const qty = wrapper.find('[data-test="move-qty-1"]');
+    expect(qty.element.value).toBe('3');
     expect(qty.attributes('max')).toBe('3');
-    expect(qty.attributes('placeholder')).toBe('all 3');
     await qty.setValue('2');
     await wrapper.find('[data-test="move-1"]').setValue(2);
     await flushPromises();
@@ -274,8 +276,38 @@ describe('ModulesView', () => {
     expect(wrapper.find('[data-test="move-notice"]').text()).toContain(
       "Moved 2 of 3 ALM Pam to 'travel case', leaving 1 here."
     );
-    // The count is cleared, so the next move does not silently reuse it.
-    expect(wrapper.find('[data-test="move-qty-1"]').element.value).toBe('');
+  });
+
+  // Letting the module go again puts the count back to plain text: nothing
+  // typed there survives to surprise the next move.
+  it('takes the count box away when the module is unpicked', async () => {
+    mockLists([
+      {
+        id: 1,
+        manufacturer: 'ALM',
+        name: 'Pam',
+        quantity: 3,
+        racks: [{ id: 1, name: 'main rack', quantity: 3 }],
+        manual_status: 'pending',
+        analysis_status: 'pending',
+      },
+    ]);
+    api.post.mockResolvedValue({ ok: true, moved: 3, left: 0 });
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="rack-select"]').setValue(1);
+    await flushPromises();
+    await wrapper.find('[data-test="select-1-1"]').setValue(true);
+    await wrapper.find('[data-test="move-qty-1"]').setValue('1');
+    await wrapper.find('[data-test="select-1-1"]').setValue(false);
+    expect(wrapper.find('[data-test="move-qty-1"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="move-1"]').setValue(2);
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/racks/1/modules/1/move', {
+      to_rack_id: 2,
+      quantity: 3,
+    });
   });
 
   it('refuses a count that is not a whole number of the copies held', async () => {
@@ -294,6 +326,7 @@ describe('ModulesView', () => {
     await flushPromises();
     await wrapper.find('[data-test="rack-select"]').setValue(1);
     await flushPromises();
+    await wrapper.find('[data-test="select-1-1"]').setValue(true);
     await wrapper.find('[data-test="move-qty-1"]').setValue('5');
     await wrapper.find('[data-test="move-1"]').setValue(2);
     await flushPromises();
@@ -373,7 +406,7 @@ describe('ModulesView bulk move', () => {
   it('moves the ticked modules to the chosen rack in one request', async () => {
     const wrapper = mountView();
     await flushPromises();
-    api.post.mockResolvedValue({ ok: true, moved: 2, to_rack_id: 2 });
+    api.post.mockResolvedValue({ ok: true, moved: 2, copies: 2, to_rack_id: 2 });
 
     await wrapper.find('[data-test="select-1-10"]').setValue(true);
     await wrapper.find('[data-test="select-1-11"]').setValue(true);
@@ -386,9 +419,10 @@ describe('ModulesView bulk move', () => {
     expect(api.post).toHaveBeenCalledWith('/api/racks/1/modules/move', {
       to_rack_id: 2,
       module_ids: [10, 11],
+      quantities: { 10: 1, 11: 1 },
     });
     expect(wrapper.find('[data-test="move-notice"]').text()).toContain(
-      "Moved 2 module(s) from 'main rack' to 'travel case'"
+      "Moved 2 copies of 2 module(s) from 'main rack' to 'travel case'"
     );
     // The selection is emptied, so the next move does not repeat this one.
     expect(wrapper.find('[data-test="bulk-move-1"]').text()).toContain('0 selected');
@@ -438,7 +472,54 @@ describe('ModulesView bulk move', () => {
     expect(api.post).toHaveBeenCalledWith('/api/racks/2/modules/move', {
       to_rack_id: 1,
       module_ids: [12],
+      quantities: { 12: 1 },
     });
+  });
+
+  // Each ticked module carries its own count, so a rack can send two of one
+  // module, one of another, and keep the rest.
+  it('sends the count typed against each ticked module', async () => {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(
+        path === '/api/racks'
+          ? racksResponse
+          : [
+              { ...modulesResponse[0], quantity: 3, racks: [{ id: 1, name: 'main rack', quantity: 3 }] },
+              modulesResponse[1],
+            ]
+      )
+    );
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    api.post.mockResolvedValue({ ok: true, moved: 2, copies: 3, to_rack_id: 2 });
+
+    await wrapper.find('[data-test="select-all-1"]').setValue(true);
+    // Ticking fills each box with what the rack holds of that module.
+    expect(wrapper.find('[data-test="move-qty-10"]').element.value).toBe('3');
+    expect(wrapper.find('[data-test="move-qty-11"]').element.value).toBe('1');
+    await wrapper.find('[data-test="move-qty-10"]').setValue('2');
+
+    await wrapper.find('[data-test="bulk-target-1"]').setValue('2');
+    await wrapper.find('[data-test="bulk-move-go-1"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/racks/1/modules/move', {
+      to_rack_id: 2,
+      module_ids: [10, 11],
+      quantities: { 10: 2, 11: 1 },
+    });
+    expect(wrapper.find('[data-test="move-notice"]').text()).toContain('Moved 3 copies of 2');
+  });
+
+  it('refuses a bulk move whose count is more than the rack holds', async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.find('[data-test="select-1-10"]').setValue(true);
+    await wrapper.find('[data-test="move-qty-10"]').setValue('4');
+    await wrapper.find('[data-test="bulk-target-1"]').setValue('2');
+    await wrapper.find('[data-test="bulk-move-go-1"]').trigger('click');
+    await flushPromises();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(wrapper.find('p.error').text()).toContain('between 1 and 1');
   });
 
   it('reports what the server refused and leaves the selection alone', async () => {

@@ -494,7 +494,9 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
   // a time. Same rules as the single move, applied to a list — and the whole
   // list is checked before anything is written, so a mistyped id moves
   // nothing rather than half of them.
-  // Body: { to_rack_id, module_ids: [...] }
+  // Body: { to_rack_id, module_ids: [...], quantities?: { <module_id>: n } }
+  // A module with a quantity sends only that many copies and leaves the rest
+  // in this rack; one without sends everything the rack holds of it.
   router.post('/:id/modules/move', asyncHandler(async (req, res) => {
     const ends = await moveEnds(req, res, Number(req.body?.to_rack_id));
     if (!ends) return;
@@ -508,21 +510,39 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
     }
     const held = await RackModule.findAll({
       where: { rack_id: ends.from.id, module_id: moduleIds },
-      attributes: ['module_id'],
+      attributes: ['module_id', 'quantity'],
     });
-    const inRack = new Set(held.map((rm) => rm.module_id));
+    const inRack = new Map(held.map((rm) => [rm.module_id, rm.quantity]));
     const missing = moduleIds.filter((id) => !inRack.has(id));
     if (missing.length > 0) {
       return res.status(404).json({
         error: `${missing.length} of the selected module(s) are not in this rack`,
       });
     }
+    const asked = req.body?.quantities ?? {};
+    const counts = new Map();
+    for (const moduleId of moduleIds) {
+      const want = asked[moduleId];
+      if (want === undefined || want === null || want === '') continue;
+      const count = Number(want);
+      if (!Number.isInteger(count) || count < 1 || count > inRack.get(moduleId)) {
+        return res.status(400).json({
+          error:
+            `how many to move must be a whole number between 1 and ` +
+            `${inRack.get(moduleId)} for each selected module`,
+        });
+      }
+      counts.set(moduleId, count);
+    }
+    let copies = 0;
     await db.sequelize.transaction(async (transaction) => {
       for (const moduleId of moduleIds) {
-        await moveModule(ends.from, ends.to, moduleId, transaction);
+        const count = counts.get(moduleId) ?? null;
+        copies += count ?? inRack.get(moduleId);
+        await moveModule(ends.from, ends.to, moduleId, transaction, count);
       }
     });
-    res.json({ ok: true, moved: moduleIds.length, to_rack_id: ends.to.id });
+    res.json({ ok: true, moved: moduleIds.length, copies, to_rack_id: ends.to.id });
   }));
 
   // Set how many copies of a module this rack contains. Body: { quantity }.

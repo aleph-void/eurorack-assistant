@@ -443,11 +443,6 @@ details.panel > .panel-body > :first-child {
 .module-row-actions .move-select {
   width: auto;
 }
-/* Just wide enough for a two-digit count next to the 'Move to…' dropdown. */
-.module-row-actions .move-qty {
-  width: 5rem;
-  margin: 0;
-}
 .component-edit-actions {
   flex-wrap: wrap;
 }
@@ -921,6 +916,13 @@ button.linklike:hover {
 .bulk-move select {
   margin: 0;
   min-width: 12rem;
+}
+/* A module picked for a move edits its count in place, so the Qty column
+   holds a box just wide enough for two digits and its spinner. */
+.qty-cell input {
+  width: 4.5rem;
+  margin: 0;
+  padding: 0.2rem 0.3rem;
 }
 /* The tick column is the width of its box and nothing more. */
 .select-cell {

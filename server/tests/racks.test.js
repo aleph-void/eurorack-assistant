@@ -505,6 +505,67 @@ describe('racks API', () => {
     expect(placements).toEqual([]);
   });
 
+  // Each selected module carries its own count: send two of one, one of
+  // another, and keep the rest of both where they are.
+  it('moves the number of copies asked for per module in a bulk move', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const alice = rows[0];
+    const maths = await insertModule(db, alice.id, { quantity: 3 });
+    const pam = await insertModule(db, alice.id, {
+      manufacturer: 'ALM',
+      name: 'Pam',
+      quantity: 2,
+    });
+    const main = (await request(app).get('/api/racks').set('Cookie', aliceCookie)).body.find(
+      (r) => r.name === 'main rack'
+    );
+    const travel = (
+      await request(app).post('/api/racks').set('Cookie', aliceCookie).send({ name: 'travel case' })
+    ).body;
+
+    const res = await request(app)
+      .post(`/api/racks/${main.id}/modules/move`)
+      .set('Cookie', aliceCookie)
+      .send({
+        to_rack_id: travel.id,
+        module_ids: [maths.id, pam.id],
+        // Pam has no count of its own, so all of it goes.
+        quantities: { [maths.id]: 2 },
+      });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, moved: 2, copies: 4 });
+
+    const mathsDetail = await request(app).get(`/api/modules/${maths.id}`).set('Cookie', aliceCookie);
+    expect(mathsDetail.body.racks).toEqual([
+      { id: main.id, name: 'main rack', quantity: 1 },
+      { id: travel.id, name: 'travel case', quantity: 2 },
+    ]);
+    const pamDetail = await request(app).get(`/api/modules/${pam.id}`).set('Cookie', aliceCookie);
+    expect(pamDetail.body.racks).toEqual([{ id: travel.id, name: 'travel case', quantity: 2 }]);
+  });
+
+  it('rejects a bulk move asking for more copies than the rack holds', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const alice = rows[0];
+    const maths = await insertModule(db, alice.id, { quantity: 2 });
+    const main = (await request(app).get('/api/racks').set('Cookie', aliceCookie)).body[0];
+    const travel = (
+      await request(app).post('/api/racks').set('Cookie', aliceCookie).send({ name: 'travel case' })
+    ).body;
+
+    const res = await request(app)
+      .post(`/api/racks/${main.id}/modules/move`)
+      .set('Cookie', aliceCookie)
+      .send({ to_rack_id: travel.id, module_ids: [maths.id], quantities: { [maths.id]: 3 } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/between 1 and 2/);
+    // Nothing moved.
+    const detail = await request(app).get(`/api/modules/${maths.id}`).set('Cookie', aliceCookie);
+    expect(detail.body.racks).toEqual([{ id: main.id, name: 'main rack', quantity: 2 }]);
+  });
+
   it('validates a bulk move and writes nothing when any module is not in the rack', async () => {
     const { app, db, aliceCookie, adminCookie } = await createTestApp();
     const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
