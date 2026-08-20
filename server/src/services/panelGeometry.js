@@ -12,3 +12,9 @@ export const PANEL_MM_HEIGHT = 128.5;
 export const PX_PER_MM = 8;
 
 export const DEFAULT_HP = 8;
+
+// The width, in HP, of a 3U front plate that a picture shows as `aspect`
+// (its width divided by its height) times as wide as it is tall: the plate
+// is PANEL_MM_HEIGHT tall whatever the picture's resolution, so its shape
+// alone says how many HP across it is.
+export const hpFromAspect = (aspect) => (aspect * PANEL_MM_HEIGHT) / HP_MM;

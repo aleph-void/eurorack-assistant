@@ -14,6 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   MIN_CONTRAST,
   backgroundLevel,
+  boxHp,
   discScore,
   findDisc,
   growBox,
@@ -161,6 +162,13 @@ describe('finding the front plate in a photograph', () => {
 
   it('accepts a trimmed box that is the shape a 2HP panel has to be', () => {
     expect(panelCrop(FIXTURE, { hp: 2 })).not.toBeNull();
+  });
+
+  // What lets a supplied picture correct the module's recorded width: the
+  // plate's shape in real pixels is its width in HP.
+  it('measures the trimmed plate\'s width in HP', () => {
+    expect(boxHp(FIXTURE, trimBox(FIXTURE))).toBeCloseTo(2, 1);
+    expect(boxHp(FIXTURE, { x: 0, y: 0, w: 0, h: 1 })).toBe(null);
   });
 
   // The failure this shape of backdrop used to cause: lit with falloff, the

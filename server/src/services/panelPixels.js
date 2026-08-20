@@ -36,7 +36,7 @@
 // said, which is what this service did before it existed.
 
 import fs from 'node:fs';
-import { HP_MM, PANEL_MM_HEIGHT } from './panelGeometry.js';
+import { HP_MM, PANEL_MM_HEIGHT, hpFromAspect } from './panelGeometry.js';
 
 // Loaded on first use rather than imported: sharp is a native module, and a
 // panel that is merely unrefined beats a server that will not boot.
@@ -318,6 +318,22 @@ export function panelCrop(px, { hp = null } = {}) {
     if (actual > expected * ASPECT_TOLERANCE || actual < expected / ASPECT_TOLERANCE) return null;
   }
   return box;
+}
+
+// How wide the plate inside `box` is, in HP, measured off the pixels: `box`
+// is a fraction of a `px.width` x `px.height` image, and a 3U plate is a
+// known number of millimetres tall, so the box's shape in real pixels is the
+// only thing needed. Null when the box has no shape to measure.
+//
+// This is what lets a supplied picture correct the module's recorded width:
+// the rack organizer draws every panel into an HP-wide slot, so a photograph
+// that takes in more of the rack than the recorded width allows for — a
+// module standing next to its expander — is stretched until it is measured.
+export function boxHp(px, box) {
+  const width = box.w * px.width;
+  const height = box.h * px.height;
+  if (!(width > 0) || !(height > 0)) return null;
+  return hpFromAspect(width / height);
 }
 
 // Grow a box by a fraction of its own size, clamped to the image.

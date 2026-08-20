@@ -848,8 +848,10 @@ watch(() => props.id, () => {
         </label>
         <p class="muted" style="margin-top: 0">
           Upload a file or enter a direct image URL. A straight-on shot of the front plate works
-          best. The components are located on it in the background, so the markers appear once that
-          job finishes. Everyone with this module in a rack sees the picture you supply.
+          best. Leave the width blank and it is measured off the picture — a shot that takes in an
+          expander sets the module's width to what it actually shows, so the rack is not drawn
+          stretched. The components are located on it in the background, so the markers appear once
+          that job finishes. Everyone with this module in a rack sees the picture you supply.
         </p>
         <div class="row">
           <input

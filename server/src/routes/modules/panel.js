@@ -6,7 +6,7 @@ import {
   saveImage,
   sniffImage,
 } from '../../services/image.js';
-import { panelCrop, readPixels } from '../../services/panelPixels.js';
+import { boxHp, panelCrop, readPixels } from '../../services/panelPixels.js';
 import {
   deletePanelImageIfOrphaned,
   fillMissingPlacements,
@@ -125,8 +125,6 @@ export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
     if (statesHp && hp === null) {
       return res.status(400).json({ error: 'hp must be a panel width in HP' });
     }
-    if (hp !== null) await Module.update({ hp }, { where: { id: module.id } });
-    const width = hp ?? module.hp ?? null;
 
     // Crop the blank backdrop as part of accepting the upload, rather than
     // waiting for the component-mapping job to do it later. Some uploads do
@@ -135,8 +133,21 @@ export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
     // without a temporary white/transparent frame around it. Keep the
     // original bytes: the client already renders a panel through this crop,
     // which avoids lossy re-encoding and preserves animated image formats.
+    //
+    // A stated width is also the shape the front plate is looked for at. With
+    // no width stated the picture is trimmed on its own terms and then
+    // MEASURED, and what it measures becomes the module's width: every view
+    // that draws a panel draws it into a box that is `hp` wide (the rack
+    // organizer most visibly), so a picture wider than the recorded width —
+    // a module photographed beside its expander — is squeezed until the
+    // width catches up with it.
     const pixels = await readPixels(data);
-    const crop = pixels ? panelCrop(pixels, { hp: width }) : null;
+    const crop = pixels ? panelCrop(pixels, { hp }) : null;
+    const measured = statesHp || !crop ? null : normalizeHp(boxHp(pixels, crop));
+    const width = hp ?? measured ?? module.hp ?? null;
+    if (width !== null && width !== module.hp) {
+      await Module.update({ hp: width }, { where: { id: module.id } });
+    }
     const uploadCrop = crop
       ? { crop_x: crop.x, crop_y: crop.y, crop_w: crop.w, crop_h: crop.h }
       : { ...FULL_CROP };

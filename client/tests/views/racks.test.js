@@ -295,6 +295,49 @@ describe('RacksView', () => {
     expect(hidden()).toBe(false);
   });
 
+  // Adding a row to a case that is 84HP wide should not have to be corrected
+  // to 84HP every time.
+  async function organizerWithRows(rows) {
+    api.get.mockImplementation((path) => {
+      if (path === '/api/racks') return Promise.resolve(racksResponse);
+      return Promise.resolve({ id: 1, name: 'main rack', modules: [], rows });
+    });
+    api.put.mockResolvedValue({ rows });
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="organize-1"]').trigger('click');
+    await flushPromises();
+    return wrapper;
+  }
+
+  const addedRow = () => api.put.mock.calls[0][1].rows.at(-1);
+
+  it('starts a new row at the width the rack is already built to', async () => {
+    const wrapper = await organizerWithRows([
+      { id: 9, unit: 3, hp: 84, modules: [] },
+      { id: 10, unit: 1, hp: 84, modules: [] },
+    ]);
+    await wrapper.find('[data-test="add-3u-row"]').trigger('click');
+    await flushPromises();
+    expect(addedRow()).toEqual({ unit: 3, hp: 84, modules: [] });
+  });
+
+  it('falls back to a default width for the first row, or rows that disagree', async () => {
+    const empty = await organizerWithRows([]);
+    await empty.find('[data-test="add-3u-row"]').trigger('click');
+    await flushPromises();
+    expect(addedRow()).toEqual({ unit: 3, hp: 104, modules: [] });
+
+    vi.clearAllMocks();
+    const mixed = await organizerWithRows([
+      { id: 9, unit: 3, hp: 84, modules: [] },
+      { id: 10, unit: 3, hp: 60, modules: [] },
+    ]);
+    await mixed.find('[data-test="add-1u-row"]').trigger('click');
+    await flushPromises();
+    expect(addedRow()).toEqual({ unit: 1, hp: 104, modules: [] });
+  });
+
   it('renames a rack', async () => {
     mockLists();
     api.put.mockResolvedValue({ id: 2, name: 'live case', module_count: 1 });

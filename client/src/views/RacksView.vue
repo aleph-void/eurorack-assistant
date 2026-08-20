@@ -158,6 +158,7 @@ const availableModules = computed(() =>
     Array.from({ length: Math.max(0, module.quantity - (placedCounts.value.get(module.id) || 0)) }, () => module)
   )
 );
+const DEFAULT_ROW_HP = 104;
 const rowUsed = (row) => (row.modules || []).reduce((sum, module) => sum + (Number(module.hp) || 0), 0);
 
 async function saveLayout() {
@@ -182,8 +183,18 @@ async function saveLayout() {
   }
 }
 
+// A new row is another row of the same case, so it starts at the width the
+// rack is already built to. Rows that disagree say nothing about what the
+// next one should be, and nor does a rack with no rows yet.
+function nextRowHp() {
+  const widths = new Set(
+    (organizer.value?.rows || []).map((row) => Number(row.hp)).filter((hp) => hp > 0)
+  );
+  return widths.size === 1 ? [...widths][0] : DEFAULT_ROW_HP;
+}
+
 async function addRow(unit) {
-  organizer.value.rows.push({ unit, hp: unit === 1 ? 104 : 104, modules: [] });
+  organizer.value.rows.push({ unit, hp: nextRowHp(), modules: [] });
   await saveLayout();
 }
 
@@ -404,11 +415,6 @@ async function nudge(rowIndex, index, delta) {
         module between two others to place it there — that is how a row is reordered — or focus one
         and press <kbd>←</kbd>/<kbd>→</kbd> to step it along. A row cannot exceed its HP capacity.
       </p>
-      <div class="actions spaced">
-        <button class="secondary" :disabled="layoutBusy" data-test="add-3u-row" @click="addRow(3)">Add 3U row</button>
-        <button class="secondary" :disabled="layoutBusy" data-test="add-1u-row" @click="addRow(1)">Add 1U row</button>
-      </div>
-
       <div class="available-modules" data-test="available-modules" @dragover.prevent @drop="dropIntoAvailable">
         <h3>Available modules</h3>
         <p v-if="availableModules.length === 0" class="muted">Every module copy is placed.</p>
@@ -437,6 +443,11 @@ async function nudge(rowIndex, index, delta) {
         </div>
       </div>
 
+      <div class="actions spaced">
+        <button class="secondary" :disabled="layoutBusy" data-test="add-3u-row" @click="addRow(3)">Add 3U row</button>
+        <button class="secondary" :disabled="layoutBusy" data-test="add-1u-row" @click="addRow(1)">Add 1U row</button>
+      </div>
+
       <div v-for="(row, rowIndex) in organizer.rows" :key="row.id ?? rowIndex" class="rack-row" :data-test="`rack-row-${rowIndex}`">
         <div class="rack-row-meta">
           <button
@@ -458,7 +469,9 @@ async function nudge(rowIndex, index, delta) {
           <label>HP
             <input v-model.number="row.hp" type="number" min="1" max="504" :disabled="layoutBusy" @change="saveLayout" />
           </label>
-          <span class="muted">{{ rowUsed(row) }} / {{ row.hp }}HP</span>
+          <span class="muted" :class="{ 'over-capacity': rowUsed(row) > Number(row.hp) }">
+            {{ rowUsed(row) }} / {{ row.hp }}HP
+          </span>
           <button class="danger" style="margin: 0 0 0 auto" :disabled="layoutBusy" @click="removeRow(rowIndex)">Remove row</button>
         </div>
         <div
@@ -519,7 +532,9 @@ async function nudge(rowIndex, index, delta) {
 .module-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .module-chip { margin: 0; cursor: grab; text-align: center; display: inline-flex; flex-direction: column; align-items: center; gap: 0.25rem; padding: 0.3rem; }
 .module-chip span { color: var(--muted); }
-.module-chip > span:last-child { max-width: 8rem; font-size: 0.7rem; line-height: 1.2; }
+/* Buttons are nowrap by default (style.css), which a chip's name must not
+   be: it would run out of the available-modules box instead of wrapping. */
+.module-chip > span:last-child { max-width: 8rem; font-size: 0.7rem; line-height: 1.2; white-space: normal; overflow-wrap: anywhere; }
 .module-chip em { font-style: normal; }
 /* The same 3U panel, drawn small: HP across, one rack unit's worth of height
    per U, so the chips line up like the row they are dragged into. */
@@ -545,5 +560,9 @@ async function nudge(rowIndex, index, delta) {
 .rack-row-meta { display: flex; align-items: end; gap: 0.7rem; margin-bottom: 0.35rem; }
 .rack-row-meta label { display: grid; gap: 0.15rem; font-size: 0.85rem; }
 .rack-row-meta input, .rack-row-meta select { width: 6rem; margin: 0; }
+/* A row can go over capacity without anyone dragging anything — a supplied
+   panel measures its module wider — and the layout will not save until it is
+   under again, so the row that has to give says so. */
+.rack-row-meta .over-capacity { color: var(--danger); }
 .row-collapse { margin: 0; padding: 0.15rem 0.5rem; background: transparent; border: 1px solid var(--border-strong); color: var(--muted); }
 </style>

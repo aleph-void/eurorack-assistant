@@ -1667,6 +1667,68 @@ describe('uploading your own panel image', () => {
     expect(res.body.panel.crop.h).toBeCloseTo(300 / 400);
   });
 
+  // A picture wide enough to hold the module AND its expander: the width the
+  // module was imported with would squash it, and every view draws a panel
+  // into an HP-wide box, so the picture is measured and the width follows it.
+  async function widePlatePng(plateWidth, plateHeight) {
+    const sharp = await loadSharp();
+    return sharp({
+      create: {
+        width: plateWidth + 200,
+        height: plateHeight + 200,
+        channels: 3,
+        background: '#ffffff',
+      },
+    })
+      .composite([
+        {
+          input: {
+            create: {
+              width: plateWidth,
+              height: plateHeight,
+              channels: 3,
+              background: '#222222',
+            },
+          },
+          left: 100,
+          top: 100,
+        },
+      ])
+      .png()
+      .toBuffer();
+  }
+
+  it('measures the width off a supplied picture that is wider than the recorded HP', async () => {
+    const module = await moduleWithComponents();
+    await ctx.db.models.Module.update({ hp: 12 }, { where: { id: module.id } });
+    // 474 x 600 of plate is 20HP at 3U: a 12HP module beside its expander.
+    const res = await upload(module.id, {
+      filename: 'a110-with-expander.png',
+      data_base64: (await widePlatePng(474, 600)).toString('base64'),
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.panel.crop.w).toBeCloseTo(474 / 674, 2);
+    expect(res.body.panel.hp).toBe(20);
+    const after = await ctx.db.models.Module.findByPk(module.id);
+    expect(after.hp).toBe(20);
+  });
+
+  it('keeps a stated width, whatever shape the picture is', async () => {
+    const module = await moduleWithComponents();
+    await ctx.db.models.Module.update({ hp: 12 }, { where: { id: module.id } });
+    const res = await upload(module.id, {
+      filename: 'a110-with-expander.png',
+      data_base64: (await widePlatePng(474, 600)).toString('base64'),
+      hp: 12,
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.panel.hp).toBe(12);
+    const after = await ctx.db.models.Module.findByPk(module.id);
+    expect(after.hp).toBe(12);
+  });
+
   it('downloads a panel from a URL and treats it like a user-supplied image', async () => {
     const module = await moduleWithComponents();
     const url = 'https://cdn.example.com/a110-front.png';

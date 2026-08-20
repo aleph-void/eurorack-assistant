@@ -45,7 +45,11 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   literals, so the same entity serializes identically on every endpoint.
 - Panel pictures: a panel's markers are stored as fractions of the WHOLE
   image and every renderer maps them through `panel.crop`, so a crop can move
-  without rewriting placements. `POST /api/modules/:id/panel/trim` is the one
+  without rewriting placements. Every view draws a panel into a box `module.hp`
+  wide, so a SUPPLIED panel with no stated HP is trimmed on its own terms and
+  MEASURED (`boxHp()` in services/panelPixels.js) — the picture sets the
+  module's width rather than being stretched to the old one. A stated HP still
+  wins and is also the shape the front plate is looked for at. `POST /api/modules/:id/panel/trim` is the one
   thing that cuts the FILE down to the front plate — it re-bases every marker
   onto what survives, resets the crop to full, and sets `module_panels.trimmed`
   so it cannot be pressed a second time and eat into the hardware. The cut
