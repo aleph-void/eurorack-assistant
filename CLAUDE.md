@@ -43,6 +43,14 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   are readable via `readableResource`).
 - Response shapes go through the serializer modules, never inline object
   literals, so the same entity serializes identically on every endpoint.
+- Panel pictures: a panel's markers are stored as fractions of the WHOLE
+  image and every renderer maps them through `panel.crop`, so a crop can move
+  without rewriting placements. `POST /api/modules/:id/panel/trim` is the one
+  thing that cuts the FILE down to the front plate — it re-bases every marker
+  onto what survives, resets the crop to full, and sets `module_panels.trimmed`
+  so it cannot be pressed a second time and eat into the hardware. Anything
+  drawing a panel as a plain `<img>` must offset it with `panelCropStyle()`
+  (client/src/panelLayout.js), or a photograph's backdrop is drawn as panel.
 - Cache policy is set in one place per layer, never ad hoc in a handler:
   `app.js` stamps every `/api` response `private, no-cache` (`no-store` on
   the credential routes), and the routes that stream content-addressed bytes

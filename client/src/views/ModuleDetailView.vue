@@ -576,9 +576,11 @@ async function onPanelChosen(event) {
 // the pointer happened to be.
 const panelStatus = ref('');
 
-// Cut the blank backdrop away from the panel picture. The server only moves
-// the stored crop — the bytes and every marker position stay as they are, so
-// the markers keep pointing at the same hardware.
+// Cut the blank backdrop away from the panel picture. The server cuts the
+// image file down to the front plate and re-bases every marker onto it, so
+// the markers keep pointing at the same hardware and the picture on its own
+// is the panel. It can only be done once — afterwards there is no backdrop
+// left to find.
 const trimmingPanel = ref(false);
 async function trimPanel() {
   panelError.value = '';
@@ -587,7 +589,7 @@ async function trimPanel() {
   try {
     const { panel } = await api.post(`/api/modules/${props.id}/panel/trim`);
     if (panel && module.value) module.value = { ...module.value, panel };
-    panelStatus.value = 'Trimmed the blank space around the panel.';
+    panelStatus.value = 'Cut the picture down to the front plate.';
   } catch (e) {
     panelError.value = e.message;
   } finally {
@@ -776,11 +778,15 @@ watch(() => props.id, () => {
         class="secondary"
         style="margin: 0; white-space: nowrap"
         data-test="panel-trim"
-        :disabled="trimmingPanel"
-        title="Crop the picture to the front plate — the markers stay on the hardware they point at"
+        :disabled="trimmingPanel || module.panel.trimmed"
+        :title="
+          module.panel.trimmed
+            ? 'This picture has already been cut down to the front plate'
+            : 'Cut the picture down to the front plate — the markers stay on the hardware they point at'
+        "
         @click="trimPanel"
       >
-        {{ trimmingPanel ? 'Trimming…' : 'Trim panel' }}
+        {{ trimmingPanel ? 'Trimming…' : module.panel.trimmed ? 'Panel trimmed' : 'Trim panel' }}
       </button>
       <button
         v-if="module.panel"

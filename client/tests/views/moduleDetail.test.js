@@ -825,9 +825,15 @@ describe('ModuleDetailView', () => {
       components: [{ id: 5, component_id: 1, name: 'Signal In', shape: 'jack', x: 0.5, y: 0.5 }],
     };
     api.get.mockResolvedValue({ ...moduleResponse, panel });
+    // The server hands back the cut-down picture: new bytes, plate-sized,
+    // nothing left to crop, and every marker re-based onto it.
     const trimmed = {
       ...panel,
-      crop: { x: 0.25, y: 0.1, w: 0.5, h: 0.8 },
+      url: '/api/panels/def.png',
+      width: 200,
+      height: 960,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      trimmed: true,
     };
     api.post.mockResolvedValue({ panel: trimmed });
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
@@ -836,9 +842,13 @@ describe('ModuleDetailView', () => {
     await wrapper.find('[data-test="panel-trim"]').trigger('click');
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith('/api/modules/1/panel/trim');
-    expect(wrapper.find('[data-test="panel-status"]').text()).toContain('Trimmed');
-    // The marker survives the new crop, mapped through it by the renderer.
+    expect(wrapper.find('[data-test="panel-status"]').text()).toContain('front plate');
+    // The marker survives the cut, re-based onto the smaller picture.
     expect(wrapper.find('[data-test="panel-marker-1"]').exists()).toBe(true);
+    // There is no backdrop left to take off, so it cannot be pressed again.
+    const button = wrapper.find('[data-test="panel-trim"]');
+    expect(button.attributes('disabled')).toBeDefined();
+    expect(button.text()).toContain('Panel trimmed');
   });
 
   it('offers no trim on a panel the app drew itself', async () => {

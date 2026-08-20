@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "lint": "eslint ."
   },
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@vitejs/plugin-vue": "^5.1.2",
+    "@vitest/coverage-v8": "^2.1.9",
     "@vue/test-utils": "^2.4.6",
     "eslint": "^9.39.5",
     "eslint-plugin-vue": "^10.10.0",

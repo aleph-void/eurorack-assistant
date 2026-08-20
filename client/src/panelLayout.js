@@ -34,6 +34,21 @@ const cropOf = (panel) => ({
   h: panel?.crop?.h || 1,
 });
 
+// Drawing a panel image inside a box that is the module's FOOTPRINT: the
+// stored file is the original picture, whitespace and all, and the crop says
+// which part of it is the front plate. Blowing the image up by the crop and
+// sliding it under an overflow-hidden box shows that part alone — the same
+// thing the patch diagram does with its viewBox, for plain <img> markup.
+export function panelCropStyle(panel) {
+  const crop = cropOf(panel);
+  return {
+    width: `${100 / crop.w}%`,
+    height: `${100 / crop.h}%`,
+    left: `${(-crop.x / crop.w) * 100}%`,
+    top: `${(-crop.y / crop.h) * 100}%`,
+  };
+}
+
 // How wide the panel is drawn, at the diagram's fixed panel height.
 export function panelWidth(pm, height = PANEL_HEIGHT) {
   const panel = pm?.panel;

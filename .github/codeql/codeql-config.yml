@@ -1,0 +1,12 @@
+name: eurorack-web CodeQL config
+
+paths:
+  - server/src
+  - server/scripts
+  - client/src
+
+paths-ignore:
+  - '**/node_modules'
+  - client/dist
+  - server/tests
+  - client/tests

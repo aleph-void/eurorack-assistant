@@ -8,7 +8,7 @@ import {
   saveImage,
   sniffImage,
 } from '../../services/image.js';
-import { panelCrop, readPixels } from '../../services/panelPixels.js';
+import { cropImage, panelCrop, readPixels } from '../../services/panelPixels.js';
 import {
   deletePanelImageIfOrphaned,
   fillMissingPlacements,
@@ -21,6 +21,8 @@ import { enqueueModuleJob } from '../../jobs/worker.js';
 import { requireBudget } from '../../services/budgets.js';
 import { requireOwnedModule } from './helpers.js';
 import { asyncHandler } from '../asyncHandler.js';
+
+const clamp01 = (value) => Math.min(1, Math.max(0, value));
 
 export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
   const {
@@ -195,12 +197,16 @@ export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
   }));
 
   // Trim the blank backdrop away from the existing panel picture: work the
-  // front plate's box out of the pixels again and store it as the crop, the
-  // same way an upload is cropped on arrival. The markers store their
-  // positions as fractions of the WHOLE image and every renderer maps them
-  // through the crop, so each one stays glued to the hardware it marks —
-  // nothing about the placements needs rewriting, and the original bytes are
-  // kept untouched (no lossy re-encoding, animated formats survive).
+  // front plate's box out of the pixels again, then CUT THE FILE DOWN TO IT,
+  // so a panel image opened on its own is the panel and nothing else.
+  //
+  // The markers store their positions as fractions of the whole image, so
+  // cutting the file means re-basing every one of them onto what is left —
+  // after which the crop is the whole picture again and every renderer draws
+  // the same thing it drew before. The new bytes are stored under their own
+  // hash and the old ones go once no panel points at them. An install whose
+  // sharp will not load (or a format that cannot be cut) falls back to
+  // recording the crop alone, which is what this route used to do.
   router.post('/:id/panel/trim', requireOwnedModule(db), asyncHandler(async (req, res) => {
     const module = req.module;
     const panel = await ModulePanel.findOne({ where: { module_id: module.id } });
@@ -211,12 +217,50 @@ export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
     if (!file || !fs.existsSync(file)) {
       return res.status(404).json({ error: 'Panel image not found' });
     }
+    // Trim peels uniform lines off the edges, and a plate that has already
+    // been cut out has uniform edges of its own — pressing Trim again would
+    // eat into the hardware, so once is all it does.
+    if (panel.trimmed) {
+      const current = await loadPanels(db, [module.id]);
+      return res.json({ panel: current.get(module.id) ?? null });
+    }
     const pixels = await readPixels(file);
     const crop = pixels ? panelCrop(pixels, { hp: panel.hp ?? module.hp ?? null }) : null;
     if (!crop) {
       return res.status(400).json({ error: 'Could not find a panel edge to trim to' });
     }
-    await panel.update({ crop_x: crop.x, crop_y: crop.y, crop_w: crop.w, crop_h: crop.h });
+    // Both the crop and every marker are fractions of the file as it stands,
+    // so the box cuts straight out of it.
+    const cut = await cropImage(file, crop, { ext: panel.image_ext });
+    if (!cut) {
+      await panel.update({ crop_x: crop.x, crop_y: crop.y, crop_w: crop.w, crop_h: crop.h });
+    } else {
+      const stale = { hash: panel.image_hash, ext: panel.image_ext };
+      const hash = saveImage(panelsDir, cut.buffer, cut.ext);
+      // Every marker is a fraction of the image that is being cut down, so
+      // each one moves to the same fraction of what survives — and a marker
+      // that fell outside the plate stays on the edge it was nearest.
+      const placements = await ModulePanelComponent.findAll({ where: { panel_id: panel.id } });
+      for (const placement of placements) {
+        await placement.update({
+          x: clamp01((placement.x - crop.x) / crop.w),
+          y: clamp01((placement.y - crop.y) / crop.h),
+          w: Math.min(1, (Number(placement.w) || 0) / crop.w),
+          h: Math.min(1, (Number(placement.h) || 0) / crop.h),
+        });
+      }
+      await panel.update({
+        image_hash: hash,
+        image_ext: cut.ext,
+        width: cut.width,
+        height: cut.height,
+        trimmed: true,
+        ...FULL_CROP,
+      });
+      if (hash !== stale.hash || cut.ext !== stale.ext) {
+        await deletePanelImageIfOrphaned(db, panelsDir, stale.hash, stale.ext);
+      }
+    }
     const panels = await loadPanels(db, [module.id]);
     res.json({ panel: panels.get(module.id) ?? null });
   }));

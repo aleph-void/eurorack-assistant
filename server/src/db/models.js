@@ -178,6 +178,9 @@ export function defineModels(sequelize) {
       crop_h: { type: DataTypes.REAL, allowNull: false, defaultValue: 1 },
       hp: { type: DataTypes.REAL },
       description: { type: DataTypes.TEXT },
+      // The file has already been cut down to the front plate (migration
+      // 031), so there is nothing left for Trim to take off.
+      trimmed: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     },
     { tableName: 'module_panels', createdAt: 'created_at', updatedAt: false }
   );

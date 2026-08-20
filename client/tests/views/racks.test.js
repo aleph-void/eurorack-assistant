@@ -66,7 +66,7 @@ describe('RacksView', () => {
         id: 1,
         name: 'main rack',
         modules: [{ id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, quantity: 1 }],
-        rows: [{ id: 9, unit: 3, hp: 84, modules: [{ module_id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, panel: { url: '/api/panels/arp.svg' } }] }],
+        rows: [{ id: 9, unit: 3, hp: 84, modules: [{ module_id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, panel: { url: '/api/panels/arp.svg', crop: { x: 0.1, y: 0, w: 0.5, h: 1 } } }] }],
       });
     });
     const wrapper = mount(RacksView, { global: testGlobal() });
@@ -76,6 +76,43 @@ describe('RacksView', () => {
     const row = wrapper.find('[data-test="rack-row-0"]');
     expect(row.find('img').attributes('src')).toBe('/api/panels/arp.svg');
     expect(row.find('.placed-module').attributes('style')).toContain('--module-hp: 2');
+    // Only the front plate is drawn: the picture is blown up by its crop and
+    // slid under the box, so the photo's blank backdrop stays outside it.
+    expect(row.find('img').attributes('style')).toContain('width: 200%');
+    expect(row.find('img').attributes('style')).toContain('left: -20%');
+  });
+
+  it('draws every module from one scale — HP across, rack units down', async () => {
+    api.get.mockImplementation((path) => {
+      if (path === '/api/racks') return Promise.resolve(racksResponse);
+      return Promise.resolve({
+        id: 1,
+        name: 'main rack',
+        modules: [
+          { id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, quantity: 1, panel: { url: '/api/panels/arp.svg' } },
+          { id: 5, manufacturer: 'Make Noise', name: 'Maths', hp: 20, quantity: 1, panel: null },
+        ],
+        rows: [
+          { id: 9, unit: 3, hp: 84, modules: [{ module_id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, panel: { url: '/api/panels/arp.svg' } }] },
+          { id: 10, unit: 1, hp: 84, modules: [] },
+        ],
+      });
+    });
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="organize-1"]').trigger('click');
+    await flushPromises();
+
+    // A row is as tall as its unit count; a module as wide as its HP. Both
+    // come from the same scale, so the panels keep their real proportions.
+    expect(wrapper.find('[data-test="rack-row-0"] .rack-row-slots').attributes('style'))
+      .toContain('--row-units: 3');
+    expect(wrapper.find('[data-test="rack-row-1"] .rack-row-slots').attributes('style'))
+      .toContain('--row-units: 1');
+    // Inventory chips are the same picture drawn small — HP-wide too, so a
+    // 2HP module does not sit in the list looking like a 20HP one.
+    expect(wrapper.find('[data-test="available-module-5-0"]').attributes('style'))
+      .toContain('--module-hp: 20');
   });
 
   it('persists the module id when a panel is dragged from inventory into a row', async () => {

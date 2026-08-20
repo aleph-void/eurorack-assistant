@@ -513,6 +513,9 @@ export const panelJson = (panel, placements = [], blurbs = new Map()) => ({
   width: panel.width,
   height: panel.height,
   crop: { x: panel.crop_x, y: panel.crop_y, w: panel.crop_w, h: panel.crop_h },
+  // The file has already been cut down to the front plate, so Trim has
+  // nothing left to take off (routes/modules/panel.js).
+  trimmed: Boolean(panel.trimmed),
   hp: panel.hp ?? null,
   description: panel.description ?? null,
   components: placements.map((p) => ({

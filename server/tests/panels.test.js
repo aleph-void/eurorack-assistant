@@ -1930,6 +1930,15 @@ describe('trimming a panel picture', () => {
       for (let y = padY; y < padY + plateH; y++) {
         for (let x = padX; x < padX + plateW; x++) gray[y * width + x] = 120;
       }
+      // Hardware on the plate: a flat rectangle is uniform enough to read as
+      // backdrop itself, and a real panel never is.
+      for (let i = 1; i <= 3; i++) {
+        const cy = padY + Math.round((plateH * i) / 4);
+        const cx = padX + Math.round(plateW / 2);
+        for (let y = cy - 6; y <= cy + 6; y++) {
+          for (let x = cx - 6; x <= cx + 6; x++) gray[y * width + x] = 20;
+        }
+      }
     }
     const png = await sharp(gray, { raw: { width, height, channels: 1 } })
       .png()
@@ -1955,7 +1964,7 @@ describe('trimming a panel picture', () => {
   const trim = (moduleId) =>
     request(ctx.app).post(`/api/modules/${moduleId}/panel/trim`).set('Cookie', ctx.aliceCookie);
 
-  it('crops to the plate and leaves every marker on its hardware', async () => {
+  it('cuts the plate out of the file and re-bases every marker onto it', async () => {
     const { module, width, height, padX, padY, plateW, plateH } = await paddedPanel();
     const { rows: jack } = await ctx.db.query(
       `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'output_jack', 'OUT')
@@ -1967,6 +1976,7 @@ describe('trimming a panel picture', () => {
     const markerX = (padX + plateW / 2) / width;
     const markerY = (padY + plateH / 2) / height;
     const dbPanel = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    const before = { hash: dbPanel.image_hash, ext: dbPanel.image_ext };
     await ctx.db.models.ModulePanelComponent.create({
       panel_id: dbPanel.id,
       component_id: jack[0].id,
@@ -1980,20 +1990,31 @@ describe('trimming a panel picture', () => {
 
     const res = await trim(module.id);
     expect(res.status).toBe(200);
-    const crop = res.body.panel.crop;
-    // The crop closes on the plate's box…
-    expect(crop.x * width).toBeCloseTo(padX, -1);
-    expect(crop.y * height).toBeCloseTo(padY, -1);
-    expect(crop.w * width).toBeCloseTo(plateW, -1);
-    expect(crop.h * height).toBeCloseTo(plateH, -1);
-    // …while the marker's stored position is untouched, and still lands on
-    // the center of the plate once mapped through the new crop — the same
-    // arithmetic the client renders with.
+    // The picture itself is now the plate: new bytes, plate-sized, and
+    // nothing left to crop away.
+    expect(res.body.panel.crop).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+    expect(res.body.panel.width).toBeCloseTo(plateW, -1);
+    expect(res.body.panel.height).toBeCloseTo(plateH, -1);
+    const after = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    expect(after.image_hash).not.toBe(before.hash);
+    expect(fs.existsSync(panelPath(ctx.panelsDir, after.image_hash, after.image_ext))).toBe(true);
+    // The bytes nothing points at any more are gone.
+    expect(fs.existsSync(panelPath(ctx.panelsDir, before.hash, before.ext))).toBe(false);
+    // The marker was the center of the plate and still is — measured against
+    // the smaller picture it now sits on.
     const marker = res.body.panel.components[0];
-    expect(marker.x).toBeCloseTo(markerX, 10);
-    expect(marker.y).toBeCloseTo(markerY, 10);
-    expect((marker.x - crop.x) / crop.w).toBeCloseTo(0.5, 1);
-    expect((marker.y - crop.y) / crop.h).toBeCloseTo(0.5, 1);
+    expect(marker.x).toBeCloseTo(0.5, 1);
+    expect(marker.y).toBeCloseTo(0.5, 1);
+    // A marker's own size grew with everything else in the picture.
+    expect(marker.w).toBeGreaterThan(0.06);
+
+    // Trimming again finds nothing left to take off, so the picture stands.
+    const again = await trim(module.id);
+    expect(again.status).toBe(200);
+    const settled = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    expect(settled.width).toBe(after.width);
+    expect(settled.height).toBe(after.height);
+    expect(again.body.panel.components[0].x).toBeCloseTo(0.5, 1);
   });
 
   it('404s without a panel or its image, and refuses a blank picture', async () => {

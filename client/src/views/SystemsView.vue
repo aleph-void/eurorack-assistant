@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
+import { panelCropStyle } from '../panelLayout.js';
 
 // A system is a group of racks patched together as one instrument. This page
 // lists them, assigns racks in and out, and arranges the racks of one system
@@ -108,8 +109,11 @@ async function openPlan(system, { force = false } = {}) {
 // Coordinates are in those same units, which is what the server stores.
 // The server sends each rack's footprint with it, so the picture and the
 // placement rule it enforces are worked out from the same numbers.
+// One HP is 5.08mm and one rack unit 44.45mm, so a rack unit is 8.75 HP-widths
+// tall. Drawing at that ratio is what keeps a panel here the same picture it is
+// in the rack organizer, rather than a stretched one.
 const HP_PX = 4;
-const U_PX = 26;
+const U_PX = HP_PX * 8.75;
 
 // A studio that stands in one long row does not fit on a screen at full
 // size, so the plan can be drawn smaller. Zoom only scales the drawing —
@@ -138,11 +142,18 @@ const overlaps = (a, b) =>
 const planRacks = computed(() => plan.value?.racks || []);
 const unassigned = computed(() => plan.value?.unassigned_racks || []);
 
+// What the server will accept for a floor (routes/systems.js), and the size
+// an in-progress edge drag is drawing at before it is saved.
+const MIN_FLOOR_WIDTH = 20;
+const MIN_FLOOR_HEIGHT = 3;
+const MAX_FLOOR = 5000;
+const draftFloor = ref(null);
+
 // The floor the user has made, never smaller than what the racks standing on
 // it need — shrinking the plan may not hide a rack.
 const planExtent = computed(() => {
-  let width = Number(plan.value?.floor_width) || 140;
-  let height = Number(plan.value?.floor_height) || 9;
+  let width = draftFloor.value?.width ?? (Number(plan.value?.floor_width) || 140);
+  let height = draftFloor.value?.height ?? (Number(plan.value?.floor_height) || 9);
   for (const rack of planRacks.value) {
     const box = rackBox(rack);
     width = Math.max(width, box.x + box.width);
@@ -172,8 +183,8 @@ const moduleStyle = (module) => ({ width: `${(Number(module.hp) || 4) * hpPx.val
 const floorBusy = ref(false);
 async function resizeFloor(width, height) {
   if (!plan.value) return;
-  const floor_width = Math.max(20, Math.min(5000, Math.round(width)));
-  const floor_height = Math.max(3, Math.min(5000, Math.round(height)));
+  const floor_width = Math.max(MIN_FLOOR_WIDTH, Math.min(MAX_FLOOR, Math.round(width)));
+  const floor_height = Math.max(MIN_FLOOR_HEIGHT, Math.min(MAX_FLOOR, Math.round(height)));
   floorBusy.value = true;
   error.value = '';
   try {
@@ -185,11 +196,65 @@ async function resizeFloor(width, height) {
     floorBusy.value = false;
   }
 }
-const growFloor = (dw, dh) =>
-  resizeFloor(
-    (Number(plan.value?.floor_width) || 140) + dw,
-    (Number(plan.value?.floor_height) || 9) + dh
-  );
+// Dragging the floor's own edge is how the plan is made bigger: grab the
+// right edge, the bottom edge or the corner and pull. The drag itself only
+// moves a draft size (so the floor grows under the pointer without a request
+// per pixel); letting go saves it. The draft never goes below the minimum,
+// and planExtent still keeps the floor at least as big as the racks need.
+const resizing = ref(null);
+
+function startResize(edge, event) {
+  if (!plan.value || floorBusy.value) return;
+  event.preventDefault();
+  // The drag starts from the size the floor is DRAWN at, so the edge follows
+  // the pointer from where it was grabbed even when racks have pushed the
+  // floor past the stored size. The axis not being dragged keeps the stored
+  // size instead, so pulling the bottom edge never quietly saves a new width.
+  resizing.value = {
+    edge,
+    x: event.clientX,
+    y: event.clientY,
+    width: planExtent.value.width,
+    height: planExtent.value.height,
+    keepWidth: Number(plan.value.floor_width) || 140,
+    keepHeight: Number(plan.value.floor_height) || 9,
+  };
+  draftFloor.value = { width: planExtent.value.width, height: planExtent.value.height };
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+}
+
+function moveResize(event) {
+  const held = resizing.value;
+  if (!held) return;
+  const clamp = (value, min) => Math.max(min, Math.min(MAX_FLOOR, Math.round(value)));
+  draftFloor.value = {
+    width: held.edge === 'bottom'
+      ? held.width
+      : clamp(held.width + (event.clientX - held.x) / hpPx.value, MIN_FLOOR_WIDTH),
+    height: held.edge === 'right'
+      ? held.height
+      : clamp(held.height + (event.clientY - held.y) / uPx.value, MIN_FLOOR_HEIGHT),
+  };
+}
+
+async function endResize(event) {
+  if (!resizing.value) return;
+  moveResize(event);
+  const held = resizing.value;
+  const draft = draftFloor.value;
+  resizing.value = null;
+  event.currentTarget.releasePointerCapture?.(event.pointerId);
+  // Keep the drawn size until the save comes back, so the floor does not
+  // snap back to its old size for a frame.
+  try {
+    await resizeFloor(
+      held.edge === 'bottom' ? held.keepWidth : draft.width,
+      held.edge === 'right' ? held.keepHeight : draft.height
+    );
+  } finally {
+    draftFloor.value = null;
+  }
+}
 
 async function saveArrangement() {
   if (!plan.value) return;
@@ -388,7 +453,8 @@ async function assign(rackId, systemId) {
       <p class="muted">
         Drag each rack to where it stands. Boxes are drawn to scale — as wide as the rack's widest
         row in HP and as tall as its rows are in U — and no two racks may stand in the same place,
-        so a rack dropped onto its neighbour comes to rest flush beside it.
+        so a rack dropped onto its neighbour comes to rest flush beside it. Drag the floor's
+        right or bottom edge — or the corner — to give the studio more room.
       </p>
 
       <div class="plan-controls">
@@ -418,22 +484,6 @@ async function assign(rackId, systemId) {
             @change="resizeFloor(plan.floor_width, Number($event.target.value))"
           />
         </label>
-        <button
-          class="secondary plan-grow"
-          :disabled="floorBusy"
-          data-test="floor-wider"
-          @click="growFloor(84, 0)"
-        >
-          Wider
-        </button>
-        <button
-          class="secondary plan-grow"
-          :disabled="floorBusy"
-          data-test="floor-taller"
-          @click="growFloor(0, 3)"
-        >
-          Taller
-        </button>
         <label class="plan-field">
           Zoom {{ Math.round(zoom * 100) }}%
           <input
@@ -448,54 +498,86 @@ async function assign(rackId, systemId) {
         </label>
       </div>
 
-      <div
-        class="plan-floor"
-        :style="planStyle"
-        data-test="plan-floor"
-        @dragover.prevent
-        @drop.prevent="dropOnPlan"
-      >
-        <p v-if="planRacks.length === 0" class="muted plan-empty" data-test="plan-empty">
-          No racks in this system yet — add one from the list below.
-        </p>
+      <div class="plan-viewport" data-test="plan-viewport">
         <div
-          v-for="rack in planRacks"
-          :key="rack.id"
-          class="plan-rack"
-          :style="rackStyle(rack)"
-          :data-test="`plan-rack-${rack.id}`"
-          draggable="true"
-          @dragstart="startPlanDrag(rack, $event)"
+          class="plan-floor"
+          :class="{ resizing: !!resizing }"
+          :style="planStyle"
+          data-test="plan-floor"
+          @dragover.prevent
+          @drop.prevent="dropOnPlan"
         >
-          <div class="plan-rack-name">
-            {{ rack.name }}
-            <button
-              class="danger plan-remove"
-              :disabled="planBusy"
-              :data-test="`unassign-${rack.id}`"
-              @click.stop="assign(rack.id, null)"
-            >
-              Remove
-            </button>
-          </div>
-          <div v-for="row in rack.rows" :key="row.id" class="plan-row" :style="rowStyle(row)">
-            <div
-              v-for="module in row.modules"
-              :key="module.id"
-              class="plan-module"
-              :style="moduleStyle(module)"
-              :title="`${module.manufacturer} ${module.name}`"
-            >
-              <img
-                v-if="module.panel"
-                :src="module.panel.url"
-                :alt="`${module.manufacturer} ${module.name}`"
-              />
-            </div>
-          </div>
-          <p v-if="!rack.rows.length" class="muted plan-no-rows">
-            No rows yet — organize this rack to draw its panels here.
+          <p v-if="planRacks.length === 0" class="muted plan-empty" data-test="plan-empty">
+            No racks in this system yet — add one from the list below.
           </p>
+          <div
+            v-for="rack in planRacks"
+            :key="rack.id"
+            class="plan-rack"
+            :style="rackStyle(rack)"
+            :data-test="`plan-rack-${rack.id}`"
+            draggable="true"
+            @dragstart="startPlanDrag(rack, $event)"
+          >
+            <div class="plan-rack-name">
+              {{ rack.name }}
+              <button
+                class="danger plan-remove"
+                :disabled="planBusy"
+                :data-test="`unassign-${rack.id}`"
+                @click.stop="assign(rack.id, null)"
+              >
+                Remove
+              </button>
+            </div>
+            <div v-for="row in rack.rows" :key="row.id" class="plan-row" :style="rowStyle(row)">
+              <div
+                v-for="module in row.modules"
+                :key="module.id"
+                class="plan-module"
+                :style="moduleStyle(module)"
+                :title="`${module.manufacturer} ${module.name}`"
+              >
+                <img
+                  v-if="module.panel"
+                  :src="module.panel.url"
+                  :style="panelCropStyle(module.panel)"
+                  :alt="`${module.manufacturer} ${module.name}`"
+                />
+              </div>
+            </div>
+            <p v-if="!rack.rows.length" class="muted plan-no-rows">
+              No rows yet — organize this rack to draw its panels here.
+            </p>
+          </div>
+          <!-- The floor's own edges: drag one to make the studio bigger. -->
+          <div
+            class="plan-resize plan-resize-right"
+            title="Drag to set how wide the plan is"
+            data-test="plan-resize-right"
+            @pointerdown="startResize('right', $event)"
+            @pointermove="moveResize"
+            @pointerup="endResize"
+            @pointercancel="endResize"
+          ></div>
+          <div
+            class="plan-resize plan-resize-bottom"
+            title="Drag to set how tall the plan is"
+            data-test="plan-resize-bottom"
+            @pointerdown="startResize('bottom', $event)"
+            @pointermove="moveResize"
+            @pointerup="endResize"
+            @pointercancel="endResize"
+          ></div>
+          <div
+            class="plan-resize plan-resize-corner"
+            title="Drag to resize the plan"
+            data-test="plan-resize-corner"
+            @pointerdown="startResize('corner', $event)"
+            @pointermove="moveResize"
+            @pointerup="endResize"
+            @pointercancel="endResize"
+          ></div>
         </div>
       </div>
 
@@ -525,9 +607,20 @@ async function assign(rackId, systemId) {
 .plan-field { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--muted); margin: 0; }
 .plan-field input[type='number'] { width: 6rem; margin: 0; }
 .plan-field input[type='range'] { width: 8rem; margin: 0; }
-.plan-grow { margin: 0; }
-/* The floor is only ever as big as the plan says; a wide studio scrolls. */
-.plan-floor { position: relative; margin: 1rem 0; max-width: 100%; overflow: auto; background: #15151b; border: 2px solid var(--border-strong); border-radius: 5px; }
+/* The floor is drawn at exactly the size the plan says — a wide studio is
+   read by scrolling the viewport around it, so making the plan wider than
+   the screen is still visibly wider. */
+.plan-viewport { margin: 1rem 0; max-width: 100%; overflow: auto; }
+.plan-floor { position: relative; background: #15151b; border: 2px solid var(--border-strong); border-radius: 5px; }
+/* Grab an edge of the floor and pull to say how much room the studio has.
+   The strips sit inside the floor so they move with it as it grows. */
+.plan-resize { position: absolute; z-index: 2; background: transparent; }
+.plan-resize:hover, .plan-floor.resizing .plan-resize { background: var(--accent); opacity: 0.5; }
+.plan-resize-right { top: 0; right: 0; width: 10px; height: 100%; cursor: ew-resize; }
+.plan-resize-bottom { left: 0; bottom: 0; width: 100%; height: 10px; cursor: ns-resize; }
+.plan-resize-corner { right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; background: var(--border-strong); border-radius: 4px 0 3px 0; }
+.plan-resize-corner:hover, .plan-floor.resizing .plan-resize-corner { opacity: 1; }
+.plan-floor.resizing { user-select: none; }
 .plan-empty { position: absolute; inset: 0; display: grid; place-items: center; }
 /* A rack's box is exactly its footprint — the same HP and U the server keeps
    racks from overlapping in — so the name bar floats over the panels rather
@@ -536,7 +629,9 @@ async function assign(rackId, systemId) {
 .plan-rack-name { position: absolute; inset: 0 0 auto 0; z-index: 1; display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; padding: 0.1rem 0.3rem; color: var(--text); background: rgba(16, 16, 21, 0.75); pointer-events: none; }
 .plan-remove { pointer-events: auto; margin: 0 0 0 auto; padding: 0 0.3rem; font-size: 0.65rem; }
 .plan-row { display: flex; align-items: stretch; gap: 1px; overflow: hidden; background: #101015; }
-.plan-module { background: #33333d; overflow: hidden; }
-.plan-module img { display: block; width: 100%; height: 100%; object-fit: fill; }
+/* Like the rack organizer: the box is the module's footprint and the picture
+   is offset by its crop, so a photo's blank backdrop is not drawn as panel. */
+.plan-module { position: relative; background: #33333d; overflow: hidden; }
+.plan-module img { position: absolute; display: block; object-fit: fill; }
 .plan-no-rows { font-size: 0.7rem; padding: 0 0.3rem 0.3rem; }
 </style>

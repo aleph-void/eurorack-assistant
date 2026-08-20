@@ -147,8 +147,8 @@ describe('SystemsView', () => {
     await rack.trigger('dragstart', { clientX: 0, clientY: 0 });
     const floor = wrapper.find('[data-test="plan-floor"]');
     floor.element.getBoundingClientRect = () => ({ left: 0, top: 0 });
-    // 200px across and 78px down: 50HP and 3U at the plan's scale.
-    await floor.trigger('drop', { clientX: 200, clientY: 78 });
+    // 200px across and 105px down: 50HP and 3U at the plan's scale.
+    await floor.trigger('drop', { clientX: 200, clientY: 105 });
     await flushPromises();
 
     expect(api.put).toHaveBeenCalledWith('/api/systems/1/layout', {
@@ -199,15 +199,16 @@ describe('SystemsView', () => {
     await wrapper.find('[data-test="arrange-1"]').trigger('click');
     await flushPromises();
 
-    // The floor is 140 HP by 9 U, drawn at 4px per HP and 26px per U — but
-    // never smaller than the racks standing on it need, and the right case
-    // ends at 174 HP.
+    // The floor is 140 HP by 9 U, drawn at 4px per HP and 35px per U (a rack
+    // unit is 8.75 HP tall) — but never smaller than the racks standing on it
+    // need, and the right case ends at 174 HP.
     const floor = () => wrapper.find('[data-test="plan-floor"]').attributes('style');
     expect(floor()).toContain('width: 696px');
-    expect(floor()).toContain('height: 234px');
+    expect(floor()).toContain('height: 315px');
 
     api.put.mockResolvedValue({ id: 1, floor_width: 224, floor_height: 9 });
-    await wrapper.find('[data-test="floor-wider"]').trigger('click');
+    await wrapper.find('[data-test="floor-width"]').setValue(224);
+    await wrapper.find('[data-test="floor-width"]').trigger('change');
     await flushPromises();
     expect(api.put).toHaveBeenCalledWith('/api/systems/1', { floor_width: 224, floor_height: 9 });
     expect(floor()).toContain('width: 896px');
@@ -218,6 +219,51 @@ describe('SystemsView', () => {
     await flushPromises();
     expect(floor()).toContain('width: 448px');
     expect(wrapper.find('[data-test="plan-rack-11"]').attributes('style')).toContain('left: 180px');
+  });
+
+  it('resizes the floor plan by dragging its edge', async () => {
+    mockPlan();
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="arrange-1"]').trigger('click');
+    await flushPromises();
+
+    const floor = () => wrapper.find('[data-test="plan-floor"]').attributes('style');
+    // The floor starts 174 HP wide (the right case ends there) by 9 U.
+    expect(floor()).toContain('width: 696px');
+
+    // Pulling the corner 200px right and 70px down is 50 HP and 2 U more.
+    const corner = wrapper.find('[data-test="plan-resize-corner"]');
+    await corner.trigger('pointerdown', { clientX: 700, clientY: 315, pointerId: 1 });
+    await corner.trigger('pointermove', { clientX: 900, clientY: 385, pointerId: 1 });
+    // The floor is drawn at the dragged size before anything is saved.
+    expect(floor()).toContain('width: 896px');
+    expect(floor()).toContain('height: 385px');
+    expect(api.put).not.toHaveBeenCalled();
+
+    api.put.mockResolvedValue({ id: 1, floor_width: 224, floor_height: 11 });
+    await corner.trigger('pointerup', { clientX: 900, clientY: 385, pointerId: 1 });
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/systems/1', { floor_width: 224, floor_height: 11 });
+    expect(floor()).toContain('width: 896px');
+    expect(floor()).toContain('height: 385px');
+  });
+
+  it('drags only one edge at a time and never below the minimum', async () => {
+    mockPlan();
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="arrange-1"]').trigger('click');
+    await flushPromises();
+
+    // The bottom edge sets the height alone; a pull far to the left cannot
+    // take the floor below the 3 U minimum (and the racks keep it at 3 U).
+    const bottom = wrapper.find('[data-test="plan-resize-bottom"]');
+    api.put.mockResolvedValue({ id: 1, floor_width: 140, floor_height: 3 });
+    await bottom.trigger('pointerdown', { clientX: 300, clientY: 315, pointerId: 2 });
+    await bottom.trigger('pointerup', { clientX: 40, clientY: 0, pointerId: 2 });
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/systems/1', { floor_width: 140, floor_height: 3 });
   });
 
   it('adds a loose rack to the system and takes one back out', async () => {

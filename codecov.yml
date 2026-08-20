@@ -1,0 +1,37 @@
+# Codecov is free for public repositories: https://about.codecov.io/
+coverage:
+  status:
+    project:
+      default:
+        # Small dips happen; a real regression is bigger than this.
+        threshold: 1%
+      server:
+        flags: [server]
+        threshold: 1%
+      client:
+        flags: [client]
+        threshold: 1%
+    patch:
+      default:
+        target: 80%
+        threshold: 5%
+
+flags:
+  server:
+    paths: [server/src]
+    carryforward: true
+  client:
+    paths: [client/src]
+    carryforward: true
+
+comment:
+  layout: reach, diff, flags, files
+  require_changes: true
+
+ignore:
+  - server/tests
+  - client/tests
+  - server/scripts
+  - server/migrations
+  - client/src/main.js
+  - client/src/whisperWorker.js

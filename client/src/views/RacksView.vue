@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import ShareButton from '../components/ShareButton.vue';
+import { panelCropStyle } from '../panelLayout.js';
 
 const racks = ref([]);
 const systems = ref([]);
@@ -337,9 +338,17 @@ async function dropIntoAvailable() {
             draggable="true"
             type="button"
             :data-test="`available-module-${module.id}-${index}`"
+            :style="{ '--module-hp': Math.max(2, Number(module.hp) || 4) }"
             @dragstart="startDrag(module)"
           >
-            <img v-if="module.panel" class="module-panel-thumb" :src="module.panel.url" :alt="`${module.manufacturer} ${module.name}`" />
+            <span class="module-panel-thumb" :class="{ 'thumb-fallback': !module.panel }">
+              <img
+                v-if="module.panel"
+                :src="module.panel.url"
+                :style="panelCropStyle(module.panel)"
+                :alt="`${module.manufacturer} ${module.name}`"
+              />
+            </span>
             <span>{{ module.manufacturer }} {{ module.name }} <em>{{ module.hp ? `${module.hp}HP` : 'HP unknown' }}</em></span>
           </button>
         </div>
@@ -359,7 +368,13 @@ async function dropIntoAvailable() {
           <span class="muted">{{ rowUsed(row) }} / {{ row.hp }}HP</span>
           <button class="danger" style="margin: 0 0 0 auto" :disabled="layoutBusy" @click="removeRow(rowIndex)">Remove row</button>
         </div>
-        <div class="rack-row-slots" :class="`unit-${row.unit}`" @dragover.prevent @drop="dropIntoRow(rowIndex)">
+        <div
+          class="rack-row-slots"
+          :class="`unit-${row.unit}`"
+          :style="{ '--row-units': Number(row.unit) || 3 }"
+          @dragover.prevent
+          @drop="dropIntoRow(rowIndex)"
+        >
           <button
             v-for="(module, index) in row.modules"
             :key="`${module.module_id}-${index}`"
@@ -370,7 +385,12 @@ async function dropIntoAvailable() {
             :style="{ '--module-hp': Math.max(2, Number(module.hp) || 4) }"
             @dragstart="startDrag(module, rowIndex)"
           >
-            <img v-if="module.panel" :src="module.panel.url" :alt="`${module.manufacturer} ${module.name}`" />
+            <img
+              v-if="module.panel"
+              :src="module.panel.url"
+              :style="panelCropStyle(module.panel)"
+              :alt="`${module.manufacturer} ${module.name}`"
+            />
             <span v-else class="panel-fallback">{{ module.manufacturer }}<br />{{ module.name }}<br />{{ module.hp }}HP</span>
           </button>
           <span v-if="row.modules.length === 0" class="muted">Drop modules here</span>
@@ -381,19 +401,34 @@ async function dropIntoAvailable() {
 </template>
 
 <style scoped>
+/* Every module in the organizer is drawn from ONE scale, so a 2HP module and
+   a 34HP one are the same picture at different widths. A rack unit is
+   44.45mm and an HP is 5.08mm, so a row is 8.75 HP-widths tall per U —
+   panels then keep their real proportions instead of being stretched to
+   whatever height the row happened to have. */
+.rack-organizer { --hp-px: 9px; --u-px: calc(8.75 * var(--hp-px)); --chip-scale: 0.42; }
 .rack-organizer { margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1rem; }
 .available-modules { min-height: 3.5rem; border: 1px dashed var(--border-strong); border-radius: 7px; padding: 0.6rem; }
 .available-modules { margin: 1rem 0; }
 .module-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.module-chip { margin: 0; cursor: grab; text-align: left; display: inline-flex; flex-direction: column; gap: 0.25rem; }
+.module-chip { margin: 0; cursor: grab; text-align: center; display: inline-flex; flex-direction: column; align-items: center; gap: 0.25rem; padding: 0.3rem; }
 .module-chip span { color: var(--muted); }
+.module-chip > span:last-child { max-width: 8rem; font-size: 0.7rem; line-height: 1.2; }
 .module-chip em { font-style: normal; }
-.module-panel-thumb { width: 3rem; height: 5rem; object-fit: contain; object-position: center; }
-.rack-row-slots { display: flex; align-items: stretch; gap: 2px; overflow-x: auto; padding: 0.35rem; background: #15151b; border: 2px solid var(--border-strong); border-radius: 5px; min-height: 13rem; }
-.rack-row-slots.unit-1 { min-height: 4.8rem; }
-.placed-module { flex: 0 0 calc(var(--module-hp) * 0.95rem); width: calc(var(--module-hp) * 0.95rem); margin: 0; padding: 0; border: 0; border-radius: 0; cursor: grab; overflow: hidden; background: #25252d; }
-.placed-module img { display: block; width: 100%; height: 100%; object-fit: fill; }
-.panel-fallback { display: grid; place-items: center; height: 100%; padding: 0.2rem; font-size: 0.7rem; text-align: center; color: var(--muted); }
+/* The same 3U panel, drawn small: HP across, one rack unit's worth of height
+   per U, so the chips line up like the row they are dragged into. */
+.module-panel-thumb { position: relative; display: block; flex: none; overflow: hidden; width: calc(var(--module-hp) * var(--hp-px) * var(--chip-scale)); min-width: 10px; height: calc(3 * var(--u-px) * var(--chip-scale)); background: #25252d; }
+.module-panel-thumb img { position: absolute; object-fit: fill; }
+.thumb-fallback { border: 1px dashed var(--border-strong); }
+.rack-row-slots { display: flex; align-items: stretch; gap: 2px; overflow-x: auto; padding: 0.35rem; background: #15151b; border: 2px solid var(--border-strong); border-radius: 5px; height: calc(var(--row-units, 3) * var(--u-px)); }
+.placed-module { flex: 0 0 calc(var(--module-hp) * var(--hp-px)); width: calc(var(--module-hp) * var(--hp-px)); height: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; cursor: grab; overflow: hidden; background: #25252d; }
+.placed-module { position: relative; }
+/* The image is sized and offset by the panel's crop (panelLayout.js), so the
+   blank backdrop a product photo came with stays outside the box. */
+.placed-module img { position: absolute; display: block; object-fit: fill; }
+/* A module with no panel picture still occupies its real width, so the name
+   is set narrow and clipped rather than widening the box. */
+.panel-fallback { display: grid; place-items: center; height: 100%; padding: 0.15rem; font-size: 0.6rem; line-height: 1.15; overflow-wrap: anywhere; text-align: center; color: var(--muted); }
 .rack-row { margin: 0.8rem 0; }
 .rack-row-meta { display: flex; align-items: end; gap: 0.7rem; margin-bottom: 0.35rem; }
 .rack-row-meta label { display: grid; gap: 0.15rem; font-size: 0.85rem; }

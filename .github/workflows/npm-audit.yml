@@ -1,0 +1,38 @@
+name: npm audit
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '13 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [server, client]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      # Advisories in build/test-only packages do not ship; production deps do.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit all dependencies (advisory only)
+        run: npm audit --audit-level=moderate || true

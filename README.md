@@ -1,5 +1,10 @@
 # Eurorack Assistant
 
+[![CI](https://github.com/aleph-void/eurorack-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/aleph-void/eurorack-assistant/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/aleph-void/eurorack-assistant/actions/workflows/codeql.yml/badge.svg)](https://github.com/aleph-void/eurorack-assistant/actions/workflows/codeql.yml)
+[![codecov](https://codecov.io/gh/aleph-void/eurorack-assistant/branch/main/graph/badge.svg)](https://codecov.io/gh/aleph-void/eurorack-assistant)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/aleph-void/eurorack-assistant/badge)](https://scorecard.dev/viewer/?uri=github.com/aleph-void/eurorack-assistant)
+
 An open-source web application for asking LLMs questions about **your** eurorack
 modular synthesizer system. Import your module list, and the app automatically
 finds each module's user manual, analyzes it into a structured description
@@ -484,6 +489,14 @@ npm run dev       # dev server on :5173, proxies /api to :3000
 
 Tests never call real LLMs or the network — the CLI backends, `fetch`, and the
 database are all injected fakes (`pg-mem` in-memory Postgres for the server).
+
+Both suites also run with coverage (`npm run test:coverage`, writing
+`coverage/lcov.info`). CI runs lint, tests and coverage for both packages on
+Node 20 and 22, builds the client, and builds both Docker images; CodeQL,
+dependency review, `npm audit` and an OpenSSF Scorecard run alongside, and
+Dependabot keeps npm, GitHub Actions and the base images current. Coverage is
+uploaded to Codecov — set the repository secret `CODECOV_TOKEN` (Codecov is
+free for public repositories) to turn that on.
 
 ## Security notes
 
