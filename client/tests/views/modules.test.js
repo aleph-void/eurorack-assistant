@@ -165,7 +165,7 @@ describe('ModulesView', () => {
     await flushPromises();
     const qty = (rackId) =>
       wrapper
-        .find(`[data-test="rack-group-${rackId}"] [data-test="module-1"] .qty-cell`)
+        .find(`[data-test="rack-group-${rackId}"] [data-test="qty-${rackId}-1"]`)
         .text();
     expect(qty(1)).toBe('2');
     expect(qty(2)).toBe('1');
@@ -252,6 +252,60 @@ describe('ModulesView', () => {
     await wrapper.find('[data-test="rack-select"]').setValue(1);
     await flushPromises();
     expect(wrapper.find('[data-test="channel-scan"]').exists()).toBe(true);
+  });
+
+  // The Qty column is the rack's inventory, corrected in place. One copy has
+  // nothing to step down to, so it shows the plus alone.
+  it('steps a rack holding up and down from the Qty column', async () => {
+    mockLists([
+      {
+        id: 1,
+        manufacturer: 'ALM',
+        name: 'Pam',
+        quantity: 1,
+        racks: [{ id: 1, name: 'main rack', quantity: 1 }],
+        manual_status: 'pending',
+        analysis_status: 'pending',
+      },
+    ]);
+    api.put.mockResolvedValue({ ok: true });
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="qty-down-1-1"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="qty-up-1-1"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/modules/1', { quantity: 2 });
+    expect(wrapper.find('[data-test="qty-1-1"]').text()).toBe('2');
+
+    // With two copies in the rack the minus appears, and takes one back off.
+    await wrapper.find('[data-test="qty-down-1-1"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenLastCalledWith('/api/racks/1/modules/1', { quantity: 1 });
+    expect(wrapper.find('[data-test="qty-1-1"]').text()).toBe('1');
+    expect(wrapper.find('[data-test="qty-down-1-1"]').exists()).toBe(false);
+  });
+
+  // A refused step leaves the number where it was and says why.
+  it('keeps the count as it was when the server refuses the step', async () => {
+    mockLists([
+      {
+        id: 1,
+        manufacturer: 'ALM',
+        name: 'Pam',
+        quantity: 2,
+        racks: [{ id: 1, name: 'main rack', quantity: 2 }],
+        manual_status: 'pending',
+        analysis_status: 'pending',
+      },
+    ]);
+    api.put.mockRejectedValue(new Error('quantity must be a whole number between 1 and 99'));
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="qty-up-1-1"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="qty-1-1"]').text()).toBe('2');
+    expect(wrapper.text()).toContain('quantity must be a whole number between 1 and 99');
   });
 
   // Letting the module go again puts the count back to plain text: nothing

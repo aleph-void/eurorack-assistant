@@ -933,6 +933,20 @@ button.linklike:hover {
   margin: 0;
   padding: 0.2rem 0.3rem;
 }
+/* Otherwise it steps the rack's holding: the number between two square
+   buttons small enough to sit inside a table row. */
+.qty-step {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.3rem;
+}
+.qty-step button {
+  margin: 0;
+  padding: 0 0.4rem;
+  line-height: 1.5rem;
+  min-width: 1.5rem;
+}
 /* The tick column is the width of its box and nothing more. */
 .select-cell {
   width: 1.5rem;

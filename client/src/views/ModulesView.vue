@@ -212,6 +212,35 @@ const moving = ref(false);
 const selectedIn = (rackId) => selection.value[rackId] ?? [];
 const isSelected = (rackId, moduleId) => selectedIn(rackId).includes(moduleId);
 
+// ---- correcting how many copies a rack holds ----
+// The Qty column is the rack's inventory, so it is edited where it is read:
+// one step per press, never below one copy (the rack would still hold the
+// module) and never above the 99 the server takes. Stepping down past what
+// the layout has placed drops the excess placements, which is why the step
+// waits for the server rather than moving the number on its own.
+const qtySaving = ref({});
+
+async function stepQuantity(rack, module, delta) {
+  if (!rack || qtySaving.value[module.id]) return;
+  const held = heldIn(module, rack);
+  const quantity = held + delta;
+  if (quantity < 1 || quantity > 99) return;
+  error.value = '';
+  qtySaving.value = { ...qtySaving.value, [module.id]: true };
+  try {
+    await api.put(`/api/racks/${rack.id}/modules/${module.id}`, { quantity });
+    const here = (module.racks || []).find((r) => r.id === rack.id);
+    if (here) here.quantity = quantity;
+    module.quantity += delta;
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    const next = { ...qtySaving.value };
+    delete next[module.id];
+    qtySaving.value = next;
+  }
+}
+
 // Picking a module to move is also picking how many of it to move: its
 // quantity turns into a box holding the number the rack has, ready to be
 // changed. Letting it go again takes the box, and whatever was typed in it,
@@ -570,6 +599,34 @@ onUnmounted(() => clearTimeout(refreshTimer));
                     :data-test="`move-qty-${module.id}`"
                     :aria-label="`How many ${module.manufacturer} ${module.name} to move`"
                   />
+                  <!-- Otherwise the count is the rack's inventory, stepped up
+                       and down in place. A rack always holds at least one of
+                       a module it holds at all, so the minus only appears
+                       once there is more than one copy to give up. -->
+                  <div v-else-if="group.rack" class="qty-step">
+                    <button
+                      v-if="heldIn(module, group.rack) > 1"
+                      class="secondary"
+                      :disabled="!!qtySaving[module.id]"
+                      :data-test="`qty-down-${group.rack.id}-${module.id}`"
+                      :aria-label="`One fewer ${module.manufacturer} ${module.name} in ${group.rack.name}`"
+                      @click="stepQuantity(group.rack, module, -1)"
+                    >
+                      −
+                    </button>
+                    <span :data-test="`qty-${group.rack.id}-${module.id}`">
+                      {{ heldIn(module, group.rack) }}
+                    </span>
+                    <button
+                      class="secondary"
+                      :disabled="!!qtySaving[module.id] || heldIn(module, group.rack) >= 99"
+                      :data-test="`qty-up-${group.rack.id}-${module.id}`"
+                      :aria-label="`One more ${module.manufacturer} ${module.name} in ${group.rack.name}`"
+                      @click="stepQuantity(group.rack, module, 1)"
+                    >
+                      +
+                    </button>
+                  </div>
                   <template v-else>{{ heldIn(module, group.rack) }}</template>
                 </td>
                 <td>{{ module.hp ? `${module.hp}HP` : '—' }}</td>
