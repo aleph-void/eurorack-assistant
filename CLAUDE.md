@@ -28,8 +28,13 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   for the shared derived state. Sections take `:module`/`:patch` + id props
   and emit `reload`.
 - `client/tests/views/` — one test file per view.
-- Schema: SQL-file migrations in `server/migrations/` are the source of truth
-  (never `sequelize.sync()`); models in `server/src/db/models.js`.
+- Schema: the migrations in `server/migrations/` are the source of truth
+  (never `sequelize.sync()`); models in `server/src/db/models.js`. Each
+  migration is a module exporting `up`/`down` against the helpers in
+  `src/db/migrationContext.js`; `src/db/migrate.js` applies, reverts and
+  reports on them. `server/migrations/README.md` is the format, and the rules
+  (every migration has a working `down`; never edit one that has been
+  applied — its `up` source is checksummed in `schema_migrations`).
 
 ## Conventions (enforced patterns — keep them)
 
@@ -75,7 +80,9 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
 - Server tests: `cd server && npx vitest run` (Vitest + Supertest + pg-mem)
 - Client tests: `cd client && npx vitest run` (Vitest + Vue Test Utils + jsdom)
 - Lint: `npm run lint` in `server/` and `client/`
-- Dev DB migrations: `cd server && npm run migrate`
+- Dev DB migrations: `cd server && npm run migrate` (also `npm run
+  migrate:status`, `npm run migrate:down`, `node scripts/migrate.js down --to
+  <id>`)
 
 ## Test gotchas (learned the hard way)
 

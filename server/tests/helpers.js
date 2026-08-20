@@ -134,10 +134,11 @@ function registerTextSearch(mem) {
   });
 }
 
-// In-memory postgres + migrations, wrapped in the app's Sequelize database
-// object. db.query() is a raw-SQL escape hatch for test fixtures/assertions,
-// backed by the same pg-mem instance.
-export async function createTestDb() {
+// An empty in-memory postgres, wrapped in the app's Sequelize database object,
+// with no migrations applied. Only the migration tests want this; everything
+// else wants createTestDb() below. db.query() is a raw-SQL escape hatch for
+// test fixtures/assertions, backed by the same pg-mem instance.
+export function createBareDb() {
   const mem = newDb();
   // Sequelize issues SET statements (timezone, client_min_messages) on
   // connect that pg-mem cannot parse; swallow them.
@@ -147,6 +148,12 @@ export async function createTestDb() {
   const db = createDatabase({ dialectModule: adapter, databaseVersion: '13.4.0' });
   const pool = new adapter.Pool();
   db.query = (...args) => pool.query(...args);
+  return db;
+}
+
+// The same, with the app's schema in place: in-memory postgres + migrations.
+export async function createTestDb() {
+  const db = createBareDb();
   await migrate(db);
   return db;
 }
