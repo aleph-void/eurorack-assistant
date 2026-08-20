@@ -123,7 +123,7 @@ async function openOrganizer(rack) {
   try {
     organizer.value = await api.get(`/api/racks/${rack.id}`);
     organizingRackId.value = rack.id;
-    collapsedRows.value = new Set();
+    collapsedRows.value = [];
   } catch (e) {
     error.value = e.message;
   }
@@ -132,17 +132,16 @@ async function openOrganizer(rack) {
 // Folding a row's panel strip away, so a tall rack's organizer fits on
 // screen while one row is being worked on. Pure view state: the layout is
 // untouched, and the strip stays in the DOM (v-show) like every other
-// collapsed section in the app. Keyed by the row's persisted id — indexes
-// shift when a row above is removed — with the index standing in for a row
-// so new it has not been saved yet.
-const collapsedRows = ref(new Set());
-const rowKey = (row, rowIndex) => row.id ?? `new-${rowIndex}`;
-const rowCollapsed = (row, rowIndex) => collapsedRows.value.has(rowKey(row, rowIndex));
-function toggleRowCollapsed(row, rowIndex) {
-  const next = new Set(collapsedRows.value);
-  const key = rowKey(row, rowIndex);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
+// collapsed section in the app. Held BY POSITION, one flag per row: saving
+// the layout REPLACES the rack's rows (PUT /:id/layout deletes and
+// re-inserts them), so a row's id is a different number after every drop and
+// cannot identify the same row across a save. The flags are spliced along
+// with the rows when one is removed.
+const collapsedRows = ref([]);
+const rowCollapsed = (rowIndex) => collapsedRows.value[rowIndex] === true;
+function toggleRowCollapsed(rowIndex) {
+  const next = collapsedRows.value.slice();
+  next[rowIndex] = !next[rowIndex];
   collapsedRows.value = next;
 }
 
@@ -200,6 +199,9 @@ async function addRow(unit) {
 
 async function removeRow(index) {
   organizer.value.rows.splice(index, 1);
+  const flags = collapsedRows.value.slice();
+  flags.splice(index, 1);
+  collapsedRows.value = flags;
   await saveLayout();
 }
 
@@ -448,17 +450,20 @@ async function nudge(rowIndex, index, delta) {
         <button class="secondary" :disabled="layoutBusy" data-test="add-1u-row" @click="addRow(1)">Add 1U row</button>
       </div>
 
-      <div v-for="(row, rowIndex) in organizer.rows" :key="row.id ?? rowIndex" class="rack-row" :data-test="`rack-row-${rowIndex}`">
+      <!-- Keyed by position, not by row id: a save replaces the rows, so
+           keying by id would tear down and rebuild every row (and reload its
+           panel pictures) after every drop. -->
+      <div v-for="(row, rowIndex) in organizer.rows" :key="rowIndex" class="rack-row" :data-test="`rack-row-${rowIndex}`">
         <div class="rack-row-meta">
           <button
             type="button"
             class="row-collapse"
-            :aria-expanded="String(!rowCollapsed(row, rowIndex))"
-            :title="rowCollapsed(row, rowIndex) ? 'Expand row' : 'Collapse row'"
+            :aria-expanded="String(!rowCollapsed(rowIndex))"
+            :title="rowCollapsed(rowIndex) ? 'Expand row' : 'Collapse row'"
             :data-test="`row-collapse-${rowIndex}`"
-            @click="toggleRowCollapsed(row, rowIndex)"
+            @click="toggleRowCollapsed(rowIndex)"
           >
-            {{ rowCollapsed(row, rowIndex) ? '▸' : '▾' }}
+            {{ rowCollapsed(rowIndex) ? '▸' : '▾' }}
           </button>
           <label>Unit
             <select v-model.number="row.unit" :disabled="layoutBusy" @change="saveLayout">
@@ -475,7 +480,7 @@ async function nudge(rowIndex, index, delta) {
           <button class="danger" style="margin: 0 0 0 auto" :disabled="layoutBusy" @click="removeRow(rowIndex)">Remove row</button>
         </div>
         <div
-          v-show="!rowCollapsed(row, rowIndex)"
+          v-show="!rowCollapsed(rowIndex)"
           class="rack-row-slots"
           :class="`unit-${row.unit}`"
           :style="{ '--row-units': Number(row.unit) || 3 }"

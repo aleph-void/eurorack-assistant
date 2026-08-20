@@ -205,6 +205,26 @@ describe('PatchDiagram', () => {
     expect(wrapper.text()).toContain('1 cable drawn');
   });
 
+  // Unplugging from the picture, the same gesture the rack organizer uses to
+  // pull a module out of a row.
+  it('emits disconnect when an interactive cable is alt- or right-clicked', async () => {
+    const wrapper = mountDiagram({ interactive: true });
+    const path = wrapper.find('[data-test="diagram-cable-21"]');
+    await path.trigger('click', { altKey: true });
+    await path.trigger('contextmenu');
+    expect(wrapper.emitted('disconnect')).toHaveLength(2);
+    expect(wrapper.emitted('disconnect')[0][0].id).toBe(21);
+  });
+
+  // A shared, read-only diagram keeps the browser's own context menu.
+  it('leaves a read-only cable alone', async () => {
+    const wrapper = mountDiagram();
+    const path = wrapper.find('[data-test="diagram-cable-21"]');
+    await path.trigger('click', { altKey: true });
+    await path.trigger('contextmenu');
+    expect(wrapper.emitted('disconnect')).toBeUndefined();
+  });
+
   it('crops the image to the front plate', () => {
     const [maths, lpg] = modules();
     maths.panel.crop = { x: 0.25, y: 0.1, w: 0.5, h: 0.8 };

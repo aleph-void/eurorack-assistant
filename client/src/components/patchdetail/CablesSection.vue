@@ -308,7 +308,7 @@ async function toggleCableFlag(cable, field) {
   }
 }
 
-defineExpose({ connectCable });
+defineExpose({ connectCable, removeCable });
 </script>
 
 <template>

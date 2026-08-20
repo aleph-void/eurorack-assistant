@@ -157,10 +157,14 @@ describe('RacksView', () => {
   // back the way the server would and the rendered row follows it.
   function echoLayout(detail) {
     const byId = new Map(detail.modules.map((module) => [module.id, module]));
+    // Saving REPLACES the rack's rows, so every save hands back rows with
+    // brand new ids — nothing on the page may identify a row by its id.
+    let nextRowId = 100;
     api.put.mockImplementation((path, body) =>
       Promise.resolve({
         rows: body.rows.map((row, index) => ({
           ...detail.rows[index],
+          id: nextRowId++,
           unit: row.unit,
           hp: row.hp,
           modules: row.modules.map(({ module_id: id }) => ({
@@ -293,6 +297,40 @@ describe('RacksView', () => {
 
     await toggle().trigger('click');
     expect(hidden()).toBe(false);
+  });
+
+  // Every save re-creates the rack's rows with new ids, so a collapsed row
+  // that was identified by its id sprang open again after each drop.
+  it('keeps a row collapsed across a layout save', async () => {
+    const wrapper = await openReorderable();
+    const collapsed = (index) =>
+      wrapper.find(`[data-test="row-collapse-${index}"]`).attributes('aria-expanded') === 'false';
+    await wrapper.find('[data-test="row-collapse-0"]').trigger('click');
+    expect(collapsed(0)).toBe(true);
+
+    await wrapper.find('[data-test="add-1u-row"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.findAll('.rack-row')).toHaveLength(2);
+    expect(collapsed(0)).toBe(true);
+    // The row just added is not folded away, or it would look like nothing
+    // happened.
+    expect(collapsed(1)).toBe(false);
+  });
+
+  // The flags follow the rows they belong to when one above them goes.
+  it('moves a collapsed state up when the row above it is removed', async () => {
+    const wrapper = await openReorderable();
+    const collapsed = (index) =>
+      wrapper.find(`[data-test="row-collapse-${index}"]`).attributes('aria-expanded') === 'false';
+    await wrapper.find('[data-test="add-1u-row"]').trigger('click');
+    await flushPromises();
+    await wrapper.find('[data-test="row-collapse-1"]').trigger('click');
+    expect(collapsed(1)).toBe(true);
+
+    await wrapper.findAll('.rack-row')[0].find('button.danger').trigger('click');
+    await flushPromises();
+    expect(wrapper.findAll('.rack-row')).toHaveLength(1);
+    expect(collapsed(0)).toBe(true);
   });
 
   // Adding a row to a case that is 84HP wide should not have to be corrected

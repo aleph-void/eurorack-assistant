@@ -282,6 +282,16 @@ describe('PatchDetailView', () => {
     });
   });
 
+  it('deletes a cable the diagram asks to unplug', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.delete.mockResolvedValue({});
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    wrapper.findComponent(PatchDiagram).vm.$emit('disconnect', { id: 21 });
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/patches/7/cables/21');
+  });
+
   // Typing into a picker, then taking the highlighted match with Enter.
   async function pick(wrapper, test, text) {
     const input = wrapper.find(`[data-test="${test}"]`);

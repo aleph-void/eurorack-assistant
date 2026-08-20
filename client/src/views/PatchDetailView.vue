@@ -41,6 +41,7 @@ const rackModules = ref([]);
 // does, so the write (and its error display) lives in the cables section.
 const cablesSection = ref(null);
 const connectDiagramCable = (ends) => cablesSection.value?.connectCable(ends);
+const disconnectDiagramCable = (cable) => cablesSection.value?.removeCable(cable);
 
 // ---- renaming ----
 const renaming = ref(false);
@@ -235,6 +236,7 @@ onMounted(async () => {
       :rack-rows="patch.rack_layout"
       interactive
       @connect="connectDiagramCable"
+      @disconnect="disconnectDiagramCable"
     />
 
     <p class="muted" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap">

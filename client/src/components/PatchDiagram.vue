@@ -29,7 +29,7 @@ const props = defineProps({
   // they determine the diagram's row breaks and instance order.
   rackRows: { type: Array, default: () => [] },
 });
-const emit = defineEmits(['connect']);
+const emit = defineEmits(['connect', 'disconnect']);
 
 // A patch snapshots the whole rack, so by default only the modules it
 // actually uses are drawn — the rest would bury them.
@@ -187,6 +187,15 @@ function finishCable(event) {
   });
 }
 
+// Unplugging from the picture: the same alt-click / right-click gesture the
+// rack organizer uses to pull a module out of a row. The parent does the
+// write, so a read-only diagram keeps the browser's own context menu.
+function unplugCable(cable, event) {
+  if (!props.interactive) return;
+  event.preventDefault();
+  emit('disconnect', cable);
+}
+
 const draftCable = computed(() =>
   dragging.value ? cablePath(dragging.value.source, dragging.value.point, drawn.value.length) : null
 );
@@ -315,11 +324,13 @@ const draftCable = computed(() =>
               :key="c.cable.id"
               :d="c.d"
               class="cable"
-              :class="{ optional: c.cable.optional }"
+              :class="{ optional: c.cable.optional, unpluggable: interactive }"
               :stroke="c.color"
               :data-test="`diagram-cable-${c.cable.id}`"
+              @click.alt="unplugCable(c.cable, $event)"
+              @contextmenu="unplugCable(c.cable, $event)"
             >
-              <title>{{ c.title }}</title>
+              <title>{{ c.title }}{{ interactive ? ' — alt- or right-click to unplug' : '' }}</title>
             </path>
             <circle
               v-for="end in ends"
@@ -433,6 +444,9 @@ const draftCable = computed(() =>
 .cable:hover {
   stroke-width: 8;
   opacity: 1;
+}
+.cable.unpluggable {
+  cursor: pointer;
 }
 .cable.optional {
   stroke-dasharray: 14 10;
