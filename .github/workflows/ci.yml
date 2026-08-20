@@ -28,9 +28,9 @@ jobs:
       run:
         working-directory: ${{ matrix.package }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -52,7 +52,7 @@ jobs:
         # One report per package is enough; the extra node version would only
         # duplicate the same lines.
         if: matrix.node == '20'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ${{ matrix.package }}/coverage/lcov.info
@@ -64,10 +64,10 @@ jobs:
     name: Docker build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build server image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./server
           push: false
@@ -75,7 +75,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=server
 
       - name: Build nginx image (builds the client)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: nginx/Dockerfile
