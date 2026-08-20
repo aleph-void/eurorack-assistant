@@ -1,0 +1,181 @@
+export const description = 'initial schema: users, modules, manuals, racks, notes, questions, jobs';
+
+export async function up({ sql }) {
+  await sql`
+CREATE TABLE users (
+  id SERIAL PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE sessions (
+  id SERIAL PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE app_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- Modules are shared records: the manual and its analysis are found once and
+-- reused by every user who has the module. rack_modules maps racks to the
+-- modules in them (with a per-rack quantity).
+CREATE TABLE modules (
+  id SERIAL PRIMARY KEY,
+  manufacturer TEXT NOT NULL,
+  name TEXT NOT NULL,
+  manual_status TEXT NOT NULL DEFAULT 'pending',
+  analysis_status TEXT NOT NULL DEFAULT 'pending',
+  summary TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (manufacturer, name)
+);
+
+-- PDF documents, mapped to modules. Files are content-addressed: hash is the
+-- sha256 of the PDF bytes and the file lives at MANUALS_DIR/<hash>.pdf, so
+-- identical documents are stored once no matter how many records reference
+-- them. A module can have several: user_id NULL marks the shared auto-found
+-- manual, while rows with a user_id are private documents that user attached
+-- to their own module instance (invisible to other users).
+CREATE TABLE manuals (
+  id SERIAL PRIMARY KEY,
+  module_id INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  hash TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT 'manual',
+  original_name TEXT,
+  source TEXT NOT NULL DEFAULT 'found',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX manuals_hash_idx ON manuals (hash);
+
+-- module_id stands in for the unique (manufacturer, name) module pair: one
+-- document record per (manufacturer, module, database name, content hash).
+-- Re-imports of an UNCHANGED manual reuse the existing 'manual' row, while a
+-- revised manual (new hash) may coexist under the same name.
+CREATE UNIQUE INDEX manuals_module_name_hash_uidx ON manuals (module_id, name, hash);
+
+-- A user's racks. Modules live in racks (not directly on users): each user
+-- has any number of named racks, and the same shared module record can appear
+-- in many racks. Imports target a rack by name ('main rack' by default).
+-- Racks are strictly private to their owner.
+CREATE TABLE racks (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, name)
+);
+
+CREATE TABLE rack_modules (
+  rack_id INTEGER NOT NULL REFERENCES racks(id) ON DELETE CASCADE,
+  module_id INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (rack_id, module_id)
+);
+
+CREATE TABLE module_components (
+  id SERIAL PRIMARY KEY,
+  module_id INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  voltage_min REAL,
+  voltage_max REAL,
+  polarity TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Per-user notes. A note can be attached to any number of the user's modules
+-- and module components (and reused across them).
+CREATE TABLE notes (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE note_modules (
+  note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+  module_id INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
+  PRIMARY KEY (note_id, module_id)
+);
+
+CREATE TABLE note_components (
+  note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+  component_id INTEGER NOT NULL REFERENCES module_components(id) ON DELETE CASCADE,
+  PRIMARY KEY (note_id, component_id)
+);
+
+CREATE TABLE questions (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  prompt TEXT NOT NULL,
+  answer TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  answered_at TIMESTAMPTZ
+);
+
+CREATE TABLE question_modules (
+  question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  module_id INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
+  PRIMARY KEY (question_id, module_id)
+);
+
+CREATE TABLE question_components (
+  question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  component_id INTEGER NOT NULL REFERENCES module_components(id) ON DELETE CASCADE,
+  PRIMARY KEY (question_id, component_id)
+);
+
+CREATE TABLE jobs (
+  id SERIAL PRIMARY KEY,
+  type TEXT NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  module_id INTEGER REFERENCES modules(id) ON DELETE CASCADE,
+  question_id INTEGER REFERENCES questions(id) ON DELETE CASCADE,
+  payload TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+`;
+}
+
+export async function down({ dropTable }) {
+  // Reverse creation order, so nothing still references a table when it goes.
+  await dropTable(
+    'jobs',
+    'question_components',
+    'question_modules',
+    'questions',
+    'note_components',
+    'note_modules',
+    'notes',
+    'module_components',
+    'rack_modules',
+    'racks',
+    'manuals',
+    'modules',
+    'app_config',
+    'sessions',
+    'users'
+  );
+}

@@ -420,8 +420,11 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
   menu button. Navigation lives in a hamburger drawer, styling follows the
   Aleph Void palette in `src/style.css`, and the long detail pages (module,
   patch, question) keep each section behind a click-to-open expander.
-- Database schema is created by `server/migrations/*.sql`, applied
-  automatically at server start (tracked in `schema_migrations`).
+- Database schema is created by the migrations in `server/migrations/`, applied
+  automatically at server start (tracked in `schema_migrations`). Each is a
+  module with `up`/`down` hooks run by `server/src/db/migrate.js`; see
+  `server/migrations/README.md` for the format and `npm run migrate:status` /
+  `npm run migrate:down` for the rest of the CLI.
 
 ### Data model (main tables)
 
