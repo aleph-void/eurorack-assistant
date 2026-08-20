@@ -193,6 +193,24 @@ describe('finding the front plate in a photograph', () => {
     expect(bottom).toBeLessThanOrEqual(PAD_Y + PLATE_H + 1);
   });
 
+  // Backdrop down the SIDES ONLY: a press shot cropped to the height of the
+  // module, so the plate runs to the top and bottom of the frame. The peel
+  // used to take the sides and then, with only plate left to look at, call
+  // the featureless top of the module backdrop and eat down it to the first
+  // knob — beheading the module, or trimming to a shape panelCrop then
+  // rejected, which is the Trim button appearing to do nothing.
+  it('trims the sides of a shot that is already the height of the plate', () => {
+    const gray = Buffer.alloc(IMAGE_W * PLATE_H);
+    FIXTURE.gray.copy(gray, 0, PAD_Y * IMAGE_W, (PAD_Y + PLATE_H) * IMAGE_W);
+    const sided = { width: IMAGE_W, height: PLATE_H, gray };
+    const box = trimBox(sided);
+    expect(box.x * IMAGE_W).toBeCloseTo(PAD_X, 0);
+    expect(box.w * IMAGE_W).toBeCloseTo(PLATE_W, 0);
+    expect(box.y).toBe(0);
+    expect(box.h).toBe(1);
+    expect(panelCrop(sided, { hp: 2 })).not.toBeNull();
+  });
+
   it('rejects one that is nothing like the shape of the module it claims to be', () => {
     // Told it is 20HP, the same thin strip cannot be the plate — the picture
     // is of something else as well, and the whole image is the safer crop.

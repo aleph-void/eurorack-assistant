@@ -139,9 +139,10 @@ export function backgroundLevel({ width, height, gray }) {
 //
 // A line (row or column) is backdrop when it is LOCALLY UNIFORM — every
 // pixel sits within tolerance of its own ~TRIM_BLOCK-pixel stretch's median —
-// AND CONTINUOUS with the line peeled just before it, block for block. Two
-// tests because backdrop has to beat two impostors, and each test catches
-// the one the other cannot:
+// AND ONE LEVEL ALONG ITS LENGTH, stretch to stretch — AND CONTINUOUS with
+// the line peeled just before it, block for block. Three tests because
+// backdrop has to beat three impostors, and each test catches what the
+// others cannot:
 //
 //   - One global background level failed on gradients: real product shots
 //     put the module on falloff lighting, and measured against the
@@ -156,6 +157,11 @@ export function backgroundLevel({ width, height, gray }) {
 //     is continuous — stepping from backdrop onto the plate jumps the level
 //     in one line, where a gradient never does. That is what the
 //     continuity test stops at.
+//   - A line that runs ACROSS the plate is uniform inside each of its
+//     stretches too, and steps between them where it meets the plate's edge.
+//     A photograph padded down the sides only is nothing but such rows, and
+//     without this test they read as backdrop the moment the columns have
+//     been peeled in to the plate.
 //
 // A line still has to carry a few contrasting pixels before it counts as
 // content, so JPEG ringing along the backdrop does not widen the box to the
@@ -196,28 +202,75 @@ export function trimBox(px, { tolerance = TRIM_TOLERANCE } = {}) {
     return false;
   };
 
-  const span = (length, isRow, from, to) => {
-    const min = Math.max(2, Math.round((to - from) * 0.002));
+  // Backdrop is also one level ALONG the line: stretch to stretch, its
+  // medians step within tolerance. Locally uniform is not enough on its own,
+  // because a line that crosses the plate is uniform inside every stretch and
+  // still jumps between them. A gradient drifts a level or two per stretch
+  // and stays flat by this test.
+  const level = (medians) => {
+    for (let i = 1; i < medians.length; i++) {
+      if (Math.abs(medians[i] - medians[i - 1]) > tolerance) return false;
+    }
+    return true;
+  };
+
+  const contentMin = (extent) => Math.max(2, Math.round(extent * 0.002));
+
+  // May the peel start at this edge of the frame at all?
+  //
+  // Peeling inwards assumes the edge is backdrop, and the FIRST line peeled
+  // is the one line with nothing before it to be continuous with — so it is
+  // taken on trust, and whatever it is becomes the level the peel then
+  // follows. That is fine at an edge that really is backdrop and wrong at one
+  // the module reaches, which is what a photograph padded down the SIDES ONLY
+  // is: the plate runs to the top and bottom of the frame, and once the
+  // column pass has peeled in to the plate, the next row pass sees nothing
+  // but plate, calls the featureless top of it backdrop, and eats down the
+  // module until it reaches a knob. Both ends of the module go, and the crop
+  // that comes out is the wrong shape (rejected in panelCrop, so the trim
+  // reports finding no plate) or wrong (the module beheaded).
+  //
+  // So the trust is granted once, per edge, against the WHOLE frame, before
+  // either axis has been narrowed to something that cannot show the module.
+  // Full width, a row through a side-padded photograph plainly crosses the
+  // plate, and the top and bottom simply never peel — which is right, there
+  // is nothing there to peel.
+  const edgeIsBackdrop = (line, isRow) => {
+    const extent = isRow ? width : height;
+    const stats = lineStats(line, isRow, 0, extent);
+    return stats.content < contentMin(extent) && level(stats.medians);
+  };
+
+  const span = (length, isRow, from, to, edges) => {
+    const min = contentMin(to - from);
     const isBackdrop = (line, prev) => {
       const stats = lineStats(line, isRow, from, to);
       if (stats.content >= min) return null;
+      if (!level(stats.medians)) return null;
       if (prev && jumps(prev.medians, stats.medians)) return null;
       return stats;
     };
     let a = 0;
-    for (let prev = null; a < length; a += 1) {
-      const stats = isBackdrop(a, prev);
-      if (!stats) break;
-      prev = stats;
+    if (edges[0]) {
+      for (let prev = null; a < length; a += 1) {
+        const stats = isBackdrop(a, prev);
+        if (!stats) break;
+        prev = stats;
+      }
     }
     let b = length - 1;
-    for (let prev = null; b >= a; b -= 1) {
-      const stats = isBackdrop(b, prev);
-      if (!stats) break;
-      prev = stats;
+    if (edges[1]) {
+      for (let prev = null; b >= a; b -= 1) {
+        const stats = isBackdrop(b, prev);
+        if (!stats) break;
+        prev = stats;
+      }
     }
     return b >= a ? [a, b] : null;
   };
+
+  const rowEdges = [edgeIsBackdrop(0, true), edgeIsBackdrop(height - 1, true)];
+  const colEdges = [edgeIsBackdrop(0, false), edgeIsBackdrop(width - 1, false)];
 
   // Rows and columns take turns, each measured only inside the other's
   // current span: once the row pass has peeled a full-width band off the
@@ -227,9 +280,9 @@ export function trimBox(px, { tolerance = TRIM_TOLERANCE } = {}) {
   let ys = [0, height - 1];
   let xs = [0, width - 1];
   for (let pass = 0; pass < 4; pass++) {
-    const nextYs = span(height, true, xs[0], xs[1] + 1);
+    const nextYs = span(height, true, xs[0], xs[1] + 1, rowEdges);
     if (!nextYs) return null;
-    const nextXs = span(width, false, nextYs[0], nextYs[1] + 1);
+    const nextXs = span(width, false, nextYs[0], nextYs[1] + 1, colEdges);
     if (!nextXs) return null;
     const settled =
       nextYs[0] === ys[0] && nextYs[1] === ys[1] && nextXs[0] === xs[0] && nextXs[1] === xs[1];
