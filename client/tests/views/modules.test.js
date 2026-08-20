@@ -222,62 +222,6 @@ describe('ModulesView', () => {
     expect(wrapper.find('[data-test="channel-scan"]').exists()).toBe(true);
   });
 
-  it('moves a module to another rack from the rack-scoped view', async () => {
-    mockLists([
-      { id: 1, manufacturer: 'ALM', name: 'Pam', quantity: 1, racks: [], manual_status: 'pending', analysis_status: 'pending' },
-    ]);
-    api.post.mockResolvedValue({ ok: true, moved: 1, left: 0 });
-    const wrapper = mount(ModulesView, { global: testGlobal() });
-    await flushPromises();
-    await wrapper.find('[data-test="rack-select"]').setValue(1);
-    await flushPromises();
-    // Untouched, the count stays a plain number and the whole holding goes.
-    expect(wrapper.find('[data-test="move-qty-1"]').exists()).toBe(false);
-    await wrapper.find('[data-test="move-1"]').setValue(2);
-    await flushPromises();
-    expect(api.post).toHaveBeenCalledWith('/api/racks/1/modules/1/move', {
-      to_rack_id: 2,
-      quantity: 1,
-    });
-  });
-
-  // Two of the same module can be split between racks: say how many go, and
-  // the rest stay where they are.
-  it('moves only some of the copies when a count is typed', async () => {
-    mockLists([
-      {
-        id: 1,
-        manufacturer: 'ALM',
-        name: 'Pam',
-        quantity: 3,
-        racks: [{ id: 1, name: 'main rack', quantity: 3 }],
-        manual_status: 'pending',
-        analysis_status: 'pending',
-      },
-    ]);
-    api.post.mockResolvedValue({ ok: true, moved: 2, left: 1 });
-    const wrapper = mount(ModulesView, { global: testGlobal() });
-    await flushPromises();
-    await wrapper.find('[data-test="rack-select"]').setValue(1);
-    await flushPromises();
-
-    // Picking the module turns its count into a box holding all three.
-    await wrapper.find('[data-test="select-1-1"]').setValue(true);
-    const qty = wrapper.find('[data-test="move-qty-1"]');
-    expect(qty.element.value).toBe('3');
-    expect(qty.attributes('max')).toBe('3');
-    await qty.setValue('2');
-    await wrapper.find('[data-test="move-1"]').setValue(2);
-    await flushPromises();
-    expect(api.post).toHaveBeenCalledWith('/api/racks/1/modules/1/move', {
-      to_rack_id: 2,
-      quantity: 2,
-    });
-    expect(wrapper.find('[data-test="move-notice"]').text()).toContain(
-      "Moved 2 of 3 ALM Pam to 'travel case', leaving 1 here."
-    );
-  });
-
   // Letting the module go again puts the count back to plain text: nothing
   // typed there survives to surprise the next move.
   it('takes the count box away when the module is unpicked', async () => {
@@ -292,7 +236,6 @@ describe('ModulesView', () => {
         analysis_status: 'pending',
       },
     ]);
-    api.post.mockResolvedValue({ ok: true, moved: 3, left: 0 });
     const wrapper = mount(ModulesView, { global: testGlobal() });
     await flushPromises();
     await wrapper.find('[data-test="rack-select"]').setValue(1);
@@ -301,37 +244,6 @@ describe('ModulesView', () => {
     await wrapper.find('[data-test="move-qty-1"]').setValue('1');
     await wrapper.find('[data-test="select-1-1"]').setValue(false);
     expect(wrapper.find('[data-test="move-qty-1"]').exists()).toBe(false);
-
-    await wrapper.find('[data-test="move-1"]').setValue(2);
-    await flushPromises();
-    expect(api.post).toHaveBeenCalledWith('/api/racks/1/modules/1/move', {
-      to_rack_id: 2,
-      quantity: 3,
-    });
-  });
-
-  it('refuses a count that is not a whole number of the copies held', async () => {
-    mockLists([
-      {
-        id: 1,
-        manufacturer: 'ALM',
-        name: 'Pam',
-        quantity: 2,
-        racks: [{ id: 1, name: 'main rack', quantity: 2 }],
-        manual_status: 'pending',
-        analysis_status: 'pending',
-      },
-    ]);
-    const wrapper = mount(ModulesView, { global: testGlobal() });
-    await flushPromises();
-    await wrapper.find('[data-test="rack-select"]').setValue(1);
-    await flushPromises();
-    await wrapper.find('[data-test="select-1-1"]').setValue(true);
-    await wrapper.find('[data-test="move-qty-1"]').setValue('5');
-    await wrapper.find('[data-test="move-1"]').setValue(2);
-    await flushPromises();
-    expect(api.post).not.toHaveBeenCalled();
-    expect(wrapper.find('p.error').text()).toContain('between 1 and 2');
   });
 
   it('deletes a module after confirmation, scoped to the selected rack', async () => {
@@ -342,6 +254,9 @@ describe('ModulesView', () => {
     vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     const wrapper = mount(ModulesView, { global: testGlobal() });
     await flushPromises();
+    // The button says what it does — it is the one way to get a module out
+    // of a rack now that the per-row move dropdown is gone.
+    expect(wrapper.find('[data-test="delete-1"]').text()).toBe('Delete module');
     await wrapper.find('[data-test="module-1"] button.danger').trigger('click');
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/modules/1');

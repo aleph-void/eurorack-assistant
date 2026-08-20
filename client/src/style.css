@@ -425,9 +425,21 @@ details.panel > .panel-body > :first-child {
 /* The last column of the modules table: its buttons and the move-to picker
    sit on one line instead of stacking the delete button under the one
    before it, and the column takes only the width they need. */
-.module-actions-cell {
+/* The actions are the last of many columns, so on a narrow screen they sat
+   off the right edge of the scrolled table and the delete button might as
+   well not have existed. Pinning the column keeps them on screen wherever
+   the table is scrolled to. */
+.module-actions-cell,
+.module-actions-head {
   width: 1%;
   white-space: nowrap;
+  position: sticky;
+  right: 0;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+}
+tr:hover td.module-actions-cell {
+  background: var(--panel-2);
 }
 .module-row-actions {
   display: flex;
@@ -439,9 +451,6 @@ details.panel > .panel-body > :first-child {
 .module-row-actions button,
 .module-row-actions select {
   margin: 0;
-}
-.module-row-actions .move-select {
-  width: auto;
 }
 .component-edit-actions {
   flex-wrap: wrap;

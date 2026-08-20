@@ -47,12 +47,10 @@ const filteredModules = computed(() => {
   });
 });
 
-// What the last move did, shown above the list — the single-module move and
-// the bulk one both report through it.
+// What the last move did, shown above the list.
 const moveNotice = ref('');
 
 const currentRack = computed(() => racks.value.find((r) => r.id === selectedRack.value) || null);
-const otherRacks = computed(() => racks.value.filter((r) => r.id !== selectedRack.value));
 
 // One collapsible section per rack, so a system of several racks reads as
 // the racks it is made of instead of one long list. A module in two racks is
@@ -96,13 +94,14 @@ function moduleHref(module, rack) {
 async function remove(module) {
   const where = currentRack.value ? `from rack '${currentRack.value.name}'` : 'from all your racks';
   const ok = await dialog.confirm({
-    title: 'Remove module',
+    title: 'Delete module',
     message:
-      `Remove ${module.manufacturer} ${module.name} ${where}? ` +
-      'Its manual, analysis and panel stay on the server, so importing it ' +
-      'again brings the module back with all of that work — and your notes ' +
-      'and questions about it.',
-    confirmLabel: 'Remove',
+      `Delete ${module.manufacturer} ${module.name} ${where}? ` +
+      'The module itself is kept — its manual, analysis and panel stay on ' +
+      'the server for anyone who adds it later, and importing it again ' +
+      'brings it back with all of that work, and your notes and questions ' +
+      'about it.',
+    confirmLabel: 'Delete',
     danger: true,
   });
   if (!ok) return;
@@ -199,42 +198,9 @@ function heldIn(module, rack) {
 // two different racks. Blank means all of them.
 const moveQty = ref({});
 
-// Move a module from the selected rack into another one (quantities merge if
-// the target rack already has it).
-async function move(module, event) {
-  const toRackId = Number(event.target.value);
-  event.target.value = '';
-  if (!toRackId) return;
-  error.value = '';
-  moveNotice.value = '';
-  const held = heldIn(module, currentRack.value);
-  const quantity = askedQty(module, currentRack.value);
-  if (quantity === null) {
-    error.value =
-      `How many ${module.manufacturer} ${module.name} to move must be a whole number ` +
-      `between 1 and ${held}.`;
-    return;
-  }
-  try {
-    const res = await api.post(`/api/racks/${selectedRack.value}/modules/${module.id}/move`, {
-      to_rack_id: toRackId,
-      quantity,
-    });
-    const target = racks.value.find((r) => r.id === toRackId);
-    moveNotice.value =
-      `Moved ${res.moved} of ${held} ${module.manufacturer} ${module.name} to ` +
-      `'${target?.name ?? 'the other rack'}'` +
-      (res.left ? `, leaving ${res.left} here.` : '.');
-    moveQty.value = { ...moveQty.value, [module.id]: '' };
-    await load();
-  } catch (e) {
-    error.value = e.message;
-  }
-}
-
 // ---- moving a selection of modules at once ----
-// Reorganizing a case is a job of many modules, not one dropdown at a time.
-// The selection is per rack group and keyed by rack, because a module can sit
+// Reorganizing a case is a job of many modules at once, so moving them is
+// ticking them off and picking where they go. The selection is per rack group and keyed by rack, because a module can sit
 // in two racks and ticking it under one says nothing about the other — and
 // the group's rack is the source the move runs from.
 const selection = ref({});
@@ -571,7 +537,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
                 <th>Manual</th>
                 <th>Analysis</th>
                 <th>Panel</th>
-                <th></th>
+                <th class="module-actions-head"></th>
               </tr>
             </thead>
             <tbody>
@@ -622,23 +588,12 @@ onUnmounted(() => clearTimeout(refreshTimer));
                     >
                       {{ expandedComponents[module.id] ? 'Hide components' : 'Components' }}
                     </button>
-                    <select
-                      v-if="currentRack && otherRacks.length > 0"
-                      class="move-select"
-                      :data-test="`move-${module.id}`"
-                      @change="move(module, $event)"
-                    >
-                      <option value="">Move to…</option>
-                      <option v-for="rack in otherRacks" :key="rack.id" :value="rack.id">
-                        {{ rack.name }}
-                      </option>
-                    </select>
                     <button
                       class="danger"
                       :data-test="`delete-${module.id}`"
                       @click="remove(module)"
                     >
-                      Remove
+                      Delete module
                     </button>
                   </div>
                 </td>
