@@ -123,9 +123,27 @@ async function openOrganizer(rack) {
   try {
     organizer.value = await api.get(`/api/racks/${rack.id}`);
     organizingRackId.value = rack.id;
+    collapsedRows.value = new Set();
   } catch (e) {
     error.value = e.message;
   }
+}
+
+// Folding a row's panel strip away, so a tall rack's organizer fits on
+// screen while one row is being worked on. Pure view state: the layout is
+// untouched, and the strip stays in the DOM (v-show) like every other
+// collapsed section in the app. Keyed by the row's persisted id — indexes
+// shift when a row above is removed — with the index standing in for a row
+// so new it has not been saved yet.
+const collapsedRows = ref(new Set());
+const rowKey = (row, rowIndex) => row.id ?? `new-${rowIndex}`;
+const rowCollapsed = (row, rowIndex) => collapsedRows.value.has(rowKey(row, rowIndex));
+function toggleRowCollapsed(row, rowIndex) {
+  const next = new Set(collapsedRows.value);
+  const key = rowKey(row, rowIndex);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  collapsedRows.value = next;
 }
 
 const placedCounts = computed(() => {
@@ -239,6 +257,16 @@ async function dropIntoAvailable() {
   endDrag();
   if (!held || held.rowIndex === null || !organizer.value) return;
   organizer.value.rows[held.rowIndex].modules.splice(held.index, 1);
+  await saveLayout();
+}
+
+// Alt-click (or right-click) pulls the module straight off the row and back
+// into the available list — the same move as dragging it out to Available,
+// without having to land a drag with a 2HP-wide target in hand.
+async function removeFromRow(rowIndex, index) {
+  const row = organizer.value?.rows[rowIndex];
+  if (!row || !row.modules[index]) return;
+  row.modules.splice(index, 1);
   await saveLayout();
 }
 
@@ -411,6 +439,16 @@ async function nudge(rowIndex, index, delta) {
 
       <div v-for="(row, rowIndex) in organizer.rows" :key="row.id ?? rowIndex" class="rack-row" :data-test="`rack-row-${rowIndex}`">
         <div class="rack-row-meta">
+          <button
+            type="button"
+            class="row-collapse"
+            :aria-expanded="String(!rowCollapsed(row, rowIndex))"
+            :title="rowCollapsed(row, rowIndex) ? 'Expand row' : 'Collapse row'"
+            :data-test="`row-collapse-${rowIndex}`"
+            @click="toggleRowCollapsed(row, rowIndex)"
+          >
+            {{ rowCollapsed(row, rowIndex) ? '▸' : '▾' }}
+          </button>
           <label>Unit
             <select v-model.number="row.unit" :disabled="layoutBusy" @change="saveLayout">
               <option :value="3">3U</option>
@@ -424,6 +462,7 @@ async function nudge(rowIndex, index, delta) {
           <button class="danger" style="margin: 0 0 0 auto" :disabled="layoutBusy" @click="removeRow(rowIndex)">Remove row</button>
         </div>
         <div
+          v-show="!rowCollapsed(row, rowIndex)"
           class="rack-row-slots"
           :class="`unit-${row.unit}`"
           :style="{ '--row-units': Number(row.unit) || 3 }"
@@ -441,7 +480,7 @@ async function nudge(rowIndex, index, delta) {
             }"
             draggable="true"
             type="button"
-            :title="`${module.manufacturer} ${module.name} — ${module.hp}HP (drag, or ← → to reorder)`"
+            :title="`${module.manufacturer} ${module.name} — ${module.hp}HP (drag or ← → to reorder, alt- or right-click to remove)`"
             :aria-label="`${module.manufacturer} ${module.name}, place ${index + 1} of ${row.modules.length}`"
             :data-test="`placed-module-${rowIndex}-${index}`"
             :style="{ '--module-hp': Math.max(2, Number(module.hp) || 4) }"
@@ -449,6 +488,8 @@ async function nudge(rowIndex, index, delta) {
             @dragend="endDrag"
             @keydown.left.prevent="nudge(rowIndex, index, -1)"
             @keydown.right.prevent="nudge(rowIndex, index, 1)"
+            @click.alt.prevent="removeFromRow(rowIndex, index)"
+            @contextmenu.prevent="removeFromRow(rowIndex, index)"
           >
             <img
               v-if="module.panel"
@@ -504,4 +545,5 @@ async function nudge(rowIndex, index, delta) {
 .rack-row-meta { display: flex; align-items: end; gap: 0.7rem; margin-bottom: 0.35rem; }
 .rack-row-meta label { display: grid; gap: 0.15rem; font-size: 0.85rem; }
 .rack-row-meta input, .rack-row-meta select { width: 6rem; margin: 0; }
+.row-collapse { margin: 0; padding: 0.15rem 0.5rem; background: transparent; border: 1px solid var(--border-strong); color: var(--muted); }
 </style>

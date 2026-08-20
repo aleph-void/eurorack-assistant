@@ -208,6 +208,17 @@ export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
     const module = req.module;
     const panel = await ModulePanel.findOne({ where: { module_id: module.id } });
     if (!panel) return res.status(404).json({ error: 'Module has no panel' });
+    // A panel_image job in flight is looking at the bytes this would cut up.
+    // Trimming under it would race the job's save (each replacing the record
+    // the other worked from), so the cut waits until the markers have landed.
+    const locating = await db.models.Job.count({
+      where: { module_id: module.id, type: 'panel_image', status: ['pending', 'running'] },
+    });
+    if (locating > 0) {
+      return res
+        .status(409)
+        .json({ error: 'The panel is still being placed; trim it when that job finishes' });
+    }
     const { outcome } = await trimPanelImage(db, module, panel, panelsDir);
     if (outcome === 'missing') return res.status(404).json({ error: 'Panel image not found' });
     if (outcome === 'no-edge') {

@@ -994,6 +994,24 @@ export async function locateOnUploadedPanel(db, backend, module, panel, componen
   if (!located) {
     log('no component could be located on the uploaded image; keeping it unmarked');
   }
+  // The mapping above spends its time in an LLM call, and the panel is live
+  // while it runs: a trim (or another upload) can replace the picture under
+  // it. Saving would then resurrect this job's stale snapshot — a row
+  // pointing at an image file the replacement already deleted, which is a
+  // broken panel no button can repair. The newer picture wins; the markers
+  // worked out against the old bytes go with the old bytes.
+  const current = await db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+  if (!current || current.image_hash !== panel.image_hash) {
+    log('the panel picture changed while the components were being located; keeping the newer picture');
+    return current
+      ? {
+          panel: current.get({ plain: true }),
+          placements: (
+            await db.models.ModulePanelComponent.findAll({ where: { panel_id: current.id } })
+          ).map((row) => row.get({ plain: true })),
+        }
+      : null;
+  }
   return savePanel(
     db,
     module,
@@ -1004,6 +1022,10 @@ export async function locateOnUploadedPanel(db, backend, module, panel, componen
       image_ext: panel.image_ext,
       width: panel.width,
       height: panel.height,
+      // A picture that has already been cut down to the plate stays marked as
+      // such, or a re-locate would re-arm the Trim button against an image
+      // with no backdrop left to lose.
+      trimmed: Boolean(panel.trimmed),
       ...(located?.crop ?? { ...FULL_CROP }),
       hp: module.hp ?? panel.hp ?? null,
       description: located

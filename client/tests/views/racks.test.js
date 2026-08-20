@@ -247,6 +247,54 @@ describe('RacksView', () => {
     wrapper.unmount();
   });
 
+  it('pulls a module off the row with alt-click or right-click', async () => {
+    const wrapper = await openReorderable();
+
+    // Alt-click removes the trailing ARP; the other copy of it stays put.
+    await wrapper.find('[data-test="placed-module-0-2"]').trigger('click', { altKey: true });
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/layout', {
+      rows: [{ unit: 3, hp: 84, modules: [{ module_id: 4 }, { module_id: 5 }] }],
+    });
+    expect(placedNames(wrapper)).toEqual(['2hp ARP', 'Make Noise Maths']);
+
+    // Right-click takes the next one the same way.
+    await wrapper.find('[data-test="placed-module-0-1"]').trigger('contextmenu');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/layout', {
+      rows: [{ unit: 3, hp: 84, modules: [{ module_id: 4 }] }],
+    });
+    expect(placedNames(wrapper)).toEqual(['2hp ARP']);
+  });
+
+  it('leaves the row alone on a plain click', async () => {
+    const wrapper = await openReorderable();
+    await wrapper.find('[data-test="placed-module-0-0"]').trigger('click');
+    await flushPromises();
+    expect(api.put).not.toHaveBeenCalled();
+    expect(placedNames(wrapper)).toHaveLength(3);
+  });
+
+  it('collapses a row to its meta bar and expands it again', async () => {
+    const wrapper = await openReorderable();
+    const strip = () => wrapper.find('[data-test="rack-row-0"] .rack-row-slots');
+    const toggle = () => wrapper.find('[data-test="row-collapse-0"]');
+    const hidden = () => (strip().attributes('style') || '').includes('display: none');
+    expect(hidden()).toBe(false);
+    expect(toggle().attributes('aria-expanded')).toBe('true');
+
+    await toggle().trigger('click');
+    // Folded away, but still in the DOM (v-show), and nothing was saved:
+    // collapsing is view state, not layout.
+    expect(strip().exists()).toBe(true);
+    expect(hidden()).toBe(true);
+    expect(toggle().attributes('aria-expanded')).toBe('false');
+    expect(api.put).not.toHaveBeenCalled();
+
+    await toggle().trigger('click');
+    expect(hidden()).toBe(false);
+  });
+
   it('renames a rack', async () => {
     mockLists();
     api.put.mockResolvedValue({ id: 2, name: 'live case', module_count: 1 });

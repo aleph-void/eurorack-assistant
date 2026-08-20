@@ -583,6 +583,18 @@ export function createHandlers(
         progress(`no panel yet: ${label}`);
         continue;
       }
+      // Same rule as the module page's Trim button: a panel_image job in
+      // flight is working from these bytes, and cutting them up mid-job races
+      // its save. The sweep skips the module; it can be trimmed once the
+      // markers have landed.
+      const locating = await db.models.Job.count({
+        where: { module_id: module.id, type: 'panel_image', status: ['pending', 'running'] },
+      });
+      if (locating > 0) {
+        tally.skipped += 1;
+        progress(`panel is still being placed; skipped: ${label}`);
+        continue;
+      }
       const { outcome, width, height } = await trimPanelImage(db, module, panel, panelsDir);
       if (outcome === 'trimmed') {
         tally.trimmed += 1;

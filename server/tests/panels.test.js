@@ -932,6 +932,82 @@ describe('building a module panel', () => {
     expect(panel.description).toMatch(/could not be located/);
   });
 
+  // The locate call spends its time in an LLM, and the panel is live while it
+  // runs: a trim can cut the picture down and delete the old bytes before the
+  // markers come back. Saving the job's snapshot then would point the panel at
+  // a file that no longer exists — a broken image no button can repair.
+  it('does not resurrect a picture a mid-flight trim already replaced', async () => {
+    const { module } = await analyzedModule(db, manualsDir);
+    const hash = saveImage(panelsDir, PANEL_PNG, 'png');
+    await db.models.ModulePanel.create({
+      module_id: module.id,
+      source: 'upload',
+      image_hash: hash,
+      image_ext: 'png',
+      width: 400,
+      height: 1200,
+    });
+
+    const CUT_PNG = pngBytes(200, 1150);
+    let cutHash;
+    const backend = fakeBackend({
+      // While the model is looking at the picture, a trim lands: the file is
+      // cut down, the row re-pointed at the cut, and the old bytes deleted.
+      analyzeImage: async () => {
+        cutHash = saveImage(panelsDir, CUT_PNG, 'png');
+        await db.models.ModulePanel.update(
+          { image_hash: cutHash, width: 200, height: 1150, trimmed: true },
+          { where: { module_id: module.id } }
+        );
+        fs.rmSync(panelPath(panelsDir, hash, 'png'));
+        return JSON.stringify({
+          is_panel: true,
+          components: COMPONENTS.map((c, i) => ({ name: c.name, x: 0.5, y: 0.15 * (i + 1) })),
+        });
+      },
+    });
+    const { panel, placements } = await buildPanelForModule(db, backend, module, panelsDir, {
+      fetchImpl: fakeFetch({}),
+    });
+
+    // The newer picture won; the markers worked out against the old bytes
+    // went with the old bytes.
+    expect(panel.image_hash).toBe(cutHash);
+    expect(panel.trimmed).toBe(true);
+    expect(placements).toEqual([]);
+    expect(await db.models.ModulePanel.count({ where: { module_id: module.id } })).toBe(1);
+    expect(fs.existsSync(panelPath(panelsDir, cutHash, 'png'))).toBe(true);
+  });
+
+  // Re-locating on a panel that has already been cut down to the plate must
+  // not reset the flag that stops it being cut a second time.
+  it('keeps an already-trimmed panel marked trimmed when re-locating on it', async () => {
+    const { module } = await analyzedModule(db, manualsDir);
+    const hash = saveImage(panelsDir, PANEL_PNG, 'png');
+    await db.models.ModulePanel.create({
+      module_id: module.id,
+      source: 'upload',
+      image_hash: hash,
+      image_ext: 'png',
+      width: 400,
+      height: 1200,
+      trimmed: true,
+    });
+
+    const backend = fakeBackend({
+      analyzeImage: JSON.stringify({
+        is_panel: true,
+        components: COMPONENTS.map((c, i) => ({ name: c.name, x: 0.5, y: 0.15 * (i + 1) })),
+      }),
+    });
+    const { panel } = await buildPanelForModule(db, backend, module, panelsDir, {
+      fetchImpl: fakeFetch({}),
+    });
+    expect(panel.source).toBe('upload');
+    expect(panel.image_hash).toBe(hash);
+    expect(panel.trimmed).toBe(true);
+  });
+
   // The module's own width beats anything the drawing step works out.
   it('draws a generated panel at the width recorded on the module', async () => {
     const { module } = await analyzedModule(db, manualsDir, { hp: 16 });
@@ -2084,6 +2160,24 @@ describe('trimming a panel picture', () => {
     expect(await ctx.db.models.Job.count({ where: { type: 'trim_panels' } })).toBe(0);
     const untouched = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
     expect(untouched.trimmed).toBeFalsy();
+  });
+
+  // The trim races the panel_image job that is placing markers on the same
+  // bytes: each would replace the record the other worked from. The button
+  // waits its turn instead.
+  it('refuses to trim while a panel_image job is still placing the markers', async () => {
+    const { module } = await paddedPanel();
+    const job = await ctx.db.models.Job.create({
+      type: 'panel_image',
+      module_id: module.id,
+      status: 'running',
+    });
+    const busy = await trim(module.id);
+    expect(busy.status).toBe(409);
+    expect(busy.body.error).toMatch(/still being placed/);
+
+    await job.update({ status: 'complete' });
+    expect((await trim(module.id)).status).toBe(200);
   });
 
   it('404s without a panel or its image, and refuses a blank picture', async () => {
