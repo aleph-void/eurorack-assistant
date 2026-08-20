@@ -49,15 +49,22 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   wide, so a SUPPLIED panel with no stated HP is trimmed on its own terms and
   MEASURED (`boxHp()` in services/panelPixels.js) — the picture sets the
   module's width rather than being stretched to the old one. A stated HP still
-  wins and is also the shape the front plate is looked for at. `POST /api/modules/:id/panel/trim` is the one
-  thing that cuts the FILE down to the front plate — it re-bases every marker
-  onto what survives, resets the crop to full, and sets `module_panels.trimmed`
-  so it cannot be pressed a second time and eat into the hardware. The cut
-  itself lives in `trimPanelImage()` (services/panelImage.js), which the
-  system view's "Trim All Panels" button also drives for a whole studio at
-  once through the `trim_panels` job (no LLM involved). Anything
-  drawing a panel as a plain `<img>` must offset it with `panelCropStyle()`
-  (client/src/panelLayout.js), or a photograph's backdrop is drawn as panel.
+  wins and is also the shape the front plate is looked for at. Every panel is
+  CUT DOWN TO THE FRONT PLATE as it arrives — an upload or a URL
+  (`POST /api/modules/:id/panel`) and the picture the panel job downloads
+  alike — by `trimIncomingPanel()` (services/panelImage.js), which cuts bytes
+  that are not stored yet and re-bases any markers already worked out on them.
+  Cutting resets the crop to full and sets `module_panels.trimmed`, so a
+  picture is only ever cut once: cutting twice eats into the hardware.
+  `POST /api/modules/:id/panel/trim` does the same to a panel ALREADY stored
+  (`trimPanelImage()`, which also re-bases the stored markers), for panels
+  from before the cut-on-arrival rule or ones an install without sharp let
+  through; the system view's "Trim All Panels" button drives it for a whole
+  studio at once through the `trim_panels` job (no LLM involved). A picture
+  that cannot be cut (no sharp, an animated format) is still stored whole with
+  its crop recorded, so anything drawing a panel as a plain `<img>` must
+  offset it with `panelCropStyle()` (client/src/panelLayout.js), or a
+  photograph's backdrop is drawn as panel.
 - Cache policy is set in one place per layer, never ad hoc in a handler:
   `app.js` stamps every `/api` response `private, no-cache` (`no-store` on
   the credential routes), and the routes that stream content-addressed bytes

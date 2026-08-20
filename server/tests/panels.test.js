@@ -493,12 +493,18 @@ describe('building a module panel', () => {
 
     expect(panel.source).toBe('image');
     expect(panel.image_ext).toBe('png');
-    expect(panel.width).toBe(400);
+    // The downloaded picture is CUT down to the plate as it lands, so what is
+    // stored is the panel and nothing else: the crop is the whole file again,
+    // the markers are fractions of what survived, and there is nothing left
+    // for the Trim button to take off.
+    expect(panel.width).toBe(320);
     expect(panel.height).toBe(1200);
-    expect(panel.crop_x).toBeCloseTo(0.1);
-    expect(panel.crop_w).toBeCloseTo(0.8);
+    expect(panel.crop_x).toBe(0);
+    expect(panel.crop_w).toBe(1);
+    expect(panel.trimmed).toBe(true);
     expect(panel.hp).toBe(8);
     expect(placements).toHaveLength(5);
+    expect(placements[0].x).toBeCloseTo(0.5, 2);
     expect(fs.existsSync(panelPath(panelsDir, panel.image_hash, 'png'))).toBe(true);
 
     const stored = await db.models.ModulePanel.findOne({ where: { module_id: module.id } });
@@ -562,11 +568,14 @@ describe('building a module panel', () => {
     });
 
     expect(panel.source).toBe('image');
-    // The crop is the plate itself, measured off the picture rather than
-    // taken from the model's answer (which was not even asked for it).
-    expect(panel.crop_x * fixture.width).toBeCloseTo(fixture.plate.x0, 0);
-    expect(panel.crop_w * fixture.width).toBeCloseTo(102, 0);
-    expect(panel.crop_h * fixture.height).toBeCloseTo(1286, 0);
+    // The stored file is the plate itself, cut to the box measured off the
+    // picture rather than to the model's answer (which was not even asked
+    // for it) — after which the crop is the whole file.
+    expect(panel.width).toBeCloseTo(102, 0);
+    expect(panel.height).toBeCloseTo(1286, 0);
+    expect(panel.crop_x).toBe(0);
+    expect(panel.crop_w).toBe(1);
+    expect(panel.trimmed).toBe(true);
     // The model was shown the crop, and told it did not need to find the panel.
     const [prompt, file] = backend.calls.analyzeImage.at(-1);
     expect(prompt).toContain('already been cropped');
@@ -574,11 +583,14 @@ describe('building a module panel', () => {
     expect(file).not.toBe(panelPath(panelsDir, panel.image_hash, 'png'));
     // Its 30px drift is gone: every marker is back on its control, to within
     // a millimetre (a plate is 128.5mm over 1286px here, so ~10px/mm), and in
-    // fractions of the whole image rather than of the crop it was mapped on.
+    // fractions of the CUT picture rather than of the press shot it was
+    // mapped on.
     for (const control of fixture.controls) {
       const placed = placements.find((p) => p.name === control.name);
-      expect(Math.abs(placed.y * fixture.height - control.y * fixture.height)).toBeLessThan(10);
-      expect(Math.abs(placed.x * fixture.width - control.x * fixture.width)).toBeLessThan(10);
+      const x = control.x * fixture.width - fixture.plate.x0;
+      const y = control.y * fixture.height - fixture.plate.y0;
+      expect(Math.abs(placed.x * panel.width - x)).toBeLessThan(10);
+      expect(Math.abs(placed.y * panel.height - y)).toBeLessThan(10);
     }
     // And the temporary crop it was shown does not outlive the job.
     expect(fs.readdirSync(panelsDir).filter((f) => f.endsWith('.png'))).toHaveLength(1);
@@ -1572,6 +1584,7 @@ describe('uploading your own panel image', () => {
   beforeEach(async () => {
     panelFetch = fakeFetch({
       'cdn.example.com/a110-front.png': { body: PANEL_PNG },
+      'cdn.example.com/bordered.png': { body: await borderedPng() },
       'cdn.example.com/not-an-image.png': { body: PDF_BYTES },
     });
     ctx = await createTestApp({ fetchImpl: panelFetch });
@@ -1624,10 +1637,12 @@ describe('uploading your own panel image', () => {
     expect(job.user_id).toBe(alice.id);
   });
 
-  it('trims a blank surround as soon as the panel is uploaded', async () => {
-    const module = await moduleWithComponents();
+  // A 96x300 plate sitting in the middle of a 160x400 white frame: the shape
+  // a press shot arrives in, and what both the file upload and the URL below
+  // are expected to come out the other side of as 96x300 of module.
+  async function borderedPng() {
     const sharp = await loadSharp();
-    const bordered = await sharp({
+    return sharp({
       create: {
         width: 160,
         height: 400,
@@ -1651,20 +1666,29 @@ describe('uploading your own panel image', () => {
       ])
       .png()
       .toBuffer();
+  }
 
+  it('cuts a blank surround off as soon as the panel is uploaded', async () => {
+    const module = await moduleWithComponents();
     const res = await upload(module.id, {
       filename: 'panel-with-border.png',
-      data_base64: bordered.toString('base64'),
+      data_base64: (await borderedPng()).toString('base64'),
       hp: 8,
     });
 
     expect(res.status).toBe(201);
-    expect(res.body.panel.width).toBe(160);
-    expect(res.body.panel.height).toBe(400);
-    expect(res.body.panel.crop.x).toBeCloseTo(32 / 160);
-    expect(res.body.panel.crop.y).toBeCloseTo(50 / 400);
-    expect(res.body.panel.crop.w).toBeCloseTo(96 / 160);
-    expect(res.body.panel.crop.h).toBeCloseTo(300 / 400);
+    // The FILE is cut down to the plate, not merely marked with where the
+    // plate is: the picture stored is 96x300 of module, the crop is the whole
+    // of it, and the Trim button has nothing left to do.
+    expect(res.body.panel.width).toBe(96);
+    expect(res.body.panel.height).toBe(300);
+    expect(res.body.panel.crop).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+    expect(res.body.panel.trimmed).toBe(true);
+
+    const panel = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    const bytes = fs.readFileSync(panelPath(ctx.panelsDir, panel.image_hash, panel.image_ext));
+    const cut = await (await loadSharp())(bytes).metadata();
+    expect([cut.width, cut.height]).toEqual([96, 300]);
   });
 
   // A picture wide enough to hold the module AND its expander: the width the
@@ -1708,7 +1732,10 @@ describe('uploading your own panel image', () => {
     });
 
     expect(res.status).toBe(201);
-    expect(res.body.panel.crop.w).toBeCloseTo(474 / 674, 2);
+    // Measured before the cut, off the plate the cut is made to: 474px of
+    // plate in a 674px picture is 20HP, and the stored picture is that plate.
+    expect(res.body.panel.width).toBe(474);
+    expect(res.body.panel.crop).toEqual({ x: 0, y: 0, w: 1, h: 1 });
     expect(res.body.panel.hp).toBe(20);
     const after = await ctx.db.models.Module.findByPk(module.id);
     expect(after.hp).toBe(20);
@@ -1745,6 +1772,22 @@ describe('uploading your own panel image', () => {
 
     const panel = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
     expect(fs.existsSync(panelPath(ctx.panelsDir, panel.image_hash, 'png'))).toBe(true);
+  });
+
+  // A URL is the other way to replace a module's panel, and a picture fetched
+  // from one is a press shot as often as an uploaded file is: it is cut down
+  // to the plate on the way in exactly the same way.
+  it('cuts the surround off a panel given by URL as well', async () => {
+    const module = await moduleWithComponents();
+    const res = await upload(module.id, { url: 'https://cdn.example.com/bordered.png', hp: 8 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.panel.source).toBe('upload');
+    expect(res.body.panel.source_url).toBe('https://cdn.example.com/bordered.png');
+    expect(res.body.panel.width).toBe(96);
+    expect(res.body.panel.height).toBe(300);
+    expect(res.body.panel.crop).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+    expect(res.body.panel.trimmed).toBe(true);
   });
 
   // The whole point of the upload: the components end up on the user's own

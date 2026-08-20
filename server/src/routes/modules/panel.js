@@ -14,6 +14,7 @@ import {
   loadPanels,
   normalizeHp,
   savePanel,
+  trimIncomingPanel,
   trimPanelImage,
 } from '../../services/panelImage.js';
 import { enqueueModuleJob } from '../../jobs/worker.js';
@@ -126,13 +127,17 @@ export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
       return res.status(400).json({ error: 'hp must be a panel width in HP' });
     }
 
-    // Crop the blank backdrop as part of accepting the upload, rather than
-    // waiting for the component-mapping job to do it later. Some uploads do
-    // not queue that job at all (there are no analyzed components yet), and
-    // even when they do, the user should see the panel they just supplied
-    // without a temporary white/transparent frame around it. Keep the
-    // original bytes: the client already renders a panel through this crop,
-    // which avoids lossy re-encoding and preserves animated image formats.
+    // Cut the blank backdrop off as part of accepting the upload, rather than
+    // waiting for the component-mapping job to do it later or for someone to
+    // press Trim. Some uploads do not queue that job at all (there are no
+    // analyzed components yet), and even when they do, the user should see
+    // the panel they just supplied without a white/transparent frame around
+    // it — the panel a module is given should BE the plate from the moment it
+    // is stored, whether it arrived as a file or as a URL.
+    //
+    // A picture that cannot be cut (no sharp, an animated format, nothing
+    // worth cutting) is stored whole with the crop recorded, which is what
+    // every renderer maps through anyway.
     //
     // A stated width is also the shape the front plate is looked for at. With
     // no width stated the picture is trimmed on its own terms and then
@@ -148,12 +153,16 @@ export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
     if (width !== null && width !== module.hp) {
       await Module.update({ hp: width }, { where: { id: module.id } });
     }
-    const uploadCrop = crop
-      ? { crop_x: crop.x, crop_y: crop.y, crop_w: crop.w, crop_h: crop.h }
-      : { ...FULL_CROP };
+    const cut = await trimIncomingPanel(data, crop, { ext: info.ext });
+    const stored = cut
+      ? { data: cut.buffer, ext: cut.ext, width: cut.width, height: cut.height }
+      : { data, ext: info.ext, width: info.width, height: info.height };
+    const uploadCrop = cut || !crop
+      ? { ...FULL_CROP }
+      : { crop_x: crop.x, crop_y: crop.y, crop_w: crop.w, crop_h: crop.h };
 
     const previous = await ModulePanel.findOne({ where: { module_id: module.id } });
-    const hash = saveImage(panelsDir, data, info.ext);
+    const hash = saveImage(panelsDir, stored.data, stored.ext);
     await savePanel(
       db,
       { ...module, hp: width },
@@ -161,10 +170,13 @@ export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
         source: 'upload',
         source_url: sourceUrl,
         image_hash: hash,
-        image_ext: info.ext,
-        width: info.width,
-        height: info.height,
+        image_ext: stored.ext,
+        width: stored.width,
+        height: stored.height,
         ...uploadCrop,
+        // Cut to the plate here means there is nothing left for the Trim
+        // button (or the system-wide sweep) to take off it.
+        trimmed: Boolean(cut),
         hp: width,
         description,
       },

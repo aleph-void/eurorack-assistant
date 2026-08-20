@@ -907,6 +907,42 @@ export async function deletePanelImageIfOrphaned(db, panelsDir, hash, ext) {
   fs.rmSync(panelPath(panelsDir, hash, ext), { force: true });
 }
 
+// A marker's position is a fraction of the picture it was placed on, so
+// cutting that picture down to `box` puts the marker at the same fraction of
+// what survives — and one that fell outside the plate lands on the edge it
+// was nearest.
+const rebaseMarker = (marker, box) => ({
+  ...marker,
+  x: clamp01(((Number(marker.x) || 0) - box.x) / box.w),
+  y: clamp01(((Number(marker.y) || 0) - box.y) / box.h),
+  w: Math.min(1, (Number(marker.w) || 0) / box.w),
+  h: Math.min(1, (Number(marker.h) || 0) / box.h),
+});
+
+// A plate that already fills its picture is not worth a second encode.
+const WORTH_CUTTING = 0.999;
+
+// Cut a panel picture down to its front plate BEFORE it becomes the module's
+// panel: the same cut trimPanelImage() makes to a stored one, made instead to
+// bytes that are only just in hand — a picture the user uploaded or gave a URL
+// for (routes/modules/panel.js), or one the panel job downloaded
+// (buildPanelForModule below). Doing it as the picture lands means the panel
+// stored is the panel and nothing else from the start, with no Trim press
+// needed and no half-second where a photograph's backdrop is drawn as panel.
+//
+// `source` is the bytes or the file to cut, `box` the plate in fractions of
+// it, and `markers` whatever has already been placed on it, which comes back
+// re-based onto the cut. Null when there is nothing worth cutting, when sharp
+// will not load, or when the format cannot be cut — in which case the caller
+// stores the picture whole and records the crop, exactly as it used to.
+export async function trimIncomingPanel(source, box, { ext = 'png', markers = [] } = {}) {
+  if (!box) return null;
+  if (box.w >= WORTH_CUTTING && box.h >= WORTH_CUTTING) return null;
+  const cut = await cropImage(source, box, { ext });
+  if (!cut) return null;
+  return { ...cut, markers: markers.map((marker) => rebaseMarker(marker, box)) };
+}
+
 // Cut the blank backdrop away from a panel picture that is already stored:
 // work the front plate's box out of the pixels, CUT THE FILE DOWN TO IT, and
 // re-base every marker onto what survives — after which the crop is the whole
@@ -927,7 +963,6 @@ export async function deletePanelImageIfOrphaned(db, panelsDir, hash, ext) {
 // cut — the crop alone is recorded, which is what the route used to do).
 export async function trimPanelImage(db, module, panel, panelsDir) {
   const { ModulePanelComponent } = db.models;
-  const clamp01 = (value) => Math.min(1, Math.max(0, value));
   if (panel.trimmed) return { outcome: 'already' };
   const file = panel.image_hash ? panelPath(panelsDir, panel.image_hash, panel.image_ext) : null;
   if (!file || !fs.existsSync(file)) return { outcome: 'missing' };
@@ -948,12 +983,8 @@ export async function trimPanelImage(db, module, panel, panelsDir) {
   // outside the plate stays on the edge it was nearest.
   const placements = await ModulePanelComponent.findAll({ where: { panel_id: panel.id } });
   for (const placement of placements) {
-    await placement.update({
-      x: clamp01((placement.x - crop.x) / crop.w),
-      y: clamp01((placement.y - crop.y) / crop.h),
-      w: Math.min(1, (Number(placement.w) || 0) / crop.w),
-      h: Math.min(1, (Number(placement.h) || 0) / crop.h),
-    });
+    const { x, y, w, h } = rebaseMarker(placement, crop);
+    await placement.update({ x, y, w, h });
   }
   await panel.update({
     image_hash: hash,
@@ -1026,7 +1057,9 @@ export async function locateOnUploadedPanel(db, backend, module, panel, componen
       // such, or a re-locate would re-arm the Trim button against an image
       // with no backdrop left to lose.
       trimmed: Boolean(panel.trimmed),
-      ...(located?.crop ?? { ...FULL_CROP }),
+      // ... and a picture that IS the plate is never cropped again: the crop
+      // a fresh reading of it suggests would only shave the hardware.
+      ...(panel.trimmed ? { ...FULL_CROP } : located?.crop ?? { ...FULL_CROP }),
       hp: module.hp ?? panel.hp ?? null,
       description: located
         ? `Uploaded panel image — ${located.matched} of ${components.length} component(s) located on it.`
@@ -1120,22 +1153,59 @@ export async function buildPanelForModule(db, backend, module, panelsDir, deps =
         await deletePanelImageIfOrphaned(db, panelsDir, researched.image.hash, researched.image.ext);
         return landed;
       }
+      // Cut the plate out of the downloaded picture as it lands, rather than
+      // storing a press shot and leaving a Trim button for someone to press:
+      // what the research found is a photograph, and what a panel is drawn
+      // from should be the module.
+      const plate = {
+        x: located.crop.crop_x,
+        y: located.crop.crop_y,
+        w: located.crop.crop_w,
+        h: located.crop.crop_h,
+      };
+      const cut = await trimIncomingPanel(researched.image.path, plate, {
+        ext: researched.image.ext,
+        markers: located.placements,
+      });
+      if (cut) {
+        log(
+          'cut the panel out of the downloaded image: ' +
+            `${researched.image.width}x${researched.image.height} to ${cut.width}x${cut.height}`
+        );
+      }
+      const stored = cut
+        ? {
+            hash: saveImage(panelsDir, cut.buffer, cut.ext),
+            ext: cut.ext,
+            width: cut.width,
+            height: cut.height,
+          }
+        : researched.image;
       const saved = await savePanel(
         db,
         module,
         {
           source: 'image',
           source_url: researched.image.url,
-          image_hash: researched.image.hash,
-          image_ext: researched.image.ext,
-          width: researched.image.width,
-          height: researched.image.height,
-          ...located.crop,
+          image_hash: stored.hash,
+          image_ext: stored.ext,
+          width: stored.width,
+          height: stored.height,
+          ...(cut ? { ...FULL_CROP } : located.crop),
+          trimmed: Boolean(cut),
           hp: researched.hp,
           description: researched.page_url ? `Found on ${researched.page_url}` : null,
         },
-        located.placements
+        cut ? cut.markers : located.placements
       );
+      if (cut) {
+        await deletePanelImageIfOrphaned(
+          db,
+          panelsDir,
+          researched.image.hash,
+          researched.image.ext
+        );
+      }
       if (previous) {
         await deletePanelImageIfOrphaned(db, panelsDir, previous.image_hash, previous.image_ext);
       }
