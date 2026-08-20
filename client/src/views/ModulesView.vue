@@ -83,8 +83,10 @@ async function load() {
   }
 }
 
+// A module can be split between racks, so the racks it stands in are named
+// with how many of it each one holds rather than by name alone.
 function rackNames(module) {
-  return (module.racks || []).map((r) => r.name).join(', ');
+  return (module.racks || []).map((r) => `${r.name} (×${r.quantity})`).join(', ');
 }
 
 function moduleHref(module, rack) {
@@ -568,7 +570,7 @@ onUnmounted(() => clearTimeout(refreshTimer));
                     :data-test="`move-qty-${module.id}`"
                     :aria-label="`How many ${module.manufacturer} ${module.name} to move`"
                   />
-                  <template v-else>{{ module.quantity }}</template>
+                  <template v-else>{{ heldIn(module, group.rack) }}</template>
                 </td>
                 <td>{{ module.hp ? `${module.hp}HP` : '—' }}</td>
                 <td v-if="!currentRack">{{ rackNames(module) }}</td>

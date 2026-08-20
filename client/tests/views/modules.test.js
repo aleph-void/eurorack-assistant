@@ -143,6 +143,38 @@ describe('ModulesView', () => {
     expect(travel.attributes('open')).toBeUndefined();
   });
 
+  // A module split between two racks holds a different number in each: the
+  // Qty column under a rack is what THAT rack holds, not the total, or a
+  // move of one copy out of two reads as the quantity having been copied.
+  it('shows each rack’s own count of a module split between racks', async () => {
+    mockLists([
+      {
+        id: 1,
+        manufacturer: 'Make Noise',
+        name: 'Maths',
+        quantity: 3,
+        racks: [
+          { id: 1, name: 'main rack', quantity: 2 },
+          { id: 2, name: 'travel case', quantity: 1 },
+        ],
+        manual_status: 'found',
+        analysis_status: 'complete',
+      },
+    ]);
+    const wrapper = mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    const qty = (rackId) =>
+      wrapper
+        .find(`[data-test="rack-group-${rackId}"] [data-test="module-1"] .qty-cell`)
+        .text();
+    expect(qty(1)).toBe('2');
+    expect(qty(2)).toBe('1');
+    // And the rack list names how many stand in each.
+    expect(wrapper.find('[data-test="rack-group-1"] [data-test="module-1"]').text()).toContain(
+      'main rack (×2), travel case (×1)'
+    );
+  });
+
   // Typing narrows the visible rows by manufacturer or module name, and empties
   // the racks that no longer have anything to show.
   it('filters the visible modules by name or manufacturer', async () => {
