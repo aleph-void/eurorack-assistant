@@ -137,6 +137,116 @@ describe('RacksView', () => {
     expect(wrapper.find('[data-test="rack-row-0"] img').attributes('src')).toBe('/api/panels/arp.svg');
   });
 
+  // Two copies of the same module in one row, plus a third module, so a
+  // reorder has to move the RIGHT copy rather than the first match by id.
+  function reorderableDetail() {
+    const arp = { module_id: 4, manufacturer: '2hp', name: 'ARP', hp: 2 };
+    const maths = { module_id: 5, manufacturer: 'Make Noise', name: 'Maths', hp: 20 };
+    return {
+      id: 1,
+      name: 'main rack',
+      modules: [
+        { id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, quantity: 2 },
+        { id: 5, manufacturer: 'Make Noise', name: 'Maths', hp: 20, quantity: 1 },
+      ],
+      rows: [{ id: 9, unit: 3, hp: 84, modules: [{ ...arp }, { ...maths }, { ...arp }] }],
+    };
+  }
+
+  // The layout PUT is the source of truth for order, so echo the saved row
+  // back the way the server would and the rendered row follows it.
+  function echoLayout(detail) {
+    const byId = new Map(detail.modules.map((module) => [module.id, module]));
+    api.put.mockImplementation((path, body) =>
+      Promise.resolve({
+        rows: body.rows.map((row, index) => ({
+          ...detail.rows[index],
+          unit: row.unit,
+          hp: row.hp,
+          modules: row.modules.map(({ module_id: id }) => ({
+            module_id: id,
+            manufacturer: byId.get(id).manufacturer,
+            name: byId.get(id).name,
+            hp: byId.get(id).hp,
+          })),
+        })),
+      })
+    );
+  }
+
+  // jsdom lays nothing out, so give each slot the box it would really have:
+  // 2HP, 20HP, 2HP at 9px per HP, laid end to end.
+  function measureSlots(wrapper, widths) {
+    let left = 0;
+    for (const [index, slot] of wrapper.findAll('.placed-module').entries()) {
+      const box = { left, width: widths[index], right: left + widths[index], top: 0, bottom: 100, height: 100 };
+      slot.element.getBoundingClientRect = () => box;
+      left += widths[index];
+    }
+  }
+
+  async function openReorderable(attachTo) {
+    const detail = reorderableDetail();
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/racks' ? racksResponse : reorderableDetail())
+    );
+    echoLayout(detail);
+    const wrapper = mount(RacksView, { global: testGlobal(), ...(attachTo ? { attachTo } : {}) });
+    await flushPromises();
+    await wrapper.find('[data-test="organize-1"]').trigger('click');
+    await flushPromises();
+    return wrapper;
+  }
+
+  const placedNames = (wrapper) =>
+    wrapper.findAll('.placed-module').map((slot) => slot.attributes('aria-label').split(',')[0]);
+
+  it('drops a module between two others instead of appending it', async () => {
+    const wrapper = await openReorderable();
+    measureSlots(wrapper, [18, 180, 18]);
+    const slots = wrapper.find('[data-test="rack-row-0"] .rack-row-slots');
+
+    // Picked up the trailing ARP, aimed at the left half of Maths: it lands
+    // between the two, not back on the end.
+    await wrapper.find('[data-test="placed-module-0-2"]').trigger('dragstart');
+    await slots.trigger('dragover', { clientX: 30 });
+    expect(wrapper.find('[data-test="placed-module-0-1"]').classes()).toContain('drop-before');
+    await slots.trigger('drop', { clientX: 30 });
+    await flushPromises();
+
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/layout', {
+      rows: [{ unit: 3, hp: 84, modules: [{ module_id: 4 }, { module_id: 4 }, { module_id: 5 }] }],
+    });
+    expect(placedNames(wrapper)).toEqual(['2hp ARP', '2hp ARP', 'Make Noise Maths']);
+  });
+
+  it('leaves the row alone when a module is dropped back where it started', async () => {
+    const wrapper = await openReorderable();
+    measureSlots(wrapper, [18, 180, 18]);
+    const slots = wrapper.find('[data-test="rack-row-0"] .rack-row-slots');
+    await wrapper.find('[data-test="placed-module-0-0"]').trigger('dragstart');
+    await slots.trigger('drop', { clientX: 5 });
+    await flushPromises();
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it('steps the focused module along its row with the arrow keys', async () => {
+    const wrapper = await openReorderable(document.body);
+    await wrapper.find('[data-test="placed-module-0-0"]').trigger('keydown.right');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/layout', {
+      rows: [{ unit: 3, hp: 84, modules: [{ module_id: 5 }, { module_id: 4 }, { module_id: 4 }] }],
+    });
+    expect(placedNames(wrapper)).toEqual(['Make Noise Maths', '2hp ARP', '2hp ARP']);
+    // Focus follows the module that moved, so it can be stepped again.
+    expect(document.activeElement).toBe(wrapper.find('[data-test="placed-module-0-1"]').element);
+
+    await wrapper.find('[data-test="placed-module-0-0"]').trigger('keydown.left');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
   it('renames a rack', async () => {
     mockLists();
     api.put.mockResolvedValue({ id: 2, name: 'live case', module_count: 1 });

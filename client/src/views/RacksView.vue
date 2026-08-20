@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import ShareButton from '../components/ShareButton.vue';
@@ -17,6 +17,9 @@ const organizer = ref(null);
 const organizingRackId = ref(null);
 const layoutBusy = ref(false);
 const dragged = ref(null);
+// Where the module in hand would land: { rowIndex, index }. Drawn as a bar on
+// the slot edge the drop would insert against, so a reorder can be aimed.
+const dropHint = ref(null);
 
 async function load() {
   try {
@@ -171,38 +174,88 @@ async function removeRow(index) {
   await saveLayout();
 }
 
-function startDrag(module, rowIndex = null) {
+function startDrag(module, rowIndex = null, index = null) {
   // Inventory entries use `id`; persisted row placements use `module_id`.
   // Normalize once at the gesture boundary so a first drop saves the actual
-  // module id rather than an undefined placement.
-  dragged.value = { module: { ...module, module_id: module.module_id ?? module.id }, rowIndex };
+  // module id rather than an undefined placement. A placement also carries
+  // WHICH copy is in hand — a row may hold two of the same module, and the
+  // one dragged is the one that has to move.
+  dragged.value = { module: { ...module, module_id: module.module_id ?? module.id }, rowIndex, index };
 }
 
-async function dropIntoRow(rowIndex) {
-  const held = dragged.value;
+function endDrag() {
   dragged.value = null;
+  dropHint.value = null;
+}
+
+// Which slot the cursor is aiming at: the first module whose left half it is
+// over, else the end of the row. Measured against the DOM, which still holds
+// the pre-drop order, so the answer is an index into the row as it stands.
+function slotIndex(container, clientX) {
+  const slots = [...container.querySelectorAll('.placed-module')];
+  for (const [index, slot] of slots.entries()) {
+    const box = slot.getBoundingClientRect();
+    if (clientX < box.left + box.width / 2) return index;
+  }
+  return slots.length;
+}
+
+function onRowDragOver(rowIndex, event) {
+  if (!dragged.value) return;
+  dropHint.value = { rowIndex, index: slotIndex(event.currentTarget, event.clientX) };
+}
+
+function onRowDragLeave(rowIndex, event) {
+  // Crossing between two modules inside the row fires dragleave as well;
+  // only a cursor that has actually left the row clears the bar.
+  if (event.currentTarget.contains(event.relatedTarget)) return;
+  if (dropHint.value?.rowIndex === rowIndex) dropHint.value = null;
+}
+
+async function dropIntoRow(rowIndex, event) {
+  const held = dragged.value;
+  let target = slotIndex(event.currentTarget, event.clientX);
+  endDrag();
   if (!held || !organizer.value) return;
   const row = organizer.value.rows[rowIndex];
-  if (held.rowIndex !== null) organizer.value.rows[held.rowIndex].modules.splice(
-    organizer.value.rows[held.rowIndex].modules.findIndex((module) => module.module_id === held.module.module_id),
-    1
-  );
+  if (held.rowIndex !== null) {
+    // Pulling the module out shifts everything to its right one slot left, so
+    // a target beyond it means one less by the time it is put back down.
+    if (held.rowIndex === rowIndex && held.index < target) target -= 1;
+    if (held.rowIndex === rowIndex && held.index === target) return;
+    organizer.value.rows[held.rowIndex].modules.splice(held.index, 1);
+  }
   if (rowUsed(row) + (Number(held.module.hp) || 0) > Number(row.hp)) {
-    if (held.rowIndex !== null) organizer.value.rows[held.rowIndex].modules.push(held.module);
+    if (held.rowIndex !== null) organizer.value.rows[held.rowIndex].modules.splice(held.index, 0, held.module);
     error.value = `${held.module.manufacturer} ${held.module.name} does not fit in this ${row.hp}HP row.`;
     return;
   }
-  row.modules.push(held.module);
+  row.modules.splice(target, 0, held.module);
   await saveLayout();
 }
 
 async function dropIntoAvailable() {
   const held = dragged.value;
-  dragged.value = null;
+  endDrag();
   if (!held || held.rowIndex === null || !organizer.value) return;
-  const row = organizer.value.rows[held.rowIndex];
-  row.modules.splice(row.modules.findIndex((module) => module.module_id === held.module.module_id), 1);
+  organizer.value.rows[held.rowIndex].modules.splice(held.index, 1);
   await saveLayout();
+}
+
+// Keyboard reordering, for the same job without a mouse: the focused module
+// steps one place along its row. A 2HP panel is a small drag target, so this
+// is the reliable way to nudge one into place.
+async function nudge(rowIndex, index, delta) {
+  const row = organizer.value?.rows[rowIndex];
+  const target = index + delta;
+  if (!row || target < 0 || target >= row.modules.length) return;
+  const [module] = row.modules.splice(index, 1);
+  row.modules.splice(target, 0, module);
+  await saveLayout();
+  // Keep the module the user is stepping along under the keyboard.
+  await nextTick();
+  const moved = document.querySelector(`[data-test="placed-module-${rowIndex}-${target}"]`);
+  if (moved instanceof HTMLElement) moved.focus();
 }
 </script>
 
@@ -319,8 +372,9 @@ async function dropIntoAvailable() {
     <section v-if="organizer" class="rack-organizer" data-test="rack-organizer">
       <h2>Organize {{ organizer.name }}</h2>
       <p class="muted">
-        Add 3U and 1U rows, set their HP, then drag each module copy into its physical row. A row
-        cannot exceed its HP capacity.
+        Add 3U and 1U rows, set their HP, then drag each module copy into its physical row. Drop a
+        module between two others to place it there — that is how a row is reordered — or focus one
+        and press <kbd>←</kbd>/<kbd>→</kbd> to step it along. A row cannot exceed its HP capacity.
       </p>
       <div class="actions spaced">
         <button class="secondary" :disabled="layoutBusy" data-test="add-3u-row" @click="addRow(3)">Add 3U row</button>
@@ -340,6 +394,7 @@ async function dropIntoAvailable() {
             :data-test="`available-module-${module.id}-${index}`"
             :style="{ '--module-hp': Math.max(2, Number(module.hp) || 4) }"
             @dragstart="startDrag(module)"
+            @dragend="endDrag"
           >
             <span class="module-panel-thumb" :class="{ 'thumb-fallback': !module.panel }">
               <img
@@ -372,18 +427,28 @@ async function dropIntoAvailable() {
           class="rack-row-slots"
           :class="`unit-${row.unit}`"
           :style="{ '--row-units': Number(row.unit) || 3 }"
-          @dragover.prevent
-          @drop="dropIntoRow(rowIndex)"
+          @dragover.prevent="onRowDragOver(rowIndex, $event)"
+          @dragleave="onRowDragLeave(rowIndex, $event)"
+          @drop="dropIntoRow(rowIndex, $event)"
         >
           <button
             v-for="(module, index) in row.modules"
             :key="`${module.module_id}-${index}`"
             class="placed-module"
+            :class="{
+              'drop-before': dropHint?.rowIndex === rowIndex && dropHint.index === index,
+              'drop-after': dropHint?.rowIndex === rowIndex && dropHint.index === row.modules.length && index === row.modules.length - 1,
+            }"
             draggable="true"
             type="button"
-            :title="`${module.manufacturer} ${module.name} — ${module.hp}HP`"
+            :title="`${module.manufacturer} ${module.name} — ${module.hp}HP (drag, or ← → to reorder)`"
+            :aria-label="`${module.manufacturer} ${module.name}, place ${index + 1} of ${row.modules.length}`"
+            :data-test="`placed-module-${rowIndex}-${index}`"
             :style="{ '--module-hp': Math.max(2, Number(module.hp) || 4) }"
-            @dragstart="startDrag(module, rowIndex)"
+            @dragstart="startDrag(module, rowIndex, index)"
+            @dragend="endDrag"
+            @keydown.left.prevent="nudge(rowIndex, index, -1)"
+            @keydown.right.prevent="nudge(rowIndex, index, 1)"
           >
             <img
               v-if="module.panel"
@@ -423,6 +488,12 @@ async function dropIntoAvailable() {
 .rack-row-slots { display: flex; align-items: stretch; gap: 2px; overflow-x: auto; padding: 0.35rem; background: #15151b; border: 2px solid var(--border-strong); border-radius: 5px; height: calc(var(--row-units, 3) * var(--u-px)); }
 .placed-module { flex: 0 0 calc(var(--module-hp) * var(--hp-px)); width: calc(var(--module-hp) * var(--hp-px)); height: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; cursor: grab; overflow: hidden; background: #25252d; }
 .placed-module { position: relative; }
+/* Where a drop would land, drawn INSIDE the slot it inserts against: a bar
+   between two panels would push the row along mid-drag and move the very
+   target being aimed at. */
+.placed-module.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+.placed-module.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
+.placed-module:focus-visible { outline: 2px solid var(--accent-2); outline-offset: -2px; }
 /* The image is sized and offset by the panel's crop (panelLayout.js), so the
    blank backdrop a product photo came with stays outside the box. */
 .placed-module img { position: absolute; display: block; object-fit: fill; }
