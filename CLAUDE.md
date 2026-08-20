@@ -48,7 +48,10 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   without rewriting placements. `POST /api/modules/:id/panel/trim` is the one
   thing that cuts the FILE down to the front plate — it re-bases every marker
   onto what survives, resets the crop to full, and sets `module_panels.trimmed`
-  so it cannot be pressed a second time and eat into the hardware. Anything
+  so it cannot be pressed a second time and eat into the hardware. The cut
+  itself lives in `trimPanelImage()` (services/panelImage.js), which the
+  system view's "Trim All Panels" button also drives for a whole studio at
+  once through the `trim_panels` job (no LLM involved). Anything
   drawing a panel as a plain `<img>` must offset it with `panelCropStyle()`
   (client/src/panelLayout.js), or a photograph's backdrop is drawn as panel.
 - Cache policy is set in one place per layer, never ad hoc in a handler:

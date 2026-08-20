@@ -44,6 +44,7 @@ function describe(job) {
   if (job.module_name) return `${job.module_manufacturer || ''} ${job.module_name}`.trim();
   if (job.question_prompt) return job.question_prompt;
   if (job.rack_name) return job.rack_name;
+  if (job.system_name) return job.system_name;
   return '';
 }
 

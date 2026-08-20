@@ -1916,7 +1916,7 @@ describe('trimming a panel picture', () => {
 
   // A drawn 2HP plate on a large blank backdrop, stored as the module's
   // panel with no crop — the state Trim exists to fix.
-  async function paddedPanel({ blank = false } = {}) {
+  async function paddedPanel({ blank = false, name = 'Maths' } = {}) {
     const sharp = await loadSharp();
     const pxPerMm = 4;
     const plateW = Math.round(2 * HP_MM * pxPerMm);
@@ -1943,7 +1943,7 @@ describe('trimming a panel picture', () => {
     const png = await sharp(gray, { raw: { width, height, channels: 1 } })
       .png()
       .toBuffer();
-    const module = await insertModule(ctx.db, alice.id, { hp: 2 });
+    const module = await insertModule(ctx.db, alice.id, { name, hp: 2 });
     const hash = saveImage(ctx.panelsDir, png, 'png');
     const panel = await ctx.db.models.ModulePanel.create({
       module_id: module.id,
@@ -2015,6 +2015,75 @@ describe('trimming a panel picture', () => {
     expect(settled.width).toBe(after.width);
     expect(settled.height).toBe(after.height);
     expect(again.body.panel.components[0].x).toBeCloseTo(0.5, 1);
+  });
+
+  it('trims every panel in a system from one queued job', async () => {
+    const first = await paddedPanel({ name: 'Maths' });
+    const second = await paddedPanel({ name: 'Wogglebug' });
+    // A module with no panel at all rides along and is simply skipped.
+    await insertModule(ctx.db, alice.id, { name: 'Rene' });
+    const racks = (await request(ctx.app).get('/api/racks').set('Cookie', ctx.aliceCookie)).body;
+    const system = (
+      await request(ctx.app)
+        .post('/api/systems')
+        .set('Cookie', ctx.aliceCookie)
+        .send({ name: 'studio' })
+    ).body;
+    for (const rack of racks) {
+      await request(ctx.app)
+        .put(`/api/racks/${rack.id}/system`)
+        .set('Cookie', ctx.aliceCookie)
+        .send({ system_id: system.id });
+    }
+
+    const queued = await request(ctx.app)
+      .post(`/api/systems/${system.id}/panels/trim`)
+      .set('Cookie', ctx.aliceCookie);
+    expect(queued.status).toBe(202);
+    expect(queued.body).toMatchObject({ type: 'trim_panels', status: 'pending', reused: false });
+    // Asking twice while it is still queued re-uses the sweep already waiting.
+    const again = await request(ctx.app)
+      .post(`/api/systems/${system.id}/panels/trim`)
+      .set('Cookie', ctx.aliceCookie);
+    expect(again.body).toMatchObject({ id: queued.body.id, reused: true });
+    expect(await ctx.db.models.Job.count({ where: { type: 'trim_panels' } })).toBe(1);
+
+    // Trimming is pixels and file writes: the model is never asked anything.
+    const backend = fakeBackend();
+    const worker = createWorker(ctx.db, {
+      manualsDir: ctx.manualsDir,
+      panelsDir: ctx.panelsDir,
+      backendFactory: () => backend,
+      log: () => {},
+    });
+    const done = await worker.tick();
+    expect(done.status).toBe('complete');
+    expect(Object.values(backend.calls).every((made) => made.length === 0)).toBe(true);
+
+    for (const { module, panel } of [first, second]) {
+      const after = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+      expect(after.trimmed).toBe(true);
+      expect(after.width).toBeLessThan(panel.width);
+      expect(after.crop_w).toBeCloseTo(1);
+      expect(fs.existsSync(panelPath(ctx.panelsDir, after.image_hash, after.image_ext))).toBe(true);
+    }
+  });
+
+  it('will not sweep a system that is not yours', async () => {
+    const { module } = await paddedPanel();
+    const system = (
+      await request(ctx.app)
+        .post('/api/systems')
+        .set('Cookie', ctx.aliceCookie)
+        .send({ name: 'studio' })
+    ).body;
+    const res = await request(ctx.app)
+      .post(`/api/systems/${system.id}/panels/trim`)
+      .set('Cookie', ctx.adminCookie);
+    expect(res.status).toBe(404);
+    expect(await ctx.db.models.Job.count({ where: { type: 'trim_panels' } })).toBe(0);
+    const untouched = await ctx.db.models.ModulePanel.findOne({ where: { module_id: module.id } });
+    expect(untouched.trimmed).toBeFalsy();
   });
 
   it('404s without a panel or its image, and refuses a blank picture', async () => {

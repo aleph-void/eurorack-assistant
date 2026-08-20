@@ -37,6 +37,7 @@ import { extractJsonObject } from './json.js';
 import { downloadImage, panelPath, saveImage } from './image.js';
 import { HP_MM, PANEL_MM_HEIGHT, PX_PER_MM, DEFAULT_HP } from './panelGeometry.js';
 import {
+  cropImage,
   growBox,
   panelCrop,
   pointInBox,
@@ -904,6 +905,68 @@ export async function deletePanelImageIfOrphaned(db, panelsDir, hash, ext) {
   if (!hash) return;
   if ((await db.models.ModulePanel.count({ where: { image_hash: hash } })) > 0) return;
   fs.rmSync(panelPath(panelsDir, hash, ext), { force: true });
+}
+
+// Cut the blank backdrop away from a panel picture that is already stored:
+// work the front plate's box out of the pixels, CUT THE FILE DOWN TO IT, and
+// re-base every marker onto what survives — after which the crop is the whole
+// picture again and every renderer draws what it drew before. The new bytes
+// are stored under their own hash and the old ones go once no panel points at
+// them.
+//
+// Trim peels uniform lines off the edges, and a plate that has already been
+// cut out has uniform edges of its own, so a panel is only ever trimmed once
+// (module_panels.trimmed) — trimming twice would eat into the hardware.
+//
+// One panel's worth of the work, shared by the module page's Trim button
+// (routes/modules/panel.js) and the system-wide sweep (jobs/handlers.js), so
+// trimming means the same thing however it was asked for. Reports what
+// happened rather than throwing: 'trimmed', 'already' (nothing to do),
+// 'missing' (the file has gone), 'no-edge' (no plate found in the pixels) or
+// 'crop' (an install whose sharp will not load, or a format that cannot be
+// cut — the crop alone is recorded, which is what the route used to do).
+export async function trimPanelImage(db, module, panel, panelsDir) {
+  const { ModulePanelComponent } = db.models;
+  const clamp01 = (value) => Math.min(1, Math.max(0, value));
+  if (panel.trimmed) return { outcome: 'already' };
+  const file = panel.image_hash ? panelPath(panelsDir, panel.image_hash, panel.image_ext) : null;
+  if (!file || !fs.existsSync(file)) return { outcome: 'missing' };
+  const pixels = await readPixels(file);
+  const crop = pixels ? panelCrop(pixels, { hp: panel.hp ?? module.hp ?? null }) : null;
+  if (!crop) return { outcome: 'no-edge' };
+  // Both the crop and every marker are fractions of the file as it stands,
+  // so the box cuts straight out of it.
+  const cut = await cropImage(file, crop, { ext: panel.image_ext });
+  if (!cut) {
+    await panel.update({ crop_x: crop.x, crop_y: crop.y, crop_w: crop.w, crop_h: crop.h });
+    return { outcome: 'crop' };
+  }
+  const stale = { hash: panel.image_hash, ext: panel.image_ext };
+  const hash = saveImage(panelsDir, cut.buffer, cut.ext);
+  // Every marker is a fraction of the image that is being cut down, so each
+  // one moves to the same fraction of what survives — and a marker that fell
+  // outside the plate stays on the edge it was nearest.
+  const placements = await ModulePanelComponent.findAll({ where: { panel_id: panel.id } });
+  for (const placement of placements) {
+    await placement.update({
+      x: clamp01((placement.x - crop.x) / crop.w),
+      y: clamp01((placement.y - crop.y) / crop.h),
+      w: Math.min(1, (Number(placement.w) || 0) / crop.w),
+      h: Math.min(1, (Number(placement.h) || 0) / crop.h),
+    });
+  }
+  await panel.update({
+    image_hash: hash,
+    image_ext: cut.ext,
+    width: cut.width,
+    height: cut.height,
+    trimmed: true,
+    ...FULL_CROP,
+  });
+  if (hash !== stale.hash || cut.ext !== stale.ext) {
+    await deletePanelImageIfOrphaned(db, panelsDir, stale.hash, stale.ext);
+  }
+  return { outcome: 'trimmed', width: cut.width, height: cut.height };
 }
 
 // Place this module's components on a panel image that is already stored —

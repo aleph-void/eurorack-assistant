@@ -28,6 +28,8 @@
 //   scope_question  — determine which modules/jacks a question applies to,
 //                     then leave the question 'scoped' for the user to review
 //   answer_question — ask the LLM with the reviewed scope and attachments
+//   trim_panels     — cut the blank backdrop off every panel picture in a
+//                     system's racks, one module at a time. No LLM involved
 //   export_rack     — zip a rack's manuals, notes and questions into a
 //                     one-shot download served by the exports route
 //
@@ -52,7 +54,7 @@ import {
   moduleFactGaps,
 } from '../services/componentDescriber.js';
 import { extractManualDocument } from '../services/manualText.js';
-import { buildPanelForModule } from '../services/panelImage.js';
+import { buildPanelForModule, trimPanelImage } from '../services/panelImage.js';
 import { downloadVideoForModule, removeVideoFiles } from '../services/videos.js';
 import { analyzeVideoForModule } from '../services/videoAnalyzer.js';
 import { answerQuestion, scopeQuestion } from '../services/ask.js';
@@ -545,6 +547,67 @@ export function createHandlers(
     }
   }
 
+  // Trim every panel in a system: the same cut the module page's Trim button
+  // makes (services/panelImage.js), asked for once for a whole studio rather
+  // than module by module. No model runs — it is pixels and file writes — so
+  // the job needs no LLM account (see worker.js).
+  //
+  // A panel that is already trimmed, has no picture on disk, or has no
+  // findable plate edge is reported and skipped: one module that cannot be
+  // cut must not fail the sweep for the rest, since a retry would re-trim
+  // nothing and leave the same module behind again.
+  async function handleTrimPanels(job, backend, progress) {
+    const { Module, ModulePanel, Rack, RackModule, System } = db.models;
+    const payload = JSON.parse(job.payload || '{}');
+    const system = await System.findOne({
+      where: { id: payload.system_id, user_id: job.user_id },
+    });
+    if (!system) throw new Error(`System ${payload.system_id} no longer exists`);
+    const racks = await Rack.findAll({ where: { system_id: system.id }, attributes: ['id'] });
+    if (racks.length === 0) throw new Error(`System '${system.name}' has no racks in it`);
+    const mappings = await RackModule.findAll({
+      where: { rack_id: racks.map((rack) => rack.id) },
+      attributes: ['module_id'],
+    });
+    const moduleIds = [...new Set(mappings.map((mapping) => mapping.module_id))];
+    if (moduleIds.length === 0) throw new Error(`System '${system.name}' has no modules in it`);
+    const modules = await Module.findAll({ where: { id: moduleIds }, order: [['id', 'ASC']] });
+    progress(`trimming panels: ${modules.length} module(s) in '${system.name}'`);
+    const tally = { trimmed: 0, already: 0, skipped: 0 };
+    for (const record of modules) {
+      const module = record.get({ plain: true });
+      const label = `${module.manufacturer} ${module.name}`.trim();
+      const panel = await ModulePanel.findOne({ where: { module_id: module.id } });
+      if (!panel) {
+        tally.skipped += 1;
+        progress(`no panel yet: ${label}`);
+        continue;
+      }
+      const { outcome, width, height } = await trimPanelImage(db, module, panel, panelsDir);
+      if (outcome === 'trimmed') {
+        tally.trimmed += 1;
+        progress(`trimmed to ${width}x${height}: ${label}`);
+      } else if (outcome === 'crop') {
+        tally.trimmed += 1;
+        progress(`could not cut the file; recorded the crop instead: ${label}`);
+      } else if (outcome === 'already') {
+        tally.already += 1;
+        progress(`already trimmed: ${label}`);
+      } else {
+        tally.skipped += 1;
+        progress(
+          outcome === 'missing'
+            ? `panel image is missing: ${label}`
+            : `no panel edge to trim to: ${label}`
+        );
+      }
+    }
+    progress(
+      `${tally.trimmed} panel(s) trimmed, ${tally.already} already trimmed, ` +
+        `${tally.skipped} skipped`
+    );
+  }
+
   async function handleExportRack(job, backend, progress) {
     const payload = JSON.parse(job.payload || '{}');
     const rack = await db.models.Rack.findOne({
@@ -584,6 +647,7 @@ export function createHandlers(
     analyze_video: handleAnalyzeVideo,
     scope_question: handleScopeQuestion,
     answer_question: handleAnswerQuestion,
+    trim_panels: handleTrimPanels,
     export_rack: handleExportRack,
   };
 }

@@ -55,13 +55,16 @@ export function jobRoutes(db, { bus = null } = {}) {
         const { id, type, status, attempts, error, created_at, updated_at, module_id, question_id } =
           job;
         // export_rack jobs carry their target rack and, while the zip is
-        // still on disk, the download link in the payload.
+        // still on disk, the download link in the payload; trim_panels
+        // carries the system whose panels it sweeps.
         let rack_name = null;
+        let system_name = null;
         let download = null;
         if (job.payload) {
           try {
             const payload = JSON.parse(job.payload);
             rack_name = payload.rack_name ?? null;
+            system_name = payload.system_name ?? null;
             download = payload.download ?? null;
           } catch {
             // payload is not JSON
@@ -81,6 +84,7 @@ export function jobRoutes(db, { bus = null } = {}) {
           module_name: job.Module?.name ?? null,
           question_prompt: job.Question?.prompt ?? null,
           rack_name,
+          system_name,
           // Running, but nothing has reported progress for a long time —
           // the worker normally reclaims these on its next pass, and the
           // client offers a Retry in the meantime.

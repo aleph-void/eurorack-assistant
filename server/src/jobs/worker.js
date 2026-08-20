@@ -206,16 +206,18 @@ export function createWorker(db, options = {}) {
       question_prompt = null,
     } = job;
     // export_rack jobs carry their target rack and, once complete, the
-    // download link in the payload.
+    // download link in the payload; trim_panels carries the system it sweeps.
     let rack_name = null;
+    let system_name = null;
     let download = null;
     if (job.payload) {
       try {
         const payload = JSON.parse(job.payload);
         rack_name = payload.rack_name ?? null;
+        system_name = payload.system_name ?? null;
         download = payload.download ?? null;
       } catch {
-        // payload is not JSON (never the case for export jobs)
+        // payload is not JSON (never the case for export or trim jobs)
       }
     }
     return {
@@ -230,6 +232,7 @@ export function createWorker(db, options = {}) {
       module_name,
       question_prompt,
       rack_name,
+      system_name,
       download,
     };
   }
@@ -605,11 +608,12 @@ export function createWorker(db, options = {}) {
       const ownerUser = owners[0] ? await db.models.User.findByPk(owners[0]) : null;
       settings = await getLlmSettings(db, job.type, ownerUser);
       // Model runs happen on the job owner's own authorized account — there
-      // is no shared login to fall back to. import, export_rack and
-      // download_video (yt-dlp + ffmpeg, no model) never call the model;
-      // everything else may, and fails for good (not three times) when no
-      // account is connected, because no retry will conjure one.
-      if (!['import', 'export_rack', 'download_video'].includes(job.type)) {
+      // is no shared login to fall back to. import, export_rack,
+      // download_video (yt-dlp + ffmpeg, no model) and trim_panels (pixels
+      // and file writes) never call the model; everything else may, and
+      // fails for good (not three times) when no account is connected,
+      // because no retry will conjure one.
+      if (!['import', 'export_rack', 'download_video', 'trim_panels'].includes(job.type)) {
         const account = ownerUser && (await getAccount(db, ownerUser.id, settings.provider));
         if (!account) {
           const missing = new Error(

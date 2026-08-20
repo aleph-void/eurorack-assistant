@@ -1,14 +1,12 @@
-import fs from 'node:fs';
 import { Router } from 'express';
 import {
   downloadImage,
   MAX_IMAGE_BYTES,
   MIN_PANEL_PIXELS,
-  panelPath,
   saveImage,
   sniffImage,
 } from '../../services/image.js';
-import { cropImage, panelCrop, readPixels } from '../../services/panelPixels.js';
+import { panelCrop, readPixels } from '../../services/panelPixels.js';
 import {
   deletePanelImageIfOrphaned,
   fillMissingPlacements,
@@ -16,13 +14,12 @@ import {
   loadPanels,
   normalizeHp,
   savePanel,
+  trimPanelImage,
 } from '../../services/panelImage.js';
 import { enqueueModuleJob } from '../../jobs/worker.js';
 import { requireBudget } from '../../services/budgets.js';
 import { requireOwnedModule } from './helpers.js';
 import { asyncHandler } from '../asyncHandler.js';
-
-const clamp01 = (value) => Math.min(1, Math.max(0, value));
 
 export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
   const {
@@ -211,55 +208,10 @@ export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
     const module = req.module;
     const panel = await ModulePanel.findOne({ where: { module_id: module.id } });
     if (!panel) return res.status(404).json({ error: 'Module has no panel' });
-    const file = panel.image_hash
-      ? panelPath(panelsDir, panel.image_hash, panel.image_ext)
-      : null;
-    if (!file || !fs.existsSync(file)) {
-      return res.status(404).json({ error: 'Panel image not found' });
-    }
-    // Trim peels uniform lines off the edges, and a plate that has already
-    // been cut out has uniform edges of its own — pressing Trim again would
-    // eat into the hardware, so once is all it does.
-    if (panel.trimmed) {
-      const current = await loadPanels(db, [module.id]);
-      return res.json({ panel: current.get(module.id) ?? null });
-    }
-    const pixels = await readPixels(file);
-    const crop = pixels ? panelCrop(pixels, { hp: panel.hp ?? module.hp ?? null }) : null;
-    if (!crop) {
+    const { outcome } = await trimPanelImage(db, module, panel, panelsDir);
+    if (outcome === 'missing') return res.status(404).json({ error: 'Panel image not found' });
+    if (outcome === 'no-edge') {
       return res.status(400).json({ error: 'Could not find a panel edge to trim to' });
-    }
-    // Both the crop and every marker are fractions of the file as it stands,
-    // so the box cuts straight out of it.
-    const cut = await cropImage(file, crop, { ext: panel.image_ext });
-    if (!cut) {
-      await panel.update({ crop_x: crop.x, crop_y: crop.y, crop_w: crop.w, crop_h: crop.h });
-    } else {
-      const stale = { hash: panel.image_hash, ext: panel.image_ext };
-      const hash = saveImage(panelsDir, cut.buffer, cut.ext);
-      // Every marker is a fraction of the image that is being cut down, so
-      // each one moves to the same fraction of what survives — and a marker
-      // that fell outside the plate stays on the edge it was nearest.
-      const placements = await ModulePanelComponent.findAll({ where: { panel_id: panel.id } });
-      for (const placement of placements) {
-        await placement.update({
-          x: clamp01((placement.x - crop.x) / crop.w),
-          y: clamp01((placement.y - crop.y) / crop.h),
-          w: Math.min(1, (Number(placement.w) || 0) / crop.w),
-          h: Math.min(1, (Number(placement.h) || 0) / crop.h),
-        });
-      }
-      await panel.update({
-        image_hash: hash,
-        image_ext: cut.ext,
-        width: cut.width,
-        height: cut.height,
-        trimmed: true,
-        ...FULL_CROP,
-      });
-      if (hash !== stale.hash || cut.ext !== stale.ext) {
-        await deletePanelImageIfOrphaned(db, panelsDir, stale.hash, stale.ext);
-      }
     }
     const panels = await loadPanels(db, [module.id]);
     res.json({ panel: panels.get(module.id) ?? null });

@@ -3,6 +3,7 @@ import { requireAuth } from '../auth.js';
 import { findSystemByName, rackFootprints, racksOverlap } from '../services/racks.js';
 import { rackDetailJson } from '../services/rackJson.js';
 import { loadPanels } from '../services/panelImage.js';
+import { enqueueJob } from '../jobs/enqueue.js';
 import { asyncHandler } from './asyncHandler.js';
 
 // A user's systems: collections of racks that are patched together as one
@@ -22,7 +23,7 @@ export const MIN_FLOOR_HEIGHT = 3;
 export const MAX_FLOOR = 5000;
 
 export function systemRoutes(db) {
-  const { System, Rack, RackModule } = db.models;
+  const { Job, System, Rack, RackModule } = db.models;
   const router = Router();
   router.use(requireAuth(db));
 
@@ -266,6 +267,40 @@ export function systemRoutes(db) {
         position: rack.system_position,
       })),
     });
+  }));
+
+  // Trim the blank backdrop off EVERY panel in the system's racks, in the
+  // background. The cut itself is the same one the module page's Trim button
+  // makes (services/panelImage.js) — this is that, asked for once for a whole
+  // studio, which is what makes a floor plan drawn from photographs read like
+  // the real furniture rather than a wall of white margins.
+  //
+  // No model runs, so nothing here spends tokens; it still goes to the queue
+  // because a system's worth of images is far more than a request should sit
+  // on. A panel that is already trimmed is left alone, so pressing this twice
+  // costs nothing and eats into no hardware.
+  router.post('/:id/panels/trim', requireOwnedSystem, asyncHandler(async (req, res) => {
+    const system = req.system;
+    // Re-use a queued/running sweep of the same system rather than stacking
+    // duplicates (payload is TEXT, so filter the few live rows in JS).
+    const live = (
+      await Job.findAll({
+        where: { type: 'trim_panels', user_id: req.user.id, status: ['pending', 'running'] },
+      })
+    ).find((job) => {
+      try {
+        return JSON.parse(job.payload || '{}').system_id === system.id;
+      } catch {
+        return false;
+      }
+    });
+    const job = live
+      ? live.get({ plain: true })
+      : await enqueueJob(db, 'trim_panels', {
+          userId: req.user.id,
+          payload: { system_id: system.id, system_name: system.name },
+        });
+    res.status(202).json({ id: job.id, type: job.type, status: job.status, reused: !!live });
   }));
 
   // Deleting a system keeps its racks — they simply stop being part of one.

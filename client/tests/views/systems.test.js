@@ -117,6 +117,33 @@ describe('SystemsView', () => {
     expect(wrapper.find('[data-test="system-1"]').exists()).toBe(false);
   });
 
+  it('queues one background sweep to trim every panel in a system', async () => {
+    api.get.mockResolvedValue(systemsResponse);
+    api.post.mockResolvedValue({ id: 7, type: 'trim_panels', status: 'pending', reused: false });
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    // A system with no modules has nothing to trim.
+    expect(wrapper.find('[data-test="trim-panels-2"]').attributes('disabled')).toBeDefined();
+
+    await wrapper.find('[data-test="trim-panels-1"]').trigger('click');
+    await flushPromises();
+    expect(confirm.mock.calls[0][0].message).toContain('cannot be undone');
+    expect(api.post).toHaveBeenCalledWith('/api/systems/1/panels/trim');
+    expect(wrapper.find('[data-test="notice"]').text()).toContain('runs in the background');
+  });
+
+  it('leaves the panels alone when the trim is not confirmed', async () => {
+    api.get.mockResolvedValue(systemsResponse);
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="trim-panels-1"]').trigger('click');
+    await flushPromises();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="notice"]').exists()).toBe(false);
+  });
+
   it('opens the floor plan, drawing each rack to scale with its rows', async () => {
     mockPlan();
     const wrapper = mount(SystemsView, { global: testGlobal() });

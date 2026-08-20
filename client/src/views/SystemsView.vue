@@ -10,6 +10,7 @@ import { panelCropStyle } from '../panelLayout.js';
 
 const systems = ref([]);
 const error = ref('');
+const notice = ref('');
 const loading = ref(true);
 const newName = ref('');
 const newDescription = ref('');
@@ -85,6 +86,40 @@ async function remove(system) {
     }
   } catch (e) {
     error.value = e.message;
+  }
+}
+
+// Cut the blank backdrop off every panel in the system, in one go. The same
+// trim the module page offers, asked for once for the whole studio — which is
+// what makes a floor plan drawn from photographs read like real furniture
+// rather than a wall of white margins. A system's worth of images is far too
+// much to wait on, so the server queues a job and the Jobs page reports it.
+//
+// Cutting a panel down is not undoable, so it is confirmed first; a panel
+// that has already been trimmed is left alone either way.
+const trimming = ref(null);
+async function trimPanels(system) {
+  const ok = await dialog.confirm({
+    title: 'Trim all panels',
+    message:
+      `Trim the panel picture of every module in '${system.name}'? Each image is cut down to ` +
+      'the front plate itself and its markers move with it. Panels that are already trimmed ' +
+      'are left alone, and the cut cannot be undone.',
+    confirmLabel: 'Trim all panels',
+  });
+  if (!ok) return;
+  error.value = '';
+  notice.value = '';
+  trimming.value = system.id;
+  try {
+    await api.post(`/api/systems/${system.id}/panels/trim`);
+    notice.value =
+      `Trimming the panels of '${system.name}' — it runs in the background ` +
+      '(progress is on the Jobs page).';
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    trimming.value = null;
   }
 }
 
@@ -368,6 +403,7 @@ async function assign(rackId, systemId) {
     Choose <strong>Arrange racks</strong> to drag each rack into the place it stands in the room.
   </p>
   <p v-if="error" class="error" data-test="error">{{ error }}</p>
+  <p v-if="notice" class="success" data-test="notice">{{ notice }}</p>
   <p v-if="loading" class="muted">Loading…</p>
   <div v-else class="panel">
     <div v-if="systems.length" class="table-wrap">
@@ -416,6 +452,19 @@ async function assign(rackId, systemId) {
                   @click="startRename(system)"
                 >
                   Rename
+                </button>
+                <button
+                  class="secondary"
+                  :disabled="system.module_count === 0 || trimming === system.id"
+                  :title="
+                    system.module_count === 0
+                      ? 'This system has no modules to trim panels for'
+                      : 'Cut every panel picture in this system down to the front plate'
+                  "
+                  :data-test="`trim-panels-${system.id}`"
+                  @click="trimPanels(system)"
+                >
+                  Trim All Panels
                 </button>
                 <button class="danger" :data-test="`delete-${system.id}`" @click="remove(system)">
                   Delete
