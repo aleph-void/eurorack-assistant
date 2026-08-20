@@ -36,6 +36,27 @@ export function createApp(
   app.use(express.json({ limit: '40mb' }));
   app.use(cookieParser());
 
+  // Cache policy for the API. Every response here is one user's own state,
+  // so no shared cache may keep it and no browser may reuse it without
+  // asking — express already puts an ETag on the JSON, which turns that ask
+  // into a 304 when nothing changed. Said out loud rather than left to the
+  // heuristics: a response with no Cache-Control at all is one a proxy is
+  // free to make its own decision about. The routes that stream
+  // content-addressed bytes (panels, captures, manuals) override this with
+  // their own immutable policy.
+  app.use('/api', (req, res, next) => {
+    res.set('Cache-Control', 'private, no-cache');
+    next();
+  });
+  // Sessions, provider tokens and device grants go further: those responses
+  // carry credentials and should not reach a disk cache at all.
+  for (const prefix of ['/api/auth', '/api/llm', '/api/oauth', '/api/devices']) {
+    app.use(prefix, (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      next();
+    });
+  }
+
   // Registered before the limiters so probes never consume a request budget.
   app.get('/api/health', (req, res) => res.json({ ok: true }));
 

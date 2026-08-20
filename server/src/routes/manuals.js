@@ -84,6 +84,11 @@ export function manualRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
     // policy the panel route already applies to its images.
     res.set('X-Content-Type-Options', 'nosniff');
     res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+    // The file is addressed by the hash of its own bytes, so it can never
+    // change under that URL — the same policy the panel and capture images
+    // are served with. Private, because who may read a manual is a question
+    // this route answers per user; a shared cache must not answer it.
+    res.set('Cache-Control', 'private, max-age=31536000, immutable');
     fs.createReadStream(file).pipe(res);
   }
 

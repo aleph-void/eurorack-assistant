@@ -858,6 +858,9 @@ describe('module documents API', () => {
     const shared = await request(app).get(`/api/manuals/${PDF_HASH}`).set('Cookie', aliceCookie);
     expect(shared.status).toBe(200);
     expect(shared.headers['content-type']).toContain('application/pdf');
+    // Addressed by the hash of its own bytes, so the browser may keep it —
+    // privately, because access is decided per user.
+    expect(shared.headers['cache-control']).toBe('private, max-age=31536000, immutable');
     expect(Buffer.compare(shared.body, PDF_BYTES)).toBe(0);
 
     // Alice's private upload: only alice can retrieve it.
@@ -1934,5 +1937,31 @@ describe('jobs API', () => {
       .send({ prompt: 'How?' });
     const { rows: jobs } = await db.query("SELECT * FROM jobs WHERE type = 'scope_question'");
     expect(jobs[0].user_id).toBe(rows[0].id);
+  });
+});
+
+describe('API cache policy', () => {
+  it('keeps API responses out of shared caches, and credentials out of any cache', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    await insertModule(db, rows[0].id, { manufacturer: 'Make Noise', name: 'Maths' });
+
+    // Ordinary data: one user's own, and revalidated rather than reused —
+    // the ETag express sends makes that revalidation a 304 when nothing has
+    // changed.
+    const list = await request(app).get('/api/modules').set('Cookie', aliceCookie);
+    expect(list.headers['cache-control']).toBe('private, no-cache');
+    expect(list.headers.etag).toBeTruthy();
+
+    // Responses carrying credentials are not written down at all.
+    const me = await request(app).get('/api/auth/me').set('Cookie', aliceCookie);
+    expect(me.headers['cache-control']).toBe('no-store');
+    const llm = await request(app).get('/api/llm').set('Cookie', aliceCookie);
+    expect(llm.headers['cache-control']).toBe('no-store');
+
+    // Even the ones nobody is signed in for.
+    const denied = await request(app).get('/api/modules');
+    expect(denied.status).toBe(401);
+    expect(denied.headers['cache-control']).toBe('private, no-cache');
   });
 });

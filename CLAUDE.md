@@ -43,6 +43,12 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   are readable via `readableResource`).
 - Response shapes go through the serializer modules, never inline object
   literals, so the same entity serializes identically on every endpoint.
+- Cache policy is set in one place per layer, never ad hoc in a handler:
+  `app.js` stamps every `/api` response `private, no-cache` (`no-store` on
+  the credential routes), and the routes that stream content-addressed bytes
+  (panels, captures, manuals) override that with `private, max-age=31536000,
+  immutable`. The built client's policy lives in `nginx/cache.conf`, which
+  BOTH vhosts include — `nginx/nginx.conf` and `nginx/tls.conf.template`.
 - No prettier config on purpose — running prettier rewrites to double quotes
   against the house style. Format by hand. `npm run lint` (ESLint flat config)
   must stay clean in both `server/` and `client/`.
