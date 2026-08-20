@@ -1,5 +1,5 @@
 # Build the Vue client, then serve it with nginx (which also proxies /api).
-FROM node:20-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 WORKDIR /client
 COPY client/package.json client/package-lock.json ./
 RUN npm ci
