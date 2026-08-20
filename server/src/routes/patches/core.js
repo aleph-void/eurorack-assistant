@@ -4,6 +4,11 @@ import {
   loadPatchDetail as loadPatchDetailFor,
   patchJson,
 } from '../../services/patchDetail.js';
+import {
+  copyRackLayout,
+  resyncRackLayout,
+  snapshotRackLayout,
+} from '../../services/patchLayout.js';
 import { readableResource, removeShares } from '../../services/sharing.js';
 import { requireOwnedPatch } from './helpers.js';
 import { asyncHandler } from '../asyncHandler.js';
@@ -168,6 +173,10 @@ export function patchCoreRoutes(db) {
         order: [['id', 'ASC']],
         transaction,
       });
+      // The patch takes its own copy of how these racks are laid out right
+      // now, so the diagram keeps drawing the studio as it stood today
+      // however the cases are rebuilt afterwards.
+      await snapshotRackLayout(db, patch, racks, { transaction });
       const instancesOf = (moduleId) => created.filter((pm) => pm.module_id === moduleId);
       const linkRows = [];
       for (const pair of expanderPairs) {
@@ -210,6 +219,16 @@ export function patchCoreRoutes(db) {
         owner_username: owner?.username ?? req.user.username,
       })
     );
+  }));
+
+  // Catch this patch up with the racks it stands in, taking a fresh copy of
+  // how they are organised now. Modules are arranged in one place — the rack
+  // — and a patch keeps the arrangement it was built with; this is the one
+  // way that picture ever changes afterwards, and it is the owner's to ask
+  // for.
+  router.post('/:id/rack-layout/resync', requireOwnedPatch(db), asyncHandler(async (req, res) => {
+    const rows = await resyncRackLayout(db, req.patch);
+    res.json({ ok: true, rows });
   }));
 
   // Cables worth plugging next, learned from the user's other patches.
@@ -428,6 +447,10 @@ export function patchCoreRoutes(db) {
         );
         moduleMap.set(pm.id, created.id);
       }
+      // A clone is a copy of the patch, not a fresh look at the studio: it
+      // inherits the arrangement the original froze rather than whatever the
+      // racks look like today.
+      await copyRackLayout(db, source.id, copy, { transaction });
 
       // Connection points declared inside the patch, and the map that
       // rewrites cable ends referring to them.

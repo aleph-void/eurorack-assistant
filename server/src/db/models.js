@@ -210,6 +210,10 @@ export function defineModels(sequelize) {
       user_id: { type: DataTypes.INTEGER, allowNull: false },
       name: { type: DataTypes.TEXT, allowNull: false },
       description: { type: DataTypes.TEXT },
+      // The size of the floor plan the racks are arranged on (migration
+      // 029), in the units the rack coordinates use: HP across, U down.
+      floor_width: { type: DataTypes.REAL, allowNull: false, defaultValue: 140 },
+      floor_height: { type: DataTypes.REAL, allowNull: false, defaultValue: 9 },
     },
     { tableName: 'systems', createdAt: 'created_at', updatedAt: 'updated_at' }
   );
@@ -469,6 +473,37 @@ export function defineModels(sequelize) {
       external: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     },
     { tableName: 'patch_modules', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // The physical arrangement the patch was built from (migration 030): the
+  // rows of every rack it snapshotted, copied INTO the patch so the diagram
+  // keeps drawing the studio as it stood, however the racks are reorganised
+  // afterwards. Soft references, like the rest of a patch snapshot.
+  const PatchRackRow = define(
+    'PatchRackRow',
+    {
+      id,
+      patch_id: { type: DataTypes.INTEGER, allowNull: false },
+      rack_id: { type: DataTypes.INTEGER },
+      rack_name: { type: DataTypes.TEXT },
+      rack_position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      unit: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 3 },
+      hp: { type: DataTypes.REAL, allowNull: false },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'patch_rack_rows', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // One module standing in one of those rows, in the order it stands.
+  const PatchRackRowModule = define(
+    'PatchRackRowModule',
+    {
+      id,
+      row_id: { type: DataTypes.INTEGER, allowNull: false },
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'patch_rack_row_modules', createdAt: 'created_at', updatedAt: false }
   );
 
   // A named bus or layer within a patch ("Rhythm", "Granular bus").
@@ -970,6 +1005,10 @@ export function defineModels(sequelize) {
   PatchSetting.belongsTo(Patch, { foreignKey: 'patch_id' });
   Patch.hasMany(PatchGroup, { foreignKey: 'patch_id' });
   PatchGroup.belongsTo(Patch, { foreignKey: 'patch_id' });
+  Patch.hasMany(PatchRackRow, { foreignKey: 'patch_id' });
+  PatchRackRow.belongsTo(Patch, { foreignKey: 'patch_id' });
+  PatchRackRow.hasMany(PatchRackRowModule, { foreignKey: 'row_id' });
+  PatchRackRowModule.belongsTo(PatchRackRow, { foreignKey: 'row_id' });
   PatchModule.hasMany(PatchModulePort, { foreignKey: 'patch_module_id' });
   PatchModulePort.belongsTo(PatchModule, { foreignKey: 'patch_module_id' });
   Patch.hasMany(PatchModuleLink, { foreignKey: 'patch_id' });
@@ -1075,6 +1114,8 @@ export function defineModels(sequelize) {
     PatchModulePort,
     PatchModuleLink,
     PatchModuleLinkJack,
+    PatchRackRow,
+    PatchRackRowModule,
     Note,
     NoteModule,
     NoteComponent,

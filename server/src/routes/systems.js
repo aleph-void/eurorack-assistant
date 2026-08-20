@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
-import { findSystemByName } from '../services/racks.js';
+import { findSystemByName, rackFootprints, racksOverlap } from '../services/racks.js';
 import { rackDetailJson } from '../services/rackJson.js';
 import { loadPanels } from '../services/panelImage.js';
 import { asyncHandler } from './asyncHandler.js';
@@ -12,6 +12,15 @@ import { asyncHandler } from './asyncHandler.js';
 //
 // Systems are private to their owner — every route here operates on the
 // requesting user's systems and racks alone.
+// The floor plan a new system starts with, and the most it can be stretched
+// to. The maximum matches the ceiling on the coordinates themselves, so a
+// rack can always be placed anywhere on the floor its owner made.
+export const DEFAULT_FLOOR_WIDTH = 140;
+export const DEFAULT_FLOOR_HEIGHT = 9;
+export const MIN_FLOOR_WIDTH = 20;
+export const MIN_FLOOR_HEIGHT = 3;
+export const MAX_FLOOR = 5000;
+
 export function systemRoutes(db) {
   const { System, Rack, RackModule } = db.models;
   const router = Router();
@@ -21,6 +30,10 @@ export function systemRoutes(db) {
     id: system.id,
     name: system.name,
     description: system.description ?? null,
+    // How much floor there is to arrange racks on, in HP across and rack
+    // units down — the units the placements themselves are in.
+    floor_width: system.floor_width ?? DEFAULT_FLOOR_WIDTH,
+    floor_height: system.floor_height ?? DEFAULT_FLOOR_HEIGHT,
     rack_count,
     module_count,
     created_at: system.created_at,
@@ -156,6 +169,21 @@ export function systemRoutes(db) {
     if (req.body?.description !== undefined) {
       updates.description = String(req.body.description || '').trim() || null;
     }
+    // Growing the floor is how a wide studio gets arranged: the plan cannot
+    // be dragged into space that is not there. Shrinking is allowed too, and
+    // it never moves a rack — the plan simply draws at least as much floor
+    // as the racks standing on it need.
+    for (const [key, min] of [
+      ['floor_width', MIN_FLOOR_WIDTH],
+      ['floor_height', MIN_FLOOR_HEIGHT],
+    ]) {
+      if (req.body?.[key] === undefined) continue;
+      const value = Number(req.body[key]);
+      if (!Number.isFinite(value) || value < min || value > MAX_FLOOR) {
+        return res.status(400).json({ error: `${key} must be between ${min} and ${MAX_FLOOR}` });
+      }
+      updates[key] = value;
+    }
     await system.update(updates);
     const rackCount = await Rack.count({ where: { system_id: system.id } });
     res.json(systemJson(system, { rack_count: rackCount }));
@@ -187,6 +215,38 @@ export function systemRoutes(db) {
         return res.status(400).json({ error: 'rack coordinates must be between 0 and 5000' });
       }
       placements.push({ rack, x, y });
+    }
+    // Two racks cannot stand in the same place. Racks the body leaves out
+    // keep the spot they already have and are checked too, or moving one
+    // rack could be used to bury another.
+    //
+    // Only a rack that actually MOVES has to come to rest somewhere free:
+    // racks that were already sharing floor (a system arranged before this
+    // rule, where everything piled up at the origin) stay allowed exactly
+    // where they are, so the way out is to drag them apart one at a time
+    // rather than a plan that refuses every save.
+    const footprints = await rackFootprints(db, racks.map((rack) => rack.id));
+    const standing = racks.map((rack) => {
+      const placement = placements.find((item) => item.rack.id === rack.id);
+      const x = placement ? placement.x : rack.system_x;
+      const y = placement ? placement.y : rack.system_y;
+      return {
+        name: rack.name,
+        x,
+        y,
+        moved: x !== rack.system_x || y !== rack.system_y,
+        ...footprints.get(rack.id),
+      };
+    });
+    for (let i = 0; i < standing.length; i++) {
+      for (let j = i + 1; j < standing.length; j++) {
+        if (!standing[i].moved && !standing[j].moved) continue;
+        if (racksOverlap(standing[i], standing[j])) {
+          return res.status(409).json({
+            error: `'${standing[i].name}' and '${standing[j].name}' would overlap — racks cannot stand in the same place`,
+          });
+        }
+      }
     }
     await db.sequelize.transaction(async (transaction) => {
       for (const [position, placement] of placements.entries()) {

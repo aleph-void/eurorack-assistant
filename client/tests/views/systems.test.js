@@ -29,6 +29,8 @@ describe('SystemsView', () => {
     name: 'studio',
     rack_count: 2,
     module_count: 9,
+    floor_width: 140,
+    floor_height: 9,
     racks: [
       {
         id: 10,
@@ -36,6 +38,8 @@ describe('SystemsView', () => {
         module_count: 1,
         system_x: 0,
         system_y: 0,
+        width_hp: 84,
+        height_u: 3,
         rows: [
           {
             id: 100,
@@ -47,7 +51,16 @@ describe('SystemsView', () => {
           },
         ],
       },
-      { id: 11, name: 'right case', module_count: 1, system_x: 90, system_y: 0, rows: [] },
+      {
+        id: 11,
+        name: 'right case',
+        module_count: 1,
+        system_x: 90,
+        system_y: 0,
+        width_hp: 84,
+        height_u: 3,
+        rows: [],
+      },
     ],
     unassigned_racks: [{ id: 12, name: 'skiff', module_count: 2, rows: [] }],
   };
@@ -144,6 +157,67 @@ describe('SystemsView', () => {
         { rack_id: 11, x: 90, y: 0 },
       ],
     });
+  });
+
+  it('never lets one rack stand on another, sliding it clear the short way', async () => {
+    mockPlan();
+    api.put.mockResolvedValue({ racks: [] });
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="arrange-1"]').trigger('click');
+    await flushPromises();
+
+    const floor = wrapper.find('[data-test="plan-floor"]');
+    floor.element.getBoundingClientRect = () => ({ left: 0, top: 0 });
+    const drag = async (clientX, clientY) => {
+      const rack = wrapper.find('[data-test="plan-rack-10"]');
+      rack.element.getBoundingClientRect = () => ({ left: 0, top: 0 });
+      await rack.trigger('dragstart', { clientX: 0, clientY: 0 });
+      await floor.trigger('drop', { clientX, clientY });
+      await flushPromises();
+    };
+    const placed = (id) =>
+      api.put.mock.calls.at(-1)[1].racks.find((rack) => rack.rack_id === id);
+
+    // Dropped at 10 HP, the left case's right edge would cross into the
+    // right case at 90. It comes to rest flush against it instead.
+    await drag(40, 0);
+    expect(placed(10)).toEqual({ rack_id: 10, x: 6, y: 0 });
+    // The neighbour it was pushed off is left exactly where it stood.
+    expect(placed(11)).toEqual({ rack_id: 11, x: 90, y: 0 });
+
+    // Dropped squarely on top of the right case, sliding sideways is the
+    // long way out and it lands in the row below instead.
+    await drag(360, 0);
+    expect(placed(10)).toEqual({ rack_id: 10, x: 90, y: 3 });
+  });
+
+  it('resizes the floor plan and draws it at the chosen zoom', async () => {
+    mockPlan();
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="arrange-1"]').trigger('click');
+    await flushPromises();
+
+    // The floor is 140 HP by 9 U, drawn at 4px per HP and 26px per U — but
+    // never smaller than the racks standing on it need, and the right case
+    // ends at 174 HP.
+    const floor = () => wrapper.find('[data-test="plan-floor"]').attributes('style');
+    expect(floor()).toContain('width: 696px');
+    expect(floor()).toContain('height: 234px');
+
+    api.put.mockResolvedValue({ id: 1, floor_width: 224, floor_height: 9 });
+    await wrapper.find('[data-test="floor-wider"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/systems/1', { floor_width: 224, floor_height: 9 });
+    expect(floor()).toContain('width: 896px');
+
+    // A very wide studio is read by drawing it smaller; the coordinates
+    // themselves are untouched.
+    await wrapper.find('[data-test="plan-zoom"]').setValue(50);
+    await flushPromises();
+    expect(floor()).toContain('width: 448px');
+    expect(wrapper.find('[data-test="plan-rack-11"]').attributes('style')).toContain('left: 180px');
   });
 
   it('adds a loose rack to the system and takes one back out', async () => {

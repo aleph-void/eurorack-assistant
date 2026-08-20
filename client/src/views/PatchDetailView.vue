@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '../api.js';
+import { dialog } from '../dialog.js';
 import ScopePanel from '../components/ScopePanel.vue';
 import PatchNotesPanel from '../components/PatchNotesPanel.vue';
 import PatchDiagram from '../components/PatchDiagram.vue';
@@ -55,6 +56,32 @@ async function loadSuggestions() {
     suggestions.value = res?.suggestions ?? [];
   } catch {
     suggestions.value = [];
+  }
+}
+
+// Catch the patch up with the racks it stands in. A patch draws the studio
+// as it stood when it was made, so this is the only thing that ever changes
+// its arrangement — asked for, never quietly.
+const resyncing = ref(false);
+async function resyncLayout() {
+  const ok = await dialog.confirm({
+    title: 'Match the current rack layout',
+    message:
+      `Redraw '${patch.value.name}' the way ${
+        patch.value.system_name ? `system '${patch.value.system_name}'` : `rack '${patch.value.rack_name}'`
+      } is organised now? The patch keeps its cables — only the arrangement of the panels changes.`,
+    confirmLabel: 'Match layout',
+  });
+  if (!ok) return;
+  resyncing.value = true;
+  error.value = '';
+  try {
+    await api.post(`/api/patches/${props.id}/rack-layout/resync`);
+    await load();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    resyncing.value = false;
   }
 }
 
@@ -209,6 +236,19 @@ onMounted(async () => {
       interactive
       @connect="connectDiagramCable"
     />
+
+    <p class="muted" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap">
+      The panels are arranged the way the rack was when this patch was made.
+      <button
+        class="secondary"
+        style="margin: 0"
+        :disabled="resyncing"
+        data-test="resync-layout"
+        @click="resyncLayout"
+      >
+        Match the rack's layout now
+      </button>
+    </p>
 
     <VoicePatchPanel
       :patch-id="props.id"

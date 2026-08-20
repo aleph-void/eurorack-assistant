@@ -106,41 +106,90 @@ async function openPlan(system, { force = false } = {}) {
 // A rack's box is drawn to scale: as wide as its widest row in HP and as tall
 // as its rows are in rack units, so the plan reads like the real furniture.
 // Coordinates are in those same units, which is what the server stores.
+// The server sends each rack's footprint with it, so the picture and the
+// placement rule it enforces are worked out from the same numbers.
 const HP_PX = 4;
 const U_PX = 26;
 
-const rackSize = (rack) => {
-  const rows = rack.rows || [];
-  const width = rows.reduce((max, row) => Math.max(max, Number(row.hp) || 0), 0) || 84;
-  const height = rows.reduce((sum, row) => sum + (Number(row.unit) || 3), 0) || 3;
-  return { width, height };
-};
+// A studio that stands in one long row does not fit on a screen at full
+// size, so the plan can be drawn smaller. Zoom only scales the drawing —
+// every coordinate stays in HP and rack units.
+const zoom = ref(1);
+const hpPx = computed(() => HP_PX * zoom.value);
+const uPx = computed(() => U_PX * zoom.value);
+
+const rackSize = (rack) => ({
+  width: Number(rack.width_hp) || 84,
+  height: Number(rack.height_u) || 3,
+});
+const rackBox = (rack) => ({
+  x: Number(rack.system_x) || 0,
+  y: Number(rack.system_y) || 0,
+  ...rackSize(rack),
+});
+
+// Two racks overlap when their boxes share floor in both directions;
+// standing flush, edge against edge, is how cases really sit. The server
+// enforces the same rule (services/racks.js) — this is what keeps the drag
+// from proposing a placement it would refuse.
+const overlaps = (a, b) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 const planRacks = computed(() => plan.value?.racks || []);
 const unassigned = computed(() => plan.value?.unassigned_racks || []);
 
-// How big the plan needs to be to hold every rack where it stands.
+// The floor the user has made, never smaller than what the racks standing on
+// it need — shrinking the plan may not hide a rack.
 const planExtent = computed(() => {
-  let width = 140;
-  let height = 9;
+  let width = Number(plan.value?.floor_width) || 140;
+  let height = Number(plan.value?.floor_height) || 9;
   for (const rack of planRacks.value) {
-    const size = rackSize(rack);
-    width = Math.max(width, (Number(rack.system_x) || 0) + size.width + 8);
-    height = Math.max(height, (Number(rack.system_y) || 0) + size.height + 2);
+    const box = rackBox(rack);
+    width = Math.max(width, box.x + box.width);
+    height = Math.max(height, box.y + box.height);
   }
-  return { width: width * HP_PX, height: height * U_PX };
+  return { width, height };
 });
+const planStyle = computed(() => ({
+  width: `${planExtent.value.width * hpPx.value}px`,
+  height: `${planExtent.value.height * uPx.value}px`,
+}));
 
 const rackStyle = (rack) => {
-  const size = rackSize(rack);
+  const box = rackBox(rack);
   return {
-    left: `${(Number(rack.system_x) || 0) * HP_PX}px`,
-    top: `${(Number(rack.system_y) || 0) * U_PX}px`,
-    width: `${size.width * HP_PX}px`,
+    left: `${box.x * hpPx.value}px`,
+    top: `${box.y * uPx.value}px`,
+    width: `${box.width * hpPx.value}px`,
+    height: `${box.height * uPx.value}px`,
   };
 };
-const rowStyle = (row) => ({ height: `${(Number(row.unit) || 3) * U_PX}px` });
-const moduleStyle = (module) => ({ width: `${(Number(module.hp) || 4) * HP_PX}px` });
+const rowStyle = (row) => ({ height: `${(Number(row.unit) || 3) * uPx.value}px` });
+const moduleStyle = (module) => ({ width: `${(Number(module.hp) || 4) * hpPx.value}px` });
+
+// How much floor there is to arrange on. Saved on the system, because a
+// studio's shape is a property of the studio and not of this browser.
+const floorBusy = ref(false);
+async function resizeFloor(width, height) {
+  if (!plan.value) return;
+  const floor_width = Math.max(20, Math.min(5000, Math.round(width)));
+  const floor_height = Math.max(3, Math.min(5000, Math.round(height)));
+  floorBusy.value = true;
+  error.value = '';
+  try {
+    const saved = await api.put(`/api/systems/${plan.value.id}`, { floor_width, floor_height });
+    plan.value = { ...plan.value, floor_width: saved.floor_width, floor_height: saved.floor_height };
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    floorBusy.value = false;
+  }
+}
+const growFloor = (dw, dh) =>
+  resizeFloor(
+    (Number(plan.value?.floor_width) || 140) + dw,
+    (Number(plan.value?.floor_height) || 9) + dh
+  );
 
 async function saveArrangement() {
   if (!plan.value) return;
@@ -168,9 +217,42 @@ function startPlanDrag(rack, event) {
   const box = event.currentTarget.getBoundingClientRect();
   dragged.value = {
     rack_id: rack.id,
-    dx: (event.clientX - box.left) / HP_PX,
-    dy: (event.clientY - box.top) / U_PX,
+    dx: (event.clientX - box.left) / hpPx.value,
+    dy: (event.clientY - box.top) / uPx.value,
   };
+}
+
+// Where a rack dropped at (x, y) actually comes to rest. Racks may not stand
+// on top of each other, so a box that lands on a neighbour is pushed clear of
+// it the short way — which is what makes standing two cases flush together a
+// matter of dropping roughly right rather than hitting the exact HP. Pushing
+// clear of one neighbour can land on the next, so it settles in a few passes
+// and gives up rather than shuffling for ever.
+function settle(rack, x, y) {
+  const size = rackSize(rack);
+  const others = planRacks.value.filter((other) => other.id !== rack.id).map(rackBox);
+  const from = { x, y };
+  let spot = { x, y };
+  for (let pass = 0; pass < 8; pass++) {
+    const hit = others.find((other) => overlaps({ ...spot, ...size }, other));
+    if (!hit) return spot;
+    const options = [
+      { x: hit.x - size.width, y: spot.y },
+      { x: hit.x + hit.width, y: spot.y },
+      { x: spot.x, y: hit.y - size.height },
+      { x: spot.x, y: hit.y + hit.height },
+    ].filter((option) => option.x >= 0 && option.y >= 0);
+    if (options.length === 0) return null;
+    // Nearest to where it was actually dropped, measured on screen so a
+    // rack unit and an HP are compared in the same units the eye sees.
+    options.sort(
+      (a, b) =>
+        Math.hypot((a.x - from.x) * HP_PX, (a.y - from.y) * U_PX) -
+        Math.hypot((b.x - from.x) * HP_PX, (b.y - from.y) * U_PX)
+    );
+    spot = options[0];
+  }
+  return null;
 }
 
 async function dropOnPlan(event) {
@@ -181,8 +263,16 @@ async function dropOnPlan(event) {
   if (!rack) return;
   const box = event.currentTarget.getBoundingClientRect();
   // Snap to whole HP and whole rack units: real racks stand on a grid too.
-  rack.system_x = Math.max(0, Math.round((event.clientX - box.left) / HP_PX - held.dx));
-  rack.system_y = Math.max(0, Math.round((event.clientY - box.top) / U_PX - held.dy));
+  const x = Math.max(0, Math.round((event.clientX - box.left) / hpPx.value - held.dx));
+  const y = Math.max(0, Math.round((event.clientY - box.top) / uPx.value - held.dy));
+  const spot = settle(rack, x, y);
+  if (!spot) {
+    error.value = 'No room there — move another rack out of the way, or make the plan bigger.';
+    return;
+  }
+  error.value = '';
+  rack.system_x = spot.x;
+  rack.system_y = spot.y;
   await saveArrangement();
 }
 
@@ -297,12 +387,70 @@ async function assign(rackId, systemId) {
       <h2>Arrange {{ plan.name }}</h2>
       <p class="muted">
         Drag each rack to where it stands. Boxes are drawn to scale — as wide as the rack's widest
-        row in HP and as tall as its rows are in U.
+        row in HP and as tall as its rows are in U — and no two racks may stand in the same place,
+        so a rack dropped onto its neighbour comes to rest flush beside it.
       </p>
+
+      <div class="plan-controls">
+        <label class="plan-field">
+          Plan width (HP)
+          <input
+            type="number"
+            min="20"
+            max="5000"
+            step="4"
+            :value="plan.floor_width"
+            :disabled="floorBusy"
+            data-test="floor-width"
+            @change="resizeFloor(Number($event.target.value), plan.floor_height)"
+          />
+        </label>
+        <label class="plan-field">
+          Plan height (U)
+          <input
+            type="number"
+            min="3"
+            max="5000"
+            step="1"
+            :value="plan.floor_height"
+            :disabled="floorBusy"
+            data-test="floor-height"
+            @change="resizeFloor(plan.floor_width, Number($event.target.value))"
+          />
+        </label>
+        <button
+          class="secondary plan-grow"
+          :disabled="floorBusy"
+          data-test="floor-wider"
+          @click="growFloor(84, 0)"
+        >
+          Wider
+        </button>
+        <button
+          class="secondary plan-grow"
+          :disabled="floorBusy"
+          data-test="floor-taller"
+          @click="growFloor(0, 3)"
+        >
+          Taller
+        </button>
+        <label class="plan-field">
+          Zoom {{ Math.round(zoom * 100) }}%
+          <input
+            type="range"
+            min="25"
+            max="100"
+            step="5"
+            :value="zoom * 100"
+            data-test="plan-zoom"
+            @input="zoom = Number($event.target.value) / 100"
+          />
+        </label>
+      </div>
 
       <div
         class="plan-floor"
-        :style="{ width: `${planExtent.width}px`, height: `${planExtent.height}px` }"
+        :style="planStyle"
         data-test="plan-floor"
         @dragover.prevent
         @drop.prevent="dropOnPlan"
@@ -373,12 +521,21 @@ async function assign(rackId, systemId) {
 
 <style scoped>
 .system-plan { margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+.plan-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.75rem; }
+.plan-field { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--muted); margin: 0; }
+.plan-field input[type='number'] { width: 6rem; margin: 0; }
+.plan-field input[type='range'] { width: 8rem; margin: 0; }
+.plan-grow { margin: 0; }
+/* The floor is only ever as big as the plan says; a wide studio scrolls. */
 .plan-floor { position: relative; margin: 1rem 0; max-width: 100%; overflow: auto; background: #15151b; border: 2px solid var(--border-strong); border-radius: 5px; }
 .plan-empty { position: absolute; inset: 0; display: grid; place-items: center; }
-.plan-rack { position: absolute; background: #25252d; border: 1px solid var(--border-strong); border-radius: 4px; cursor: grab; padding-bottom: 2px; }
-.plan-rack-name { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; padding: 0.15rem 0.3rem; color: var(--muted); }
-.plan-remove { margin: 0 0 0 auto; padding: 0 0.3rem; font-size: 0.65rem; }
-.plan-row { display: flex; align-items: stretch; gap: 1px; overflow: hidden; margin: 0 2px 1px; background: #101015; }
+/* A rack's box is exactly its footprint — the same HP and U the server keeps
+   racks from overlapping in — so the name bar floats over the panels rather
+   than making the box taller than the case really is. */
+.plan-rack { position: absolute; box-sizing: border-box; overflow: hidden; background: #25252d; border: 1px solid var(--border-strong); border-radius: 4px; cursor: grab; }
+.plan-rack-name { position: absolute; inset: 0 0 auto 0; z-index: 1; display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; padding: 0.1rem 0.3rem; color: var(--text); background: rgba(16, 16, 21, 0.75); pointer-events: none; }
+.plan-remove { pointer-events: auto; margin: 0 0 0 auto; padding: 0 0.3rem; font-size: 0.65rem; }
+.plan-row { display: flex; align-items: stretch; gap: 1px; overflow: hidden; background: #101015; }
 .plan-module { background: #33333d; overflow: hidden; }
 .plan-module img { display: block; width: 100%; height: 100%; object-fit: fill; }
 .plan-no-rows { font-size: 0.7rem; padding: 0 0.3rem 0.3rem; }

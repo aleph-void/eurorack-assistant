@@ -3,6 +3,7 @@
 // back, and a rack must look the same on either.
 
 import { loadPanels } from './panelImage.js';
+import { rackFootprint } from './racks.js';
 
 export const rackJson = (rack, moduleCount) => ({
   id: rack.id,
@@ -81,8 +82,13 @@ export async function rackDetailJson(db, rack, { panels = null } = {}) {
     ],
   });
   const loaded = panels ?? (await loadPanels(db, mappings.map((mapping) => mapping.module_id)));
+  const rows = await layoutJson(db, rack, mappings, loaded);
   return {
     ...rackJson(rack, mappings.length),
+    // How much floor the rack takes on a system plan. Sent with the rack so
+    // the plan places boxes from the same geometry the server validates
+    // placements with, rather than deriving its own from the rows.
+    ...rackFootprint(rows),
     modules: mappings
       .filter((rm) => rm.Module)
       .map((rm) => ({
@@ -94,6 +100,6 @@ export async function rackDetailJson(db, rack, { panels = null } = {}) {
         summary: rm.Module.summary,
         quantity: rm.quantity,
       })),
-    rows: await layoutJson(db, rack, mappings, loaded),
+    rows,
   };
 }

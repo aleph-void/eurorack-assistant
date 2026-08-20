@@ -386,12 +386,21 @@ describe('a share does not leak the owner\'s other private records', () => {
   it('hides the rack layout behind a shared patch from the recipient but not the owner', async () => {
     const fixture = await withUsers();
     const { app, aliceCookie, adminCookie, admin, db } = fixture;
-    const { patch, rackId } = await createPatch(fixture);
-    // Give the rack a physical row so a layout exists to leak.
+    const { patch } = await createPatch(fixture);
+    // Give the rack a physical row and have the patch take a copy of it, so
+    // there is a layout to leak. (A patch snapshots the arrangement when it
+    // is made, so a row added afterwards reaches it only on a resync.)
+    const { rows: racks } = await db.query('SELECT id FROM racks WHERE user_id = $1', [
+      fixture.alice.id,
+    ]);
     await db.query(
       'INSERT INTO rack_rows (rack_id, position, unit, hp) VALUES ($1, 0, 3, 84)',
-      [rackId]
+      [racks[0].id]
     );
+    await request(app)
+      .post(`/api/patches/${patch.id}/rack-layout/resync`)
+      .set('Cookie', aliceCookie)
+      .send({});
     await share(app, aliceCookie, 'patch', patch.id, { user_ids: [admin.id] });
 
     const recipient = await request(app).get(`/api/patches/${patch.id}`).set('Cookie', adminCookie);

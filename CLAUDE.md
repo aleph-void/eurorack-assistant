@@ -111,4 +111,18 @@ rack in it at once — that is what makes a cable from a jack in one rack to a
 jack in another legal, with no change to the cable rules — and each
 `patch_modules` row carries the `rack_id`/`rack_name` it came from, soft like
 everything else in a patch, so `rack_layout` matches each placement to an
-instance OF THE SAME RACK and the patch outlives the system.
+instance OF THE SAME RACK and the patch outlives the system. Racks on a
+system's floor plan may not overlap: the footprint geometry and the rule live
+in `services/racks.js`, the layout route enforces it, and the plan slides a
+dropped rack clear rather than refusing the drop. `systems.floor_width` /
+`floor_height` (migration 029) say how much floor there is to arrange on.
+
+Modules are organised in exactly ONE place — the rack (`rack_rows` /
+`rack_row_modules`, the Organize rack page). A patch takes its own COPY of
+that arrangement when it is created (`patch_rack_rows` /
+`patch_rack_row_modules`, migration 030, `services/patchLayout.js`) and draws
+from the copy ever after, so rebuilding a case does not rearrange the patches
+already made from it. Cloning copies the patch's frozen arrangement rather
+than taking a fresh look at the studio, and
+`POST /api/patches/:id/rack-layout/resync` is the only thing that refreshes
+it.

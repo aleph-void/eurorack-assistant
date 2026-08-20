@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
-import { findRackByName } from '../services/racks.js';
+import { findRackByName, freePlacement, rackFootprints } from '../services/racks.js';
 import { layoutJson, rackDetailJson, rackJson } from '../services/rackJson.js';
 import { readableResource, removeShares } from '../services/sharing.js';
 import { enqueueJob, enqueueVideoJob } from '../jobs/worker.js';
@@ -117,14 +117,25 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
       where: { id: Number(raw) || 0, user_id: req.user.id },
     });
     if (!system) return res.status(404).json({ error: 'System not found' });
-    // A rack joining a system lands after the ones already in it, so its box
-    // does not sit on top of another until the user drags it somewhere.
+    // A rack joining a system lands after the ones already in it, and on
+    // free floor beside them rather than on top of them — two racks may
+    // never stand in the same place, and a newcomer piled at the origin
+    // would be exactly that.
     const siblings = await Rack.findAll({ where: { system_id: system.id } });
     const position = siblings.reduce((max, r) => Math.max(max, r.system_position + 1), 0);
-    await rack.update({
-      system_id: system.id,
-      system_position: rack.system_id === system.id ? rack.system_position : position,
-    });
+    const joining = rack.system_id !== system.id;
+    const updates = { system_id: system.id, system_position: joining ? position : rack.system_position };
+    if (joining) {
+      const others = siblings.filter((r) => r.id !== rack.id);
+      const footprints = await rackFootprints(db, [rack.id, ...others.map((r) => r.id)]);
+      const spot = freePlacement(
+        others.map((r) => ({ x: r.system_x, y: r.system_y, ...footprints.get(r.id) })),
+        footprints.get(rack.id)
+      );
+      updates.system_x = spot.x;
+      updates.system_y = spot.y;
+    }
+    await rack.update(updates);
     res.json(rackJson(rack, await RackModule.count({ where: { rack_id: rack.id } })));
   }));
 

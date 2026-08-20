@@ -1782,6 +1782,84 @@ describe('system patches', () => {
     expect(detail.rack_layout[1].modules).toEqual([instanceOf('Plaits')]);
   });
 
+  it('keeps the arrangement it was built with when the rack is rebuilt', async () => {
+    const fixture = await withSystemFixture();
+    const { app, aliceCookie, leftRack, maths, plaits, db } = fixture;
+    // Both modules stand in the left case, Maths first.
+    await mapModule(db, fixture.alice.id, plaits.id, { rack: 'left case' });
+    const organize = (modules) =>
+      request(app)
+        .put(`/api/racks/${leftRack.id}/layout`)
+        .set('Cookie', aliceCookie)
+        .send({ rows: [{ unit: 3, hp: 84, modules }] });
+    await organize([{ module_id: maths.id }, { module_id: plaits.id }]);
+
+    const patch = (
+      await request(app)
+        .post('/api/patches')
+        .set('Cookie', aliceCookie)
+        .send({ rack_id: leftRack.id, name: 'As it stood' })
+    ).body;
+    const detail = async (id = patch.id) =>
+      (await request(app).get(`/api/patches/${id}`).set('Cookie', aliceCookie)).body;
+    const order = (body) =>
+      body.rack_layout[0].modules.map(
+        (instanceId) => body.modules.find((m) => m.id === instanceId).module_name
+      );
+    expect(order(await detail())).toEqual(['Maths', 'Plaits']);
+
+    // The case is rebuilt with the two modules the other way round. The
+    // patch is a picture of the studio as it was, so it does not move.
+    await organize([{ module_id: plaits.id }, { module_id: maths.id }]);
+    expect(order(await detail())).toEqual(['Maths', 'Plaits']);
+    // A patch made now sees the new arrangement.
+    const after = (
+      await request(app)
+        .post('/api/patches')
+        .set('Cookie', aliceCookie)
+        .send({ rack_id: leftRack.id, name: 'As it stands' })
+    ).body;
+    expect(order(await detail(after.id))).toEqual(['Plaits', 'Maths']);
+
+    // A clone copies the patch, not the studio: it inherits the old picture.
+    const clone = (
+      await request(app)
+        .post(`/api/patches/${patch.id}/clone`)
+        .set('Cookie', aliceCookie)
+        .send({})
+    ).body;
+    expect(order(await detail(clone.id))).toEqual(['Maths', 'Plaits']);
+
+    // Told to catch up, the old patch takes a fresh copy — and keeps its
+    // instances, so the cables in it still point at something.
+    const resync = await request(app)
+      .post(`/api/patches/${patch.id}/rack-layout/resync`)
+      .set('Cookie', aliceCookie)
+      .send({});
+    expect(resync.status).toBe(200);
+    expect(order(await detail())).toEqual(['Plaits', 'Maths']);
+    expect((await detail()).modules).toHaveLength(2);
+  });
+
+  it('lets nobody but the owner resync a patch layout', async () => {
+    const fixture = await withSystemFixture();
+    const { app, aliceCookie, adminCookie, leftRack } = fixture;
+    const patch = (
+      await request(app)
+        .post('/api/patches')
+        .set('Cookie', aliceCookie)
+        .send({ rack_id: leftRack.id, name: 'Mine' })
+    ).body;
+    expect(
+      (
+        await request(app)
+          .post(`/api/patches/${patch.id}/rack-layout/resync`)
+          .set('Cookie', adminCookie)
+          .send({})
+      ).status
+    ).toBe(404);
+  });
+
   it('keeps the two copies of one module in the racks they stand in', async () => {
     const fixture = await withSystemFixture();
     const { app, db, aliceCookie, system } = fixture;

@@ -216,6 +216,112 @@ describe('systems API', () => {
     ]);
   });
 
+  it('keeps two racks from standing in the same place', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const alice = await aliceId(db);
+    const { system, leftRack, rightRack } = await studio(app, aliceCookie, db, alice);
+
+    // Neither rack has rows yet, so each takes the floor of a plain 84 HP,
+    // 3U case — and joining the system stood them side by side rather than
+    // both at the origin.
+    const joined = await request(app).get(`/api/systems/${system.id}`).set('Cookie', aliceCookie);
+    expect(joined.body.racks.map((r) => [r.name, r.system_x, r.system_y])).toEqual([
+      ['left case', 0, 0],
+      ['right case', 84, 0],
+    ]);
+    expect(joined.body.racks.map((r) => [r.width_hp, r.height_u])).toEqual([
+      [84, 3],
+      [84, 3],
+    ]);
+
+    // Dropping one onto the other is refused, and says which two clash.
+    const clash = await request(app)
+      .put(`/api/systems/${system.id}/layout`)
+      .set('Cookie', aliceCookie)
+      .send({
+        racks: [
+          { rack_id: leftRack.id, x: 0, y: 0 },
+          { rack_id: rightRack.id, x: 40, y: 1 },
+        ],
+      });
+    expect(clash.status).toBe(409);
+    expect(clash.body.error).toMatch(/left case.*right case.*overlap/);
+
+    // A rack the body leaves out still holds its floor.
+    const bury = await request(app)
+      .put(`/api/systems/${system.id}/layout`)
+      .set('Cookie', aliceCookie)
+      .send({ racks: [{ rack_id: leftRack.id, x: 84, y: 0 }] });
+    expect(bury.status).toBe(409);
+
+    // Standing flush — one rack's right edge against the other's left — is
+    // how cases really sit, so it is allowed.
+    const flush = await request(app)
+      .put(`/api/systems/${system.id}/layout`)
+      .set('Cookie', aliceCookie)
+      .send({
+        racks: [
+          { rack_id: leftRack.id, x: 0, y: 3 },
+          { rack_id: rightRack.id, x: 0, y: 0 },
+        ],
+      });
+    expect(flush.status).toBe(200);
+  });
+
+  it('lets racks that already overlap be dragged apart', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const alice = await aliceId(db);
+    const { system, leftRack, rightRack } = await studio(app, aliceCookie, db, alice);
+    // A system arranged before racks were kept apart: everything piled up at
+    // the origin. Refusing every save would leave it stuck that way, so a
+    // rack that stays where it is may keep overlapping — only one that
+    // actually moves has to come to rest somewhere free.
+    await db.query('UPDATE racks SET system_x = 0, system_y = 0 WHERE system_id = $1', [system.id]);
+
+    const apart = await request(app)
+      .put(`/api/systems/${system.id}/layout`)
+      .set('Cookie', aliceCookie)
+      .send({
+        racks: [
+          { rack_id: leftRack.id, x: 0, y: 0 },
+          { rack_id: rightRack.id, x: 200, y: 0 },
+        ],
+      });
+    expect(apart.status).toBe(200);
+    expect(apart.body.racks.map((r) => [r.name, r.x])).toEqual([
+      ['left case', 0],
+      ['right case', 200],
+    ]);
+  });
+
+  it('sizes the floor plan the system is arranged on', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const alice = await aliceId(db);
+    const { system } = await studio(app, aliceCookie, db, alice);
+    const opened = await request(app).get(`/api/systems/${system.id}`).set('Cookie', aliceCookie);
+    expect([opened.body.floor_width, opened.body.floor_height]).toEqual([140, 9]);
+
+    // A studio that stands in one long row needs a plan far wider than that.
+    const wider = await request(app)
+      .put(`/api/systems/${system.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ floor_width: 900, floor_height: 15 });
+    expect(wider.status).toBe(200);
+    expect([wider.body.floor_width, wider.body.floor_height]).toEqual([900, 15]);
+    const reopened = await request(app).get(`/api/systems/${system.id}`).set('Cookie', aliceCookie);
+    expect([reopened.body.floor_width, reopened.body.floor_height]).toEqual([900, 15]);
+
+    for (const body of [{ floor_width: 4 }, { floor_height: 1 }, { floor_width: 99999 }]) {
+      const bad = await request(app)
+        .put(`/api/systems/${system.id}`)
+        .set('Cookie', aliceCookie)
+        .send(body);
+      expect(bad.status).toBe(400);
+    }
+    const unchanged = await request(app).get(`/api/systems/${system.id}`).set('Cookie', aliceCookie);
+    expect([unchanged.body.floor_width, unchanged.body.floor_height]).toEqual([900, 15]);
+  });
+
   it('moves a rack between systems and out of one again', async () => {
     const { app, db, aliceCookie } = await createTestApp();
     const alice = await aliceId(db);

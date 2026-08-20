@@ -14,6 +14,8 @@
 // cables are nullable exactly so a patch survives modules it cannot see, which
 // is what makes a patch from a stranger's rack render at all.
 
+import { snapshotRackLayout } from './patchLayout.js';
+
 export const PATCH_FORMAT = 'eurorack-assistant.patch';
 export const PATCH_FORMAT_VERSION = 2;
 
@@ -451,6 +453,11 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
       const created = await PatchGroup.create({ ...g, patch_id: patch.id }, { transaction });
       groupIds.set(g.name, created.id);
     }
+
+    // Filed under one of the user's racks, the import copies that rack's
+    // arrangement as it stands now — the same thing creating a patch from
+    // the rack does. An unfiled import has no studio to copy.
+    if (rack) await snapshotRackLayout(db, patch, [rack], { transaction });
 
     // Instances, then the connection points declared on them.
     const rowIds = new Map();

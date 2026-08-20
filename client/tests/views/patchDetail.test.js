@@ -240,6 +240,28 @@ describe('PatchDetailView', () => {
     expect(wrapper.find('[data-test="ask-about-patch"]').attributes('to')).toBe('/ask?patch=7');
   });
 
+  it('asks before matching the patch to the rack as it is organised now', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.post.mockResolvedValue({ ok: true, rows: 2 });
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    // The patch draws the studio as it stood, so catching it up is asked for.
+    await wrapper.find('[data-test="resync-layout"]').trigger('click');
+    await flushPromises();
+    expect(confirm.mock.calls[0][0].message).toContain("rack 'main rack'");
+    expect(api.post).not.toHaveBeenCalled();
+
+    confirm.mockResolvedValue(true);
+    api.get.mockClear();
+    await wrapper.find('[data-test="resync-layout"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/rack-layout/resync');
+    // The page re-reads the patch, so the diagram redraws.
+    expect(api.get).toHaveBeenCalledWith('/api/patches/7');
+  });
+
   it('creates a cable emitted by the diagram drag gesture', async () => {
     api.get.mockResolvedValue(patchResponse);
     api.post.mockResolvedValue({ id: 22 });
