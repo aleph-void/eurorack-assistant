@@ -1,4 +1,4 @@
-// Sequelize models for the schema in migrations/. The SQL migrations remain
+// Sequelize models for the schema in migrations/. The migrations remain
 // the source of truth for the schema (models are never sync()ed); attribute
 // and column names are kept in snake_case so model JSON matches the API's
 // existing response shapes.
