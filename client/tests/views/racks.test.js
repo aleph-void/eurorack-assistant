@@ -511,17 +511,13 @@ describe('RacksView', () => {
     expect(placedNames(wrapper)).toHaveLength(3);
   });
 
-  it('collapses a row to its meta bar and expands it again', async () => {
+  it('opens the organizer with every row collapsed, and expands one on demand', async () => {
     const wrapper = await openReorderable();
     const strip = () => wrapper.find('[data-test="rack-row-0"] .rack-row-slots');
     const toggle = () => wrapper.find('[data-test="row-collapse-0"]');
     const hidden = () => (strip().attributes('style') || '').includes('display: none');
-    expect(hidden()).toBe(false);
-    expect(toggle().attributes('aria-expanded')).toBe('true');
-
-    await toggle().trigger('click');
-    // Folded away, but still in the DOM (v-show), and nothing was saved:
-    // collapsing is view state, not layout.
+    // Folded away on load, but still in the DOM (v-show), and nothing was
+    // saved: collapsing is view state, not layout.
     expect(strip().exists()).toBe(true);
     expect(hidden()).toBe(true);
     expect(toggle().attributes('aria-expanded')).toBe('false');
@@ -529,6 +525,11 @@ describe('RacksView', () => {
 
     await toggle().trigger('click');
     expect(hidden()).toBe(false);
+    expect(toggle().attributes('aria-expanded')).toBe('true');
+
+    await toggle().trigger('click');
+    expect(hidden()).toBe(true);
+    expect(api.put).not.toHaveBeenCalled();
   });
 
   // Every save re-creates the rack's rows with new ids, so a collapsed row
@@ -537,7 +538,6 @@ describe('RacksView', () => {
     const wrapper = await openReorderable();
     const collapsed = (index) =>
       wrapper.find(`[data-test="row-collapse-${index}"]`).attributes('aria-expanded') === 'false';
-    await wrapper.find('[data-test="row-collapse-0"]').trigger('click');
     expect(collapsed(0)).toBe(true);
 
     await wrapper.find('[data-test="add-1u-row"]').trigger('click');
@@ -556,6 +556,7 @@ describe('RacksView', () => {
       wrapper.find(`[data-test="row-collapse-${index}"]`).attributes('aria-expanded') === 'false';
     await wrapper.find('[data-test="add-1u-row"]').trigger('click');
     await flushPromises();
+    expect(collapsed(1)).toBe(false);
     await wrapper.find('[data-test="row-collapse-1"]').trigger('click');
     expect(collapsed(1)).toBe(true);
 
@@ -581,6 +582,16 @@ describe('RacksView', () => {
   }
 
   const addedRow = () => api.put.mock.calls[0][1].rows.at(-1);
+
+  it('collapses every row of a multi-row rack on load', async () => {
+    const wrapper = await organizerWithRows([
+      { id: 9, unit: 3, hp: 84, modules: [] },
+      { id: 10, unit: 1, hp: 84, modules: [] },
+    ]);
+    const toggles = wrapper.findAll('[data-test^="row-collapse-"]');
+    expect(toggles).toHaveLength(2);
+    for (const toggle of toggles) expect(toggle.attributes('aria-expanded')).toBe('false');
+  });
 
   it('starts a new row at the width the rack is already built to', async () => {
     const wrapper = await organizerWithRows([

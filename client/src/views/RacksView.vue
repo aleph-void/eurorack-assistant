@@ -128,7 +128,9 @@ async function openOrganizer(rack) {
   try {
     organizer.value = await api.get(`/api/racks/${rack.id}`);
     organizingRackId.value = rack.id;
-    collapsedRows.value = [];
+    // Every row starts folded: a full case is several rows of panels tall,
+    // and opening the organizer on all of them buries the controls.
+    collapsedRows.value = (organizer.value.rows || []).map(() => true);
     layoutError.value = '';
   } catch (e) {
     error.value = e.message;
@@ -136,9 +138,11 @@ async function openOrganizer(rack) {
 }
 
 // Folding a row's panel strip away, so a tall rack's organizer fits on
-// screen while one row is being worked on. Pure view state: the layout is
-// untouched, and the strip stays in the DOM (v-show) like every other
-// collapsed section in the app. Held BY POSITION, one flag per row: saving
+// screen while one row is being worked on. Every row is folded when the
+// organizer opens; a row added afterwards starts open, since it was asked
+// for to be filled. Pure view state: the layout is untouched, and the strip
+// stays in the DOM (v-show) like every other collapsed section in the app.
+// Held BY POSITION, one flag per row: saving
 // the layout REPLACES the rack's rows (PUT /:id/layout deletes and
 // re-inserts them), so a row's id is a different number after every drop and
 // cannot identify the same row across a save. The flags are spliced along
