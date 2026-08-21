@@ -1,20 +1,12 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { onMounted, ref, shallowRef } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
-import ScopePanel from '../components/ScopePanel.vue';
-import PatchNotesPanel from '../components/PatchNotesPanel.vue';
 import PatchDiagram from '../components/PatchDiagram.vue';
 import ShareButton from '../components/ShareButton.vue';
 import VoicePatchPanel from '../components/VoicePatchPanel.vue';
 import CablesSection from '../components/patchdetail/CablesSection.vue';
-import FlowSection from '../components/patchdetail/FlowSection.vue';
-import NormalledSection from '../components/patchdetail/NormalledSection.vue';
-import SettingsSection from '../components/patchdetail/SettingsSection.vue';
-import LinksSection from '../components/patchdetail/LinksSection.vue';
-import GroupsSection from '../components/patchdetail/GroupsSection.vue';
-import ExtrasSection from '../components/patchdetail/ExtrasSection.vue';
 import {
   FROM_TYPES,
   TO_TYPES,
@@ -24,18 +16,15 @@ import {
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
 
-// A capture files itself under a note on this patch, so the notes panel is
-// refreshed when one is taken.
-const notesPanel = ref(null);
-const onCaptured = () => notesPanel.value?.load();
-
-const patch = ref(null);
+// A big patch is a few thousand components and panel placements, and none of
+// this page ever writes into the payload — every section reads it and asks
+// the server for a fresh one. So it is held SHALLOW: making all of it deeply
+// reactive doubles the cost of every render of the diagram and triples the
+// memory it sits in, buying nothing.
+const patch = shallowRef(null);
 const error = ref('');
 
-const { modules, modulesById, groupsById, multiRack, moduleLabel, cables, jackCandidates } =
-  usePatchFacts(patch);
-
-const rackModules = ref([]);
+const { modules, modulesById, moduleLabel, cables, jackCandidates } = usePatchFacts(patch);
 
 // The diagram's drag gesture creates a cable exactly like the cable form
 // does, so the write (and its error display) lives in the cables section.
@@ -139,16 +128,15 @@ async function duplicatePatch() {
 // cables already plugged (so they can be pulled out by name), and the words
 // this rack uses — a recogniser has never heard of Mimeophon and does better
 // when it is told the names it should expect.
-const voiceFrom = computed(() => jackCandidates(FROM_TYPES, false));
-const voiceTo = computed(() => jackCandidates(TO_TYPES, true));
-const cableCandidates = computed(() =>
+const voiceFrom = () => jackCandidates(FROM_TYPES, false);
+const voiceTo = () => jackCandidates(TO_TYPES, true);
+const cableCandidates = () =>
   cables.value.map((c) => ({
     cable_id: c.id,
     module_label: `${moduleLabel(modulesById.value.get(c.from_patch_module_id))} ${c.from_component_name}`,
     jack_name: `${moduleLabel(modulesById.value.get(c.to_patch_module_id))} ${c.to_component_name}`,
-  }))
-);
-const vocabulary = computed(() => {
+  }));
+const vocabulary = () => {
   const words = new Set();
   for (const pm of modules.value) {
     words.add(pm.manufacturer);
@@ -157,7 +145,7 @@ const vocabulary = computed(() => {
     for (const c of pm.components) words.add(c.name);
   }
   return [...words].filter(Boolean);
-});
+};
 
 async function rename() {
   renameError.value = '';
@@ -169,15 +157,6 @@ async function rename() {
     renameError.value = e.message;
   }
 }
-
-onMounted(async () => {
-  try {
-    const list = await api.get('/api/modules', { quiet: true });
-    rackModules.value = Array.isArray(list) ? list : [];
-  } catch {
-    rackModules.value = [];
-  }
-});
 </script>
 
 <template>
@@ -213,6 +192,14 @@ onMounted(async () => {
       >
         Duplicate
       </button>
+      <RouterLink
+        :to="`/patches/${props.id}/config`"
+        style="font-size: 0.8rem"
+        data-test="configure-patch"
+        title="Control settings, buses, linked instances, off-rack gear, the scope and the notes"
+      >
+        Configure
+      </RouterLink>
       <ShareButton :id="props.id" type="patch" :label="patch.name" small />
       <a
         :href="`/api/patches/${props.id}/export`"
@@ -283,64 +270,5 @@ onMounted(async () => {
       :suggestions="suggestions"
       @reload="load"
     />
-    <FlowSection :patch="patch" />
-    <NormalledSection :patch="patch" />
-    <SettingsSection :patch="patch" :patch-id="id" @reload="load" />
-    <LinksSection :patch="patch" :patch-id="id" @reload="load" />
-    <GroupsSection :patch="patch" :patch-id="id" @reload="load" />
-    <ExtrasSection :patch="patch" :patch-id="id" :rack-modules="rackModules" @reload="load" />
-
-    <ScopePanel :patch-id="props.id" :modules="modules" @captured="onCaptured" />
-
-    <PatchNotesPanel ref="notesPanel" :patch-id="props.id" />
-
-    <details class="panel" data-test="snapshot">
-      <summary>
-        <h2>Modules in this patch</h2>
-        <span class="summary-count">
-          {{ modules.length }} {{ (modules.length) === 1 ? 'module' : 'modules' }}
-        </span>
-      </summary>
-      <div class="panel-body">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Module</th>
-                <th v-if="multiRack">Rack</th>
-                <th>Bus</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="pm in modules" :key="pm.id" :data-test="`patch-module-${pm.id}`">
-                <td>
-                  <RouterLink v-if="pm.live" :to="`/modules/${pm.module_id}`">
-                    {{ moduleLabel(pm) }}
-                  </RouterLink>
-                  <template v-else>{{ moduleLabel(pm) }}</template>
-                </td>
-                <td v-if="multiRack">{{ pm.rack_name || '—' }}</td>
-                <td>{{ groupsById.get(pm.group_id)?.name || '—' }}</td>
-                <td>
-                  <span
-                    class="badge"
-                    :class="pm.live ? 'found' : pm.external ? 'pending' : 'failed'"
-                  >
-                    {{
-                      pm.live
-                        ? 'in your system'
-                        : pm.external
-                          ? 'off-rack gear'
-                          : 'no longer in your system'
-                    }}
-                  </span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </details>
   </template>
 </template>

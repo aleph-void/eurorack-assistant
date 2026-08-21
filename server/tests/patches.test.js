@@ -1782,6 +1782,46 @@ describe('system patches', () => {
     expect(detail.rack_layout[1].modules).toEqual([instanceOf('Plaits')]);
   });
 
+  // The floor plan is where a person arranges their studio, so it is what the
+  // picture of the studio follows: rack by rack as they STAND, not in the
+  // order some earlier save happened to send them in.
+  it('reads the racks of a system in the order they stand on its floor plan', async () => {
+    const fixture = await withSystemFixture();
+    const { app, aliceCookie, system, leftRack, rightRack } = fixture;
+    for (const [rack, module] of [
+      [fixture.leftRack, fixture.maths],
+      [fixture.rightRack, fixture.plaits],
+    ]) {
+      await request(app)
+        .put(`/api/racks/${rack.id}/layout`)
+        .set('Cookie', aliceCookie)
+        .send({ rows: [{ unit: 3, hp: 84, modules: [{ module_id: module.id }] }] });
+    }
+    // The right case is moved to the near end of the floor, the left case
+    // behind it — so the studio now reads right case first.
+    const moved = await request(app)
+      .put(`/api/systems/${system.id}/layout`)
+      .set('Cookie', aliceCookie)
+      .send({
+        racks: [
+          { rack_id: leftRack.id, x: 0, y: 6 },
+          { rack_id: rightRack.id, x: 0, y: 0 },
+        ],
+      });
+    expect(moved.status).toBe(200);
+
+    const patch = (
+      await request(app)
+        .post('/api/patches')
+        .set('Cookie', aliceCookie)
+        .send({ system_id: system.id, name: 'As it stands' })
+    ).body;
+    const detail = (
+      await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie)
+    ).body;
+    expect(detail.rack_layout.map((row) => row.rack_name)).toEqual(['right case', 'left case']);
+  });
+
   it('keeps the arrangement it was built with when the rack is rebuilt', async () => {
     const fixture = await withSystemFixture();
     const { app, aliceCookie, leftRack, maths, plaits, db } = fixture;

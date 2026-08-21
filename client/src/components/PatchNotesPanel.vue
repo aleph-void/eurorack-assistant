@@ -1,10 +1,14 @@
 <script setup>
 import { onMounted, ref } from 'vue';
 import { api } from '../api.js';
+import { useLazyPanel } from '../lazyPanel.js';
 
 // Notes attached to this patch — what the patch is for, what to try next, and
 // the waveform captures filed under them.
 const props = defineProps({ patchId: { type: [String, Number], required: true } });
+
+// Built the first time it is opened (lazyPanel.js).
+const { opened, onToggle } = useLazyPanel();
 
 const notes = ref([]);
 const title = ref('');
@@ -57,14 +61,14 @@ onMounted(load);
 </script>
 
 <template>
-  <details class="panel" data-test="patch-notes">
+  <details class="panel" data-test="patch-notes" @toggle="onToggle">
     <summary>
       <h2>Notes on this patch</h2>
       <span class="summary-count">
         {{ notes.length }} {{ notes.length === 1 ? 'note' : 'notes' }}
       </span>
     </summary>
-    <div class="panel-body">
+    <div v-if="opened" class="panel-body">
       <p v-if="error" class="error" data-test="patch-notes-error">{{ error }}</p>
 
       <form @submit.prevent="create">

@@ -8,11 +8,12 @@
 // where one was found, otherwise the logical panel the server drew from the
 // manual.
 
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import ComponentLegend from './ComponentLegend.vue';
 import { componentColor } from '../componentTypes.js';
 import {
   PANEL_HEIGHT,
+  cableBounds,
   cableColor,
   cablePath,
   imageWidthFor,
@@ -35,9 +36,12 @@ const props = defineProps({
 });
 const emit = defineEmits(['connect', 'disconnect', 'retype']);
 
-// A patch snapshots the whole rack, so by default only the modules it
-// actually uses are drawn — the rest would bury them.
-const showAll = ref(false);
+// A patch snapshots the whole rack, and the rack is what the picture is OF:
+// the case in front of you, with the patched jacks marked on it. So every
+// module is drawn by default — untick this to see only the ones a cable
+// touches. (Only what is on screen is ever built, so a whole studio costs
+// what a corner of it costs.)
+const showAll = ref(true);
 const showJackNames = ref(false);
 // Panels are drawn edge to edge the way they stand in the case, so there is
 // nowhere for a name to go without pushing them apart again: names are on the
@@ -48,9 +52,6 @@ const showModuleNames = ref(false);
 const label = (pm) =>
   props.labelFor ? props.labelFor(pm) : `${pm.manufacturer} ${pm.module_name}`.trim();
 
-// A patch with no cables yet uses no modules, and drawing the whole rack in
-// that case buries the diagram in panels the patch has nothing to do with —
-// so an unpatched patch draws nothing until 'show every module' is ticked.
 const visibleModules = computed(() =>
   showAll.value ? props.modules : usedModules(props.modules, props.cables)
 );
@@ -88,12 +89,41 @@ const diagram = computed(() =>
   })
 );
 
+// ---- the whole screen ----
+// Patching is close work on a picture that is far wider than the column this
+// page is laid out in, so the diagram can take the whole display: the panel
+// itself goes fullscreen, controls and all, and the picture refits to what it
+// is given.
+const container = ref(null);
+const fullscreen = ref(false);
+
+function toggleFullscreen() {
+  if (typeof document === 'undefined') return;
+  if (document.fullscreenElement) {
+    document.exitFullscreen?.();
+    return;
+  }
+  container.value?.requestFullscreen?.();
+}
+
+function onFullscreenChange() {
+  fullscreen.value = Boolean(document.fullscreenElement);
+  // The box is a different size now: refit unless the user has taken the
+  // zoom into their own hands, and re-measure what is on screen either way.
+  nextTick(() => {
+    if (!userZoomed.value) fitZoom();
+    measureViewport();
+  });
+}
+
 // ---- zoom ----
 // The diagram is one coordinate space rendered at whatever CSS width we ask
 // for, so zooming is just that width: every jack marker, cable and hit test
 // goes through getBoundingClientRect and follows along. Patching is close
 // work — a rack row is wider than any screen — so the picture opens fitted to
 // the page and zooms from there, and stays where the user put it.
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
 const MIN_ZOOM = 0.15;
 const MAX_ZOOM = 6;
 const wrap = ref(null);
@@ -126,28 +156,162 @@ function wheelZoom(event) {
   event.preventDefault();
   zoomBy(event.deltaY < 0 ? 1.12 : 1 / 1.12);
 }
-onMounted(fitZoom);
+onMounted(() => {
+  document.addEventListener('fullscreenchange', onFullscreenChange);
+  fitZoom();
+  // The picture opens fitted to the page, so that is the size its panels are
+  // wanted at — no need to wait out the settle timer for the first ones.
+  imageZoom.value = zoom.value;
+  // Measured now, not on the next tick: the box is in the document by the
+  // time this runs, and waiting a tick would leave one frame with an empty
+  // picture in it.
+  measureViewport();
+  window.addEventListener('resize', onScroll);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener('fullscreenchange', onFullscreenChange);
+  clearTimeout(imageZoomTimer);
+  window.removeEventListener('resize', onScroll);
+  if (viewportFrame) cancelAnimationFrame(viewportFrame);
+});
+// Zooming changes what a scroll position means, and so does redrawing the
+// picture with different modules on it.
+watch(zoom, () => nextTick(measureViewport));
 // A diagram that changes shape (modules shown, names on, a row added) is
 // refitted unless the user has taken the zoom into their own hands.
 watch(
-  () => diagram.value.width,
+  () => diagram.value,
   () => {
     if (!userZoomed.value) fitZoom();
+    nextTick(measureViewport);
   }
 );
 const zoomPercent = computed(() => Math.round(zoom.value * 100));
+
+// A marker has to be the same size ON SCREEN however far the picture is
+// zoomed out, or a whole studio draws its jacks as invisible specks: the
+// radius is given in diagram units, so it is divided by the zoom. The clamp
+// keeps it from swallowing the panel at the extremes — at 15% a panel is only
+// a couple of hundred units wide.
+const MARKER_SCREEN_R = 6;
+const markerRadius = computed(() => clamp(MARKER_SCREEN_R / zoom.value, 2, 18));
+const markerStroke = computed(() => clamp(1.5 / zoom.value, 0.5, 4.5));
+// The dark ring behind every marker, so a bright dot has an edge to be seen
+// against on a photograph of a panel. Kept here rather than in the stylesheet
+// because a marker's colours travel on the element itself — a rule in CSS
+// would win over the component type's own colour.
+const MARKER_HALO = 'rgba(9, 9, 11, 0.75)';
+// A placement with no component behind it has no type and no colour of its
+// own, and falls back to the module page's neutral marker.
+const MARKER_NEUTRAL = '#e4e4e7';
+// The ring around the marker being corrected, in place of its dark halo.
+const MARKER_SELECTED = '#f4f4f5';
+
+// ---- what is on screen ----
+// A studio is two hundred panels and six thousand markers, and a picture of
+// one is far wider than any screen: at any moment nearly all of it is scrolled
+// out of sight. Building that part costs exactly what building the part you
+// are looking at costs — the same nodes, the same panel images decoded — and
+// shows nothing, so only the part inside the scroll box is drawn. Everything
+// keeps its place in the coordinate space, so the scrollbars, the hit tests
+// and the drag gesture are untouched by this.
+//
+// The margin is a band of diagram either side of the box, so a scroll finds
+// the panels already there rather than arriving before them.
+const VIEWPORT_MARGIN = 500;
+// Before there is anything to measure, the first screenful is GUESSED from
+// the window: the box has not been laid out yet, and rendering the whole
+// studio for one frame — every panel built, every image fetched — an instant
+// before all but a screenful is thrown away is the most expensive moment on
+// the page. The real measurement replaces this as soon as the box exists.
+// null means 'measured, and the box has no size at all' — a test renderer
+// with no layout — and then everything is drawn, because the honest answer
+// to 'what is on screen' is 'no idea'.
+const viewport = ref(
+  typeof window === 'undefined'
+    ? null
+    : {
+        x0: -VIEWPORT_MARGIN,
+        y0: -VIEWPORT_MARGIN,
+        x1: window.innerWidth + VIEWPORT_MARGIN,
+        y1: window.innerHeight + VIEWPORT_MARGIN,
+      }
+);
+let viewportFrame = 0;
+
+function measureViewport() {
+  const el = wrap.value;
+  if (!el || !el.clientWidth || !el.clientHeight) {
+    viewport.value = null;
+    return;
+  }
+  const scale = zoom.value || 1;
+  viewport.value = {
+    x0: el.scrollLeft / scale - VIEWPORT_MARGIN,
+    y0: el.scrollTop / scale - VIEWPORT_MARGIN,
+    x1: (el.scrollLeft + el.clientWidth) / scale + VIEWPORT_MARGIN,
+    y1: (el.scrollTop + el.clientHeight) / scale + VIEWPORT_MARGIN,
+  };
+}
+
+// Scrolling fires far faster than the screen redraws; measuring once per
+// frame is as often as it can matter.
+function onScroll() {
+  if (viewportFrame) return;
+  viewportFrame = requestAnimationFrame(() => {
+    viewportFrame = 0;
+    measureViewport();
+  });
+}
+
+const inView = (box) => {
+  const v = viewport.value;
+  return !v || (box.x1 >= v.x0 && box.x0 <= v.x1 && box.y1 >= v.y0 && box.y0 <= v.y1);
+};
+
+// Zoomed out far enough, a marker is at its smallest and a panel is a couple
+// of hundred pixels wide: drawing every knob, LED and button on it turns the
+// case into a bead curtain and buries the jacks, which are the only things a
+// cable can go in. So the furniture appears as you zoom in to where you could
+// read it anyway. A jack is always drawn, at every zoom.
+const CONTROL_ZOOM = 0.55;
+const showControls = computed(() => zoom.value >= CONTROL_ZOOM);
 
 // Each panel is fetched at the size it is actually painted — its drawn width,
 // at the current zoom, at the screen's own pixel density. Widths come in a
 // few fixed steps (panelLayout.js), so zooming re-requests a picture at most
 // a couple of times and every step is cached from then on.
 const density = () => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
+// The zoom the panel pictures were last FETCHED at. A wheel gesture crosses
+// several zoom steps in a second, and each one that changes the size bucket
+// asks the server for another forty panels — pictures replaced before they
+// arrive. So the request follows the zoom only once it has stopped moving.
+const imageZoom = ref(1);
+let imageZoomTimer = 0;
+watch(zoom, (value) => {
+  clearTimeout(imageZoomTimer);
+  imageZoomTimer = setTimeout(() => {
+    imageZoom.value = value;
+  }, 250);
+});
 const imageUrl = (placed) =>
-  panelImageUrl(placed.pm.panel, imageWidthFor(placed.pm.panel, placed.width) * zoom.value * density());
+  panelImageUrl(
+    placed.pm.panel,
+    imageWidthFor(placed.pm.panel, placed.width) * imageZoom.value * density()
+  );
 const svgStyle = computed(() => ({
   width: `${Math.max(1, Math.round(diagram.value.width * zoom.value))}px`,
   maxWidth: 'none',
 }));
+
+// The panels inside the scroll box, and the instances they belong to. Markers
+// are culled with their panel: a marker is only ever ON one.
+const visiblePanels = computed(() =>
+  diagram.value.panels.filter((placed) =>
+    inView({ x0: placed.x, y0: placed.y, x1: placed.x + placed.width, y1: placed.y + placed.height })
+  )
+);
+const visibleModuleIds = computed(() => new Set(visiblePanels.value.map((placed) => placed.pm.id)));
 
 const anchorFor = (patchModuleId, componentId) =>
   componentId === null || componentId === undefined
@@ -171,6 +335,10 @@ const drawn = computed(() =>
       return {
         cable,
         d: cablePath(from, to, index),
+        // The box the curve hangs in, so a cable across the studio is drawn
+        // whenever any part of it is on screen — including the middle of a
+        // cable whose two ends are both off it.
+        box: cableBounds(from, to, index),
         color: cableColor(index),
         from,
         to,
@@ -183,10 +351,14 @@ const drawn = computed(() =>
     .filter(Boolean)
 );
 
+// A cable is on screen when any part of its curve is, whether or not either
+// panel it runs between is.
+const visibleCables = computed(() => drawn.value.filter((c) => inView(c.box)));
+
 // Cable ends, so a patched jack is marked even when its panel drew nothing
 // there.
 const ends = computed(() =>
-  drawn.value.flatMap((c) => [
+  visibleCables.value.flatMap((c) => [
     { point: c.from, color: c.color, key: `${c.cable.id}-from` },
     { point: c.to, color: c.color, key: `${c.cable.id}-to` },
   ])
@@ -208,11 +380,23 @@ const allAnchors = computed(() =>
       component,
       // Every marker is drawn in the colour of its component type, the same
       // colours the module page marks the same panel in (componentTypes.js).
-      color: component ? componentColor(component.type) : null,
+      color: component ? componentColor(component.type) : MARKER_NEUTRAL,
       ...anchor,
     };
   })
 );
+// The markers built into the picture: the ones on a panel that is on screen.
+// Everything else about a marker — the legend below, what a cable may be
+// dragged to — is a fact about the whole diagram and keeps counting them all,
+// so scrolling never changes what the picture SAYS, only what it draws.
+const visibleAnchors = computed(() =>
+  allAnchors.value.filter(
+    (a) =>
+      visibleModuleIds.value.has(a.patchModuleId) &&
+      (showControls.value || Boolean(a.component?.type?.endsWith('_jack')))
+  )
+);
+
 // The key under the picture: what is actually on this diagram, not the whole
 // catalogue of types.
 const shownComponents = computed(() => allAnchors.value.map((a) => a.component).filter(Boolean));
@@ -326,7 +510,7 @@ const draftCable = computed(() =>
 </script>
 
 <template>
-  <details open class="panel" data-test="diagram">
+  <details ref="container" open class="panel" :class="{ fullscreen }" data-test="diagram">
     <summary>
       <h2>Patch diagram</h2>
       <span class="summary-count">
@@ -376,6 +560,15 @@ const draftCable = computed(() =>
           >
             Fit
           </button>
+          <button
+            type="button"
+            class="secondary"
+            :title="fullscreen ? 'Leave full screen' : 'Fill the screen with the diagram'"
+            data-test="diagram-fullscreen"
+            @click="toggleFullscreen"
+          >
+            {{ fullscreen ? 'Exit full screen' : 'Full screen' }}
+          </button>
         </span>
       </div>
 
@@ -383,7 +576,7 @@ const draftCable = computed(() =>
         Nothing to draw yet — patch a cable, or tick 'show every module'.
       </p>
       <template v-else>
-        <div ref="wrap" class="diagram-wrap" @wheel="wheelZoom">
+        <div ref="wrap" class="diagram-wrap" @wheel="wheelZoom" @scroll="onScroll">
           <svg
             ref="svg"
             class="patch-diagram"
@@ -396,7 +589,7 @@ const draftCable = computed(() =>
           >
             <!-- One panel per module instance: the image, cropped to the
                  front plate, with the module's name above it. -->
-            <g v-for="placed in diagram.panels" :key="placed.pm.id">
+            <g v-for="placed in visiblePanels" :key="placed.pm.id">
               <title>{{ label(placed.pm) }}</title>
               <text v-if="showModuleNames" :x="placed.x" :y="placed.labelY" class="panel-label">
                 {{ label(placed.pm) }}
@@ -451,13 +644,20 @@ const draftCable = computed(() =>
             <!-- Every jack we know the position of, so an empty one still
                  reads as somewhere a cable could go. -->
             <circle
-              v-for="a in allAnchors"
+              v-for="a in visibleAnchors"
               :key="a.key"
               :cx="a.x"
               :cy="a.y"
-              r="6"
+              :r="markerRadius"
               class="jack-marker"
-              :stroke="a.color"
+              :fill="a.color"
+              :stroke="
+                selected?.patchModuleId === a.patchModuleId &&
+                selected?.componentId === a.componentId
+                  ? MARKER_SELECTED
+                  : MARKER_HALO
+              "
+              :stroke-width="markerStroke"
               :class="{
                 patchable: CABLE_OUT.includes(a.component?.type),
                 jack: Boolean(a.component?.type?.endsWith('_jack')),
@@ -475,7 +675,7 @@ const draftCable = computed(() =>
             <path v-if="draftCable" :d="draftCable" class="cable draft-cable" />
 
             <path
-              v-for="c in drawn"
+              v-for="c in visibleCables"
               :key="c.cable.id"
               :d="c.d"
               class="cable"
@@ -499,7 +699,7 @@ const draftCable = computed(() =>
 
             <template v-if="showJackNames">
               <text
-                v-for="a in allAnchors"
+                v-for="a in visibleAnchors"
                 :key="`name-${a.key}`"
                 :x="a.x"
                 :y="a.y - 10"
@@ -595,6 +795,17 @@ const draftCable = computed(() =>
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
+/* Fullscreen: the element is on its own black backdrop with none of the
+   page's own background behind it, and the picture is given every pixel that
+   is not one of the diagram's own controls. */
+.panel:fullscreen {
+  background: var(--bg);
+  overflow: auto;
+  padding: 0.6rem 1rem 1rem;
+}
+.panel:fullscreen .diagram-wrap {
+  max-height: calc(100vh - 7.5rem);
+}
 .diagram-wrap {
   overflow: auto;
   /* Zoomed in, the diagram is bigger than the page: it scrolls inside its own
@@ -631,25 +842,23 @@ const draftCable = computed(() =>
   font-size: 15px;
   text-anchor: middle;
 }
-/* The stroke is the component type's colour, set on the circle itself
-   (componentTypes.js), so nothing here may set one. A marker whose component
-   the patch no longer holds keeps the neutral below. */
+/* Every colour a marker is drawn in rides on the circle itself — the type's
+   own colour as its fill (componentTypes.js), a dark ring around it for
+   contrast — so nothing here may set a fill or a stroke or it would win over
+   the type. Only how SOLID the marker is belongs here: a hole a cable goes in
+   is filled, a control is a faint disc, because the diagram is for patching
+   and the controls are on it for orientation. */
 .jack-marker {
-  fill: none;
-  stroke: rgba(228, 228, 231, 0.55);
-  stroke-width: 1.5;
+  fill-opacity: 0.35;
 }
-/* A hole a cable goes in is drawn heavier than a control: the diagram is for
-   patching, and the controls are on it for orientation. */
 .jack-marker.jack {
-  stroke-width: 2.5;
+  fill-opacity: 0.95;
 }
 .jack-marker.patchable {
   cursor: crosshair;
 }
 .jack-marker.selected {
-  fill: rgba(228, 228, 231, 0.25);
-  stroke-width: 4;
+  fill-opacity: 1;
 }
 .jack-editor {
   display: flex;

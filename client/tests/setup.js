@@ -12,3 +12,15 @@ export function testGlobal() {
     },
   };
 }
+
+// A panel that is not open has not been built (src/lazyPanel.js), so a test
+// that reaches inside one opens it first — which is what a person does. Opens
+// every <details> on the page, since a test is usually after one particular
+// section and should not have to say which.
+export async function openPanels(wrapper) {
+  for (const details of wrapper.findAll('details')) {
+    if (details.element.open) continue;
+    details.element.open = true;
+    await details.trigger('toggle');
+  }
+}

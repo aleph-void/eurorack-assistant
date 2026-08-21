@@ -7,6 +7,7 @@ import RacksView from './views/RacksView.vue';
 import SystemsView from './views/SystemsView.vue';
 import PatchesView from './views/PatchesView.vue';
 import PatchDetailView from './views/PatchDetailView.vue';
+import PatchConfigView from './views/PatchConfigView.vue';
 import ImportView from './views/ImportView.vue';
 import SearchView from './views/SearchView.vue';
 import ManualTextView from './views/ManualTextView.vue';
@@ -36,6 +37,14 @@ export const routes = [
   { path: '/systems', name: 'systems', component: SystemsView },
   { path: '/patches', name: 'patches', component: PatchesView },
   { path: '/patches/:id', name: 'patch-detail', component: PatchDetailView, props: true },
+  // Everything about a patch that is not the picture of it, kept off the
+  // patch view so that page is the diagram and the cables and nothing else.
+  {
+    path: '/patches/:id/config',
+    name: 'patch-config',
+    component: PatchConfigView,
+    props: true,
+  },
   { path: '/import', name: 'import', component: ImportView },
   { path: '/search', name: 'search', component: SearchView },
   // A manual read as text, addressed by the document's content hash.

@@ -6,6 +6,7 @@ import {
 } from '../../services/patchDetail.js';
 import {
   copyRackLayout,
+  inFloorOrder,
   resyncRackLayout,
   snapshotRackLayout,
 } from '../../services/patchLayout.js';
@@ -84,13 +85,12 @@ export function patchCoreRoutes(db) {
         where: { id: Number(req.body.system_id) || 0, user_id: req.user.id },
       });
       if (!system) return res.status(404).json({ error: 'System not found' });
-      racks = await Rack.findAll({
-        where: { system_id: system.id },
-        order: [
-          ['system_position', 'ASC'],
-          ['id', 'ASC'],
-        ],
-      });
+      // In the order the studio reads — how the racks stand on the system's
+      // floor plan — so the instances of a system patch are numbered, and its
+      // panels drawn, the way the racks are actually arranged.
+      racks = inFloorOrder(
+        await Rack.findAll({ where: { system_id: system.id }, order: [['id', 'ASC']] })
+      );
       if (racks.length === 0) {
         return res.status(400).json({ error: 'this system has no racks to patch' });
       }
@@ -215,7 +215,13 @@ export function patchCoreRoutes(db) {
     const patch = found.row;
     // A share recipient gets the patch itself but not the private layout of
     // the rack it sits in (racks are shared separately, if at all).
-    const { json } = await loadPatchDetailFor(db, patch, { includeRackLayout: !found.shared });
+    // The page this feeds draws the patch and patches cables on it; it never
+    // shows what a control does. Leaving the prose out of a whole-studio patch
+    // takes about half the payload off the wire and out of the browser.
+    const { json } = await loadPatchDetailFor(db, patch, {
+      includeRackLayout: !found.shared,
+      describe: false,
+    });
     const owner = found.shared ? await db.models.User.findByPk(patch.user_id) : null;
     res.json(
       patchJson(patch, {

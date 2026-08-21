@@ -233,14 +233,34 @@ export function layoutDiagram(
   return { panels, anchors, width: totalWidth, height: totalHeight };
 }
 
+// How far a cable hangs below its two ends. Its own function because the
+// curve and the BOX the curve lives in have to agree: the diagram draws only
+// what is on screen, and a cable is on screen when that box is.
+export function cableSag(from, to, index = 0) {
+  const dx = Math.abs(to.x - from.x);
+  const dy = Math.abs(to.y - from.y);
+  return clamp(Math.hypot(dx, dy) * 0.35, 30, 220) + (index % 3) * 14;
+}
+
+// The rectangle a drawn cable occupies. The curve's control points sit `sag`
+// below both ends and a cubic never reaches its control points, so this is a
+// little generous — which is what it should be for deciding what to draw.
+export function cableBounds(from, to, index = 0) {
+  const sag = cableSag(from, to, index);
+  return {
+    x0: Math.min(from.x, to.x),
+    x1: Math.max(from.x, to.x),
+    y0: Math.min(from.y, to.y),
+    y1: Math.max(from.y, to.y) + sag,
+  };
+}
+
 // A patch cable hangs. Drawn as a cubic curve whose control points sag below
 // both ends by an amount that grows with the distance covered, which reads as
 // a cable rather than as a wiring-diagram elbow — and keeps two cables between
 // the same pair of panels from lying exactly on top of each other.
 export function cablePath(from, to, index = 0) {
-  const dx = Math.abs(to.x - from.x);
-  const dy = Math.abs(to.y - from.y);
-  const sag = clamp(Math.hypot(dx, dy) * 0.35, 30, 220) + (index % 3) * 14;
+  const sag = cableSag(from, to, index);
   return (
     `M ${round(from.x)} ${round(from.y)} ` +
     `C ${round(from.x)} ${round(from.y + sag)} ` +

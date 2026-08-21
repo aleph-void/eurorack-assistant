@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { testGlobal } from '../setup.js';
+import { openPanels, testGlobal } from '../setup.js';
 
 vi.mock('../../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -198,46 +198,34 @@ describe('PatchDetailView', () => {
 
   // The row-level removals ask before they act — except unplugging a cable,
   // which is the ordinary motion of patching and stays a single click.
-  it('asks before removing, but unplugs a cable without a question', async () => {
+  // Pulling a cable out is what patching is: it is not gated behind a
+  // question, the way everything on the configuration page is.
+  it('unplugs a cable without a question', async () => {
     api.get.mockResolvedValue(patchResponse);
     api.delete.mockResolvedValue({ ok: true });
     const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     await wrapper.find('[data-test="delete-cable-21"]').trigger('click');
     await flushPromises();
     expect(confirm).not.toHaveBeenCalled();
     expect(api.delete).toHaveBeenCalledWith('/api/patches/7/cables/21');
-
-    // Everything else on the page is gated, and a declined question acts on
-    // nothing.
-    api.delete.mockClear();
-    await wrapper.find('[data-test="delete-setting-31"]').trigger('click');
-    await wrapper.find('[data-test="remove-instance-12"]').trigger('click');
-    await flushPromises();
-    expect(confirm).toHaveBeenCalledTimes(2);
-    expect(api.delete).not.toHaveBeenCalled();
-
-    confirm.mockResolvedValue(true);
-    await wrapper.find('[data-test="delete-setting-31"]').trigger('click');
-    await flushPromises();
-    expect(api.delete).toHaveBeenCalledWith('/api/patches/7/settings/31');
   });
 
-  it('renders the snapshot, cables and settings', async () => {
+  it('renders the snapshot note and the cables', async () => {
     api.get.mockResolvedValue(patchResponse);
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
     expect(wrapper.find('[data-test="snapshot-note"]').text()).toContain("rack 'main rack'");
     const cable = wrapper.find('[data-test="cable-21"]');
     expect(cable.text()).toContain('EOR');
     expect(cable.text()).toContain('Signal In');
-    expect(wrapper.find('[data-test="setting-31"]').text()).toContain('Rise');
-    // A module deleted since the snapshot still shows, marked as gone.
-    expect(wrapper.find('[data-test="patch-module-12"]').text()).toContain('no longer in your system');
-    // The patch can be taken straight to the assistant.
+    // The patch can be taken straight to the assistant, or to its setup.
     expect(wrapper.find('[data-test="ask-about-patch"]').attributes('to')).toBe('/ask?patch=7');
+    expect(wrapper.find('[data-test="configure-patch"]').attributes('to')).toBe('/patches/7/config');
   });
 
   it('asks before matching the patch to the rack as it is organised now', async () => {
@@ -246,6 +234,7 @@ describe('PatchDetailView', () => {
     const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     // The patch draws the studio as it stood, so catching it up is asked for.
     await wrapper.find('[data-test="resync-layout"]').trigger('click');
@@ -267,6 +256,7 @@ describe('PatchDetailView', () => {
     api.post.mockResolvedValue({ id: 22 });
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
     wrapper.findComponent(PatchDiagram).vm.$emit('connect', {
       from_patch_module_id: 11,
       from_component_id: 2,
@@ -287,6 +277,7 @@ describe('PatchDetailView', () => {
     api.delete.mockResolvedValue({});
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
     wrapper.findComponent(PatchDiagram).vm.$emit('disconnect', { id: 21 });
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/patches/7/cables/21');
@@ -299,6 +290,7 @@ describe('PatchDetailView', () => {
     api.put.mockResolvedValue({ id: 1, type: 'bidirectional_jack' });
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
     wrapper.findComponent(PatchDiagram).vm.$emit('retype', {
       module_id: 3,
       patch_module_id: 11,
@@ -327,6 +319,7 @@ describe('PatchDetailView', () => {
     api.post.mockResolvedValue({ id: 22 });
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     // Typing lists the matching modules with the first one highlighted.
     const from = wrapper.find('[data-test="cable-from-module"]');
@@ -357,6 +350,7 @@ describe('PatchDetailView', () => {
     api.get.mockResolvedValue(patchResponse);
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     await pick(wrapper, 'cable-to-module', 'doepfer');
     const jack = wrapper.find('[data-test="cable-to-jack"]');
@@ -403,6 +397,7 @@ describe('PatchDetailView', () => {
     api.get.mockResolvedValue(withHeader);
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     await pick(wrapper, 'cable-to-module', 'maths');
     const jack = wrapper.find('[data-test="cable-to-jack"]');
@@ -415,6 +410,7 @@ describe('PatchDetailView', () => {
     api.get.mockResolvedValue(patchResponse);
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     // Maths' Signal In is fed by the patch's one cable.
     await pick(wrapper, 'cable-to-module', 'maths');
@@ -435,6 +431,7 @@ describe('PatchDetailView', () => {
     api.post.mockResolvedValue({ id: 22 });
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     const line = wrapper.find('[data-test="quick-cable"]');
     // Half a line explains itself instead of failing silently.
@@ -471,6 +468,7 @@ describe('PatchDetailView', () => {
     api.post.mockResolvedValue({ id: 23 });
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     // The patch's cable runs EOR → Signal In, both fixed-direction jacks, so
     // there is nothing to reverse.
@@ -526,6 +524,7 @@ describe('PatchDetailView', () => {
     api.post.mockResolvedValue({ id: 25 });
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     const row = wrapper.find('[data-test="suggestion-2-5"]');
     expect(row.text()).toContain('Make Noise Maths — EOR');
@@ -564,6 +563,7 @@ describe('PatchDetailView', () => {
     });
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     // Signal reaches Maths and nothing leaves it.
     expect(wrapper.find('[data-test="loose-end-11"]').text()).toContain('Make Noise Maths');
@@ -577,6 +577,7 @@ describe('PatchDetailView', () => {
     api.post.mockResolvedValue({ id: 99, name: 'Krell (copy)' });
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     await wrapper.find('[data-test="duplicate-patch"]').trigger('click');
     await flushPromises();
@@ -589,6 +590,7 @@ describe('PatchDetailView', () => {
     api.post.mockResolvedValue({ id: 22 });
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     await wrapper.find('[data-test="cable-chain"]').setValue(true);
     await pick(wrapper, 'cable-from-module', 'make noise');
@@ -604,108 +606,14 @@ describe('PatchDetailView', () => {
     expect(wrapper.find('[data-test="cable-to-module"]').element.value).toBe('');
   });
 
-  it('renders the signal flow as an indented tree with source, merge and cycle badges', async () => {
-    api.get.mockResolvedValue(patchResponse);
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
 
-    const root = wrapper.find('[data-test="flow-row-0"]');
-    expect(root.text()).toContain('Make Noise Maths — EOR');
-    expect(root.text()).toContain('generator');
 
-    const hop = wrapper.find('[data-test="flow-row-1"]');
-    expect(hop.text()).toContain('cable →');
-    expect(hop.text()).toContain('Doepfer A-180-2 — M1');
-
-    const merged = wrapper.find('[data-test="flow-row-2"]');
-    expect(merged.text()).toContain('mult copy →');
-    expect(merged.text()).toContain('merge point');
-
-    const looped = wrapper.find('[data-test="flow-row-3"]');
-    expect(looped.text()).toContain('feedback loop');
-  });
-
-  it('labels switch positions and distinguishes switched selection from mixing', async () => {
-    api.get.mockResolvedValue({
-      ...patchResponse,
-      flow: [
-        {
-          key: 'pm11:c2',
-          kind: 'jack',
-          patch_module_id: 11,
-          component_id: 2,
-          name: 'EOR',
-          jack_type: 'output_jack',
-          via: null,
-          switched: false,
-          merge: false,
-          switched_merge: false,
-          cycle: false,
-          children: [
-            {
-              key: 'pm13:c5',
-              kind: 'jack',
-              patch_module_id: 13,
-              component_id: 5,
-              name: 'I/O 1',
-              jack_type: 'bidirectional_jack',
-              via: 'switch',
-              switched: true,
-              merge: false,
-              switched_merge: false,
-              cycle: false,
-              children: [
-                {
-                  key: 'pm13:c6',
-                  kind: 'jack',
-                  patch_module_id: 13,
-                  component_id: 6,
-                  name: 'O/I',
-                  jack_type: 'bidirectional_jack',
-                  via: 'switch',
-                  switched: true,
-                  merge: false,
-                  switched_merge: true,
-                  cycle: false,
-                  children: [],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    });
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
-
-    const step = wrapper.find('[data-test="flow-row-1"]');
-    expect(step.text()).toContain('switch position →');
-    expect(step.text()).toContain('one switch position');
-    // A switched convergence is a selection, not a mix.
-    const common = wrapper.find('[data-test="flow-row-2"]');
-    expect(common.text()).toContain('switched — one source at a time');
-    expect(common.text()).not.toContain('merge point');
-  });
-
-  it('shows normalled connections as active (with the traced signal) or overridden', async () => {
-    api.get.mockResolvedValue(patchResponse);
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
-
-    const overridden = wrapper.find('[data-test="normalled-11-41"]');
-    expect(overridden.text()).toContain('Signal In');
-    expect(overridden.text()).toContain('internal oscillator');
-    expect(overridden.text()).toContain('overridden');
-
-    const active = wrapper.find('[data-test="normalled-13-42"]');
-    expect(active.text()).toContain('active');
-    expect(active.text()).toContain('receives EOR from Make Noise Maths (via M1)');
-  });
 
   it('offers mult jacks at both ends of a cable', async () => {
     api.get.mockResolvedValue(patchResponse);
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     // The mult module is offered at both ends even though it has no fixed
     // input/output jacks, and its jacks are labeled with their group.
@@ -722,32 +630,6 @@ describe('PatchDetailView', () => {
     expect(await jackNames('cable-to-module', 'cable-to-jack')).toContain('M2 (mult 1)');
   });
 
-  it('offers enum options as a dropdown and ranges as numbers when dialing in a module', async () => {
-    api.get.mockResolvedValue(patchResponse);
-    api.put.mockResolvedValue({ id: 32 });
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
-
-    await pick(wrapper, 'settings-module', 'maths');
-    // Rise has min/max 0..10 → a number input, prefilled from the saved setting.
-    const rise = wrapper.find('[data-test="control-input-3"]');
-    expect(rise.attributes('type')).toBe('number');
-    expect(rise.attributes('max')).toBe('10');
-    expect(rise.element.value).toBe('7');
-    // Mode has enum positions → a select.
-    const mode = wrapper.find('[data-test="control-input-4"]');
-    expect(mode.element.tagName).toBe('SELECT');
-    expect(mode.findAll('option').map((o) => o.text()).join(' ')).toContain('Cycle');
-
-    await mode.setValue('Cycle');
-    await wrapper.find('[data-test="control-save-4"]').trigger('click');
-    await flushPromises();
-    expect(api.put).toHaveBeenCalledWith('/api/patches/7/settings', {
-      patch_module_id: 11,
-      component_id: 4,
-      value: 'Cycle',
-    });
-  });
 });
 
 
@@ -891,26 +773,13 @@ describe('PatchDetailView beyond the rack', () => {
     ],
   };
 
-  it('labels instances by their role and shows bridged links and off-rack gear', async () => {
-    api.get.mockResolvedValue(richPatch);
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
-
-    expect(wrapper.find('[data-test="patch-module-11"]').text()).toContain('LXR (snare voice)');
-    expect(wrapper.find('[data-test="patch-module-11"]').text()).toContain('Rhythm');
-    expect(wrapper.find('[data-test="patch-module-12"]').text()).toContain('off-rack gear');
-    expect(wrapper.find('[data-test="link-81"]').text()).toContain('bridge');
-    expect(wrapper.find('[data-test="link-81"]').text()).toContain('1↔1');
-    // The declared connection point of the off-rack gear is listed.
-    expect(wrapper.find('[data-test="declared-12"]').text()).toContain('MIDI OUT');
-    expect(wrapper.find('[data-test="declared-12"]').text()).toContain('midi din');
-  });
 
   it('shows what a cable is for and lets it be marked provisional', async () => {
     api.get.mockResolvedValue(richPatch);
     api.put.mockResolvedValue({});
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     const cable = wrapper.find('[data-test="cable-21"]');
     expect(cable.text()).toContain('adds the distortion layer');
@@ -923,181 +792,15 @@ describe('PatchDetailView beyond the rack', () => {
     expect(api.put).toHaveBeenCalledWith('/api/patches/7/cables/21', { optional: false });
   });
 
-  it('flags bridged, conditional, optional and cut-short paths in the flow', async () => {
-    api.get.mockResolvedValue(richPatch);
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
 
-    expect(wrapper.find('[data-test="flow-row-0"]').text()).toContain('midi din');
-    const bridged = wrapper.find('[data-test="flow-row-1"]');
-    expect(bridged.text()).toContain('bridged link');
-    expect(bridged.text()).toContain('MIX 4 set to up');
-    expect(bridged.text()).toContain('not recorded in this patch');
-    expect(bridged.text()).toContain('optional cable');
-    expect(bridged.text()).toContain('path cut short');
-    expect(wrapper.find('[data-test="flow-truncated"]').exists()).toBe(true);
-  });
 
-  it('explains a default cancelled by a cable leaving another jack', async () => {
-    api.get.mockResolvedValue(richPatch);
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
-    const row = wrapper.find('[data-test="normalled-11-41"]');
-    expect(row.text()).toContain('overridden');
-    expect(row.text()).toContain('a cable is patched out of L');
-    expect(row.text()).toContain('one of several');
-  });
 
-  it('names a bus, labels an instance and adds off-rack gear', async () => {
-    api.get.mockResolvedValue(richPatch);
-    api.post.mockResolvedValue({ id: 99 });
-    api.put.mockResolvedValue({});
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
+  
 
-    await wrapper.find('[data-test="group-name"]').setValue('Granular bus');
-    await wrapper.find('[data-test="groups"] form').trigger('submit');
-    await flushPromises();
-    expect(api.post).toHaveBeenCalledWith('/api/patches/7/groups', { name: 'Granular bus' });
 
-    await wrapper.find('[data-test="label-input-13"]').setValue('case link');
-    await wrapper.find('[data-test="label-save-13"]').trigger('click');
-    await flushPromises();
-    expect(api.put).toHaveBeenCalledWith('/api/patches/7/modules/13', { label: 'case link' });
 
-    await wrapper.find('[data-test="add-kind"]').setValue('external');
-    await wrapper.find('[data-test="add-name"]').setValue('Monitors');
-    await wrapper.findAll('[data-test="extras"] form')[0].trigger('submit');
-    await flushPromises();
-    expect(api.post).toHaveBeenCalledWith('/api/patches/7/modules', {
-      module_name: 'Monitors',
-      manufacturer: undefined,
-      external: true,
-      label: undefined,
-    });
-  });
 
-  it('corrects an instance\'s manufacturer and module name, refusing an empty one', async () => {
-    api.get.mockResolvedValue(richPatch);
-    api.put.mockResolvedValue({});
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
 
-    // The drafts start from the snapshot the patch holds.
-    expect(wrapper.find('[data-test="manufacturer-input-12"]').element.value).toBe('external');
-    expect(wrapper.find('[data-test="module-name-input-12"]').element.value).toBe('UMC404HD');
-
-    await wrapper.find('[data-test="manufacturer-input-12"]').setValue('Behringer');
-    await wrapper.find('[data-test="module-name-input-12"]').setValue('  UMC404HD mk2 ');
-    await wrapper.find('[data-test="name-save-12"]').trigger('click');
-    await flushPromises();
-    expect(api.put).toHaveBeenCalledWith('/api/patches/7/modules/12', {
-      manufacturer: 'Behringer',
-      module_name: 'UMC404HD mk2',
-    });
-
-    // Blanking either one is refused before it reaches the server.
-    api.put.mockClear();
-    await wrapper.find('[data-test="module-name-input-12"]').setValue('   ');
-    expect(wrapper.find('[data-test="name-save-12"]').attributes('disabled')).toBeDefined();
-    // Enter reaches the same guard the disabled button hides behind.
-    await wrapper.find('[data-test="module-name-input-12"]').trigger('keyup.enter');
-    await flushPromises();
-    expect(api.put).not.toHaveBeenCalled();
-    expect(wrapper.find('[data-test="instance-error"]').text()).toContain('both required');
-  });
-
-  it('declares a connection point on gear the patch invented', async () => {
-    api.get.mockResolvedValue(richPatch);
-    api.post.mockResolvedValue({ id: 91 });
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
-
-    await wrapper.find('[data-test="port-module"]').setValue('12');
-    await wrapper.find('[data-test="port-name"]').setValue('MAIN OUT');
-    await wrapper.find('[data-test="port-type"]').setValue('input_jack');
-    await wrapper.find('[data-test="port-kind"]').setValue('audio_quarter_inch');
-    await wrapper.findAll('[data-test="extras"] form')[1].trigger('submit');
-    await flushPromises();
-    expect(api.post).toHaveBeenCalledWith('/api/patches/7/modules/12/ports', {
-      name: 'MAIN OUT',
-      type: 'input_jack',
-      port_kind: 'audio_quarter_inch',
-    });
-  });
-
-  it('links two instances and reloads the patch', async () => {
-    api.get.mockResolvedValue(richPatch);
-    api.post.mockResolvedValue({ id: 82 });
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
-
-    await wrapper.find('[data-test="link-a"]').setValue(11);
-    await wrapper.find('[data-test="link-b"]').setValue(13);
-    await wrapper.find('[data-test="links"] form').trigger('submit');
-    await flushPromises();
-    expect(api.post).toHaveBeenCalledWith('/api/patches/7/links', {
-      a_patch_module_id: 11,
-      b_patch_module_id: 13,
-      kind: 'bridge',
-    });
-    // The new link arrives with the reloaded patch.
-    expect(api.get.mock.calls.filter(([path]) => path === '/api/patches/7')).toHaveLength(2);
-  });
-
-  it('shows why two instances could not be linked', async () => {
-    api.get.mockResolvedValue(richPatch);
-    api.post.mockRejectedValue(new Error('those two are already linked'));
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
-
-    await wrapper.find('[data-test="link-a"]').setValue(11);
-    await wrapper.find('[data-test="link-b"]').setValue(13);
-    await wrapper.find('[data-test="links"] form').trigger('submit');
-    await flushPromises();
-    expect(wrapper.find('[data-test="link-error"]').text()).toContain('already linked');
-    expect(api.get.mock.calls.filter(([path]) => path === '/api/patches/7')).toHaveLength(1);
-  });
-
-  it('unlinks a bridged pair once the user confirms', async () => {
-    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
-    api.get.mockResolvedValue(richPatch);
-    api.delete.mockResolvedValue({ ok: true });
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
-
-    await wrapper.find('[data-test="delete-link-81"]').trigger('click');
-    await flushPromises();
-    expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Remove link', danger: true })
-    );
-    expect(api.delete).toHaveBeenCalledWith('/api/patches/7/links/81');
-    expect(api.get.mock.calls.filter(([path]) => path === '/api/patches/7')).toHaveLength(2);
-  });
-
-  it('keeps the link when the confirm is declined', async () => {
-    vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
-    api.get.mockResolvedValue(richPatch);
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
-
-    await wrapper.find('[data-test="delete-link-81"]').trigger('click');
-    await flushPromises();
-    expect(api.delete).not.toHaveBeenCalled();
-    expect(api.get.mock.calls.filter(([path]) => path === '/api/patches/7')).toHaveLength(1);
-  });
-
-  it('shows why a link could not be removed', async () => {
-    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
-    api.get.mockResolvedValue(richPatch);
-    api.delete.mockRejectedValue(new Error('link is gone already'));
-    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
-    await flushPromises();
-
-    await wrapper.find('[data-test="delete-link-81"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.find('[data-test="link-error"]').text()).toContain('gone already');
-  });
 });
 
 // A patch built from a system spans several racks, and then which case a
@@ -1153,14 +856,12 @@ describe('PatchDetailView system patches', () => {
     api.get.mockResolvedValue(systemPatch);
     const wrapper = mount(PatchDetailView, { props: { id: '8' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     const note = wrapper.find('[data-test="snapshot-note"]').text();
     expect(note).toContain("system 'studio'");
     expect(note).toContain('any jack on any of those racks');
-    // The snapshot table gains a rack column only when there is more than one.
-    expect(wrapper.find('[data-test="patch-module-11"]').text()).toContain('left case');
-    expect(wrapper.find('[data-test="patch-module-12"]').text()).toContain('right case');
-    // …and the rack rides along in the name the diagram and cable list use,
+    // The rack rides along in the name the diagram and cable list use,
     // which is what tells two identical modules in two cases apart.
     expect(wrapper.findComponent(PatchDiagram).props('labelFor')(systemPatch.modules[0])).toBe(
       'Make Noise Maths · left case'
@@ -1171,6 +872,7 @@ describe('PatchDetailView system patches', () => {
     api.get.mockResolvedValue(systemPatch);
     const wrapper = mount(PatchDetailView, { props: { id: '8' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
     const rows = wrapper.findComponent(PatchDiagram).props('rackRows');
     expect(rows.map((row) => row.rack_name)).toEqual(['left case', 'right case']);
   });
@@ -1187,8 +889,7 @@ describe('PatchDetailView system patches', () => {
     });
     const wrapper = mount(PatchDetailView, { props: { id: '8' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
     expect(wrapper.find('[data-test="snapshot-note"]').text()).toContain("rack 'left case'");
-    // No rack column: every instance stands in the same one.
-    expect(wrapper.find('[data-test="patch-module-11"]').findAll('td')).toHaveLength(3);
   });
 });

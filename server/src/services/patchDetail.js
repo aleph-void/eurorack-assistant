@@ -25,11 +25,15 @@ export const patchJson = (patch, extra = {}) => ({
   ...extra,
 });
 
-export const componentJson = (c) => ({
+// `describe` is off for the payload the browser draws a patch from: what each
+// control DOES is prose the patch page never shows, and on a patch of a whole
+// studio it is a megabyte of it. The LLM-facing readers (services/ask.js) and
+// the scope keep the default.
+export const componentJson = (c, { describe = true } = {}) => ({
   id: c.id,
   type: c.type,
   name: c.name,
-  description: c.description,
+  ...(describe ? { description: c.description } : {}),
   voltage_min: c.voltage_min ?? null,
   voltage_max: c.voltage_max ?? null,
   polarity: c.polarity ?? null,
@@ -40,11 +44,11 @@ export const componentJson = (c) => ({
 // A connection point declared inside the patch (external gear, or a module
 // the rack does not hold) presented in the same shape as a component, so
 // cables, settings and the tracers need no special case.
-export const portJson = (p) => ({
+export const portJson = (p, { describe = true } = {}) => ({
   id: p.id,
   type: p.type,
   name: p.name,
-  description: p.description,
+  ...(describe ? { description: p.description } : {}),
   voltage_min: null,
   voltage_max: null,
   polarity: null,
@@ -99,7 +103,7 @@ export const moduleJson = (pm, { live, components, panel = null, hp = null }) =>
 // shared with: the rack's physical row/HP geometry belongs to the rack, which
 // is a separately-shareable record, and must not leak just because a patch
 // that happens to sit in it was shared.
-export async function loadPatchDetail(db, patch, { includeRackLayout = true } = {}) {
+export async function loadPatchDetail(db, patch, { includeRackLayout = true, describe = true } = {}) {
 const {
   Module,
   ModuleComponent,
@@ -175,7 +179,7 @@ const {
   for (const c of components) {
     if (!componentsByModule.has(c.module_id)) componentsByModule.set(c.module_id, []);
     componentsByModule.get(c.module_id).push({
-      ...componentJson(c),
+      ...componentJson(c, { describe }),
       values: valuesByComponent.get(c.id) ?? [],
     });
   }
@@ -190,7 +194,7 @@ const {
   const portsByPatchModule = new Map();
   for (const p of portRows) {
     if (!portsByPatchModule.has(p.patch_module_id)) portsByPatchModule.set(p.patch_module_id, []);
-    portsByPatchModule.get(p.patch_module_id).push({ ...portJson(p), values: [] });
+    portsByPatchModule.get(p.patch_module_id).push({ ...portJson(p, { describe }), values: [] });
   }
 
   const cables = await PatchCable.findAll({
@@ -295,7 +299,7 @@ const {
     cables: cables.map((c) => c.get({ plain: true })),
   });
 
-  const panels = await loadPanels(db, [...liveIds]);
+  const panels = await loadPanels(db, [...liveIds], { describe });
   // The physical arrangement is the patch's OWN copy of the racks it was
   // built from (services/patchLayout.js), not the racks as they stand today
   // — reorganising a case does not rearrange the patches already made from

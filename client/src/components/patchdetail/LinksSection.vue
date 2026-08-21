@@ -3,12 +3,16 @@ import { computed, ref, toRef } from 'vue';
 import { api } from '../../api.js';
 import { dialog } from '../../dialog.js';
 import { usePatchFacts } from './usePatchFacts.js';
+import { useLazyPanel } from '../../lazyPanel.js';
 
 const props = defineProps({
   patch: { type: Object, required: true },
   patchId: { type: String, required: true },
 });
 const emit = defineEmits(['reload']);
+
+// Built the first time it is opened (lazyPanel.js).
+const { opened, onToggle } = useLazyPanel();
 
 const { modules, modulesById, moduleLabel } = usePatchFacts(toRef(props, 'patch'));
 
@@ -54,14 +58,14 @@ async function removeLink(link) {
 </script>
 
 <template>
-  <details class="panel" data-test="links">
+  <details class="panel" data-test="links" @toggle="onToggle">
     <summary>
       <h2>Linked instances</h2>
       <span class="summary-count">
         {{ links.length }} {{ (links.length) === 1 ? 'link' : 'links' }}
       </span>
     </summary>
-    <div class="panel-body">
+    <div v-if="opened" class="panel-body">
       <p class="muted">
         Modules wired to each other without patch cables: a host and its expander panel, or a
         bridged pair carrying signals between two points of the system — where a signal patched

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { testGlobal } from './setup.js';
+import { openPanels, testGlobal } from './setup.js';
 
 vi.mock('../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -82,6 +82,7 @@ describe('LinkDeviceView', () => {
 
     const wrapper = mount(LinkDeviceView, { global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
     expect(api.get).toHaveBeenCalledWith('/api/devices/authorizations/WDJB-MJHT');
     expect(wrapper.find('[data-test="pending"]').text()).toContain('CVOsc oscilloscope');
 
@@ -100,6 +101,7 @@ describe('LinkDeviceView', () => {
     await wrapper.find('[data-test="code-input"]').setValue('AAAA-BBBB');
     await wrapper.find('form').trigger('submit');
     await flushPromises();
+    await openPanels(wrapper);
     expect(wrapper.find('[data-test="error"]').text()).toContain('not valid');
     expect(wrapper.find('[data-test="pending"]').exists()).toBe(false);
   });
@@ -121,6 +123,7 @@ describe('DevicesView', () => {
 
     const wrapper = mount(DevicesView, { global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
     const panel = wrapper.find('[data-test="device-1"]');
     expect(panel.text()).toContain('Bench scope');
     expect(panel.text()).toContain('ES-9');
@@ -146,6 +149,7 @@ describe('ScopePanel', () => {
     api.get.mockResolvedValue([]);
     const wrapper = mountPanel();
     await flushPromises();
+    await openPanels(wrapper);
     expect(wrapper.find('[data-test="scope-disconnected"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="scope-automap"]').attributes('disabled')).toBeDefined();
   });
@@ -164,6 +168,7 @@ describe('ScopePanel', () => {
     const wrapper = mountPanel();
     useDevicesStore().connections = [CONNECTION];
     await flushPromises();
+    await openPanels(wrapper);
 
     await wrapper.find('[data-test="scope-automap"]').trigger('click');
     await flushPromises();
@@ -183,6 +188,7 @@ describe('ScopePanel', () => {
     const wrapper = mountPanel();
     useDevicesStore().connections = [CONNECTION];
     await flushPromises();
+    await openPanels(wrapper);
 
     await wrapper.find('[data-test="scope-override-module-0"]').setValue(11);
     const jacks = wrapper.find('[data-test="scope-override-jack-0"]').findAll('option');
@@ -226,6 +232,7 @@ describe('ScopePanel', () => {
     const wrapper = mountPanel();
     useDevicesStore().connections = [CONNECTION];
     await flushPromises();
+    await openPanels(wrapper);
 
     await wrapper.find('[data-test="capture-title"]').setValue('Krell gate');
     await wrapper.find('[data-test="scope-capture"]').trigger('click');
@@ -253,6 +260,7 @@ describe('ScopePanel', () => {
     const wrapper = mountPanel();
     useDevicesStore().connections = [CONNECTION];
     await flushPromises();
+    await openPanels(wrapper);
 
     // Every channel starts ticked, and each is named by what it is watching.
     expect(wrapper.find('[data-test="capture-channels"]').text()).toContain(
@@ -276,6 +284,7 @@ describe('ScopePanel', () => {
     const wrapper = mountPanel();
     useDevicesStore().connections = [CONNECTION];
     await flushPromises();
+    await openPanels(wrapper);
 
     await wrapper.find('[data-test="capture-channels-all"]').trigger('click');
     await wrapper.find('[data-test="scope-capture"]').trigger('click');
@@ -293,6 +302,7 @@ describe('ScopePanel', () => {
     const wrapper = mountPanel();
     useDevicesStore().connections = [CONNECTION];
     await flushPromises();
+    await openPanels(wrapper);
     await wrapper.find('[data-test="scope-capture"]').trigger('click');
     await flushPromises();
     expect(wrapper.find('[data-test="scope-error"]').text()).toContain('did not answer');
@@ -314,6 +324,7 @@ describe('ScopePanel', () => {
     );
     const wrapper = mountPanel();
     await flushPromises();
+    await openPanels(wrapper);
     return wrapper;
   };
 
@@ -390,6 +401,7 @@ describe('PatchNotesPanel', () => {
 
     const wrapper = mount(PatchNotesPanel, { props: { patchId: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
     expect(api.get).toHaveBeenCalledWith('/api/notes?patch_id=7');
     expect(wrapper.find('[data-test="patch-note-4"]').text()).toContain('Waveform — Krell');
     expect(wrapper.find('[data-test="patch-note-capture-5"]').attributes('src')).toBe(
@@ -411,6 +423,7 @@ describe('PatchNotesPanel', () => {
     api.post.mockResolvedValue({ ok: true });
     const wrapper = mount(PatchNotesPanel, { props: { patchId: '7' }, global: testGlobal() });
     await flushPromises();
+    await openPanels(wrapper);
 
     await wrapper.find('[data-test="patch-note-detach-4"]').trigger('click');
     await flushPromises();

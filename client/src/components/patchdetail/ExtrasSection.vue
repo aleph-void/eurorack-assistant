@@ -4,6 +4,7 @@ import { api } from '../../api.js';
 import { dialog } from '../../dialog.js';
 import AutocompleteSelect from '../AutocompleteSelect.vue';
 import { jackLabel, portKindLabel, usePatchFacts } from './usePatchFacts.js';
+import { useLazyPanel } from '../../lazyPanel.js';
 
 const props = defineProps({
   patch: { type: Object, required: true },
@@ -11,6 +12,9 @@ const props = defineProps({
   rackModules: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['reload']);
+
+// Built the first time it is opened (lazyPanel.js).
+const { opened, onToggle } = useLazyPanel();
 
 const { modules, moduleLabel } = usePatchFacts(toRef(props, 'patch'));
 
@@ -114,14 +118,14 @@ async function removePort(pm, port) {
 </script>
 
 <template>
-  <details class="panel" data-test="extras">
+  <details class="panel" data-test="extras" @toggle="onToggle">
     <summary>
       <h2>Other gear in this patch</h2>
       <span class="summary-count">
         {{ declaredModules.length }} {{ (declaredModules.length) === 1 ? 'item' : 'items' }}
       </span>
     </summary>
-    <div class="panel-body">
+    <div v-if="opened" class="panel-body">
       <p class="muted">
         A patch reaches past the rack: a computer and its DAW at the end of an audio interface,
         the MIDI source driving a sequencer, the monitors everything lands in — and modules the

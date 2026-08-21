@@ -26,7 +26,12 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   split into section components: `client/src/components/moduledetail/` and
   `client/src/components/patchdetail/`, each with a `use*Facts.js` composable
   for the shared derived state. Sections take `:module`/`:patch` + id props
-  and emit `reload`.
+  and emit `reload`. A patch is TWO pages: `PatchDetailView` is the picture
+  and the two ways of patching a cable (diagram, cable list, voice), and
+  `PatchConfigView` (`/patches/:id/config`) is everything that is set up once
+  and read rarely — control settings, buses, links, off-rack gear, flow,
+  normalled connections, the scope, notes, the module snapshot. Both read the
+  same `GET /api/patches/:id` and reload it after every write.
 - `client/tests/views/` — one test file per view.
 - Schema: the migrations in `server/migrations/` are the source of truth
   (never `sequelize.sync()`); models in `server/src/db/models.js`. Each
@@ -90,15 +95,39 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   patched into is the input and the matching jack on the opposite panel is the
   output, which `cableProblem()` enforces (bridged jacks are otherwise exempt
   from the mult rules — they are paired, not copies).
+- ONLY WHAT IS ON SCREEN IS BUILT. A studio is two hundred panels and six
+  thousand markers, and the picture is far wider than any screen: the diagram
+  renders the panels whose box intersects the scroll viewport (plus a margin),
+  their markers, and the cables whose curve passes through it — `measureViewport`
+  in PatchDiagram.vue, `cableBounds()` in panelLayout.js. Everything keeps its
+  place in the coordinate space, so scrollbars, hit tests and the drag gesture
+  are untouched; a viewport that measures nothing (a test renderer with no
+  layout) means 'draw everything'. The same rule holds off-screen work
+  elsewhere on the page: a collapsed `<details>` is only HIDDEN by the browser,
+  so every section that starts closed builds its body the first time it is
+  opened (`client/src/lazyPanel.js`; a test that reaches inside one calls
+  `openPanels()` from tests/setup.js first). The patch payload is held in a
+  `shallowRef`, never a deep one — nothing on either page writes into it, and
+  deep reactivity doubles every render and triples the memory.
 - The patch diagram draws the case, not a poster of it: panels sit flush
   against each other and rows sit straight on top of each other (`PANEL_GAP`
   / `ROW_GAP` are 0), a PHYSICAL rack row is never folded in two (it scrolls —
   `wrap` is off whenever rack rows drive the layout), and module names are off
   by default because there is nowhere to put them. The picture zooms instead
   (the SVG's CSS width; the coordinate space never changes, so every hit test
-  follows). A jack the picture does not place is OUT OF FRAME and is not drawn
+  follows), and can take the whole display ('Full screen', which refits). A
+  marker keeps its size ON SCREEN at every zoom (the radius is divided by the
+  zoom), and below `CONTROL_ZOOM` only jacks are drawn — a knob at 20% is a
+  bead in a curtain of them, and the jacks are what a cable goes in. Panel
+  pictures are re-fetched at a new size only once a zoom gesture SETTLES.
+  Every module in the rack is drawn by default: the picture is of the case.
+  A jack the picture does not place is OUT OF FRAME and is not drawn
   — nothing hangs below a panel, which is what kept the rows apart; cables
   that end at one are counted in the "not drawn" line instead.
+- A patch payload is served WITHOUT PROSE (`describe: false` in
+  routes/patches/core.js): what each control does is a megabyte of description
+  on a whole-studio patch and neither patch page shows it. The LLM-facing
+  readers (services/ask.js) and the scope keep the default.
 - Every kind of thing on a panel — the ten COMPONENT_TYPES — has ONE colour,
   and every picture of a panel uses it: the module page's front plate, the
   rack organizer's rows and the patch diagram. `client/src/componentTypes.js`
@@ -217,7 +246,12 @@ rack in it at once — that is what makes a cable from a jack in one rack to a
 jack in another legal, with no change to the cable rules — and each
 `patch_modules` row carries the `rack_id`/`rack_name` it came from, soft like
 everything else in a patch, so `rack_layout` matches each placement to an
-instance OF THE SAME RACK and the patch outlives the system. Racks on a
+instance OF THE SAME RACK and the patch outlives the system. The FLOOR PLAN is the arrangement: a patch reads
+the racks of a system in the order they stand on it (top band first, left to
+right — `inFloorOrder()` in services/patchLayout.js), and freezes that order
+in `patch_rack_rows.rack_position`, so a patch made before a rack was moved
+keeps reading the studio the way it stood. `racks.system_position` only
+records the order the last floor-plan save happened to send. Racks on a
 system's floor plan may not overlap: the footprint geometry and the rule live
 in `services/racks.js`, the layout route enforces it, and the plan slides a
 dropped rack clear rather than refusing the drop. `systems.floor_width` /

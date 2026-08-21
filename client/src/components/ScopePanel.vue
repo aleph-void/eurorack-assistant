@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import { useDevicesStore } from '../stores/devices.js';
+import { useLazyPanel } from '../lazyPanel.js';
 
 // The oscilloscope side of a patch: which pane is watching which jack, and
 // capturing what they show. Mapping is derived from the patch itself, so the
@@ -14,6 +15,9 @@ const props = defineProps({
   modules: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['captured']);
+
+// Built the first time it is opened (lazyPanel.js).
+const { opened, onToggle } = useLazyPanel();
 
 const devices = useDevicesStore();
 const channels = ref([]);
@@ -258,14 +262,14 @@ watch(connected, (isConnected) => {
 </script>
 
 <template>
-  <details class="panel" data-test="scope-panel">
+  <details class="panel" data-test="scope-panel" @toggle="onToggle">
     <summary>
       <h2>Oscilloscope</h2>
       <span class="summary-count">
         {{ connected ? 'connected' : 'no scope' }}
       </span>
     </summary>
-    <div class="panel-body">
+    <div v-if="opened" class="panel-body">
 <p v-if="!connected" class="muted" data-test="scope-disconnected">
         No oscilloscope is connected.
         <RouterLink to="/devices">Link one</RouterLink> and it will appear here.

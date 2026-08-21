@@ -7,7 +7,7 @@
 // The endpoints are the ordinary ones — a shared record reads back exactly
 // like your own, with `shared` set and the owner named.
 
-import { computed, ref, watch } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -20,7 +20,9 @@ const props = defineProps({
 });
 
 const route = useRoute();
-const item = ref(null);
+// Read-only, and a shared patch carries the same few thousand components a
+// patch of your own does: held shallow for the same reason (PatchDetailView).
+const item = shallowRef(null);
 const error = ref('');
 const loading = ref(true);
 

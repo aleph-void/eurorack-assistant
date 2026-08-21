@@ -4,12 +4,16 @@ import { api } from '../../api.js';
 import { dialog } from '../../dialog.js';
 import AutocompleteSelect from '../AutocompleteSelect.vue';
 import { usePatchFacts } from './usePatchFacts.js';
+import { useLazyPanel } from '../../lazyPanel.js';
 
 const props = defineProps({
   patch: { type: Object, required: true },
   patchId: { type: String, required: true },
 });
 const emit = defineEmits(['reload']);
+
+// Built the first time it is opened (lazyPanel.js).
+const { opened, onToggle } = useLazyPanel();
 
 const { modules, modulesById, moduleLabel, moduleOptions } = usePatchFacts(toRef(props, 'patch'));
 
@@ -100,7 +104,7 @@ function settingLabel(setting) {
 </script>
 
 <template>
-  <details class="panel" data-test="settings">
+  <details class="panel" data-test="settings" @toggle="onToggle">
     <summary>
       <h2>Control settings</h2>
       <span class="summary-count">
@@ -108,7 +112,7 @@ function settingLabel(setting) {
         {{ patch.settings.length === 1 ? 'setting' : 'settings' }}
       </span>
     </summary>
-    <div class="panel-body">
+    <div v-if="opened" class="panel-body">
       <p class="muted">
         How each control is dialed in. Settings are more than a record: a switch that decides
         which signal is normalled to an input, or turns an output into a channel mix, resolves

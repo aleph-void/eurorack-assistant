@@ -3,12 +3,16 @@ import { computed, reactive, ref, toRef } from 'vue';
 import { api } from '../../api.js';
 import { dialog } from '../../dialog.js';
 import { usePatchFacts } from './usePatchFacts.js';
+import { useLazyPanel } from '../../lazyPanel.js';
 
 const props = defineProps({
   patch: { type: Object, required: true },
   patchId: { type: String, required: true },
 });
 const emit = defineEmits(['reload']);
+
+// Built the first time it is opened (lazyPanel.js).
+const { opened, onToggle } = useLazyPanel();
 
 const { modules, groups, moduleLabel } = usePatchFacts(toRef(props, 'patch'));
 
@@ -124,14 +128,14 @@ const groupedModules = computed(() => [
 </script>
 
 <template>
-  <details class="panel" data-test="groups">
+  <details class="panel" data-test="groups" @toggle="onToggle">
     <summary>
       <h2>Buses and layers</h2>
       <span class="summary-count">
         {{ groups.length }} {{ (groups.length) === 1 ? 'bus' : 'buss' }}
       </span>
     </summary>
-    <div class="panel-body">
+    <div v-if="opened" class="panel-body">
       <p class="muted">
         Name the groups a patch is really built from — a rhythm layer, a granular bus — and give
         each instance the role it plays, so "LXR #2" reads as the ghost-note voice it is. The

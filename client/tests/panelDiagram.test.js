@@ -272,10 +272,11 @@ describe('panel layout geometry', () => {
 });
 
 describe('PatchDiagram', () => {
-  const mountDiagram = (props = {}) =>
+  const mountDiagram = (props = {}, options = {}) =>
     mount(PatchDiagram, {
       props: { modules: modules(), cables: [cable()], ...props },
       global: testGlobal(),
+      ...options,
     });
 
   it('draws a panel image per module and a cable between the jacks', () => {
@@ -321,6 +322,11 @@ describe('PatchDiagram', () => {
     for (let i = 0; i < 8; i += 1) {
       await wrapper.find('[data-test="diagram-zoom-in"]').trigger('click');
     }
+    // Not yet, though: a zoom gesture crosses several steps, and a panel
+    // re-fetched at each of them is replaced before it arrives.
+    expect(src()).toBe('/api/panels/photo.png?w=128');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await wrapper.vm.$nextTick();
     expect(src()).toBe('/api/panels/photo.png?w=512');
   });
 
@@ -344,20 +350,51 @@ describe('PatchDiagram', () => {
       panel: panelFor([]),
     };
     const wrapper = mountDiagram({ modules: [...modules(), spare] });
-    expect(wrapper.text()).not.toContain('A-180');
-    await wrapper.find('[data-test="diagram-show-all"]').setValue(true);
     expect(wrapper.text()).toContain('A-180');
+    await wrapper.find('[data-test="diagram-show-all"]').setValue(false);
+    expect(wrapper.text()).not.toContain('A-180');
   });
 
-  // A new patch snapshots the rack before a single cable is patched; drawing
-  // the whole rack then is not a diagram of the patch.
-  it('draws nothing for a patch with no cables yet', async () => {
+  // The picture is of the case, so a patch with no cables in it yet still
+  // draws the rack it was snapshotted from.
+  it('draws the whole rack for a patch with no cables yet', async () => {
     const wrapper = mountDiagram({ cables: [] });
-    expect(wrapper.find('[data-test="diagram-empty"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="diagram-svg"]').exists()).toBe(false);
-    await wrapper.find('[data-test="diagram-show-all"]').setValue(true);
     expect(wrapper.find('[data-test="diagram-svg"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('Maths');
+    // Unticked, a patch with nothing patched has nothing of its own to draw.
+    await wrapper.find('[data-test="diagram-show-all"]').setValue(false);
+    expect(wrapper.find('[data-test="diagram-empty"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="diagram-svg"]').exists()).toBe(false);
+  });
+
+  // Patching is close work on a picture wider than the page: the diagram can
+  // take the whole display, and refits itself to what it is given.
+  it('fills the screen on request, and comes back out again', async () => {
+    const wrapper = mountDiagram({}, { attachTo: document.body });
+    const panel = wrapper.find('[data-test="diagram"]').element;
+    const request = vi.fn(() => {
+      Object.defineProperty(document, 'fullscreenElement', { value: panel, configurable: true });
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+    const exit = vi.fn(() => {
+      Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+    panel.requestFullscreen = request;
+    document.exitFullscreen = exit;
+
+    const button = () => wrapper.find('[data-test="diagram-fullscreen"]');
+    expect(button().text()).toBe('Full screen');
+    await button().trigger('click');
+    expect(request).toHaveBeenCalled();
+    await wrapper.vm.$nextTick();
+    expect(button().text()).toBe('Exit full screen');
+
+    await button().trigger('click');
+    expect(exit).toHaveBeenCalled();
+    await wrapper.vm.$nextTick();
+    expect(button().text()).toBe('Full screen');
+    wrapper.unmount();
   });
 
   it('names each module with the label the patch uses', () => {
@@ -418,7 +455,10 @@ describe('PatchDiagram', () => {
     const wrapper = mountDiagram({ modules: source, cables: [], interactive: true });
     await wrapper.find('[data-test="diagram-show-all"]').setValue(true);
     const marker = wrapper.find('[data-test="diagram-jack-11-1"]');
-    expect(marker.attributes('stroke')).toBe(componentColor('bidirectional_jack'));
+    // The type's colour is the marker's FILL — a dot rather than a hairline
+    // ring, so it is still there when a whole studio is zoomed out to fit —
+    // and the stroke is the dark halo it is seen against.
+    expect(marker.attributes('fill')).toBe(componentColor('bidirectional_jack'));
     expect(marker.classes()).toContain('patchable');
 
     const svg = wrapper.find('[data-test="diagram-svg"]');

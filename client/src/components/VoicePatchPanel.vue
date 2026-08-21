@@ -22,10 +22,15 @@ import { parseBestAlternative, pickedOption, describeEndpoint } from '../voiceCo
 
 const props = defineProps({
   patchId: { type: String, required: true },
-  fromCandidates: { type: Array, default: () => [] },
-  toCandidates: { type: Array, default: () => [] },
-  cableCandidates: { type: Array, default: () => [] },
-  vocabulary: { type: Array, default: () => [] },
+  // Each of these is a list, OR a function that builds one when it is
+  // wanted. They are every jack and every cable in the patch — thousands of
+  // items on a system — and nothing here reads them until somebody speaks, so
+  // the patch page hands over the way to build them rather than the lists
+  // themselves, and a page with the voice panel closed never pays for them.
+  fromCandidates: { type: [Array, Function], default: () => [] },
+  toCandidates: { type: [Array, Function], default: () => [] },
+  cableCandidates: { type: [Array, Function], default: () => [] },
+  vocabulary: { type: [Array, Function], default: () => [] },
 });
 const emit = defineEmits(['changed']);
 
@@ -100,10 +105,12 @@ const say = (text, kind = 'muted') => {
 
 // ---- doing what was said ----
 
+const listOf = (value) => (typeof value === 'function' ? value() : value);
+
 const context = computed(() => ({
-  from: props.fromCandidates,
-  to: props.toCandidates,
-  cables: props.cableCandidates,
+  from: listOf(props.fromCandidates),
+  to: listOf(props.toCandidates),
+  cables: listOf(props.cableCandidates),
 }));
 
 async function plug(command) {
@@ -252,7 +259,7 @@ function build() {
     engine: settings.engine,
     model: settings.model,
     continuous,
-    vocabulary: props.vocabulary,
+    vocabulary: listOf(props.vocabulary),
     onPartial: (text) => {
       partial.value = text;
     },

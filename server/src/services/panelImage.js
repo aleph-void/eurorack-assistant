@@ -510,7 +510,10 @@ export const panelImageUrl = (panel) => `/api/panels/${panel.image_hash}.${panel
 // fetched by the client so that every renderer (the patch diagram, the module
 // page, the rack organizer's rows) can colour a marker by its component type
 // without loading the module behind it, for the price of one query.
-export const panelJson = (panel, placements = [], facts = new Map()) => ({
+// `describe` is off for a payload that only has to be DRAWN: a patch of a
+// whole studio carries five thousand placements, and the sentence explaining
+// each control is the largest thing in it and is read nowhere on that page.
+export const panelJson = (panel, placements = [], facts = new Map(), { describe = true } = {}) => ({
   source: panel.source,
   source_url: panel.source_url ?? null,
   url: panelImageUrl(panel),
@@ -531,7 +534,12 @@ export const panelJson = (panel, placements = [], facts = new Map()) => ({
     // `shape`: every jack is one shape but three different types, and the
     // direction a jack runs is the thing a picture most needs to say.
     type: (p.component_id != null ? facts.get(p.component_id)?.type : null) ?? null,
-    description: (p.component_id != null ? facts.get(p.component_id)?.description : null) ?? null,
+    ...(describe
+      ? {
+          description:
+            (p.component_id != null ? facts.get(p.component_id)?.description : null) ?? null,
+        }
+      : {}),
     x: p.x,
     y: p.y,
     w: p.w,
@@ -541,7 +549,7 @@ export const panelJson = (panel, placements = [], facts = new Map()) => ({
 
 // The panels of a set of modules, keyed by module id. Flat queries, so pg-mem
 // (the test database) can run them as well as postgres.
-export async function loadPanels(db, moduleIds) {
+export async function loadPanels(db, moduleIds, { describe = true } = {}) {
   const ids = [...new Set(moduleIds.filter(Boolean))];
   if (ids.length === 0) return new Map();
   const { ModuleComponent, ModulePanel, ModulePanelComponent } = db.models;
@@ -564,7 +572,10 @@ export async function loadPanels(db, moduleIds) {
     }
   }
   return new Map(
-    panels.map((panel) => [panel.module_id, panelJson(panel, byPanel.get(panel.id) ?? [], facts)])
+    panels.map((panel) => [
+      panel.module_id,
+      panelJson(panel, byPanel.get(panel.id) ?? [], facts, { describe }),
+    ])
   );
 }
 

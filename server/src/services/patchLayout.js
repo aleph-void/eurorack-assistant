@@ -10,6 +10,24 @@
 // it names racks and modules by id and by name, and nothing here assumes
 // either still exists.
 
+// The order the racks of a system are READ IN: the way they stand on the
+// system's floor plan, top band first and left to right within it. The plan
+// is where a person arranges their studio, so it is what a picture of the
+// studio has to follow — `system_position` only records the order the last
+// save happened to send the racks in, which is nobody's arrangement.
+//
+// Racks are furniture: two standing side by side are within a rack-unit of
+// each other rather than exactly level, so the bands are found by rounding y
+// to whole units rather than by sorting on it raw.
+export function inFloorOrder(racks) {
+  return [...racks].sort(
+    (a, b) =>
+      Math.round(a.system_y ?? 0) - Math.round(b.system_y ?? 0) ||
+      (a.system_x ?? 0) - (b.system_x ?? 0) ||
+      a.id - b.id
+  );
+}
+
 // The racks a patch was built from: the ones its instances were snapshotted
 // from (a system patch spans several), falling back to the patch's own rack
 // for patches made before instances carried one.
@@ -54,14 +72,18 @@ export async function snapshotRackLayout(db, patch, racks, { transaction = null 
     transaction,
   });
   let written = 0;
-  for (const rack of racks) {
+  // The patch freezes WHERE EACH RACK STOOD as a plain order, so the picture
+  // reads the studio the way its floor plan does even after the racks are
+  // pushed around (or the system taken apart) later.
+  const ordered = inFloorOrder(racks);
+  for (const [rackPosition, rack] of ordered.entries()) {
     for (const row of rows.filter((r) => r.rack_id === rack.id)) {
       const copy = await PatchRackRow.create(
         {
           patch_id: patch.id,
           rack_id: rack.id,
           rack_name: rack.name,
-          rack_position: rack.system_position ?? 0,
+          rack_position: rackPosition,
           unit: row.unit,
           hp: row.hp,
           position: row.position,
@@ -89,14 +111,12 @@ export async function snapshotRackLayout(db, patch, racks, { transaction = null 
 export async function currentRacksOfPatch(db, patch, patchModules, { transaction = null } = {}) {
   const ids = patchRackIds(patch, patchModules);
   if (ids.length === 0) return [];
-  return db.models.Rack.findAll({
+  const racks = await db.models.Rack.findAll({
     where: { id: ids, user_id: patch.user_id },
-    order: [
-      ['system_position', 'ASC'],
-      ['id', 'ASC'],
-    ],
+    order: [['id', 'ASC']],
     transaction,
   });
+  return inFloorOrder(racks);
 }
 
 // Take a fresh copy of the racks this patch stands in — the resync.
@@ -157,7 +177,9 @@ export async function copyRackLayout(db, sourcePatchId, patch, { transaction = n
 }
 
 // The rows a patch snapshotted, in the order the studio reads: rack by rack
-// as they stood in the system, each rack's own rows top to bottom.
+// as they stand on the system's floor plan, each rack's own rows top to
+// bottom. `rack_position` is that reading order, frozen when the patch was
+// made (snapshotRackLayout).
 export async function loadPatchRackLayout(db, patchId) {
   const { PatchRackRow, PatchRackRowModule } = db.models;
   const rows = await PatchRackRow.findAll({
