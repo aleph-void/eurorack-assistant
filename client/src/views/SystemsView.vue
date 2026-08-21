@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
-import { panelCropStyle } from '../panelLayout.js';
+import { panelCropStyle, panelThumbUrl } from '../panelLayout.js';
 
 // A system is a group of racks patched together as one instrument. This page
 // lists them, assigns racks in and out, and arranges the racks of one system
@@ -589,7 +589,7 @@ async function assign(rackId, systemId) {
               >
                 <img
                   v-if="module.panel"
-                  :src="module.panel.url"
+                  :src="panelThumbUrl(module.panel, 256)"
                   :style="panelCropStyle(module.panel)"
                   :alt="`${module.manufacturer} ${module.name}`"
                 />

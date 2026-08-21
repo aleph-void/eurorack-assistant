@@ -8,12 +8,14 @@
 // where one was found, otherwise the logical panel the server drew from the
 // manual.
 
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import {
   PANEL_HEIGHT,
   cableColor,
   cablePath,
+  imageWidthFor,
   layoutDiagram,
+  panelImageUrl,
   usedModules,
 } from '../panelLayout.js';
 
@@ -29,12 +31,17 @@ const props = defineProps({
   // they determine the diagram's row breaks and instance order.
   rackRows: { type: Array, default: () => [] },
 });
-const emit = defineEmits(['connect', 'disconnect']);
+const emit = defineEmits(['connect', 'disconnect', 'retype']);
 
 // A patch snapshots the whole rack, so by default only the modules it
 // actually uses are drawn — the rest would bury them.
 const showAll = ref(false);
 const showJackNames = ref(false);
+// Panels are drawn edge to edge the way they stand in the case, so there is
+// nowhere for a name to go without pushing them apart again: names are on the
+// panels themselves and under the pointer, and this puts them back in a band
+// above each panel for anyone who wants to read the rack.
+const showModuleNames = ref(false);
 
 const label = (pm) =>
   props.labelFor ? props.labelFor(pm) : `${pm.manufacturer} ${pm.module_name}`.trim();
@@ -68,7 +75,77 @@ const organized = computed(() => {
 });
 const shown = computed(() => organized.value.modules);
 
-const diagram = computed(() => layoutDiagram(shown.value, { height: PANEL_HEIGHT, rowStarts: organized.value.rowStarts }));
+const diagram = computed(() =>
+  layoutDiagram(shown.value, {
+    height: PANEL_HEIGHT,
+    rowStarts: organized.value.rowStarts,
+    // A physical rack row is never folded in two — it scrolls. Only a diagram
+    // with no rack layout behind it wraps to keep itself on the page.
+    wrap: !organized.value.rowStarts.length,
+    labels: showModuleNames.value,
+  })
+);
+
+// ---- zoom ----
+// The diagram is one coordinate space rendered at whatever CSS width we ask
+// for, so zooming is just that width: every jack marker, cable and hit test
+// goes through getBoundingClientRect and follows along. Patching is close
+// work — a rack row is wider than any screen — so the picture opens fitted to
+// the page and zooms from there, and stays where the user put it.
+const MIN_ZOOM = 0.15;
+const MAX_ZOOM = 6;
+const wrap = ref(null);
+const zoom = ref(1);
+const userZoomed = ref(false);
+const clampZoom = (value) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
+
+function fitZoom() {
+  const available = (wrap.value?.clientWidth ?? 0) - 18; // the wrap's padding
+  const width = diagram.value.width;
+  // jsdom (and a wrap that has not been laid out yet) measures nothing;
+  // 1:1 is the honest answer then.
+  if (available <= 0 || !width) return;
+  zoom.value = clampZoom(Math.min(1, available / width));
+}
+function zoomBy(factor) {
+  userZoomed.value = true;
+  zoom.value = clampZoom(zoom.value * factor);
+}
+function resetZoom() {
+  userZoomed.value = false;
+  zoom.value = 1;
+  fitZoom();
+}
+// Ctrl/⌘ + wheel is the zoom gesture everywhere else that draws on a canvas,
+// and it is what a trackpad pinch sends. A bare wheel still scrolls the
+// diagram, which is what a bare wheel is for.
+function wheelZoom(event) {
+  if (!event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  zoomBy(event.deltaY < 0 ? 1.12 : 1 / 1.12);
+}
+onMounted(fitZoom);
+// A diagram that changes shape (modules shown, names on, a row added) is
+// refitted unless the user has taken the zoom into their own hands.
+watch(
+  () => diagram.value.width,
+  () => {
+    if (!userZoomed.value) fitZoom();
+  }
+);
+const zoomPercent = computed(() => Math.round(zoom.value * 100));
+
+// Each panel is fetched at the size it is actually painted — its drawn width,
+// at the current zoom, at the screen's own pixel density. Widths come in a
+// few fixed steps (panelLayout.js), so zooming re-requests a picture at most
+// a couple of times and every step is cached from then on.
+const density = () => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
+const imageUrl = (placed) =>
+  panelImageUrl(placed.pm.panel, imageWidthFor(placed.pm.panel, placed.width) * zoom.value * density());
+const svgStyle = computed(() => ({
+  width: `${Math.max(1, Math.round(diagram.value.width * zoom.value))}px`,
+  maxWidth: 'none',
+}));
 
 const anchorFor = (patchModuleId, componentId) =>
   componentId === null || componentId === undefined
@@ -139,7 +216,54 @@ const allAnchors = computed(() =>
     return { key, patchModuleId, componentId, component, ...anchor };
   })
 );
-const inputs = computed(() => allAnchors.value.filter((a) => a.component?.type === 'input_jack'));
+// What a cable may be dragged TO, and what it may be dragged FROM. A
+// bidirectional jack is both: which way it runs is decided by the patch, so
+// the diagram lets it be either end and the server's cable rules decide
+// whether that particular cable is legal.
+const CABLE_IN = ['input_jack', 'bidirectional_jack'];
+const CABLE_OUT = ['output_jack', 'bidirectional_jack'];
+const inputs = computed(() => allAnchors.value.filter((a) => CABLE_IN.includes(a.component?.type)));
+
+// ---- correcting a jack's direction ----
+// The analysis reads a mult's jacks as plain inputs or outputs often enough
+// that the correction belongs where the mistake shows: click the marker in
+// the diagram. It is a fact about the HARDWARE, so it is written to the
+// module and every patch drawing that module follows.
+const JACK_TYPES = [
+  { value: 'input_jack', label: 'Input' },
+  { value: 'output_jack', label: 'Output' },
+  { value: 'bidirectional_jack', label: 'Bidirectional (mult / bridged)' },
+];
+const selected = ref(null);
+const retypeTo = ref('');
+const selectedJack = computed(() => {
+  if (!selected.value) return null;
+  const pm = props.modules.find((m) => m.id === selected.value.patchModuleId);
+  const component = pm?.components?.find((c) => c.id === selected.value.componentId);
+  if (!pm || !component || !String(component.type).endsWith('_jack')) return null;
+  return { pm, component };
+});
+function selectJack(anchor) {
+  if (!props.interactive) return;
+  selected.value =
+    selected.value?.componentId === anchor.componentId &&
+    selected.value?.patchModuleId === anchor.patchModuleId
+      ? null
+      : { patchModuleId: anchor.patchModuleId, componentId: anchor.componentId };
+  retypeTo.value = selectedJack.value?.component.type ?? '';
+}
+function applyRetype() {
+  const jack = selectedJack.value;
+  if (!jack || !retypeTo.value || retypeTo.value === jack.component.type) return;
+  emit('retype', {
+    module_id: jack.pm.module_id,
+    patch_module_id: jack.pm.id,
+    component_id: jack.component.id,
+    name: jack.component.name,
+    type: retypeTo.value,
+  });
+  selected.value = null;
+}
 
 const svg = ref(null);
 const dragging = ref(null);
@@ -219,18 +343,52 @@ const draftCable = computed(() =>
           <input v-model="showJackNames" type="checkbox" data-test="diagram-jack-names" />
           Label every jack
         </label>
+        <label class="inline-check">
+          <input v-model="showModuleNames" type="checkbox" data-test="diagram-module-names" />
+          Name every module
+        </label>
+        <span class="zoom-controls">
+          <button
+            type="button"
+            class="secondary"
+            title="Zoom out"
+            data-test="diagram-zoom-out"
+            @click="zoomBy(1 / 1.25)"
+          >
+            −
+          </button>
+          <span class="zoom-level" data-test="diagram-zoom-level">{{ zoomPercent }}%</span>
+          <button
+            type="button"
+            class="secondary"
+            title="Zoom in"
+            data-test="diagram-zoom-in"
+            @click="zoomBy(1.25)"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            class="secondary"
+            title="Fit the whole diagram to the page"
+            data-test="diagram-zoom-fit"
+            @click="resetZoom"
+          >
+            Fit
+          </button>
+        </span>
       </div>
 
       <p v-if="shown.length === 0" class="muted" data-test="diagram-empty">
         Nothing to draw yet — patch a cable, or tick 'show every module'.
       </p>
       <template v-else>
-        <div class="diagram-wrap">
+        <div ref="wrap" class="diagram-wrap" @wheel="wheelZoom">
           <svg
             ref="svg"
             class="patch-diagram"
             :viewBox="`0 0 ${diagram.width} ${diagram.height}`"
-            :style="{ width: '100%', maxWidth: `${diagram.width}px` }"
+            :style="svgStyle"
             data-test="diagram-svg"
             @pointermove="moveCable"
             @pointerup="finishCable"
@@ -239,7 +397,8 @@ const draftCable = computed(() =>
             <!-- One panel per module instance: the image, cropped to the
                  front plate, with the module's name above it. -->
             <g v-for="placed in diagram.panels" :key="placed.pm.id">
-              <text :x="placed.x" :y="placed.labelY" class="panel-label">
+              <title>{{ label(placed.pm) }}</title>
+              <text v-if="showModuleNames" :x="placed.x" :y="placed.labelY" class="panel-label">
                 {{ label(placed.pm) }}
               </text>
               <svg
@@ -260,7 +419,7 @@ const draftCable = computed(() =>
                   y="0"
                   :width="placed.pm.panel.width"
                   :height="placed.pm.panel.height"
-                  :href="placed.pm.panel.url"
+                  :href="imageUrl(placed)"
                   preserveAspectRatio="none"
                 />
               </svg>
@@ -298,9 +457,17 @@ const draftCable = computed(() =>
               :cy="a.y"
               r="6"
               class="jack-marker"
-              :class="{ output: a.component?.type === 'output_jack', input: a.component?.type === 'input_jack' }"
+              :class="{
+                output: a.component?.type === 'output_jack',
+                input: a.component?.type === 'input_jack',
+                bidirectional: a.component?.type === 'bidirectional_jack',
+                selected:
+                  selected?.patchModuleId === a.patchModuleId &&
+                  selected?.componentId === a.componentId,
+              }"
               :data-test="`diagram-jack-${a.patchModuleId}-${a.componentId}`"
-              @pointerdown="a.component?.type === 'output_jack' && startCable(a, $event)"
+              @pointerdown="CABLE_OUT.includes(a.component?.type) && startCable(a, $event)"
+              @click="selectJack(a)"
             >
               <title>{{ a.name }}{{ a.component ? ` (${a.component.type})` : '' }}</title>
             </circle>
@@ -355,13 +522,52 @@ const draftCable = computed(() =>
             </template>
           </svg>
         </div>
+        <div v-if="interactive && selectedJack" class="jack-editor" data-test="diagram-jack-editor">
+          <span>
+            <strong>{{ selectedJack.component.name }}</strong>
+            on {{ label(selectedJack.pm) }}
+          </span>
+          <template v-if="selectedJack.pm.module_id">
+            <select v-model="retypeTo" data-test="diagram-jack-type">
+              <option v-for="t in JACK_TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
+            </select>
+            <button
+              type="button"
+              style="margin: 0"
+              :disabled="retypeTo === selectedJack.component.type"
+              data-test="diagram-jack-retype"
+              @click="applyRetype"
+            >
+              Change direction
+            </button>
+            <span class="muted" style="font-size: 0.8rem">
+              Corrects the module itself, so every patch that draws it follows.
+            </span>
+          </template>
+          <span v-else class="muted" style="font-size: 0.8rem">
+            This connection point was declared on the patch — change its direction where it was
+            added, under 'gear and extra connections'.
+          </span>
+          <button
+            type="button"
+            class="secondary"
+            style="margin: 0 0 0 auto"
+            data-test="diagram-jack-close"
+            @click="selected = null"
+          >
+            Close
+          </button>
+        </div>
+
         <p v-if="undrawn > 0" class="muted" data-test="diagram-undrawn">
           {{ undrawn }} {{ undrawn === 1 ? 'cable is' : 'cables are' }} not drawn — an end of
           {{ undrawn === 1 ? 'it' : 'them' }} is a connection point with no place on a panel.
         </p>
         <p class="muted" style="font-size: 0.85rem">
           <template v-if="interactive">
-            Drag a blue output marker to a green input marker to patch it. Controls and other jack types cannot be wired here.
+            Drag a blue output marker (or a yellow bidirectional one) onto a green input marker to
+            patch it; click any jack marker to correct which direction it runs. Ctrl- or ⌘-scroll
+            zooms the picture. Controls and other component types cannot be wired here.
             <br />
           </template>
           Panels are the front plates found for each module, or a drawing made from its manual
@@ -381,8 +587,29 @@ const draftCable = computed(() =>
   flex-wrap: wrap;
   margin-bottom: 0.6rem;
 }
+.zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+.zoom-controls button {
+  margin: 0;
+  padding: 0.15rem 0.55rem;
+  line-height: 1.4;
+}
+.zoom-level {
+  min-width: 3.4em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
 .diagram-wrap {
-  overflow-x: auto;
+  overflow: auto;
+  /* Zoomed in, the diagram is bigger than the page: it scrolls inside its own
+     box so the controls above it stay put while patching. */
+  max-height: 80vh;
+  overscroll-behavior: contain;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -426,6 +653,33 @@ const draftCable = computed(() =>
 .jack-marker.input {
   stroke: #4ade80;
   stroke-width: 2;
+}
+/* A mult jack, or one end of a dual module's bridged wire: which way it runs
+   is decided by the patch, so it is neither the output blue nor the input
+   green. */
+.jack-marker.bidirectional {
+  cursor: crosshair;
+  stroke: #facc15;
+  stroke-width: 2.5;
+}
+.jack-marker.selected {
+  fill: rgba(228, 228, 231, 0.25);
+  stroke-width: 4;
+}
+.jack-editor {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.jack-editor select {
+  margin: 0;
+  width: auto;
 }
 .jack-label,
 .spare-label {

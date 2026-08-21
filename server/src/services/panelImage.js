@@ -35,6 +35,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { extractJsonObject } from './json.js';
 import { downloadImage, panelPath, saveImage } from './image.js';
+import { PANEL_WIDTHS, thumbsDir } from './panelThumbs.js';
 import { HP_MM, PANEL_MM_HEIGHT, PX_PER_MM, DEFAULT_HP } from './panelGeometry.js';
 import {
   cropImage,
@@ -900,11 +901,16 @@ export async function savePanel(db, module, panel, placements) {
   return { panel, placements };
 }
 
-// Remove a panel image file that no panel row references any more.
+// Remove a panel image file that no panel row references any more, along with
+// the sized copies rendered from it (services/panelThumbs.js) — they are the
+// same picture and are orphaned by the same delete.
 export async function deletePanelImageIfOrphaned(db, panelsDir, hash, ext) {
   if (!hash) return;
   if ((await db.models.ModulePanel.count({ where: { image_hash: hash } })) > 0) return;
   fs.rmSync(panelPath(panelsDir, hash, ext), { force: true });
+  for (const width of PANEL_WIDTHS) {
+    fs.rmSync(path.join(thumbsDir(panelsDir), `${hash}@${width}.webp`), { force: true });
+  }
 }
 
 // A marker's position is a fraction of the picture it was placed on, so

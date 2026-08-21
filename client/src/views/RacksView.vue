@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import ShareButton from '../components/ShareButton.vue';
-import { panelCropStyle } from '../panelLayout.js';
+import { panelCropStyle, panelThumbUrl } from '../panelLayout.js';
 import { toast } from '../toast.js';
 
 const racks = ref([]);
@@ -626,7 +626,7 @@ async function nudge(rowIndex, index, delta) {
             <span class="module-panel-thumb" :class="{ 'thumb-fallback': !module.panel }">
               <img
                 v-if="module.panel"
-                :src="module.panel.url"
+                :src="panelThumbUrl(module.panel, 512)"
                 :style="panelCropStyle(module.panel)"
                 :alt="`${module.manufacturer} ${module.name}`"
               />
@@ -714,7 +714,7 @@ async function nudge(rowIndex, index, delta) {
           >
             <img
               v-if="module.panel"
-              :src="module.panel.url"
+              :src="panelThumbUrl(module.panel, 512)"
               :style="panelCropStyle(module.panel)"
               :alt="`${module.manufacturer} ${module.name}`"
             />
@@ -741,7 +741,7 @@ async function nudge(rowIndex, index, delta) {
       >
         <img
           v-if="dragged.module.panel"
-          :src="dragged.module.panel.url"
+          :src="panelThumbUrl(dragged.module.panel, 512)"
           :style="panelCropStyle(dragged.module.panel)"
           alt=""
         />

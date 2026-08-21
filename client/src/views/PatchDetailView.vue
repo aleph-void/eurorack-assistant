@@ -43,6 +43,20 @@ const cablesSection = ref(null);
 const connectDiagramCable = (ends) => cablesSection.value?.connectCable(ends);
 const disconnectDiagramCable = (cable) => cablesSection.value?.removeCable(cable);
 
+// Correcting which way a jack runs from the diagram. A jack's direction is a
+// fact about the MODULE — the analysis reads a mult's jacks as plain inputs
+// or outputs often enough that this is worth fixing where it shows — so the
+// write goes to the module and every patch drawing it follows.
+async function retypeDiagramJack({ module_id: moduleId, component_id: componentId, type }) {
+  if (!moduleId) return;
+  try {
+    await api.put(`/api/modules/${moduleId}/components/${componentId}`, { type });
+    await load();
+  } catch {
+    // api.js has already said so, in red, over the page.
+  }
+}
+
 // ---- renaming ----
 const renaming = ref(false);
 const renameValue = ref('');
@@ -237,6 +251,7 @@ onMounted(async () => {
       interactive
       @connect="connectDiagramCable"
       @disconnect="disconnectDiagramCable"
+      @retype="retypeDiagramJack"
     />
 
     <p class="muted" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap">

@@ -1209,6 +1209,47 @@ describe('panel image route', () => {
     expect(res.headers['content-type']).toContain('image/png');
   });
 
+  // A stored panel is the file the manufacturer published — megabytes of it,
+  // thousands of pixels across — and a patch draws forty of them a few
+  // hundred pixels wide.
+  it('serves a panel at the size it is drawn, and keeps the rendered copy', async () => {
+    const sharp = await loadSharp();
+    const alice = await ctx.db.models.User.findOne({ where: { username: 'alice' } });
+    const module = await insertModule(ctx.db, alice.id);
+    const big = await sharp({
+      create: { width: 900, height: 2700, channels: 3, background: '#404040' },
+    })
+      .png()
+      .toBuffer();
+    const hash = await storePanel(module.id, big);
+
+    const res = await request(ctx.app)
+      .get(`/api/panels/${hash}.png?w=300`)
+      .set('Cookie', ctx.aliceCookie);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('image/webp');
+    // 300 is served by the 512 variant, and it is smaller than the original.
+    const meta = await sharp(res.body).metadata();
+    expect(meta.width).toBe(512);
+    expect(res.body.length).toBeLessThan(big.length);
+    // The bytes are still addressed by their own hash, so they never change.
+    expect(res.headers['cache-control']).toContain('immutable');
+    expect(fs.existsSync(path.join(ctx.panelsDir, 'thumbs', `${hash}@512.webp`))).toBe(true);
+
+    // Rendered once: the second request is served from what the first left.
+    const again = await request(ctx.app)
+      .get(`/api/panels/${hash}.png?w=300`)
+      .set('Cookie', ctx.aliceCookie);
+    expect(again.body.length).toBe(res.body.length);
+
+    // Wanted bigger than any variant, or not asked for at all: the file.
+    for (const url of [`/api/panels/${hash}.png?w=4000`, `/api/panels/${hash}.png`]) {
+      const original = await request(ctx.app).get(url).set('Cookie', ctx.aliceCookie);
+      expect(original.headers['content-type']).toContain('image/png');
+      expect(original.body.length).toBe(big.length);
+    }
+  });
+
   it('404s on a hash no panel references, and on a bad name', async () => {
     const stranger = 'a'.repeat(64);
     fs.writeFileSync(panelPath(ctx.panelsDir, stranger, 'png'), PANEL_PNG);

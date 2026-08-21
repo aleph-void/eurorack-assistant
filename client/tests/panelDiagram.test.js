@@ -26,6 +26,8 @@ import {
   cableColor,
   cablePath,
   layoutDiagram,
+  panelImageUrl,
+  panelThumbUrl,
   panelWidth,
   spareJacks,
   usedModules,
@@ -167,6 +169,61 @@ describe('panel layout geometry', () => {
     expect(new Set(panels.map((p) => p.y)).size).toBeGreaterThan(1);
   });
 
+  // A case has no air in it: modules are screwed to the same rails, shoulder
+  // to shoulder, and the row below sits straight under the row above.
+  it('draws panels and rows flush against each other', () => {
+    const [a, b] = modules();
+    const { panels } = layoutDiagram([a, b], { rowStarts: [1] });
+    expect(panels[1].y).toBe(panels[0].y + panels[0].height);
+    const sameRow = layoutDiagram([a, b]);
+    expect(sameRow.panels[1].x).toBe(sameRow.panels[0].x + sameRow.panels[0].width);
+  });
+
+  // A rack row is the case in front of you; folding it in two would draw a
+  // rack the user does not have.
+  it('never breaks a physical rack row in two', () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      id: i + 1,
+      manufacturer: 'M',
+      module_name: `Mod ${i}`,
+      components: [],
+      panel: panelFor([]),
+    }));
+    const { panels, width } = layoutDiagram(many, { rowStarts: [0], wrap: false });
+    expect(new Set(panels.map((p) => p.y)).size).toBe(1);
+    expect(width).toBeGreaterThan(1750);
+  });
+
+  it('reserves a band for module names only when they are drawn', () => {
+    const [a] = modules();
+    const bare = layoutDiagram([a]);
+    const named = layoutDiagram([a], { labels: true });
+    expect(named.height - bare.height).toBe(30);
+    expect(named.panels[0].labelY).toBeLessThan(named.panels[0].y);
+  });
+
+  // The stored file is what the manufacturer published; the diagram draws it
+  // a few hundred pixels wide.
+  it('asks for a panel at the size it is drawn', () => {
+    const panel = panelFor([]);
+    expect(panelImageUrl({ ...panel, url: '/api/panels/abc.png' }, 300)).toBe(
+      '/api/panels/abc.png?w=512'
+    );
+    expect(panelImageUrl({ ...panel, url: '/api/panels/abc.png' }, 512)).toBe(
+      '/api/panels/abc.png?w=512'
+    );
+    // Wanted bigger than any variant: the file itself.
+    expect(panelImageUrl({ ...panel, url: '/api/panels/abc.png' }, 3000)).toBe(
+      '/api/panels/abc.png'
+    );
+    // A drawn panel is a vector; it scales on its own.
+    expect(panelImageUrl(panel, 300)).toBe('/api/panels/abc.svg');
+    // A cropped photograph carries the background the crop hides, so the
+    // whole picture is bigger than the part being drawn.
+    const cropped = { ...panel, url: '/api/panels/abc.png', crop: { x: 0, y: 0, w: 0.5, h: 1 } };
+    expect(panelThumbUrl(cropped, 200)).toBe('/api/panels/abc.png?w=512');
+  });
+
   it('draws a cable as a curve that sags between its ends', () => {
     const d = cablePath({ x: 0, y: 0 }, { x: 100, y: 0 }, 0);
     expect(d).toMatch(/^M 0 0 C /);
@@ -225,6 +282,21 @@ describe('PatchDiagram', () => {
     expect(wrapper.emitted('disconnect')).toBeUndefined();
   });
 
+  it('fetches each panel at the size it is painted, and re-asks when zoomed', async () => {
+    const source = modules().map((pm) => ({
+      ...pm,
+      panel: { ...pm.panel, url: '/api/panels/photo.png' },
+    }));
+    const wrapper = mountDiagram({ modules: source, interactive: true });
+    const src = () => wrapper.findAll('image')[0].attributes('href');
+    expect(src()).toBe('/api/panels/photo.png?w=128');
+    // Zoomed right in, the same panel is worth more pixels.
+    for (let i = 0; i < 8; i += 1) {
+      await wrapper.find('[data-test="diagram-zoom-in"]').trigger('click');
+    }
+    expect(src()).toBe('/api/panels/photo.png?w=512');
+  });
+
   it('crops the image to the front plate', () => {
     const [maths, lpg] = modules();
     maths.panel.crop = { x: 0.25, y: 0.1, w: 0.5, h: 0.8 };
@@ -276,6 +348,93 @@ describe('PatchDiagram', () => {
   it('dashes an optional cable', () => {
     const wrapper = mountDiagram({ cables: [cable({ optional: true })] });
     expect(wrapper.find('[data-test="diagram-cable-21"]').classes()).toContain('optional');
+  });
+
+  it('zooms the picture in and out without moving a jack', async () => {
+    const wrapper = mountDiagram({ interactive: true });
+    const svg = wrapper.find('[data-test="diagram-svg"]');
+    const at = () => Number(svg.attributes('style').match(/width:\s*(\d+)px/)[1]);
+    const before = at();
+    expect(wrapper.find('[data-test="diagram-zoom-level"]').text()).toBe('100%');
+
+    await wrapper.find('[data-test="diagram-zoom-in"]').trigger('click');
+    expect(at()).toBeGreaterThan(before);
+    expect(wrapper.find('[data-test="diagram-zoom-level"]').text()).toBe('125%');
+    await wrapper.find('[data-test="diagram-zoom-out"]').trigger('click');
+    expect(at()).toBe(before);
+
+    // The coordinate space is untouched, so every anchor still lines up.
+    const viewBox = svg.attributes('viewBox');
+    await wrapper.find('[data-test="diagram-zoom-in"]').trigger('click');
+    expect(svg.attributes('viewBox')).toBe(viewBox);
+
+    await wrapper.find('[data-test="diagram-zoom-fit"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-zoom-level"]').text()).toBe('100%');
+  });
+
+  it('names every module on request', async () => {
+    const wrapper = mountDiagram();
+    expect(wrapper.findAll('.panel-label')).toHaveLength(0);
+    // The name is still there for the pointer to find.
+    expect(wrapper.text()).toContain('Maths');
+    await wrapper.find('[data-test="diagram-module-names"]').setValue(true);
+    expect(wrapper.findAll('.panel-label')).toHaveLength(2);
+  });
+
+  // Which way a bidirectional jack runs is the patch's business, so it is
+  // neither the output blue nor the input green — and it may be either end
+  // of a cable.
+  it('marks a bidirectional jack in its own colour and lets it start a cable', async () => {
+    const source = modules();
+    source[0].components[0] = { id: 1, type: 'bidirectional_jack', name: '1' };
+    const layout = layoutDiagram(source);
+    const wrapper = mountDiagram({ modules: source, cables: [], interactive: true });
+    await wrapper.find('[data-test="diagram-show-all"]').setValue(true);
+    const marker = wrapper.find('[data-test="diagram-jack-11-1"]');
+    expect(marker.classes()).toContain('bidirectional');
+
+    const svg = wrapper.find('[data-test="diagram-svg"]');
+    Object.defineProperty(svg.element, 'getBoundingClientRect', {
+      value: () => ({ left: 0, top: 0, width: layout.width, height: layout.height }),
+    });
+    const from = layout.anchors.get('11:1');
+    const to = layout.anchors.get('12:3');
+    await marker.trigger('pointerdown', { clientX: from.x, clientY: from.y, pointerId: 1 });
+    await svg.trigger('pointermove', { clientX: to.x, clientY: to.y, pointerId: 1 });
+    await svg.trigger('pointerup', { clientX: to.x, clientY: to.y, pointerId: 1 });
+    expect(wrapper.emitted('connect')).toEqual([
+      [{ from_patch_module_id: 11, from_component_id: 1, to_patch_module_id: 12, to_component_id: 3 }],
+    ]);
+  });
+
+  it('corrects which way a jack runs from the picture', async () => {
+    const wrapper = mountDiagram({ interactive: true });
+    await wrapper.find('[data-test="diagram-jack-11-1"]').trigger('click');
+    const editor = wrapper.find('[data-test="diagram-jack-editor"]');
+    expect(editor.text()).toContain('EOR');
+    expect(editor.text()).toContain('Make Noise Maths');
+
+    await wrapper.find('[data-test="diagram-jack-type"]').setValue('bidirectional_jack');
+    await wrapper.find('[data-test="diagram-jack-retype"]').trigger('click');
+    expect(wrapper.emitted('retype')).toEqual([
+      [
+        {
+          module_id: 1,
+          patch_module_id: 11,
+          component_id: 1,
+          name: 'EOR',
+          type: 'bidirectional_jack',
+        },
+      ],
+    ]);
+    // The editor closes with the correction made.
+    expect(wrapper.find('[data-test="diagram-jack-editor"]').exists()).toBe(false);
+  });
+
+  it('leaves the jacks of a read-only diagram alone', async () => {
+    const wrapper = mountDiagram();
+    await wrapper.find('[data-test="diagram-jack-11-1"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-jack-editor"]').exists()).toBe(false);
   });
 
   it('has something to say when there is nothing to draw', () => {

@@ -70,6 +70,33 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   its crop recorded, so anything drawing a panel as a plain `<img>` must
   offset it with `panelCropStyle()` (client/src/panelLayout.js), or a
   photograph's backdrop is drawn as panel.
+- Panel pictures are also served at a handful of fixed widths: `?w=<px>` on
+  `GET /api/panels/:hash.:ext` renders a WEBP copy once, keeps it in
+  `panels/thumbs/`, and serves it under the same immutable policy
+  (`services/panelThumbs.js`). Every renderer asks for the size it is about to
+  draw — `panelImageUrl()`/`panelThumbUrl()` in `client/src/panelLayout.js`,
+  never a bare `panel.url` — because a stored panel is the multi-megabyte file
+  the manufacturer published and a patch draws forty of them at once.
+- A DUAL module is two panels of one product joined by a link cable rather
+  than by patch cables (Omnitone 7Path's ethernet pair). Neither side is a
+  host — that is what makes it not an expander — and BOTH SIDES MAY BE THE
+  SAME MODULE RECORD, which is how a dual racked once with quantity 2 pairs
+  its own two instances. `module_bridges` (+ the optional
+  `module_bridge_jacks` label map, migration 033) declares it on the hardware;
+  `services/moduleBridges.js` materializes it into every patch as the
+  `patch_module_links` kind 'bridge' the tracers already understand, at patch
+  creation and whenever an instance is added. Jack N pairs with jack N BY NAME
+  unless the map says otherwise. The wire runs ONE way: the end a cable is
+  patched into is the input and the matching jack on the opposite panel is the
+  output, which `cableProblem()` enforces (bridged jacks are otherwise exempt
+  from the mult rules — they are paired, not copies).
+- The patch diagram draws the case, not a poster of it: panels sit flush
+  against each other and rows sit straight on top of each other (`PANEL_GAP`
+  / `ROW_GAP` are 0), a PHYSICAL rack row is never folded in two (it scrolls —
+  `wrap` is off whenever rack rows drive the layout), and module names are off
+  by default because there is nowhere to put them. The picture zooms instead
+  (the SVG's CSS width; the coordinate space never changes, so every hit test
+  follows).
 - Arrangements are saved by REPLACEMENT — `PUT /api/racks/:id/layout` and
   `snapshotRackLayout()` both delete every row of the rack/patch and write the
   ones they were sent. Two of those running at once is a corruption, not a

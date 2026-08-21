@@ -292,6 +292,27 @@ describe('PatchDetailView', () => {
     expect(api.delete).toHaveBeenCalledWith('/api/patches/7/cables/21');
   });
 
+  // Which way a jack runs is a fact about the MODULE, so correcting it from
+  // the picture writes to the module and every patch drawing it follows.
+  it('corrects a jack the diagram says runs the wrong way', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.put.mockResolvedValue({ id: 1, type: 'bidirectional_jack' });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    wrapper.findComponent(PatchDiagram).vm.$emit('retype', {
+      module_id: 3,
+      patch_module_id: 11,
+      component_id: 1,
+      name: 'EOR',
+      type: 'bidirectional_jack',
+    });
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/modules/3/components/1', {
+      type: 'bidirectional_jack',
+    });
+    expect(api.get).toHaveBeenCalledWith('/api/patches/7');
+  });
+
   // Typing into a picker, then taking the highlighted match with Enter.
   async function pick(wrapper, test, text) {
     const input = wrapper.find(`[data-test="${test}"]`);

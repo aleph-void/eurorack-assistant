@@ -9,7 +9,7 @@
 // photograph can simply see the answer.
 
 import { computed, ref } from 'vue';
-import { placementFraction } from '../panelLayout.js';
+import { panelThumbUrl, placementFraction } from '../panelLayout.js';
 
 // A marker has to be seen against whatever the panel happens to look like, and
 // panels are every colour there is: a violet ring vanishes on a purple Make
@@ -220,7 +220,7 @@ function endDrag() {
           y="0"
           :width="panel.width"
           :height="panel.height"
-          :href="panel.url"
+          :href="panelThumbUrl(panel, 1024)"
           preserveAspectRatio="none"
         />
       </svg>

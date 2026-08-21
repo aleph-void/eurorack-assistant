@@ -6,10 +6,16 @@
 // viewBox, so the drawing scales to any width without measuring the DOM.
 
 export const PANEL_HEIGHT = 420;
-export const PANEL_GAP = 26;
-export const ROW_GAP = 120;
-// Room above a panel for its name, and below it for the jacks that have no
-// position on the picture.
+// Modules in a case stand shoulder to shoulder, screwed to the same rails,
+// and rows sit straight on top of each other — so the diagram draws them that
+// way. Each panel's own frame is what separates it from its neighbour. Both
+// are constants rather than literal zeroes so a diagram that wants air around
+// its panels is one number away.
+export const PANEL_GAP = 0;
+export const ROW_GAP = 0;
+// Room above a panel for its name (only reserved when names are drawn — they
+// would overlap on panels this close together), and below it for the jacks
+// that have no position on the picture.
 export const LABEL_HEIGHT = 30;
 export const SPARE_ROW_HEIGHT = 26;
 export const SPARE_COLUMNS = 2;
@@ -49,6 +55,37 @@ export function panelCropStyle(panel) {
   };
 }
 
+// The widths the server renders a panel at (services/panelThumbs.js). A
+// stored panel is the file the manufacturer published — several thousand
+// pixels across, megabytes of it — and a diagram of a full case draws forty
+// of them a few hundred pixels wide, so each is asked for at the size it is
+// about to be drawn. The URL still addresses the same immutable bytes, so a
+// variant is cached exactly as hard as the original.
+export const PANEL_WIDTHS = [128, 256, 512, 1024];
+
+export function panelImageUrl(panel, drawnWidth) {
+  const url = panel?.url ?? null;
+  // A drawn panel is an SVG: it is already a few kilobytes and scales on its
+  // own. So is a width bigger than anything on offer — that wants the file.
+  if (!url || url.endsWith('.svg')) return url;
+  const bucket = PANEL_WIDTHS.find((width) => width >= drawnWidth);
+  return bucket ? `${url}?w=${bucket}` : url;
+}
+
+// The same, for a panel drawn as a plain <img> in a box `cssWidth` wide: the
+// rack organizer, the system floor plan, the module page's own figure. They
+// have no zoom of their own, so the box size is the whole story.
+export function panelThumbUrl(panel, cssWidth, density = 1) {
+  return panelImageUrl(panel, imageWidthFor(panel, cssWidth) * density);
+}
+
+// How wide the WHOLE image is drawn when the visible part of it is
+// `drawnWidth` wide: a photograph is cropped to its front plate, and the
+// bytes still carry the background the crop hides.
+export function imageWidthFor(panel, drawnWidth) {
+  return drawnWidth / cropOf(panel).w;
+}
+
 // How wide the panel is drawn, at the diagram's fixed panel height.
 export function panelWidth(pm, height = PANEL_HEIGHT) {
   const panel = pm?.panel;
@@ -83,10 +120,21 @@ export function spareJacks(pm) {
 const spareHeight = (count) =>
   count === 0 ? 0 : Math.ceil(count / SPARE_COLUMNS) * SPARE_ROW_HEIGHT + 6;
 
-// Lay the modules out left to right, wrapping into rows. Returns the placed
-// panels (in diagram coordinates), the anchor point of every jack, and the
-// size of the whole drawing.
-export function layoutDiagram(modules, { height = PANEL_HEIGHT, maxRowWidth = MAX_ROW_WIDTH, rowStarts = [] } = {}) {
+// Lay the modules out left to right. Returns the placed panels (in diagram
+// coordinates), the anchor point of every jack, and the size of the whole
+// drawing.
+//
+// `rowStarts` are the module indexes a PHYSICAL row begins at, and a physical
+// row is never broken in two: a rack row that runs off the side of the screen
+// is scrolled to, not folded, or the picture stops being the case in front of
+// you. `wrap` is for a diagram with no rack rows behind it, where the only
+// row breaks there are to find are the ones that keep the drawing on a page.
+// `labels` reserves the band each panel's name is drawn in.
+export function layoutDiagram(
+  modules,
+  { height = PANEL_HEIGHT, maxRowWidth = MAX_ROW_WIDTH, rowStarts = [], wrap = true, labels = false } = {}
+) {
+  const labelBand = labels ? LABEL_HEIGHT : 0;
   const panels = [];
   const anchors = new Map(); // `${patch_module_id}:${component_id}` -> point
   let rowStart = 0;
@@ -97,7 +145,7 @@ export function layoutDiagram(modules, { height = PANEL_HEIGHT, maxRowWidth = MA
   const closeRow = () => {
     // Every panel in a row shares the row's height, so the row below clears
     // the longest spare strip in it.
-    y += LABEL_HEIGHT + height + rowSpare + ROW_GAP;
+    y += labelBand + height + rowSpare + ROW_GAP;
     x = MARGIN;
     rowStart = panels.length;
     rowSpare = 0;
@@ -105,7 +153,12 @@ export function layoutDiagram(modules, { height = PANEL_HEIGHT, maxRowWidth = MA
 
   for (const [moduleIndex, pm] of modules.entries()) {
     const width = panelWidth(pm, height);
-    if ((x > MARGIN && rowStarts.includes(moduleIndex)) || (x > MARGIN && x + width > maxRowWidth)) closeRow();
+    if (
+      (x > MARGIN && rowStarts.includes(moduleIndex)) ||
+      (wrap && x > MARGIN && x + width > maxRowWidth)
+    ) {
+      closeRow();
+    }
     // Jacks with no place on the panel go in a strip under it — but a module
     // with no panel at all has no picture to be off, so its jacks are drawn
     // inside its placeholder and cost the row no extra height.
@@ -115,10 +168,10 @@ export function layoutDiagram(modules, { height = PANEL_HEIGHT, maxRowWidth = MA
     panels.push({
       pm,
       x,
-      y: y + LABEL_HEIGHT,
+      y: y + labelBand,
       width,
       height,
-      labelY: y + LABEL_HEIGHT - 9,
+      labelY: y + labelBand - 9,
       spare,
       loose,
       row: rowStart,
@@ -126,7 +179,7 @@ export function layoutDiagram(modules, { height = PANEL_HEIGHT, maxRowWidth = MA
     x += width + PANEL_GAP;
   }
 
-  const totalHeight = panels.length === 0 ? 0 : y + LABEL_HEIGHT + height + rowSpare + MARGIN;
+  const totalHeight = panels.length === 0 ? 0 : y + labelBand + height + rowSpare + MARGIN;
   const totalWidth =
     panels.length === 0
       ? 0
