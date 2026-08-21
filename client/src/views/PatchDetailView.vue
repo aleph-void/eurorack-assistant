@@ -53,7 +53,7 @@ const suggestions = ref([]);
 
 async function loadSuggestions() {
   try {
-    const res = await api.get(`/api/patches/${props.id}/suggestions`);
+    const res = await api.get(`/api/patches/${props.id}/suggestions`, { quiet: true });
     suggestions.value = res?.suggestions ?? [];
   } catch {
     suggestions.value = [];
@@ -158,7 +158,7 @@ async function rename() {
 
 onMounted(async () => {
   try {
-    const list = await api.get('/api/modules');
+    const list = await api.get('/api/modules', { quiet: true });
     rackModules.value = Array.isArray(list) ? list : [];
   } catch {
     rackModules.value = [];

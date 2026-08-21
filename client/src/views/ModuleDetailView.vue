@@ -506,7 +506,7 @@ async function load() {
   }
   // Candidates for an expander link: the other modules in your racks.
   try {
-    const list = await api.get('/api/modules');
+    const list = await api.get('/api/modules', { quiet: true });
     rackModules.value = Array.isArray(list) ? list : [];
   } catch {
     rackModules.value = [];

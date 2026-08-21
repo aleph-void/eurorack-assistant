@@ -25,7 +25,8 @@ const patchOptions = computed(() =>
 
 onMounted(async () => {
   try {
-    const list = await api.get('/api/patches');
+    // Nothing depends on this list arriving; a failure is not worth a toast.
+    const list = await api.get('/api/patches', { quiet: true });
     patches.value = Array.isArray(list) ? list : [];
   } catch {
     patches.value = [];

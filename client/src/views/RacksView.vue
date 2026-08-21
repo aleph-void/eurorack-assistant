@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import ShareButton from '../components/ShareButton.vue';
 import { panelCropStyle } from '../panelLayout.js';
+import { toast } from '../toast.js';
 
 const racks = ref([]);
 const systems = ref([]);
@@ -216,12 +217,22 @@ function saveLayout() {
   return saving;
 }
 
+// A refused layout is said twice: in the panel beside the rows, and as a
+// toast, because the organizer is a long page and the panel is easy to be
+// scrolled away from — a drop refused for want of HP looked for all the world
+// like a drop that simply did not work.
+function refuse(message) {
+  layoutError.value = message;
+  toast.error(message, { title: 'Layout not saved' });
+}
+
 async function putLayout() {
   layoutError.value = '';
   if (overPlaced.value.length) {
-    layoutError.value =
+    refuse(
       `Not saved — ${overPlaced.value.join('; ')}. ` +
-      'Remove the extra placements (duplicated rows are the usual cause) and the layout saves itself.';
+        'Remove the extra placements (duplicated rows are the usual cause) and the layout saves itself.'
+    );
     return;
   }
   try {
@@ -239,7 +250,7 @@ async function putLayout() {
     // to undo the edit as well, which is what made a rack whose stored layout
     // is already invalid impossible to repair: every removal was reverted by
     // the failure it was meant to fix.
-    layoutError.value = `${e.message} — the rows on screen are not saved.`;
+    refuse(`${e.message} — the rows on screen are not saved.`);
   }
 }
 
@@ -429,7 +440,10 @@ async function dropIntoRow(held, rowIndex, index) {
   }
   if (rowUsed(row) + (Number(held.module.hp) || 0) > Number(row.hp)) {
     if (held.rowIndex !== null) organizer.value.rows[held.rowIndex].modules.splice(held.index, 0, held.module);
-    layoutError.value = `${held.module.manufacturer} ${held.module.name} does not fit in this ${row.hp}HP row.`;
+    refuse(
+      `${held.module.manufacturer} ${held.module.name} (${held.module.hp}HP) does not fit in this ${row.hp}HP row — ` +
+        `${rowUsed(row)}HP of it is used.`
+    );
     return;
   }
   row.modules.splice(target, 0, held.module);

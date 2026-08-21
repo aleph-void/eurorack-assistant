@@ -14,7 +14,8 @@ export const useAuthStore = defineStore('auth', {
   actions: {
     async fetchMe() {
       try {
-        this.user = await api.get('/api/auth/me');
+        // Asked on every page load; "nobody" is an ordinary answer.
+        this.user = await api.get('/api/auth/me', { quiet: true });
       } catch {
         this.user = null;
       } finally {

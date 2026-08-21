@@ -8,10 +8,12 @@ vi.mock('../src/api.js', () => ({
 import { api } from '../src/api.js';
 import { useAuthStore } from '../src/stores/auth.js';
 import { useJobsStore } from '../src/stores/jobs.js';
+import { clearToasts, toastState } from '../src/toast.js';
 
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
+  clearToasts();
 });
 
 describe('auth store', () => {
@@ -95,6 +97,35 @@ describe('jobs store', () => {
     // Non-job events are ignored.
     jobs.applyEvent({ kind: 'hello' });
     expect(jobs.feed).toHaveLength(2);
+  });
+
+  // A job ends minutes after it was queued, almost always while the user is
+  // on another page — the only place it can be said is over the page.
+  it('announces a job ending, in the colour of how it went', () => {
+    const jobs = useJobsStore();
+
+    jobs.applyEvent({
+      kind: 'job',
+      event: 'completed',
+      job: { id: 5, type: 'analyze_manual', status: 'complete', module_manufacturer: 'Make Noise', module_name: 'Maths' },
+      at: 't1',
+    });
+    jobs.applyEvent({
+      kind: 'job',
+      event: 'failed',
+      job: { id: 6, type: 'find_manual', status: 'failed', module_name: 'ARP', error: 'no manual found' },
+      at: 't2',
+    });
+    // A running commentary belongs in the feed, not over the page.
+    jobs.applyEvent({ kind: 'job', event: 'progress', job: { id: 5, type: 'analyze_manual' }, message: 'reading', at: 't3' });
+
+    expect(toastState.items).toHaveLength(2);
+    const [failure, success] = toastState.items;
+    expect(failure.kind).toBe('error');
+    expect(failure.title).toBe('Find manual — ARP');
+    expect(failure.message).toBe('no manual found');
+    expect(success.kind).toBe('success');
+    expect(success.title).toBe('Analyze manual — Make Noise Maths');
   });
 
   it('caps the feed length', () => {

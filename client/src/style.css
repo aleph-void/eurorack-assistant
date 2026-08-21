@@ -529,6 +529,138 @@ details.expander > .expander-body {
 
 /* ---- modal dialogs -------------------------------------------------- */
 
+/* The app's toasts (ToastStack + toast.js): what happened, over whatever the
+   user is looking at. Above the drawer, below a confirmation — a question
+   being asked outranks news of something that has already happened. The
+   region itself is pointer-transparent so an empty stack, and the gaps
+   between toasts, never swallow a click on the page underneath. */
+.toast-stack {
+  position: fixed;
+  top: calc(var(--topbar-height) + 0.6rem);
+  right: 0.75rem;
+  z-index: 85;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(23rem, calc(100vw - 1.5rem));
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid var(--border-strong);
+  /* The colour is carried by the left edge and the icon, so the message
+     itself stays plain text at full contrast. */
+  border-left: 5px solid var(--accent);
+  border-radius: 7px;
+  background: var(--panel-2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+/* Kind-prefixed rather than a bare .success/.error: those are the page's own
+   message paragraphs, and a toast that borrowed them would inherit their
+   colour and margins by accident rather than by decision. */
+.toast-success {
+  border-left-color: var(--ok);
+}
+.toast-error {
+  border-left-color: var(--danger);
+}
+/* The heading carries the colour; the message underneath stays plain, so the
+   words that matter are read at full contrast. */
+.toast-success .toast-title {
+  color: var(--ok);
+}
+.toast-error .toast-title {
+  color: var(--danger);
+}
+.toast-info .toast-title {
+  color: var(--accent-2);
+}
+
+.toast-icon {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--bg);
+  background: var(--accent-2);
+}
+.toast-success .toast-icon {
+  background: var(--ok);
+}
+.toast-error .toast-icon {
+  background: var(--danger);
+}
+
+.toast-body {
+  flex: 1;
+  min-width: 0;
+}
+.toast-title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.toast-message {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.toast-count {
+  margin-left: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--faint);
+}
+
+.toast-close {
+  flex: none;
+  margin: 0;
+  padding: 0 0.3rem;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 1rem;
+  line-height: 1.2;
+}
+.toast-close:hover {
+  background: none;
+  color: var(--text);
+}
+
+/* In from the right, out by folding away, so the toasts below it slide up
+   rather than jumping. */
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(1.5rem);
+}
+.toast-move {
+  transition: transform 0.18s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter-active,
+  .toast-leave-active,
+  .toast-move {
+    transition: none;
+  }
+}
+
 /* The app's confirmations (ConfirmDialog): a panel held over a darkened page,
    above the drawer so a question raised from the menu is still readable. */
 .modal-scrim {

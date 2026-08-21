@@ -79,6 +79,15 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   (`lock: transaction.LOCK.UPDATE`) first, `rack_rows` has a unique
   `(rack_id, position)` (migration 032), and the organizer keeps only one save
   in the air — a save asked for while one is running is made when it lands.
+- Failures are said twice: inline where the work is, and as a toast over the
+  page (`client/src/toast.js` + `components/ToastStack.vue`, mounted once in
+  `App.vue`, styled in `style.css`). `api.js` raises the red one itself for
+  every failed request — pass `{ quiet: true }` for a call whose failure is
+  not news (a secondary fetch the caller shrugs off; 401 is always silent) —
+  and the jobs store raises one when a job ends, green for completed and red
+  for failed. A refusal decided in the client (the organizer's HP capacity
+  check) calls `toast.error` alongside setting its own message. Repeats of the
+  same line count up on the toast already on screen rather than stacking.
 - Cache policy is set in one place per layer, never ad hoc in a handler:
   `app.js` stamps every `/api` response `private, no-cache` (`no-store` on
   the credential routes), and the routes that stream content-addressed bytes

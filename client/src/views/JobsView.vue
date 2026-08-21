@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useJobsStore } from '../stores/jobs.js';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
+import { describeJob } from '../jobLabels.js';
 
 const jobs = useJobsStore();
 // Own token budget, when there is one. A user whose allowance is spent has
@@ -39,14 +40,6 @@ const llmResumesAt = computed(() => {
   const at = jobs.llmPause.until ? new Date(jobs.llmPause.until) : null;
   return at && !Number.isNaN(at.getTime()) ? at.toLocaleString() : null;
 });
-
-function describe(job) {
-  if (job.module_name) return `${job.module_manufacturer || ''} ${job.module_name}`.trim();
-  if (job.question_prompt) return job.question_prompt;
-  if (job.rack_name) return job.rack_name;
-  if (job.system_name) return job.system_name;
-  return '';
-}
 
 async function retry(job) {
   error.value = '';
@@ -349,7 +342,7 @@ onMounted(async () => {
           <tr v-for="job in jobs.jobs" :key="job.id">
             <td>{{ job.id }}</td>
             <td>{{ job.type }}</td>
-            <td>{{ describe(job) }}</td>
+            <td>{{ describeJob(job) }}</td>
             <td>
               <span class="badge" :class="job.status">{{ job.status }}</span>
               <!-- Running, but its worker died holding it. -->

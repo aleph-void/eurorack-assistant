@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { api, ApiError } from '../src/api.js';
+import { clearToasts, toastState } from '../src/toast.js';
 
 function mockFetch(status, body) {
   return vi.fn(async () => ({
@@ -11,7 +12,10 @@ function mockFetch(status, body) {
 
 beforeEach(() => {
   vi.unstubAllGlobals();
+  clearToasts();
 });
+
+afterEach(clearToasts);
 
 describe('api wrapper', () => {
   it('GETs JSON', async () => {
@@ -34,6 +38,37 @@ describe('api wrapper', () => {
     vi.stubGlobal('fetch', mockFetch(401, { error: 'Not authenticated' }));
     await expect(api.get('/api/auth/me')).rejects.toThrow('Not authenticated');
     await expect(api.get('/api/auth/me')).rejects.toBeInstanceOf(ApiError);
+  });
+
+  // Every page reports its own failures inline, but only where that page
+  // draws them — a refusal while the user is looking elsewhere on a long page
+  // would otherwise pass unseen.
+  it('raises a red toast carrying the server\u2019s message', async () => {
+    vi.stubGlobal('fetch', mockFetch(400, { error: 'row 1 exceeds its 84HP capacity' }));
+    await expect(api.put('/api/racks/1/layout', {})).rejects.toThrow('row 1 exceeds');
+    expect(toastState.items).toHaveLength(1);
+    expect(toastState.items[0].kind).toBe('error');
+    expect(toastState.items[0].message).toBe('row 1 exceeds its 84HP capacity');
+  });
+
+  // The app asks who the viewer is on every load; 'nobody' is an ordinary
+  // answer the router already acts on.
+  it('says nothing about a 401, or about a call that opted out', async () => {
+    vi.stubGlobal('fetch', mockFetch(401, { error: 'Not authenticated' }));
+    await expect(api.get('/api/auth/me')).rejects.toThrow();
+    expect(toastState.items).toHaveLength(0);
+
+    vi.stubGlobal('fetch', mockFetch(500, { error: 'boom' }));
+    await expect(api.get('/api/modules', { quiet: true })).rejects.toThrow();
+    expect(toastState.items).toHaveLength(0);
+  });
+
+  it('reports a request that never reached the server', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    }));
+    await expect(api.get('/api/racks')).rejects.toThrow('Failed to fetch');
+    expect(toastState.items[0].message).toContain('Could not reach the server');
   });
 
   it('falls back to a generic message for non-JSON errors', async () => {

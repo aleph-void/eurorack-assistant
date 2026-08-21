@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia';
 import { api } from '../api.js';
+import { jobHeadline } from '../jobLabels.js';
+import { toast } from '../toast.js';
 
 // Queue state as the store keeps it, from an API response or a socket event.
 const asQueue = (queue) => ({
@@ -160,6 +162,16 @@ export const useJobsStore = defineStore('jobs', {
         this.jobs[idx] = { ...this.jobs[idx], ...event.job };
       } else if (event.event === 'started') {
         this.jobs.unshift({ ...event.job });
+      }
+      // A job ending is the news the user queued it for, minutes or hours
+      // ago and almost certainly from another page — the Jobs page is where
+      // it is looked up, not where it is waited for. Only the ends are
+      // announced: 'progress' is a running commentary that belongs in the
+      // feed, and 'cancelled' is the user's own doing.
+      if (event.event === 'completed') {
+        toast.success(event.message || 'Finished.', { title: jobHeadline(event.job) });
+      } else if (event.event === 'failed') {
+        toast.error(event.job.error || event.message || 'Failed.', { title: jobHeadline(event.job) });
       }
       // A finished rack export downloads itself; the server deletes the zip
       // once it has been served, so the link in the job row goes stale after.

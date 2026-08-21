@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { testGlobal } from '../setup.js';
+import { clearToasts, toastState } from '../../src/toast.js';
 
 vi.mock('../../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -23,6 +24,7 @@ import RacksView from '../../src/views/RacksView.vue';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearToasts();
   currentRouteQuery = {};
 });
 
@@ -387,6 +389,32 @@ describe('RacksView', () => {
     expect(wrapper.find('[data-test="layout-error"]').text()).toContain('not saved');
     expect(api.get).not.toHaveBeenCalled();
     expect(wrapper.findAll('.rack-row')).toHaveLength(0);
+  });
+
+  // The refusal that started all this: a module dropped into a row with no
+  // room left for it. The organizer is a long page, so saying it only in the
+  // panel beside the rows is saying it where the user is not looking.
+  it('says why a module would not fit, over the page as well as beside the rows', async () => {
+    const detail = {
+      id: 1,
+      name: 'main rack',
+      modules: [{ id: 5, manufacturer: 'Make Noise', name: 'Maths', hp: 20, quantity: 1 }],
+      rows: [{ id: 9, unit: 3, hp: 4, modules: [] }],
+    };
+    api.get.mockImplementation((path) => Promise.resolve(path === '/api/racks' ? racksResponse : detail));
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="organize-1"]').trigger('click');
+    await flushPromises();
+
+    over(wrapper.find('[data-test="rack-row-0"] .rack-row-slots').element);
+    await pickUp(wrapper.find('[data-test="available-module-5-0"]'));
+    await dropAt(40, 10);
+
+    expect(api.put).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="layout-error"]').text()).toContain('does not fit in this 4HP row');
+    expect(toastState.items[0].kind).toBe('error');
+    expect(toastState.items[0].message).toContain('Make Noise Maths (20HP) does not fit');
   });
 
   // The reason the drag is not a native HTML5 one: a native drag is a modal

@@ -19,7 +19,7 @@ const busy = ref(false);
 
 onMounted(async () => {
   try {
-    racks.value = (await api.get('/api/racks')) || [];
+    racks.value = (await api.get('/api/racks', { quiet: true })) || [];
   } catch {
     racks.value = [];
   }
