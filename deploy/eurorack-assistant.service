@@ -1,0 +1,37 @@
+# eurorack-web — brings the compose stack up at boot.
+#
+# The containers already carry `restart: unless-stopped`, which is enough to
+# survive a crash but NOT an explicit `docker compose stop`/`down`: Docker
+# remembers that you stopped them and leaves them stopped forever after. This
+# unit is what makes boot unconditional.
+#
+# Install:
+#   sudo cp deploy/eurorack-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now eurorack-web.service
+
+[Unit]
+Description=eurorack-web (docker compose stack)
+Documentation=https://github.com/nstarke/eurorack-web
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/nick/Documents/git/eurorack-web
+
+# Compose reads .env from WorkingDirectory, which is where setup.sh writes
+# POSTGRES_PASSWORD, APP_PORT and (with TLS) COMPOSE_FILE.
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose stop
+ExecReload=/usr/bin/docker compose up -d --remove-orphans
+
+# Pulling or building an image on a cold boot can take a while; never let
+# systemd kill the stack half-created.
+TimeoutStartSec=0
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
