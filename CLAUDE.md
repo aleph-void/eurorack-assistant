@@ -99,13 +99,36 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   follows). A jack the picture does not place is OUT OF FRAME and is not drawn
   — nothing hangs below a panel, which is what kept the rows apart; cables
   that end at one are counted in the "not drawn" line instead.
+- Every kind of thing on a panel — the ten COMPONENT_TYPES — has ONE colour,
+  and every picture of a panel uses it: the module page's front plate, the
+  rack organizer's rows and the patch diagram. `client/src/componentTypes.js`
+  holds the list (mirroring `services/manualAnalyzer.js`, which is what the
+  server validates against), the labels and the colours; `ComponentLegend.vue`
+  draws the key under each picture, listing only the types on it. The colour
+  goes on the marker itself (a `fill`/`stroke` attribute, because it is data),
+  so no stylesheet may set either or it would win over the type. Each panel
+  placement carries the `type` of the component behind it (`panelJson()` in
+  services/panelImage.js), so a renderer colours a marker without loading the
+  module. A placement with no component behind it has no type and falls back
+  to the module page's marker scheme, which is now what supplies CONTRAST (the
+  halo) rather than the marker colour.
+- Every component type is the same kind of thing to the module page: each has
+  its own section — present even when the analysis found none of them, since
+  the section is also where one is added by hand — and every component can be
+  arranged on the panel, renamed, retyped and removed. There is no read-only
+  type. Arranging a component whose marker is OUT OF FRAME (its stored
+  position falls outside the panel's crop) first moves it to the middle of the
+  plate: arranging is how a marker is put right, so it has to start somewhere
+  it can be taken hold of.
 - A patch is made of the connections a person can reach, so a connector that
-  is not a patch point never appears in one: an EXPANSION HEADER
-  (`port_kind: 'ribbon'` — the connector an expander's ribbon cable plugs into,
-  behind the panel) is filtered out of the diagram and out of every cable
-  picker (`isPatchPoint()` in `panelLayout.js` and `usePatchFacts.js`). It is
-  still a component of the module and still shown on the module page: the pair
-  it joins is declared as an expander, not patched.
+  is not a patch point never appears in one. `isPatchPoint()` (defined in
+  `panelLayout.js`, re-exported by `usePatchFacts.js` so the diagram and the
+  cable pickers share one rule) filters those out by `port_kind`: an EXPANSION
+  HEADER (`'ribbon'` — the connector an expander's ribbon cable plugs into,
+  behind the panel), a USB socket (`'usb'` — mini, micro or C; it faces a
+  computer or a charger, never another jack in the case) and a memory card
+  slot (`'memory_card'` — you put a card in it, you do not patch it). They are
+  still components of the module and still shown on the module page.
 - Arrangements are saved by REPLACEMENT — `PUT /api/racks/:id/layout` and
   `snapshotRackLayout()` both delete every row of the rack/patch and write the
   ones they were sent. Two of those running at once is a corruption, not a

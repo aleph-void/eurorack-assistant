@@ -502,13 +502,15 @@ export const panelImageUrl = (panel) => `/api/panels/${panel.image_hash}.${panel
 // One panel in the shape the client draws from: the image, the box of it that
 // is the panel, and where each component sits as a fraction of the image.
 //
-// `blurbs` maps component id to what the manual says that component does. A
-// marker on a picture is a circle with a name on it, which tells you which
-// jack it is but not what it is for — and the panel is exactly where that
-// question gets asked, since it is the thing you look at with a cable in your
-// hand. Carried on the placement rather than fetched by the client so the
-// patch diagram gets it too, for the price of one query.
-export const panelJson = (panel, placements = [], blurbs = new Map()) => ({
+// `facts` maps component id to what that component IS ({ type, description }).
+// A marker on a picture is a circle with a name on it, which tells you which
+// jack it is but not what it is for, nor what kind of thing it is — and the
+// panel is exactly where both questions get asked, since it is the thing you
+// look at with a cable in your hand. Carried on the placement rather than
+// fetched by the client so that every renderer (the patch diagram, the module
+// page, the rack organizer's rows) can colour a marker by its component type
+// without loading the module behind it, for the price of one query.
+export const panelJson = (panel, placements = [], facts = new Map()) => ({
   source: panel.source,
   source_url: panel.source_url ?? null,
   url: panelImageUrl(panel),
@@ -525,7 +527,11 @@ export const panelJson = (panel, placements = [], blurbs = new Map()) => ({
     component_id: p.component_id ?? null,
     name: p.name,
     shape: p.shape,
-    description: (p.component_id != null ? blurbs.get(p.component_id) : null) ?? null,
+    // The component's own type ('input_jack', 'knob', …), which is finer than
+    // `shape`: every jack is one shape but three different types, and the
+    // direction a jack runs is the thing a picture most needs to say.
+    type: (p.component_id != null ? facts.get(p.component_id)?.type : null) ?? null,
+    description: (p.component_id != null ? facts.get(p.component_id)?.description : null) ?? null,
     x: p.x,
     y: p.y,
     w: p.w,
@@ -551,14 +557,14 @@ export async function loadPanels(db, moduleIds) {
     byPanel.get(p.panel_id).push(p);
   }
   const componentIds = [...new Set(placements.map((p) => p.component_id).filter((id) => id != null))];
-  const blurbs = new Map();
+  const facts = new Map();
   if (componentIds.length > 0) {
     for (const c of await ModuleComponent.findAll({ where: { id: componentIds } })) {
-      if (c.description) blurbs.set(c.id, c.description);
+      facts.set(c.id, { type: c.type ?? null, description: c.description ?? null });
     }
   }
   return new Map(
-    panels.map((panel) => [panel.module_id, panelJson(panel, byPanel.get(panel.id) ?? [], blurbs)])
+    panels.map((panel) => [panel.module_id, panelJson(panel, byPanel.get(panel.id) ?? [], facts)])
   );
 }
 

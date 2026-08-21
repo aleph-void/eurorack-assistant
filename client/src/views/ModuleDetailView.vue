@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { api } from '../api.js';
+import { COMPONENT_TYPES, TYPE_LABELS, componentColor } from '../componentTypes.js';
 import { dialog } from '../dialog.js';
 import ModulePanel from '../components/ModulePanel.vue';
 import NormalizationsSection from '../components/moduledetail/NormalizationsSection.vue';
@@ -16,6 +17,7 @@ import VideosSection from '../components/moduledetail/VideosSection.vue';
 import NotesSection from '../components/moduledetail/NotesSection.vue';
 import { useModuleFacts } from '../components/moduledetail/useModuleFacts.js';
 import { fileToBase64 } from '../files.js';
+import { placementFraction } from '../panelLayout.js';
 
 const props = defineProps({ id: { type: String, required: true } });
 
@@ -163,40 +165,6 @@ async function rebuildAnalysis() {
   }
 }
 
-const TYPE_LABELS = {
-  input_jack: 'Input jacks',
-  output_jack: 'Output jacks',
-  bidirectional_jack: 'Bidirectional jacks (mults)',
-  knob: 'Knobs',
-  slider: 'Sliders',
-  button: 'Buttons',
-  toggle: 'Toggles',
-  switch: 'Switches',
-  display: 'Displays',
-  other: 'Other',
-};
-const MANUALLY_EDITABLE_TYPES = [
-  'input_jack',
-  'output_jack',
-  'bidirectional_jack',
-  'knob',
-  'toggle',
-  'button',
-  'display',
-  'other',
-];
-// Which components can be isolated on the panel picture one at a time, so a
-// single marker can be dragged into place without the others in the way.
-const ARRANGEABLE_TYPES = [
-  'input_jack',
-  'output_jack',
-  'bidirectional_jack',
-  'knob',
-  'toggle',
-  'button',
-  'display',
-];
-
 // 'Input jacks' → 'input jack'; 'Bidirectional jacks (mults)' loses its
 // parenthetical before the plural s is dropped.
 const singularLabel = (group) =>
@@ -204,15 +172,15 @@ const singularLabel = (group) =>
 
 const grouped = computed(() => {
   if (!module.value?.components) return [];
-  const groups = new Map();
+  // Every type gets a section, in the canonical order, whether the analysis
+  // found one or not: each section is also the entry point for adding a
+  // component of that type by hand, and a module with no sliders is exactly
+  // where a missing slider has to be added. A type this build does not know
+  // about still gets its own section, after the ten.
+  const groups = new Map(COMPONENT_TYPES.map((type) => [type, []]));
   for (const c of module.value.components) {
     if (!groups.has(c.type)) groups.set(c.type, []);
     groups.get(c.type).push(c);
-  }
-  // These four groups are also manual entry points. Keep them visible even
-  // when empty so a missing type can be added without already having one.
-  for (const type of MANUALLY_EDITABLE_TYPES) {
-    if (!groups.has(type)) groups.set(type, []);
   }
   return [...groups.entries()].map(([type, components]) => ({
     type,
@@ -311,18 +279,6 @@ const bridgeCandidates = computed(() =>
 // The analysis sometimes types a mult's jacks as plain inputs/outputs; any
 // user with the module racked can correct a component's type and, for
 // bidirectional (mult) jacks, its group.
-const COMPONENT_TYPES = [
-  'input_jack',
-  'output_jack',
-  'bidirectional_jack',
-  'knob',
-  'slider',
-  'button',
-  'toggle',
-  'switch',
-  'display',
-  'other',
-];
 const editingComponentId = ref(null);
 const editName = ref('');
 const editDescription = ref('');
@@ -342,6 +298,16 @@ const arrangedComponent = computed(() =>
   (module.value?.components || []).find((c) => c.id === arrangedComponentId.value) || null
 );
 
+// A marker whose stored position falls outside the front plate. Positions are
+// fractions of the WHOLE image and the plate is the crop within it, so a
+// re-crop (or a bad guess from the analysis) can leave one off the picture
+// altogether — drawn pinned to an edge, or not drawn at all in the diagram
+// and the rack rows, and in no case where the hardware is.
+const outOfFrame = (panel, placement) => {
+  const { fx, fy } = placementFraction(panel, placement);
+  return !(fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1);
+};
+
 async function arrangeComponent(c) {
   if (arrangedComponentId.value === c.id) {
     arrangedComponentId.value = null;
@@ -350,14 +316,25 @@ async function arrangeComponent(c) {
   componentError.value = '';
   componentTypeDraft.value = c.type;
   try {
-    const placed = (module.value?.panel?.components || []).some(
-      (placement) => placement.component_id === c.id
+    const placement = (module.value?.panel?.components || []).find(
+      (row) => row.component_id === c.id
     );
-    if (module.value?.panel && !placed) {
+    if (module.value?.panel && !placement) {
       const { panel } = await api.post(`/api/modules/${props.id}/panel/components`, {
         component_id: c.id,
       });
       if (panel && module.value) module.value = { ...module.value, panel };
+    } else if (module.value?.panel && outOfFrame(module.value.panel, placement)) {
+      // Arranging is how a marker is put right, so it has to start somewhere
+      // it can be taken hold of: the middle of the plate, to be dragged onto
+      // the hardware it names from there.
+      const crop = module.value.panel.crop || {};
+      await movePanelMarker({
+        id: placement.id,
+        name: placement.name,
+        x: (crop.x ?? 0) + (crop.w || 1) / 2,
+        y: (crop.y ?? 0) + (crop.h || 1) / 2,
+      });
     }
     arrangedComponentId.value = c.id;
     // Arranging happens at the picture: bring it into view so the marker can
@@ -413,9 +390,6 @@ async function saveComponent(c) {
       group_label: editGroup.value,
       port_kind: editPortKind.value,
     });
-    if (arrangedComponentId.value === c.id && !ARRANGEABLE_TYPES.includes(editType.value)) {
-      arrangedComponentId.value = null;
-    }
     editingComponentId.value = null;
     await load();
   } catch (e) {
@@ -833,7 +807,6 @@ watch(() => props.id, () => {
         <ModulePanel
           v-if="module.panel"
           :panel="module.panel"
-          :components="module.components || []"
           :only-component-id="arrangedComponentId"
           editable
           @move="movePanelMarker"
@@ -945,10 +918,17 @@ watch(() => props.id, () => {
 
     <details v-for="group in grouped" :key="group.type" class="panel" :data-test="`group-${group.type}`">
       <summary>
+        <!-- The colour this type is drawn in on every panel picture, so the
+             list and the markers on the plate read as the same thing. -->
+        <span
+          class="type-swatch"
+          :style="{ background: componentColor(group.type) }"
+          :data-test="`type-swatch-${group.type}`"
+          aria-hidden="true"
+        ></span>
         <h2>{{ group.label }}</h2>
         <span class="summary-count">{{ group.components.length }}</span>
         <button
-          v-if="MANUALLY_EDITABLE_TYPES.includes(group.type)"
           type="button"
           class="secondary group-add-button"
           :data-test="`add-new-${group.type}`"
@@ -1072,7 +1052,6 @@ watch(() => props.id, () => {
                   </div>
                   <div v-else class="component-row-actions">
                     <button
-                      v-if="ARRANGEABLE_TYPES.includes(group.type)"
                       type="button"
                       class="secondary"
                       :class="{ selected: arrangedComponentId === c.id }"
@@ -1088,7 +1067,6 @@ watch(() => props.id, () => {
                       Edit
                     </button>
                     <button
-                      v-if="MANUALLY_EDITABLE_TYPES.includes(group.type)"
                       class="danger"
                       :data-test="`remove-component-${c.id}`"
                       @click="removeComponent(c)"

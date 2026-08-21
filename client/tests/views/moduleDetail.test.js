@@ -866,7 +866,10 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="panel-trim"]').exists()).toBe(false);
   });
 
-  it('offers Arrange on buttons, displays and toggles, but not on switches', async () => {
+  // Every component type is the same kind of thing to this page: it can be
+  // added by hand, arranged on the panel, retyped and removed. Switches and
+  // sliders used to be read-only leftovers of the analysis.
+  it('offers Arrange, Edit and Remove on every component type', async () => {
     const panel = {
       source: 'image',
       url: '/api/panels/abc.png',
@@ -889,11 +892,20 @@ describe('ModuleDetailView', () => {
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
 
-    expect(wrapper.find('[data-test="arrange-component-4"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="arrange-component-5"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="arrange-component-6"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="arrange-component-7"]').exists()).toBe(false);
-    expect(wrapper.find('[data-test="arrange-component-8"]').exists()).toBe(true);
+    for (const id of [4, 5, 6, 7, 8]) {
+      expect(wrapper.find(`[data-test="arrange-component-${id}"]`).exists()).toBe(true);
+      expect(wrapper.find(`[data-test="edit-component-${id}"]`).exists()).toBe(true);
+      expect(wrapper.find(`[data-test="remove-component-${id}"]`).exists()).toBe(true);
+    }
+    // The type is changed from the same row, whatever the row holds.
+    await wrapper.find('[data-test="edit-component-7"]').trigger('click');
+    expect(wrapper.find('[data-test="edit-type-7"]').exists()).toBe(true);
+
+    // And a type the analysis found none of still gets its section, so a
+    // missing slider can be added without already having one.
+    expect(wrapper.find('[data-test="group-slider"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="add-new-slider"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="add-new-switch"]').exists()).toBe(true);
   });
 
   it('creates a panel marker when arranging an analyzed jack the image mapper missed', async () => {
@@ -925,6 +937,41 @@ describe('ModuleDetailView', () => {
     expect(api.post).toHaveBeenCalledWith('/api/modules/1/panel/components', { component_id: 1 });
     expect(wrapper.findAll('.marker')).toHaveLength(1);
     expect(wrapper.find('[data-test="panel-marker-1"]').exists()).toBe(true);
+  });
+
+  // Positions are fractions of the whole image and the plate is a crop of it,
+  // so a re-crop can leave a marker off the picture entirely. Arranging is
+  // where a marker is put right, so it starts by bringing it back into frame.
+  it('brings an out-of-frame marker back to the middle of the plate when arranging it', async () => {
+    const panel = {
+      source: 'image',
+      url: '/api/panels/abc.png',
+      width: 400,
+      height: 1200,
+      crop: { x: 0.2, y: 0.1, w: 0.4, h: 0.8 },
+      components: [
+        // Off the right-hand edge of the plate (0.2 → 0.6 of the image).
+        { id: 5, component_id: 1, name: 'Signal In', shape: 'jack', type: 'input_jack', x: 0.95, y: 0.5 },
+        { id: 6, component_id: 2, name: 'EOR', shape: 'jack', type: 'output_jack', x: 0.4, y: 0.5 },
+      ],
+    };
+    api.get.mockResolvedValue({ ...moduleResponse, panel });
+    api.patch.mockResolvedValue({ panel });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="arrange-component-1"]').trigger('click');
+    await flushPromises();
+    // The middle of the crop, in fractions of the whole image.
+    expect(api.patch).toHaveBeenCalledWith('/api/modules/1/panel/components/5', {
+      x: 0.4,
+      y: 0.5,
+    });
+    // A marker already on the plate is left exactly where it is.
+    await wrapper.find('[data-test="arrange-component-2"]').trigger('click');
+    await flushPromises();
+    expect(api.patch).toHaveBeenCalledTimes(1);
+    expect(api.post).not.toHaveBeenCalled();
   });
 
   it('puts a marker back where it was when the save fails', async () => {

@@ -32,6 +32,7 @@ import {
   spareJacks,
   usedModules,
 } from '../src/panelLayout.js';
+import { componentColor } from '../src/componentTypes.js';
 import PatchDiagram from '../src/components/PatchDiagram.vue';
 import ModulePanel from '../src/components/ModulePanel.vue';
 import ModulesView from '../src/views/ModulesView.vue';
@@ -138,14 +139,19 @@ describe('panel layout geometry', () => {
     expect(panels[1].y).toBe(panels[0].y + panels[0].height);
   });
 
-  // The ribbon connector an expander's cable plugs into is behind the panel,
-  // not a hole anybody patches.
-  it('keeps an expansion header out of the picture', () => {
+  // The ribbon connector an expander's cable plugs into is behind the panel, a
+  // MINI USB socket faces a computer, and an SD slot takes a card: none of
+  // them is a hole anybody patches.
+  it.each([
+    ['an expansion header', 'ribbon', 'EXP'],
+    ['a USB socket', 'usb', 'MINI USB'],
+    ['a memory card slot', 'memory_card', 'SD CARD'],
+  ])('keeps %s out of the picture', (_label, portKind, name) => {
     const [maths] = modules();
-    maths.components.push({ id: 8, type: 'input_jack', name: 'EXP', port_kind: 'ribbon' });
+    maths.components.push({ id: 8, type: 'input_jack', name, port_kind: portKind });
     maths.panel.components.push({
       component_id: 8,
-      name: 'EXP',
+      name,
       shape: 'jack',
       x: 0.5,
       y: 0.1,
@@ -403,7 +409,7 @@ describe('PatchDiagram', () => {
   });
 
   // Which way a bidirectional jack runs is the patch's business, so it is
-  // neither the output blue nor the input green — and it may be either end
+  // neither the output violet nor the input green — and it may be either end
   // of a cable.
   it('marks a bidirectional jack in its own colour and lets it start a cable', async () => {
     const source = modules();
@@ -412,7 +418,8 @@ describe('PatchDiagram', () => {
     const wrapper = mountDiagram({ modules: source, cables: [], interactive: true });
     await wrapper.find('[data-test="diagram-show-all"]').setValue(true);
     const marker = wrapper.find('[data-test="diagram-jack-11-1"]');
-    expect(marker.classes()).toContain('bidirectional');
+    expect(marker.attributes('stroke')).toBe(componentColor('bidirectional_jack'));
+    expect(marker.classes()).toContain('patchable');
 
     const svg = wrapper.find('[data-test="diagram-svg"]');
     Object.defineProperty(svg.element, 'getBoundingClientRect', {
@@ -532,32 +539,44 @@ describe('ModulePanel', () => {
     expect(wrapper.text()).toContain('8HP');
   });
 
-  // The assignment view says what each hole IS, not only where it is: the
-  // same blue/green/yellow the patch diagram draws jacks in.
-  it('marks each jack in the colour of the direction it runs', () => {
+  // The panel picture says what each thing IS, not only where it is: every
+  // component type has its own colour, and it is the same colour in the patch
+  // diagram and in the rack organizer's rows.
+  it('marks every component in the colour of its type', () => {
     const wrapper = mount(ModulePanel, {
       props: {
         panel: panelFor([
-          { component_id: 1, name: 'EOR', shape: 'jack', x: 0.3, y: 0.8, w: 0.06, h: 0.06 },
-          { component_id: 2, name: 'IN', shape: 'jack', x: 0.6, y: 0.8, w: 0.06, h: 0.06 },
-          { component_id: 3, name: '1', shape: 'jack', x: 0.4, y: 0.5, w: 0.06, h: 0.06 },
-          { component_id: 4, name: 'Rise', shape: 'knob', x: 0.5, y: 0.2, w: 0.1, h: 0.1 },
+          { component_id: 1, name: 'EOR', shape: 'jack', type: 'output_jack', x: 0.3, y: 0.8 },
+          { component_id: 2, name: 'IN', shape: 'jack', type: 'input_jack', x: 0.6, y: 0.8 },
+          { component_id: 3, name: '1', shape: 'jack', type: 'bidirectional_jack', x: 0.4, y: 0.5 },
+          { component_id: 4, name: 'Rise', shape: 'knob', type: 'knob', x: 0.5, y: 0.2 },
+          { component_id: 5, name: 'Mode', shape: 'switch', type: 'switch', x: 0.2, y: 0.2 },
+          // A placement the analysis never attached to a component: no type,
+          // so it keeps the chosen marker scheme.
+          { component_id: null, name: '?', shape: 'other', x: 0.9, y: 0.9 },
         ]),
-        components: [
-          { id: 1, type: 'output_jack', name: 'EOR' },
-          { id: 2, type: 'input_jack', name: 'IN' },
-          { id: 3, type: 'bidirectional_jack', name: '1' },
-          { id: 4, type: 'knob', name: 'Rise' },
-        ],
       },
       global: testGlobal(),
     });
-    expect(wrapper.find('[data-test="panel-marker-1"]').classes()).toContain('jack-out');
-    expect(wrapper.find('[data-test="panel-marker-2"]').classes()).toContain('jack-in');
-    expect(wrapper.find('[data-test="panel-marker-3"]').classes()).toContain('jack-both');
-    // A control has no direction, so it keeps the chosen marker colour.
-    const knob = wrapper.find('[data-test="panel-marker-4"]').classes();
-    expect(knob.some((c) => c.startsWith('jack-'))).toBe(false);
+    const stroke = (id) => wrapper.find(`[data-test="panel-marker-${id}"]`).attributes('stroke');
+    expect(stroke(1)).toBe(componentColor('output_jack'));
+    expect(stroke(2)).toBe(componentColor('input_jack'));
+    expect(stroke(3)).toBe(componentColor('bidirectional_jack'));
+    expect(stroke(4)).toBe(componentColor('knob'));
+    expect(stroke(5)).toBe(componentColor('switch'));
+    // Every one of them a different colour, which is the whole point.
+    expect(new Set([stroke(1), stroke(2), stroke(3), stroke(4), stroke(5)]).size).toBe(5);
+    const untyped = wrapper.find('[data-test="panel-marker-?"]');
+    expect(untyped.attributes('stroke')).toBeUndefined();
+    expect(untyped.classes()).not.toContain('typed');
+    // And the key beside the picture names what is on it, in order.
+    expect(wrapper.findAll('[data-test="component-legend"] > span').map((s) => s.text())).toEqual([
+      'input jack',
+      'output jack',
+      'bidirectional jack',
+      'knob',
+      'switch',
+    ]);
   });
 
   it('highlights the components it is asked to', () => {

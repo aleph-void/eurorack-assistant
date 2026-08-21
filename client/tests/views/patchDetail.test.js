@@ -379,8 +379,13 @@ describe('PatchDetailView', () => {
   });
 
   // An expansion header is the ribbon connector an expander's cable plugs
-  // into, behind the panel: signal crosses it, but never a patch cable.
-  it('never offers an expansion header as an end of a cable', async () => {
+  // into, behind the panel: signal crosses it, but never a patch cable. A USB
+  // socket is on the panel, but it faces a computer, not another jack.
+  it.each([
+    ['an expansion header', 'ribbon', 'EXP', 'exp'],
+    ['a USB socket', 'usb', 'MINI USB', 'usb'],
+    ['a memory card slot', 'memory_card', 'SD CARD', 'sd'],
+  ])('never offers %s as an end of a cable', async (_label, portKind, name, typed) => {
     const withHeader = {
       ...patchResponse,
       modules: patchResponse.modules.map((pm) =>
@@ -389,7 +394,7 @@ describe('PatchDetailView', () => {
               ...pm,
               components: [
                 ...pm.components,
-                { id: 99, type: 'input_jack', name: 'EXP', port_kind: 'ribbon', values: [] },
+                { id: 99, type: 'input_jack', name, port_kind: portKind, values: [] },
               ],
             }
           : pm
@@ -402,7 +407,7 @@ describe('PatchDetailView', () => {
     await pick(wrapper, 'cable-to-module', 'maths');
     const jack = wrapper.find('[data-test="cable-to-jack"]');
     await jack.trigger('focus');
-    await jack.setValue('exp');
+    await jack.setValue(typed);
     expect(wrapper.findAll('[data-test^="cable-to-jack-option-"]')).toHaveLength(0);
   });
 

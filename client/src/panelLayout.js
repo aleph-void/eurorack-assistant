@@ -32,8 +32,13 @@ const isJack = (c) => typeof c?.type === 'string' && c.type.endsWith('_jack');
 // Connections that are not patch points and have no business in a picture of
 // a patch. An EXPANSION HEADER is the ribbon connector an expander's cable
 // plugs into — behind the panel, not on it, and joined by declaring the two
-// modules an expander pair rather than by any cable a person patches.
-const HIDDEN_PORT_KINDS = new Set(['ribbon']);
+// modules an expander pair rather than by any cable a person patches. A USB
+// socket (mini, micro, C — the manuals name it every way there is) is on the
+// panel, but it faces a computer or a power supply, never another jack in
+// the case, so no cable in a patch ever starts or ends at one. Nor does a
+// MEMORY CARD slot: an SD card is a thing you put in it, not a thing you
+// patch to.
+const HIDDEN_PORT_KINDS = new Set(['ribbon', 'usb', 'memory_card']);
 export const isPatchPoint = (component) => !HIDDEN_PORT_KINDS.has(component?.port_kind);
 
 // The visible part of a panel image: a product photo is cropped to the front

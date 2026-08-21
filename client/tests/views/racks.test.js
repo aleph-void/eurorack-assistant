@@ -503,6 +503,146 @@ describe('RacksView', () => {
     expect(placedNames(wrapper)).toEqual(['2hp ARP']);
   });
 
+  // The rows are a picture of the hardware, so each panel carries a dot for
+  // every jack and control on it, in that type's colour — the same colours the
+  // module page and the patch diagram draw the same panel in.
+  it('marks the jacks and controls on each panel in the rows', async () => {
+    const panel = {
+      url: '/api/panels/arp.svg',
+      width: 100,
+      height: 300,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      components: [
+        { id: 1, component_id: 41, name: 'IN', type: 'input_jack', x: 0.5, y: 0.9 },
+        { id: 2, component_id: 42, name: 'OUT', type: 'output_jack', x: 0.5, y: 0.7 },
+        { id: 3, component_id: 43, name: 'RATE', type: 'knob', x: 0.5, y: 0.2 },
+        // Placed off the front plate: out of frame, so not drawn — the same
+        // rule the patch diagram follows.
+        { id: 4, component_id: 44, name: 'GHOST', type: 'knob', x: 1.6, y: 0.2 },
+      ],
+    };
+    const detail = {
+      id: 1,
+      name: 'main rack',
+      modules: [{ id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, quantity: 1 }],
+      rows: [{ id: 9, unit: 3, hp: 84, modules: [{ module_id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, panel }] }],
+    };
+    api.get.mockImplementation((path) => Promise.resolve(path === '/api/racks' ? racksResponse : detail));
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="organize-1"]').trigger('click');
+    await flushPromises();
+
+    const markers = wrapper.findAll('[data-test="placed-module-0-0"] .panel-marker');
+    expect(markers).toHaveLength(3);
+    expect(markers[0].attributes('style')).toContain('top: 90%');
+    const colors = markers.map((marker) => marker.attributes('style').match(/background: ([^;]+)/)[1]);
+    expect(new Set(colors).size).toBe(3);
+    // The key beside the rows names the three of them, and nothing else.
+    expect(wrapper.findAll('[data-test="component-legend"] > span').map((s) => s.text())).toEqual([
+      'input jack',
+      'output jack',
+      'knob',
+    ]);
+
+    // Untick and the panels are plain pictures again.
+    await wrapper.find('[data-test="show-markers"]').setValue(false);
+    expect(wrapper.findAll('.panel-marker')).toHaveLength(0);
+    expect(wrapper.find('[data-test="component-legend"]').exists()).toBe(false);
+  });
+
+  // Alt-click on an available module is the no-drag way to place it: on a
+  // tall case the row it belongs in is scrolled off the screen the chip is
+  // on, and a drag cannot be aimed at a box that is not in view.
+  function menuDetail() {
+    return {
+      id: 1,
+      name: 'main rack',
+      modules: [
+        { id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, quantity: 1 },
+        { id: 5, manufacturer: 'Make Noise', name: 'Maths', hp: 20, quantity: 1 },
+      ],
+      rows: [
+        { id: 9, unit: 3, hp: 84, modules: [] },
+        { id: 10, unit: 1, hp: 4, modules: [] },
+      ],
+    };
+  }
+
+  async function openWithRows() {
+    const detail = menuDetail();
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/racks' ? racksResponse : menuDetail())
+    );
+    echoLayout(detail);
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="organize-1"]').trigger('click');
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('sends an available module to a row chosen from the alt-click menu', async () => {
+    const wrapper = await openWithRows();
+    expect(wrapper.find('[data-test="row-menu"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="available-module-4-0"]').trigger('click', { altKey: true });
+    await flushPromises();
+    const items = wrapper.findAll('[data-test^="row-menu-"]');
+    expect(items.map((item) => item.text().replace(/\s+/g, ' '))).toEqual([
+      'Row 1 3U · 0/84HP',
+      'Row 2 1U · 0/4HP',
+    ]);
+
+    // The second row: the module lands on the end of the row it was sent to.
+    await wrapper.find('[data-test="row-menu-1"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/layout', {
+      rows: [
+        { unit: 3, hp: 84, modules: [] },
+        { unit: 1, hp: 4, modules: [{ module_id: 4 }] },
+      ],
+    });
+    // The menu is put away, and the chip with it — that copy is placed now.
+    expect(wrapper.find('[data-test="row-menu"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="available-module-4-0"]').exists()).toBe(false);
+    expect(placedNames(wrapper)).toEqual(['2hp ARP']);
+  });
+
+  // A row without the HP to take the module is listed but unpickable, rather
+  // than accepting the click and refusing the save afterwards.
+  it('offers no row that the module does not fit in', async () => {
+    const wrapper = await openWithRows();
+    // Second chip in the list: the flattened inventory numbers the copies.
+    await wrapper.find('[data-test="available-module-5-1"]').trigger('contextmenu');
+    await flushPromises();
+    expect(wrapper.find('[data-test="row-menu-0"]').attributes('disabled')).toBeUndefined();
+    const full = wrapper.find('[data-test="row-menu-1"]');
+    expect(full.attributes('disabled')).toBeDefined();
+    expect(full.attributes('title')).toContain('20HP needed, 4HP free');
+
+    await full.trigger('click');
+    await flushPromises();
+    expect(api.put).not.toHaveBeenCalled();
+    expect(toastState.items).toHaveLength(0);
+  });
+
+  it('closes the row menu on Escape and on a press elsewhere', async () => {
+    const wrapper = await openWithRows();
+    await wrapper.find('[data-test="available-module-4-0"]').trigger('click', { altKey: true });
+    await flushPromises();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-test="row-menu"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="available-module-4-0"]').trigger('click', { altKey: true });
+    await flushPromises();
+    mouse('mousedown');
+    await flushPromises();
+    expect(wrapper.find('[data-test="row-menu"]').exists()).toBe(false);
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
   it('leaves the row alone on a plain click', async () => {
     const wrapper = await openReorderable();
     await wrapper.find('[data-test="placed-module-0-0"]').trigger('click');

@@ -1,4 +1,5 @@
 import { computed } from 'vue';
+import { isPatchPoint } from '../../panelLayout.js';
 
 // A mult's bidirectional jacks can sit at either end of a cable: plugging
 // into one makes it the group's input, the rest carry copies out.
@@ -7,11 +8,10 @@ export const TO_TYPES = ['input_jack', 'bidirectional_jack'];
 
 export const portKindLabel = (kind) => (kind ? kind.replace(/_/g, ' ') : null);
 
-// An EXPANSION HEADER is the ribbon connector an expander's cable plugs into,
-// behind the panel rather than on it. It carries signal between two modules,
-// but never a signal a person patches — the pair is declared an expander
-// instead — so a patch never offers one.
-export const isPatchPoint = (component) => component?.port_kind !== 'ribbon';
+// Which connectors a patch may offer is one rule, kept where the diagram
+// keeps it (an expander's ribbon header, a USB socket) so the pickers and the
+// picture agree on what is patchable.
+export { isPatchPoint };
 
 export function jackLabel(c) {
   const port = portKindLabel(c.port_kind);

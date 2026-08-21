@@ -9,12 +9,17 @@
 // photograph can simply see the answer.
 
 import { computed, ref } from 'vue';
+import ComponentLegend from './ComponentLegend.vue';
+import { componentColor } from '../componentTypes.js';
 import { panelThumbUrl, placementFraction } from '../panelLayout.js';
 
-// A marker has to be seen against whatever the panel happens to look like, and
-// panels are every colour there is: a violet ring vanishes on a purple Make
-// Noise plate, a pale one vanishes on brushed aluminium. So the colour is the
-// viewer's to choose, cycled through a handful that each win somewhere.
+// Every marker is drawn in the colour of ITS COMPONENT TYPE, so the picture
+// says what each thing is as well as where it is. What the viewer still
+// chooses is the CONTRAST behind them: a marker has to be seen against
+// whatever the panel happens to look like, and panels are every colour there
+// is — a dark halo wins on brushed aluminium, a pale one on a black plate.
+// The scheme also colours any marker whose type is unknown (a placement the
+// analysis left unattached to a component).
 const MARKER_SCHEMES = [
   { name: 'Violet', ring: '#a78bfa', body: 'rgba(139, 92, 246, 0.2)', halo: 'rgba(9, 9, 11, 0.55)' },
   { name: 'Lime', ring: '#bef264', body: 'rgba(163, 230, 53, 0.25)', halo: 'rgba(9, 9, 11, 0.6)' },
@@ -47,10 +52,6 @@ const props = defineProps({
   // When arranging one component, hide every other marker without changing
   // the underlying panel data. null leaves the complete panel visible.
   onlyComponentId: { type: Number, default: null },
-  // The module's components, so a jack marker can be drawn in the colour its
-  // direction is drawn in everywhere else. Without them every marker is
-  // simply the chosen scheme colour.
-  components: { type: Array, default: () => [] },
 });
 
 const emit = defineEmits(['move', 'select']);
@@ -101,18 +102,6 @@ const viewBox = computed(() => {
 
 const highlighted = computed(() => new Set(props.highlight));
 
-// Which way a jack runs, in the colours the patch diagram uses: blue out,
-// green in, yellow for a jack whose direction the patch decides (a mult, one
-// end of a dual module's bridged wire). Controls keep the scheme colour —
-// they carry no direction, and the point of the scheme is being visible on a
-// panel of any colour, which the halo behind every marker preserves.
-const JACK_CLASS = {
-  output_jack: 'jack-out',
-  input_jack: 'jack-in',
-  bidirectional_jack: 'jack-both',
-};
-const typeById = computed(() => new Map(props.components.map((c) => [c.id, c.type])));
-
 const markers = computed(() =>
   (props.panel.components ?? [])
     .filter(
@@ -131,7 +120,9 @@ const markers = computed(() =>
         cy: Math.min(1, Math.max(0, fy)) * props.height,
         on: highlighted.value.has(placement.component_id),
         held: Boolean(held),
-        direction: JACK_CLASS[typeById.value.get(placement.component_id)] ?? null,
+        // A placement the analysis never attached to a component has no type
+        // and no colour of its own: it falls back to the scheme.
+        color: placement.type ? componentColor(placement.type) : null,
       };
     })
     .filter(Boolean)
@@ -250,7 +241,9 @@ function endDrag() {
           :cy="m.cy"
           r="9"
           class="marker"
-          :class="[m.direction, { on: m.on, editable, held: m.held }]"
+          :class="{ typed: Boolean(m.color), on: m.on, editable, held: m.held }"
+          :stroke="m.color"
+          :fill="m.color"
           :data-test="`panel-marker-${m.component_id ?? m.name}`"
           @pointerdown="startDrag(m, $event)"
         >
@@ -263,13 +256,14 @@ function endDrag() {
         type="button"
         class="secondary marker-color"
         data-test="panel-marker-color"
-        :title="`Marker colour: ${scheme.name} — press for the next one`"
+        :title="`Marker contrast: ${scheme.name} — the ring drawn behind every marker, and the colour of any marker whose type is unknown. Press for the next one.`"
         @click="cycleScheme"
       >
         <span class="swatch" :style="{ background: scheme.ring }" aria-hidden="true"></span>
-        Marker colour: {{ scheme.name }}
+        Marker contrast: {{ scheme.name }}
       </button>
     </div>
+    <ComponentLegend :items="panel.components ?? []" />
     <figcaption class="muted">
       <template v-if="panel.source === 'upload'">
         Panel picture you uploaded — {{ markerCountText }}{{
@@ -314,41 +308,29 @@ function endDrag() {
   pointer-events: none;
 }
 .marker {
-  fill: var(--marker-body);
-  stroke: var(--marker-ring);
   stroke-width: 2;
 }
-.marker.on {
-  fill: var(--marker-ring);
-  fill-opacity: 0.45;
+/* A marker whose component type is known carries that type's colour on the
+   circle itself (fill/stroke attributes — the colour is data, not styling),
+   so nothing here may set either or it would win over them. The halo behind
+   it still supplies the contrast the schemes exist for. */
+.marker.typed {
+  fill-opacity: 0.2;
+}
+.marker.typed.on,
+.marker.typed.held {
+  fill-opacity: 0.55;
   stroke-width: 3;
 }
-/* A jack is drawn in the colour of the direction it runs — the same blue,
-   green and yellow the patch diagram uses — so the assignment view says what
-   each hole IS as well as where it is. The halo behind it still supplies the
-   contrast the scheme colours were chosen for. */
-.marker.jack-out {
-  stroke: var(--accent-2);
-  fill: var(--accent-2);
-  fill-opacity: 0.2;
+/* A placement with no component behind it has no type and no colour of its
+   own, and takes the scheme's. */
+.marker:not(.typed) {
+  fill: var(--marker-body);
+  stroke: var(--marker-ring);
 }
-.marker.jack-in {
-  stroke: #4ade80;
-  fill: #4ade80;
-  fill-opacity: 0.2;
-}
-.marker.jack-both {
-  stroke: #facc15;
-  fill: #facc15;
-  fill-opacity: 0.2;
-}
-.marker.jack-out.on,
-.marker.jack-in.on,
-.marker.jack-both.on,
-.marker.jack-out.held,
-.marker.jack-in.held,
-.marker.jack-both.held {
-  fill-opacity: 0.55;
+.marker:not(.typed).on {
+  fill: var(--marker-ring);
+  fill-opacity: 0.45;
   stroke-width: 3;
 }
 .marker.editable {
@@ -356,9 +338,11 @@ function endDrag() {
 }
 .marker.held {
   cursor: grabbing;
+  stroke-width: 3;
+}
+.marker:not(.typed).held {
   fill: var(--marker-ring);
   fill-opacity: 0.6;
-  stroke-width: 3;
 }
 .panel-tools {
   display: flex;

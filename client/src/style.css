@@ -384,6 +384,17 @@ details.panel > .panel-body > :first-child {
   white-space: nowrap;
 }
 
+/* The colour a component type is drawn in wherever a panel is pictured
+   (componentTypes.js), shown against its group heading so the list of jacks
+   and the markers on the plate are readable as one thing. */
+.type-swatch {
+  flex: none;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.8);
+}
+
 /* Component groups expose creation from their heading. Keep this compact so
    the action remains visible beside the count even when the section is shut. */
 .group-add-button {

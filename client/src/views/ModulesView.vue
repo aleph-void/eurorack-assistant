@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { api } from '../api.js';
+import { COMPONENT_TYPES } from '../componentTypes.js';
 import { dialog } from '../dialog.js';
 import { useJobsStore } from '../stores/jobs.js';
 import ChannelScanPanel from '../components/ChannelScanPanel.vue';
@@ -14,18 +15,6 @@ const selectedRack = ref(route.query.rack ? Number(route.query.rack) : '');
 const error = ref('');
 const loading = ref(true);
 const jobs = useJobsStore();
-const COMPONENT_TYPES = [
-  'input_jack',
-  'output_jack',
-  'bidirectional_jack',
-  'knob',
-  'slider',
-  'button',
-  'toggle',
-  'switch',
-  'display',
-  'other',
-];
 const expandedComponents = ref({});
 const moduleComponents = ref({});
 const componentDrafts = ref({});

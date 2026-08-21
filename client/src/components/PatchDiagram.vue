@@ -9,6 +9,8 @@
 // manual.
 
 import { computed, onMounted, ref, watch } from 'vue';
+import ComponentLegend from './ComponentLegend.vue';
+import { componentColor } from '../componentTypes.js';
 import {
   PANEL_HEIGHT,
   cableColor,
@@ -199,9 +201,21 @@ const allAnchors = computed(() =>
   [...diagram.value.anchors.entries()].map(([key, anchor]) => {
     const [patchModuleId, componentId] = key.split(':').map(Number);
     const component = componentAt(patchModuleId, componentId);
-    return { key, patchModuleId, componentId, component, ...anchor };
+    return {
+      key,
+      patchModuleId,
+      componentId,
+      component,
+      // Every marker is drawn in the colour of its component type, the same
+      // colours the module page marks the same panel in (componentTypes.js).
+      color: component ? componentColor(component.type) : null,
+      ...anchor,
+    };
   })
 );
+// The key under the picture: what is actually on this diagram, not the whole
+// catalogue of types.
+const shownComponents = computed(() => allAnchors.value.map((a) => a.component).filter(Boolean));
 // What a cable may be dragged TO, and what it may be dragged FROM. A
 // bidirectional jack is both: which way it runs is decided by the patch, so
 // the diagram lets it be either end and the server's cable rules decide
@@ -443,10 +457,10 @@ const draftCable = computed(() =>
               :cy="a.y"
               r="6"
               class="jack-marker"
+              :stroke="a.color"
               :class="{
-                output: a.component?.type === 'output_jack',
-                input: a.component?.type === 'input_jack',
-                bidirectional: a.component?.type === 'bidirectional_jack',
+                patchable: CABLE_OUT.includes(a.component?.type),
+                jack: Boolean(a.component?.type?.endsWith('_jack')),
                 selected:
                   selected?.patchModuleId === a.patchModuleId &&
                   selected?.componentId === a.componentId,
@@ -537,11 +551,13 @@ const draftCable = computed(() =>
           {{ undrawn }} {{ undrawn === 1 ? 'cable is' : 'cables are' }} not drawn — an end of
           {{ undrawn === 1 ? 'it' : 'them' }} is a connection point with no place on a panel.
         </p>
+        <ComponentLegend :items="shownComponents" />
         <p class="muted" style="font-size: 0.85rem">
           <template v-if="interactive">
-            Drag a blue output marker (or a yellow bidirectional one) onto a green input marker to
-            patch it; click any jack marker to correct which direction it runs. Ctrl- or ⌘-scroll
-            zooms the picture. Controls and other component types cannot be wired here.
+            Drag an output marker (or a bidirectional one) onto an input marker to patch it — the
+            key above says which colour is which; click any jack marker to correct which direction
+            it runs. Ctrl- or ⌘-scroll zooms the picture. Controls and other component types
+            cannot be wired here.
             <br />
           </template>
           Panels are the front plates found for each module, or a drawing made from its manual
@@ -615,27 +631,21 @@ const draftCable = computed(() =>
   font-size: 15px;
   text-anchor: middle;
 }
+/* The stroke is the component type's colour, set on the circle itself
+   (componentTypes.js), so nothing here may set one. A marker whose component
+   the patch no longer holds keeps the neutral below. */
 .jack-marker {
   fill: none;
   stroke: rgba(228, 228, 231, 0.55);
   stroke-width: 1.5;
 }
-.jack-marker.output {
-  cursor: crosshair;
-  stroke: var(--accent-2);
+/* A hole a cable goes in is drawn heavier than a control: the diagram is for
+   patching, and the controls are on it for orientation. */
+.jack-marker.jack {
   stroke-width: 2.5;
 }
-.jack-marker.input {
-  stroke: #4ade80;
-  stroke-width: 2;
-}
-/* A mult jack, or one end of a dual module's bridged wire: which way it runs
-   is decided by the patch, so it is neither the output blue nor the input
-   green. */
-.jack-marker.bidirectional {
+.jack-marker.patchable {
   cursor: crosshair;
-  stroke: #facc15;
-  stroke-width: 2.5;
 }
 .jack-marker.selected {
   fill: rgba(228, 228, 231, 0.25);

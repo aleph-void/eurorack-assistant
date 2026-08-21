@@ -2,8 +2,10 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
+import ComponentLegend from '../components/ComponentLegend.vue';
 import ShareButton from '../components/ShareButton.vue';
-import { panelCropStyle, panelThumbUrl } from '../panelLayout.js';
+import { componentColor } from '../componentTypes.js';
+import { panelCropStyle, panelThumbUrl, placementFraction } from '../panelLayout.js';
 import { toast } from '../toast.js';
 
 const racks = ref([]);
@@ -119,6 +121,7 @@ async function remove(rack) {
 }
 
 async function openOrganizer(rack) {
+  closeRowMenu();
   if (organizingRackId.value === rack.id) {
     organizingRackId.value = null;
     organizer.value = null;
@@ -183,6 +186,42 @@ const overPlaced = computed(() => {
       return `${name} (${count} placed, ${inventory.get(id) ?? 0} in the rack)`;
     });
 });
+
+// The jacks and controls marked on each panel in the rows, in the colours
+// every other picture of a panel uses (componentTypes.js) — so a rack being
+// built can be read as hardware and not just as blocks of the right width.
+// Off by a tick for anyone who wants the plain pictures back; the inventory
+// chips above are drawn too small for a marker to mean anything, so they
+// never carry them.
+const showMarkers = ref(true);
+
+function panelMarkers(panel) {
+  if (!showMarkers.value || !panel) return [];
+  return (panel.components ?? [])
+    .map((placement) => {
+      const { fx, fy } = placementFraction(panel, placement);
+      // A component the picture places outside the front plate is out of
+      // frame, exactly as in the patch diagram: not drawn rather than pinned
+      // to an edge it does not sit on.
+      if (!Number.isFinite(fx) || !Number.isFinite(fy)) return null;
+      if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+      return {
+        key: placement.id ?? `${placement.name}-${fx}-${fy}`,
+        fx,
+        fy,
+        name: placement.name,
+        color: componentColor(placement.type),
+      };
+    })
+    .filter(Boolean);
+}
+
+// The key under the rows: every type placed on a panel of this rack.
+const placedComponents = computed(() =>
+  (organizer.value?.rows || []).flatMap((row) =>
+    (row.modules || []).flatMap((module) => module.panel?.components ?? [])
+  )
+);
 
 const DEFAULT_ROW_HP = 104;
 const rowUsed = (row) => (row.modules || []).reduce((sum, module) => sum + (Number(module.hp) || 0), 0);
@@ -460,6 +499,86 @@ async function dropIntoAvailable(held) {
   await saveLayout();
 }
 
+// Alt-click (or right-click) on an available module opens a menu of the
+// rack's rows, so a module can be placed without dragging it: on a tall case
+// the row it belongs in is usually scrolled off the screen the chip is on,
+// and a drag cannot be aimed at a box that is not in view. Held at the
+// cursor in client coordinates, like the drag ghost. The module goes on the
+// END of the row it is sent to — that is what the list can say; where in the
+// row it sits is still a drag or an arrow key.
+const rowMenu = ref(null);
+const rowMenuEl = ref(null);
+const MENU_MARGIN = 8;
+
+const fitsInRow = (row, module) =>
+  rowUsed(row) + (Number(module?.hp) || 0) <= Number(row.hp);
+
+function rowMenuHint(row, module) {
+  if (fitsInRow(row, module)) return `Add to row ${row.unit}U, ${Number(row.hp) - rowUsed(row)}HP free`;
+  return `No room — ${module.hp || 0}HP needed, ${Math.max(0, Number(row.hp) - rowUsed(row))}HP free`;
+}
+
+async function openRowMenu(module, event) {
+  rowMenu.value = { module, x: event.clientX, y: event.clientY };
+  window.addEventListener('mousedown', onRowMenuOutside, true);
+  window.addEventListener('keydown', onRowMenuKey, true);
+  window.addEventListener('scroll', closeRowMenu, true);
+  await nextTick();
+  const menu = rowMenuEl.value;
+  if (!(menu instanceof HTMLElement) || !rowMenu.value) return;
+  // A chip near the right or bottom edge would otherwise open a menu half
+  // off the screen. jsdom measures everything as zero, which clamps to the
+  // margin and changes nothing about which rows are listed.
+  const box = menu.getBoundingClientRect();
+  rowMenu.value = {
+    ...rowMenu.value,
+    x: Math.max(MENU_MARGIN, Math.min(rowMenu.value.x, window.innerWidth - box.width - MENU_MARGIN)),
+    y: Math.max(MENU_MARGIN, Math.min(rowMenu.value.y, window.innerHeight - box.height - MENU_MARGIN)),
+  };
+  const first = menu.querySelector('button:not([disabled])');
+  if (first instanceof HTMLElement) first.focus();
+}
+
+function closeRowMenu() {
+  rowMenu.value = null;
+  window.removeEventListener('mousedown', onRowMenuOutside, true);
+  window.removeEventListener('keydown', onRowMenuKey, true);
+  window.removeEventListener('scroll', closeRowMenu, true);
+}
+
+// A press anywhere else — including the chip that opened it, or another one —
+// puts the menu away before that press does whatever it does.
+function onRowMenuOutside(event) {
+  if (event.target instanceof Node && rowMenuEl.value?.contains(event.target)) return;
+  closeRowMenu();
+}
+
+function onRowMenuKey(event) {
+  if (event.key !== 'Escape') return;
+  event.preventDefault();
+  closeRowMenu();
+}
+
+onBeforeUnmount(closeRowMenu);
+
+// Sending the module to the end of the chosen row is the same move as a drop
+// there, so it goes through the same code: the HP check, the refusal and the
+// save are all one path.
+async function placeInRow(rowIndex) {
+  const module = rowMenu.value?.module;
+  closeRowMenu();
+  const row = organizer.value?.rows[rowIndex];
+  if (!module || !row) return;
+  const held = {
+    // Inventory entries use `id`, row placements `module_id` — normalized
+    // here for the same reason a drag normalizes it as it starts.
+    module: { ...module, module_id: module.module_id ?? module.id },
+    rowIndex: null,
+    index: null,
+  };
+  await dropIntoRow(held, rowIndex, row.modules.length);
+}
+
 // Alt-click (or right-click) pulls the module straight off the row and back
 // into the available list — the same move as dragging it out to Available,
 // without having to land a drag with a 2HP-wide target in hand.
@@ -600,9 +719,11 @@ async function nudge(rowIndex, index, delta) {
     <section v-if="organizer" class="rack-organizer" data-test="rack-organizer">
       <h2>Organize {{ organizer.name }}</h2>
       <p class="muted">
-        Add 3U and 1U rows, set their HP, then drag each module copy into its physical row. Drop a
-        module between two others to place it there — that is how a row is reordered — or focus one
-        and press <kbd>←</kbd>/<kbd>→</kbd> to step it along. A row cannot exceed its HP capacity.
+        Add 3U and 1U rows, set their HP, then drag each module copy into its physical row — or
+        alt-click (or right-click) an available module to send it to the end of a row you choose,
+        which beats dragging when the row is scrolled out of sight. Drop a module between two
+        others to place it there — that is how a row is reordered — or focus one and press
+        <kbd>←</kbd>/<kbd>→</kbd> to step it along. A row cannot exceed its HP capacity.
         The wheel still scrolls the page with a module in hand — hold <kbd>Shift</kbd> to slide a row
         wider than its box along — and <kbd>Esc</kbd> puts the module back where it was.
       </p>
@@ -620,8 +741,11 @@ async function nudge(rowIndex, index, delta) {
             class="module-chip"
             type="button"
             :data-test="`available-module-${module.id}-${index}`"
+            :title="`${module.manufacturer} ${module.name} — drag into a row, or alt- or right-click to pick one`"
             :style="{ '--module-hp': Math.max(2, Number(module.hp) || 4) }"
             @mousedown="onModuleMouseDown(module, null, null, 3, $event)"
+            @click.alt.prevent="openRowMenu(module, $event)"
+            @contextmenu.prevent="openRowMenu(module, $event)"
           >
             <span class="module-panel-thumb" :class="{ 'thumb-fallback': !module.panel }">
               <img
@@ -646,7 +770,12 @@ async function nudge(rowIndex, index, delta) {
       <div class="actions spaced">
         <button class="secondary" :disabled="layoutBusy" data-test="add-3u-row" @click="addRow(3)">Add 3U row</button>
         <button class="secondary" :disabled="layoutBusy" data-test="add-1u-row" @click="addRow(1)">Add 1U row</button>
+        <label class="inline-check" style="margin-left: auto">
+          <input v-model="showMarkers" type="checkbox" data-test="show-markers" />
+          Mark jacks and controls
+        </label>
       </div>
+      <ComponentLegend v-if="showMarkers" :items="placedComponents" />
 
       <!-- Keyed by position, not by row id: a save replaces the rows, so
            keying by id would tear down and rebuild every row (and reload its
@@ -719,9 +848,52 @@ async function nudge(rowIndex, index, delta) {
               :alt="`${module.manufacturer} ${module.name}`"
             />
             <span v-else class="panel-fallback">{{ module.manufacturer }}<br />{{ module.name }}<br />{{ module.hp }}HP</span>
+            <!-- Each marker sits at its fraction of the FRONT PLATE, which is
+                 exactly the box the cropped picture fills. -->
+            <span
+              v-for="marker in panelMarkers(module.panel)"
+              :key="marker.key"
+              class="panel-marker"
+              :style="{ left: `${marker.fx * 100}%`, top: `${marker.fy * 100}%`, background: marker.color }"
+              :title="marker.name"
+            ></span>
           </button>
           <span v-if="row.modules.length === 0" class="muted">Drop modules here</span>
         </div>
+      </div>
+
+      <!-- Which row to send an available module to. Above the topbar for the
+           same reason the drag ghost is: a chip near the top of the window
+           would otherwise open its menu under the menu bar. -->
+      <div
+        v-if="rowMenu"
+        ref="rowMenuEl"
+        class="row-menu"
+        role="menu"
+        data-test="row-menu"
+        :style="{ left: `${rowMenu.x}px`, top: `${rowMenu.y}px` }"
+      >
+        <p class="row-menu-head">
+          Add {{ rowMenu.module.manufacturer }} {{ rowMenu.module.name }}
+          <em>{{ rowMenu.module.hp ? `${rowMenu.module.hp}HP` : 'HP unknown' }}</em> to
+        </p>
+        <p v-if="organizer.rows.length === 0" class="muted" data-test="row-menu-empty">
+          No rows yet — add a 3U or 1U row first.
+        </p>
+        <button
+          v-for="(row, rowIndex) in organizer.rows"
+          :key="rowIndex"
+          type="button"
+          role="menuitem"
+          class="row-menu-item"
+          :disabled="!fitsInRow(row, rowMenu.module)"
+          :title="rowMenuHint(row, rowMenu.module)"
+          :data-test="`row-menu-${rowIndex}`"
+          @click="placeInRow(rowIndex)"
+        >
+          Row {{ rowIndex + 1 }}
+          <span class="muted">{{ row.unit }}U · {{ rowUsed(row) }}/{{ row.hp }}HP</span>
+        </button>
       </div>
 
       <!-- What is in hand, drawn under the cursor: with no native drag there
@@ -789,6 +961,10 @@ async function nudge(rowIndex, index, delta) {
 .placed-module.in-hand { opacity: 0.3; }
 .placed-module.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
 .placed-module:focus-visible { outline: 2px solid var(--accent-2); outline-offset: -2px; }
+/* A jack or control marked on the panel it sits on, in its type's colour.
+   Small enough that a 2HP module is still readable, and dark-ringed so a pale
+   marker holds its edge on a pale plate. */
+.panel-marker { position: absolute; width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.85); pointer-events: none; }
 /* The image is sized and offset by the panel's crop (panelLayout.js), so the
    blank backdrop a product photo came with stays outside the box. */
 .placed-module img { position: absolute; display: block; object-fit: fill; }
@@ -812,4 +988,9 @@ async function nudge(rowIndex, index, delta) {
 .drag-ghost { overflow: hidden; background: #25252d; border: 1px solid var(--accent); opacity: 0.85; }
 .drag-ghost img { position: absolute; display: block; object-fit: fill; }
 .row-collapse { margin: 0; padding: 0.15rem 0.5rem; background: transparent; border: 1px solid var(--border-strong); color: var(--muted); }
+.row-menu { position: fixed; z-index: 65; min-width: 12rem; max-height: 60vh; overflow-y: auto; padding: 0.4rem; background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: 7px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+.row-menu-head { margin: 0.1rem 0.3rem 0.4rem; font-size: 0.75rem; color: var(--muted); }
+.row-menu-head em { font-style: normal; color: var(--faint); }
+.row-menu-item { display: flex; justify-content: space-between; gap: 0.8rem; width: 100%; margin: 0 0 0.2rem; padding: 0.35rem 0.5rem; background: transparent; border: 1px solid transparent; color: var(--text); font-size: 0.8rem; text-align: left; }
+.row-menu-item:hover:not(:disabled), .row-menu-item:focus-visible { border-color: var(--accent); background: var(--accent-glow); }
 </style>

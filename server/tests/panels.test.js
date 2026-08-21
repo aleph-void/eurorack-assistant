@@ -1301,14 +1301,17 @@ describe('panel image route', () => {
       width: 400,
       height: 1200,
     });
-    // The marker carries its own id, so it can be corrected by hand, and what
-    // the manual says the component does, so resting on it says something.
+    // The marker carries its own id, so it can be corrected by hand; the type
+    // of the component behind it, so every picture of the panel can colour it
+    // by what it is; and what the manual says that component does, so resting
+    // on it says something.
     expect(detail.body.panel.components).toEqual([
       {
         id: marker.id,
         component_id: component.id,
         name: 'OUT',
         shape: 'jack',
+        type: 'output_jack',
         description: 'The main output.',
         x: 0.5,
         y: 0.9,
