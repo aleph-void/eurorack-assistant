@@ -70,6 +70,15 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   its crop recorded, so anything drawing a panel as a plain `<img>` must
   offset it with `panelCropStyle()` (client/src/panelLayout.js), or a
   photograph's backdrop is drawn as panel.
+- Arrangements are saved by REPLACEMENT — `PUT /api/racks/:id/layout` and
+  `snapshotRackLayout()` both delete every row of the rack/patch and write the
+  ones they were sent. Two of those running at once is a corruption, not a
+  lost update: each deletes the rows it can see and then inserts its own
+  (neither delete sees the other's insert under READ COMMITTED) and the record
+  ends up holding BOTH sets. Every such write takes its rack/patch row
+  (`lock: transaction.LOCK.UPDATE`) first, `rack_rows` has a unique
+  `(rack_id, position)` (migration 032), and the organizer keeps only one save
+  in the air — a save asked for while one is running is made when it lands.
 - Cache policy is set in one place per layer, never ad hoc in a handler:
   `app.js` stamps every `/api` response `private, no-cache` (`no-store` on
   the credential routes), and the routes that stream content-addressed bytes

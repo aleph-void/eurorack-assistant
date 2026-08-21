@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { testGlobal } from '../setup.js';
 
@@ -115,6 +115,30 @@ describe('RacksView', () => {
       .toContain('--module-hp: 20');
   });
 
+  // The organizer drags with plain mouse events, so a gesture is a press, a
+  // move past the threshold, and a release. jsdom lays nothing out and has no
+  // elementFromPoint, so what the cursor is over has to be said outright.
+  const over = (element) => {
+    document.elementFromPoint = () => element;
+  };
+  const mouse = (type, clientX = 0, clientY = 0) =>
+    window.dispatchEvent(new MouseEvent(type, { clientX, clientY, bubbles: true, cancelable: true }));
+
+  async function pickUp(source, clientX = 0, clientY = 0) {
+    await source.trigger('mousedown', { button: 0, clientX, clientY });
+    mouse('mousemove', clientX + 20, clientY);
+  }
+
+  async function dropAt(clientX = 0, clientY = 0) {
+    mouse('mousemove', clientX, clientY);
+    mouse('mouseup', clientX, clientY);
+    await flushPromises();
+  }
+
+  afterEach(() => {
+    delete document.elementFromPoint;
+  });
+
   it('persists the module id when a panel is dragged from inventory into a row', async () => {
     const detail = {
       id: 1,
@@ -128,9 +152,9 @@ describe('RacksView', () => {
     await flushPromises();
     await wrapper.find('[data-test="organize-1"]').trigger('click');
     await flushPromises();
-    await wrapper.find('[data-test="available-module-4-0"]').trigger('dragstart');
-    await wrapper.find('[data-test="rack-row-0"] .rack-row-slots').trigger('drop');
-    await flushPromises();
+    over(wrapper.find('[data-test="rack-row-0"] .rack-row-slots').element);
+    await pickUp(wrapper.find('[data-test="available-module-4-0"]'));
+    await dropAt(40, 10);
     expect(api.put).toHaveBeenCalledWith('/api/racks/1/layout', {
       rows: [{ unit: 3, hp: 84, modules: [{ module_id: 4 }] }],
     });
@@ -212,11 +236,15 @@ describe('RacksView', () => {
 
     // Picked up the trailing ARP, aimed at the left half of Maths: it lands
     // between the two, not back on the end.
-    await wrapper.find('[data-test="placed-module-0-2"]').trigger('dragstart');
-    await slots.trigger('dragover', { clientX: 30 });
-    expect(wrapper.find('[data-test="placed-module-0-1"]').classes()).toContain('drop-before');
-    await slots.trigger('drop', { clientX: 30 });
+    over(slots.element);
+    await pickUp(wrapper.find('[data-test="placed-module-0-2"]'), 200);
+    mouse('mousemove', 30, 10);
     await flushPromises();
+    expect(wrapper.find('[data-test="placed-module-0-1"]').classes()).toContain('drop-before');
+    // The slot the module came out of stays in the row, dimmed, so the row
+    // does not close up under the cursor mid-aim.
+    expect(wrapper.find('[data-test="placed-module-0-2"]').classes()).toContain('in-hand');
+    await dropAt(30, 10);
 
     expect(api.put).toHaveBeenCalledWith('/api/racks/1/layout', {
       rows: [{ unit: 3, hp: 84, modules: [{ module_id: 4 }, { module_id: 4 }, { module_id: 5 }] }],
@@ -227,19 +255,148 @@ describe('RacksView', () => {
   it('leaves the row alone when a module is dropped back where it started', async () => {
     const wrapper = await openReorderable();
     measureSlots(wrapper, [18, 180, 18]);
-    const slots = wrapper.find('[data-test="rack-row-0"] .rack-row-slots');
-    await wrapper.find('[data-test="placed-module-0-0"]').trigger('dragstart');
-    await slots.trigger('drop', { clientX: 5 });
+    over(wrapper.find('[data-test="rack-row-0"] .rack-row-slots').element);
+    await pickUp(wrapper.find('[data-test="placed-module-0-0"]'), 5);
+    await dropAt(5, 10);
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  // A press with no travel is a click, not a gesture: the alt-click that
+  // removes a placement, and the focus the arrow keys step from, both still
+  // have to work.
+  it('does not pick a module up until the cursor has actually moved', async () => {
+    const wrapper = await openReorderable();
+    over(wrapper.find('[data-test="rack-row-0"] .rack-row-slots').element);
+    await wrapper.find('[data-test="placed-module-0-0"]').trigger('mousedown', { button: 0, clientX: 5, clientY: 5 });
+    mouse('mousemove', 7, 6);
+    expect(wrapper.find('[data-test="drag-ghost"]').exists()).toBe(false);
+    mouse('mouseup', 7, 6);
     await flushPromises();
     expect(api.put).not.toHaveBeenCalled();
   });
 
-  // A native drag swallows the wheel, so nothing scrolls while a module is
-  // in hand unless the view takes the wheel itself for the length of the
-  // gesture.
+  // Escape is the one thing a native drag gave for free.
+  it('puts the module back where it was on Escape', async () => {
+    const wrapper = await openReorderable();
+    measureSlots(wrapper, [18, 180, 18]);
+    const slots = wrapper.find('[data-test="rack-row-0"] .rack-row-slots');
+    over(slots.element);
+    await pickUp(wrapper.find('[data-test="placed-module-0-2"]'), 200);
+    mouse('mousemove', 30, 10);
+    await flushPromises();
+    expect(wrapper.find('[data-test="drag-ghost"]').exists()).toBe(true);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-test="drag-ghost"]').exists()).toBe(false);
+    // A release afterwards is not a drop that has been left over.
+    await dropAt(30, 10);
+    expect(api.put).not.toHaveBeenCalled();
+    expect(placedNames(wrapper)).toEqual(['2hp ARP', 'Make Noise Maths', '2hp ARP']);
+  });
+
+  it('drags a placed module back out to the available list', async () => {
+    const wrapper = await openReorderable();
+    over(wrapper.find('[data-test="rack-row-0"] .rack-row-slots').element);
+    await pickUp(wrapper.find('[data-test="placed-module-0-1"]'), 100);
+    over(wrapper.find('[data-test="available-modules"]').element);
+    await dropAt(10, 400);
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/layout', {
+      rows: [{ unit: 3, hp: 84, modules: [{ module_id: 4 }, { module_id: 4 }] }],
+    });
+  });
+
+  it('removes a row and saves the rows that are left', async () => {
+    const wrapper = await openReorderable();
+    await wrapper.find('[data-test="remove-row-0"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/layout', { rows: [] });
+    expect(wrapper.findAll('.rack-row')).toHaveLength(0);
+  });
+
+  // Saving REPLACES the rack's rows, so two saves in flight at once are what
+  // left a rack holding two copies of every row. Whatever the organizer is
+  // asked to do, only one save is ever in the air.
+  it('never has two layout saves in flight at once', async () => {
+    const wrapper = await openReorderable();
+    let settle;
+    api.put.mockImplementation(() => new Promise((resolve) => { settle = () => resolve({ rows: [] }); }));
+
+    // A held arrow key: three saves asked for before the first one lands.
+    const module = wrapper.find('[data-test="placed-module-0-0"]');
+    await module.trigger('keydown.right');
+    await module.trigger('keydown.right');
+    await module.trigger('keydown.right');
+    expect(api.put).toHaveBeenCalledTimes(1);
+
+    // The ones asked for meanwhile are made as ONE save afterwards, from the
+    // layout as it stands by then.
+    settle();
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledTimes(2);
+  });
+
+  // A rack whose STORED layout already places a module more often than the
+  // rack holds it (duplicated rows, from two saves racing before the
+  // organizer saved one at a time) is refused by the server on every save.
+  // The organizer says which module is over-placed instead of spending a
+  // round trip to be told, and the rows stay as edited so the duplicates can
+  // actually be removed.
+  it('refuses to save an over-placed layout, and saves once it is repaired', async () => {
+    const doubled = {
+      id: 1,
+      name: 'mega rack',
+      modules: [{ id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, quantity: 1 }],
+      rows: [
+        { id: 9, unit: 3, hp: 84, modules: [{ module_id: 4, manufacturer: '2hp', name: 'ARP', hp: 2 }] },
+        { id: 10, unit: 3, hp: 84, modules: [{ module_id: 4, manufacturer: '2hp', name: 'ARP', hp: 2 }] },
+      ],
+    };
+    api.get.mockImplementation((path) => Promise.resolve(path === '/api/racks' ? racksResponse : doubled));
+    api.put.mockResolvedValue({ rows: [doubled.rows[0]] });
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="organize-1"]').trigger('click');
+    await flushPromises();
+
+    // Adding a row is enough to try a save, and it is stopped before the wire.
+    await wrapper.find('[data-test="add-1u-row"]').trigger('click');
+    await flushPromises();
+    expect(api.put).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="layout-error"]').text()).toContain('2hp ARP (2 placed, 1 in the rack)');
+    // The added row is still on screen: a refused save keeps the edit.
+    expect(wrapper.findAll('.rack-row')).toHaveLength(3);
+
+    // Take the duplicate away and the whole layout saves itself.
+    await wrapper.find('[data-test="remove-row-1"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/racks/1/layout', {
+      rows: [{ unit: 3, hp: 84, modules: [{ module_id: 4 }] }, { unit: 1, hp: 84, modules: [] }],
+    });
+    expect(wrapper.find('[data-test="layout-error"]').exists()).toBe(false);
+  });
+
+  // Reloading the stored layout after a refusal used to undo the edit as
+  // well, which is what made a rack in that state impossible to repair.
+  it('keeps the rows on screen when the server refuses the save', async () => {
+    const wrapper = await openReorderable();
+    api.put.mockRejectedValue(new Error('row 1 exceeds its 84HP capacity'));
+    api.get.mockClear();
+    await wrapper.find('[data-test="remove-row-0"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="layout-error"]').text()).toContain('not saved');
+    expect(api.get).not.toHaveBeenCalled();
+    expect(wrapper.findAll('.rack-row')).toHaveLength(0);
+  });
+
+  // The reason the drag is not a native HTML5 one: a native drag is a modal
+  // gesture that swallows the wheel outright, so a row further down cannot be
+  // reached with a module in hand. Following the mouse ourselves leaves the
+  // wheel an ordinary event the view can take for the length of the gesture.
   it('scrolls the page with the wheel while a module is being dragged', async () => {
     const wrapper = await openReorderable();
     const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
+    over(wrapper.find('[data-test="rack-row-0"] .rack-row-slots').element);
     const wheel = (init = {}) => {
       const event = new WheelEvent('wheel', { deltaY: 120, cancelable: true, ...init });
       window.dispatchEvent(event);
@@ -250,13 +407,13 @@ describe('RacksView', () => {
     wheel();
     expect(scrollBy).not.toHaveBeenCalled();
 
-    await wrapper.find('[data-test="placed-module-0-0"]').trigger('dragstart');
+    await pickUp(wrapper.find('[data-test="placed-module-0-0"]'), 5);
     const event = wheel();
     expect(scrollBy).toHaveBeenCalledWith(0, 120);
     expect(event.defaultPrevented).toBe(true);
 
     // And it is handed back the moment the module is put down.
-    await wrapper.find('[data-test="placed-module-0-0"]').trigger('dragend');
+    await dropAt(5, 10);
     wheel();
     expect(scrollBy).toHaveBeenCalledTimes(1);
     scrollBy.mockRestore();
@@ -267,10 +424,9 @@ describe('RacksView', () => {
     const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
     const row = wrapper.find('[data-test="rack-row-0"] .rack-row-slots').element;
     Object.defineProperty(row, 'scrollLeft', { value: 0, writable: true });
-    const original = document.elementFromPoint;
-    document.elementFromPoint = () => row;
+    over(row);
 
-    await wrapper.find('[data-test="placed-module-0-0"]').trigger('dragstart');
+    await pickUp(wrapper.find('[data-test="placed-module-0-0"]'), 5);
     window.dispatchEvent(new WheelEvent('wheel', { deltaY: 90, shiftKey: true, cancelable: true }));
     expect(row.scrollLeft).toBe(90);
     expect(scrollBy).not.toHaveBeenCalled();
@@ -280,7 +436,6 @@ describe('RacksView', () => {
     expect(row.scrollLeft).toBe(90);
     expect(scrollBy).toHaveBeenCalledWith(0, 90);
     scrollBy.mockRestore();
-    document.elementFromPoint = original;
   });
 
   it('steps the focused module along its row with the arrow keys', async () => {

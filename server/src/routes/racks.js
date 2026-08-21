@@ -188,6 +188,14 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
         normalized.push({ unit, hp, modules: rowModules.map((module, position) => ({ ...module, position })) });
       }
       await db.sequelize.transaction(async (transaction) => {
+        // Take the rack itself first, so two layout saves for the same rack
+        // cannot interleave. Each one deletes the rows it can see and then
+        // inserts its own: overlapping, both deletes run against the layout
+        // as it stood BEFORE the other inserted (READ COMMITTED gives each
+        // statement its own snapshot), and the rack ends up holding both
+        // sets — the duplicated rows an organizer saving faster than it
+        // answers used to leave behind.
+        await Rack.findOne({ where: { id: rack.id }, transaction, lock: transaction.LOCK.UPDATE });
         await RackRow.destroy({ where: { rack_id: rack.id }, transaction });
         for (const [position, row] of normalized.entries()) {
           const created = await RackRow.create({ rack_id: rack.id, unit: row.unit, hp: row.hp, position }, { transaction });

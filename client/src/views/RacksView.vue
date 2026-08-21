@@ -17,6 +17,10 @@ const organizer = ref(null);
 const organizingRackId = ref(null);
 const layoutBusy = ref(false);
 const dragged = ref(null);
+// A layout failure is shown INSIDE the organizer: `error` is drawn at the top
+// of the page, far above a mega rack's rows, where a refused save reads as a
+// button that did nothing.
+const layoutError = ref('');
 // Where the module in hand would land: { rowIndex, index }. Drawn as a bar on
 // the slot edge the drop would insert against, so a reorder can be aimed.
 const dropHint = ref(null);
@@ -124,6 +128,7 @@ async function openOrganizer(rack) {
     organizer.value = await api.get(`/api/racks/${rack.id}`);
     organizingRackId.value = rack.id;
     collapsedRows.value = [];
+    layoutError.value = '';
   } catch (e) {
     error.value = e.message;
   }
@@ -157,13 +162,68 @@ const availableModules = computed(() =>
     Array.from({ length: Math.max(0, module.quantity - (placedCounts.value.get(module.id) || 0)) }, () => module)
   )
 );
+// Placements the rack cannot back: a module put in the rows more often than
+// the rack holds it. The server refuses a layout like that outright, so a rack
+// that has somehow ACQUIRED one — duplicated rows, from two saves racing —
+// cannot save any edit at all until the extra placements are gone. Naming the
+// module that is over-placed, without spending a round trip to be told, is
+// what makes such a rack fixable from the organizer.
+const overPlaced = computed(() => {
+  const inventory = new Map((organizer.value?.modules || []).map((module) => [module.id, module.quantity]));
+  return [...placedCounts.value.entries()]
+    .filter(([id, count]) => count > (inventory.get(id) ?? 0))
+    .map(([id, count]) => {
+      const module = (organizer.value?.modules || []).find((entry) => entry.id === id);
+      const name = module ? `${module.manufacturer} ${module.name}` : `module ${id}`;
+      return `${name} (${count} placed, ${inventory.get(id) ?? 0} in the rack)`;
+    });
+});
+
 const DEFAULT_ROW_HP = 104;
 const rowUsed = (row) => (row.modules || []).reduce((sum, module) => sum + (Number(module.hp) || 0), 0);
 
-async function saveLayout() {
-  if (!organizer.value) return;
-  layoutBusy.value = true;
-  error.value = '';
+// A save REPLACES the rack's rows — the server deletes them and writes the
+// ones it was sent — so two saves in flight at once are a race the rack loses:
+// each one deletes the rows it can see and then inserts its own, and the rack
+// is left holding both sets. That is where duplicated rows come from, and a
+// held arrow key or a flurry of drops is enough to cause it. Only ever one
+// save is in the air; a save asked for while one is running is remembered and
+// made when it lands, from whatever the layout says by then. (The server takes
+// the rack for the length of the write as well now, but the organizer should
+// not be leaning on that.)
+let saving = null;
+let saveAgain = false;
+
+function saveLayout() {
+  if (!organizer.value) return Promise.resolve();
+  if (saving) {
+    saveAgain = true;
+    return saving;
+  }
+  saving = (async () => {
+    layoutBusy.value = true;
+    try {
+      do {
+        saveAgain = false;
+        await putLayout();
+      } while (saveAgain);
+    } finally {
+      saving = null;
+      saveAgain = false;
+      layoutBusy.value = false;
+    }
+  })();
+  return saving;
+}
+
+async function putLayout() {
+  layoutError.value = '';
+  if (overPlaced.value.length) {
+    layoutError.value =
+      `Not saved — ${overPlaced.value.join('; ')}. ` +
+      'Remove the extra placements (duplicated rows are the usual cause) and the layout saves itself.';
+    return;
+  }
   try {
     const result = await api.put(`/api/racks/${organizer.value.id}/layout`, {
       rows: organizer.value.rows.map((row) => ({
@@ -174,11 +234,12 @@ async function saveLayout() {
     });
     organizer.value = { ...organizer.value, rows: result.rows };
   } catch (e) {
-    error.value = e.message;
-    // Return to the stored layout after a capacity or validation failure.
-    organizer.value = await api.get(`/api/racks/${organizer.value.id}`);
-  } finally {
-    layoutBusy.value = false;
+    // The rows on screen are what the user asked for, so they STAY on screen
+    // when the server refuses them. Reloading the stored layout instead used
+    // to undo the edit as well, which is what made a rack whose stored layout
+    // is already invalid impossible to repair: every removal was reverted by
+    // the failure it was meant to fix.
+    layoutError.value = `${e.message} — the rows on screen are not saved.`;
   }
 }
 
@@ -205,39 +266,128 @@ async function removeRow(index) {
   await saveLayout();
 }
 
-function startDrag(module, rowIndex = null, index = null) {
+// The organizer's drag is done with plain mouse events, NOT the HTML5
+// drag-and-drop API. A native drag is a modal gesture that swallows the
+// wheel: the browser dispatches no wheel event to the page at all while a
+// drag is running, so no amount of listening gets a row further down into
+// reach without dropping the module first. Following the mouse ourselves
+// keeps the wheel an ordinary event for the length of the gesture.
+const DRAG_THRESHOLD = 4;
+// Where the module in hand is drawn, in client coordinates.
+const dragPoint = ref({ x: 0, y: 0 });
+// The press, before the cursor has travelled far enough to mean a drag: a
+// press that never moves is a click — focus, or the alt-click that pulls a
+// module off its row — so nothing is picked up until it does.
+let pressed = null;
+
+function onModuleMouseDown(module, rowIndex, index, unit, event) {
+  // Left button only, and never the alt/ctrl press that removes a placement.
+  if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey) return;
+  // Stops the text selection (and the browser's own image drag) a press on a
+  // panel would start. That also costs the button the focus a click gives it,
+  // which is put back by hand: the arrow keys step whatever is focused.
+  event.preventDefault();
+  if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
+  pressed = { module, rowIndex, index, unit, x: event.clientX, y: event.clientY };
+  window.addEventListener('mousemove', onDragMove, true);
+  window.addEventListener('mouseup', onDragUp, true);
+}
+
+function startDrag(press) {
   // Inventory entries use `id`; persisted row placements use `module_id`.
   // Normalize once at the gesture boundary so a first drop saves the actual
   // module id rather than an undefined placement. A placement also carries
   // WHICH copy is in hand — a row may hold two of the same module, and the
   // one dragged is the one that has to move.
-  dragged.value = { module: { ...module, module_id: module.module_id ?? module.id }, rowIndex, index };
+  dragged.value = {
+    module: { ...press.module, module_id: press.module.module_id ?? press.module.id },
+    rowIndex: press.rowIndex,
+    index: press.index,
+    unit: press.unit,
+  };
   window.addEventListener('wheel', onDragWheel, wheelOptions);
+  window.addEventListener('keydown', onDragKey, true);
+  window.addEventListener('blur', endDrag);
 }
 
 function endDrag() {
+  pressed = null;
   dragged.value = null;
   dropHint.value = null;
+  window.removeEventListener('mousemove', onDragMove, true);
+  window.removeEventListener('mouseup', onDragUp, true);
   window.removeEventListener('wheel', onDragWheel, wheelOptions);
+  window.removeEventListener('keydown', onDragKey, true);
+  window.removeEventListener('blur', endDrag);
 }
 
-// A native drag swallows the wheel, so the page stands still while a module
-// is in hand: a row further down, or a slot further along a row wider than
-// its box, cannot be reached without dropping the module first. For as long
-// as a drag is running the wheel is ours, and it does what it would do over
-// the same boxes empty-handed — plain scrolls the page, shift scrolls the
-// row under the cursor sideways.
+// Escape puts the module back down where it was, the one thing a native drag
+// gave for free.
+function onDragKey(event) {
+  if (event.key !== 'Escape' || !dragged.value) return;
+  event.preventDefault();
+  endDrag();
+}
+
+function onDragMove(event) {
+  if (pressed && !dragged.value) {
+    const travelled =
+      Math.abs(event.clientX - pressed.x) >= DRAG_THRESHOLD ||
+      Math.abs(event.clientY - pressed.y) >= DRAG_THRESHOLD;
+    if (!travelled) return;
+    startDrag(pressed);
+  }
+  if (!dragged.value) return;
+  event.preventDefault();
+  aimAt(event.clientX, event.clientY);
+}
+
+async function onDragUp(event) {
+  if (!dragged.value) {
+    // A press that never became a drag: leave the click alone.
+    endDrag();
+    return;
+  }
+  event.preventDefault();
+  await finishDrag(hintAt(event.clientX, event.clientY));
+}
+
+// Where the cursor is: the module in hand is drawn there and the drop bar is
+// worked out for whatever is under it.
+function aimAt(clientX, clientY) {
+  dragPoint.value = { x: clientX, y: clientY };
+  dropHint.value = hintAt(clientX, clientY);
+}
+
+// What a drop right here would do: a slot in a row, back to Available, or
+// nothing at all. The module in hand never answers elementFromPoint (the
+// ghost is pointer-events: none), so what is under the cursor is the box the
+// drop lands in.
+function hintAt(clientX, clientY) {
+  const under = document.elementFromPoint?.(clientX, clientY);
+  const slots = under?.closest?.('.rack-row-slots');
+  if (slots) return { rowIndex: Number(slots.dataset.rowIndex), index: slotIndex(slots, clientX) };
+  if (under?.closest?.('.available-modules')) return { available: true };
+  return null;
+}
+
+// For as long as a drag is running the wheel is ours, and it does what it
+// would do over the same boxes empty-handed — plain scrolls the page, shift
+// slides the row under the cursor sideways. The cursor has not moved, but
+// what is under it has, so the drop bar is aimed again afterwards.
 const wheelOptions = { passive: false, capture: true };
 
 function onDragWheel(event) {
   if (!dragged.value) return;
   const delta = event.deltaY || event.deltaX;
   if (!delta) return;
-  const under = document.elementFromPoint?.(event.clientX, event.clientY);
-  const row = event.shiftKey ? under?.closest('.rack-row-slots') : null;
+  const { x, y } = dragPoint.value;
+  const under = document.elementFromPoint?.(x, y);
+  const row = event.shiftKey ? under?.closest?.('.rack-row-slots') : null;
   event.preventDefault();
   if (row) row.scrollLeft += delta;
   else window.scrollBy(0, delta);
+  aimAt(x, y);
 }
 
 // A drag left running when the view goes away (a drop that navigates, a
@@ -256,24 +406,20 @@ function slotIndex(container, clientX) {
   return slots.length;
 }
 
-function onRowDragOver(rowIndex, event) {
-  if (!dragged.value) return;
-  dropHint.value = { rowIndex, index: slotIndex(event.currentTarget, event.clientX) };
-}
-
-function onRowDragLeave(rowIndex, event) {
-  // Crossing between two modules inside the row fires dragleave as well;
-  // only a cursor that has actually left the row clears the bar.
-  if (event.currentTarget.contains(event.relatedTarget)) return;
-  if (dropHint.value?.rowIndex === rowIndex) dropHint.value = null;
-}
-
-async function dropIntoRow(rowIndex, event) {
+// Putting the module down. The gesture ends either way: a drop that lands on
+// nothing simply leaves the layout as it was.
+async function finishDrag(hint) {
   const held = dragged.value;
-  let target = slotIndex(event.currentTarget, event.clientX);
   endDrag();
   if (!held || !organizer.value) return;
+  if (hint?.available) await dropIntoAvailable(held);
+  else if (Number.isInteger(hint?.rowIndex)) await dropIntoRow(held, hint.rowIndex, hint.index);
+}
+
+async function dropIntoRow(held, rowIndex, index) {
   const row = organizer.value.rows[rowIndex];
+  if (!row) return;
+  let target = index;
   if (held.rowIndex !== null) {
     // Pulling the module out shifts everything to its right one slot left, so
     // a target beyond it means one less by the time it is put back down.
@@ -283,17 +429,15 @@ async function dropIntoRow(rowIndex, event) {
   }
   if (rowUsed(row) + (Number(held.module.hp) || 0) > Number(row.hp)) {
     if (held.rowIndex !== null) organizer.value.rows[held.rowIndex].modules.splice(held.index, 0, held.module);
-    error.value = `${held.module.manufacturer} ${held.module.name} does not fit in this ${row.hp}HP row.`;
+    layoutError.value = `${held.module.manufacturer} ${held.module.name} does not fit in this ${row.hp}HP row.`;
     return;
   }
   row.modules.splice(target, 0, held.module);
   await saveLayout();
 }
 
-async function dropIntoAvailable() {
-  const held = dragged.value;
-  endDrag();
-  if (!held || held.rowIndex === null || !organizer.value) return;
+async function dropIntoAvailable(held) {
+  if (held.rowIndex === null) return;
   organizer.value.rows[held.rowIndex].modules.splice(held.index, 1);
   await saveLayout();
 }
@@ -441,10 +585,14 @@ async function nudge(rowIndex, index, delta) {
         Add 3U and 1U rows, set their HP, then drag each module copy into its physical row. Drop a
         module between two others to place it there — that is how a row is reordered — or focus one
         and press <kbd>←</kbd>/<kbd>→</kbd> to step it along. A row cannot exceed its HP capacity.
-        The wheel still scrolls the page with a module in hand; hold <kbd>Shift</kbd> to slide a row
-        wider than its box along.
+        The wheel still scrolls the page with a module in hand — hold <kbd>Shift</kbd> to slide a row
+        wider than its box along — and <kbd>Esc</kbd> puts the module back where it was.
       </p>
-      <div class="available-modules" data-test="available-modules" @dragover.prevent @drop="dropIntoAvailable">
+      <div
+        class="available-modules"
+        :class="{ 'drop-target': dropHint?.available && dragged?.rowIndex !== null }"
+        data-test="available-modules"
+      >
         <h3>Available modules</h3>
         <p v-if="availableModules.length === 0" class="muted">Every module copy is placed.</p>
         <div v-else class="module-chips">
@@ -452,12 +600,10 @@ async function nudge(rowIndex, index, delta) {
             v-for="(module, index) in availableModules"
             :key="`${module.id}-${index}`"
             class="module-chip"
-            draggable="true"
             type="button"
             :data-test="`available-module-${module.id}-${index}`"
             :style="{ '--module-hp': Math.max(2, Number(module.hp) || 4) }"
-            @dragstart="startDrag(module)"
-            @dragend="endDrag"
+            @mousedown="onModuleMouseDown(module, null, null, 3, $event)"
           >
             <span class="module-panel-thumb" :class="{ 'thumb-fallback': !module.panel }">
               <img
@@ -471,6 +617,13 @@ async function nudge(rowIndex, index, delta) {
           </button>
         </div>
       </div>
+
+      <p v-if="layoutError" class="error" data-test="layout-error">
+        {{ layoutError }}
+        <button class="secondary" style="margin: 0 0 0 0.5rem" data-test="retry-save" @click="saveLayout">
+          Retry save
+        </button>
+      </p>
 
       <div class="actions spaced">
         <button class="secondary" :disabled="layoutBusy" data-test="add-3u-row" @click="addRow(3)">Add 3U row</button>
@@ -504,16 +657,22 @@ async function nudge(rowIndex, index, delta) {
           <span class="muted" :class="{ 'over-capacity': rowUsed(row) > Number(row.hp) }">
             {{ rowUsed(row) }} / {{ row.hp }}HP
           </span>
-          <button class="danger" style="margin: 0 0 0 auto" :disabled="layoutBusy" @click="removeRow(rowIndex)">Remove row</button>
+          <button
+            class="danger"
+            style="margin: 0 0 0 auto"
+            :disabled="layoutBusy"
+            :data-test="`remove-row-${rowIndex}`"
+            @click="removeRow(rowIndex)"
+          >
+            Remove row
+          </button>
         </div>
         <div
           v-show="!rowCollapsed(rowIndex)"
           class="rack-row-slots"
           :class="`unit-${row.unit}`"
+          :data-row-index="rowIndex"
           :style="{ '--row-units': Number(row.unit) || 3 }"
-          @dragover.prevent="onRowDragOver(rowIndex, $event)"
-          @dragleave="onRowDragLeave(rowIndex, $event)"
-          @drop="dropIntoRow(rowIndex, $event)"
         >
           <button
             v-for="(module, index) in row.modules"
@@ -522,15 +681,14 @@ async function nudge(rowIndex, index, delta) {
             :class="{
               'drop-before': dropHint?.rowIndex === rowIndex && dropHint.index === index,
               'drop-after': dropHint?.rowIndex === rowIndex && dropHint.index === row.modules.length && index === row.modules.length - 1,
+              'in-hand': dragged?.rowIndex === rowIndex && dragged.index === index,
             }"
-            draggable="true"
             type="button"
             :title="`${module.manufacturer} ${module.name} — ${module.hp}HP (drag or ← → to reorder, alt- or right-click to remove)`"
             :aria-label="`${module.manufacturer} ${module.name}, place ${index + 1} of ${row.modules.length}`"
             :data-test="`placed-module-${rowIndex}-${index}`"
             :style="{ '--module-hp': Math.max(2, Number(module.hp) || 4) }"
-            @dragstart="startDrag(module, rowIndex, index)"
-            @dragend="endDrag"
+            @mousedown="onModuleMouseDown(module, rowIndex, index, row.unit, $event)"
             @keydown.left.prevent="nudge(rowIndex, index, -1)"
             @keydown.right.prevent="nudge(rowIndex, index, 1)"
             @click.alt.prevent="removeFromRow(rowIndex, index)"
@@ -547,6 +705,32 @@ async function nudge(rowIndex, index, delta) {
           <span v-if="row.modules.length === 0" class="muted">Drop modules here</span>
         </div>
       </div>
+
+      <!-- What is in hand, drawn under the cursor: with no native drag there
+           is no browser drag image, and it is pointer-events: none so the box
+           it is over is still the box the drop lands in. -->
+      <div
+        v-if="dragged"
+        class="drag-ghost"
+        data-test="drag-ghost"
+        aria-hidden="true"
+        :style="{
+          left: `${dragPoint.x}px`,
+          top: `${dragPoint.y}px`,
+          '--module-hp': Math.max(2, Number(dragged.module.hp) || 4),
+          '--row-units': Number(dragged.unit) || 3,
+        }"
+      >
+        <img
+          v-if="dragged.module.panel"
+          :src="dragged.module.panel.url"
+          :style="panelCropStyle(dragged.module.panel)"
+          alt=""
+        />
+        <span v-else class="panel-fallback">
+          {{ dragged.module.manufacturer }}<br />{{ dragged.module.name }}<br />{{ dragged.module.hp }}HP
+        </span>
+      </div>
     </section>
   </div>
 </template>
@@ -561,6 +745,8 @@ async function nudge(rowIndex, index, delta) {
 .rack-organizer { margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1rem; }
 .available-modules { min-height: 3.5rem; border: 1px dashed var(--border-strong); border-radius: 7px; padding: 0.6rem; }
 .available-modules { margin: 1rem 0; }
+/* Where a module pulled off a row would land if it were dropped now. */
+.available-modules.drop-target { border-color: var(--accent); background: #1b1b24; }
 .module-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .module-chip { margin: 0; cursor: grab; text-align: center; display: inline-flex; flex-direction: column; align-items: center; gap: 0.25rem; padding: 0.3rem; }
 .module-chip span { color: var(--muted); }
@@ -580,6 +766,9 @@ async function nudge(rowIndex, index, delta) {
    between two panels would push the row along mid-drag and move the very
    target being aimed at. */
 .placed-module.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+/* The slot a module was picked up from, left in place so the row does not
+   close up and move the very targets being aimed at. */
+.placed-module.in-hand { opacity: 0.3; }
 .placed-module.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
 .placed-module:focus-visible { outline: 2px solid var(--accent-2); outline-offset: -2px; }
 /* The image is sized and offset by the panel's crop (panelLayout.js), so the
@@ -596,5 +785,13 @@ async function nudge(rowIndex, index, delta) {
    panel measures its module wider — and the layout will not save until it is
    under again, so the row that has to give says so. */
 .rack-row-meta .over-capacity { color: var(--danger); }
+/* Drawn at the same scale as the row it is headed for, so what is in hand
+   is the size it will be when it lands. */
+/* Above the sticky topbar (z-index 60), so a module dragged to the top of
+   the window is not slid under the menu bar. */
+.drag-ghost { position: fixed; z-index: 65; pointer-events: none; transform: translate(-50%, -50%); }
+.drag-ghost { width: calc(var(--module-hp) * var(--hp-px)); height: calc(var(--row-units) * var(--u-px)); }
+.drag-ghost { overflow: hidden; background: #25252d; border: 1px solid var(--accent); opacity: 0.85; }
+.drag-ghost img { position: absolute; display: block; object-fit: fill; }
 .row-collapse { margin: 0; padding: 0.15rem 0.5rem; background: transparent; border: 1px solid var(--border-strong); color: var(--muted); }
 </style>

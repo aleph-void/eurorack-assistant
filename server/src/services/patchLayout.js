@@ -26,6 +26,14 @@ export function patchRackIds(patch, patchModules) {
 // are soft ids, and a patch may not read another account's furniture.
 export async function snapshotRackLayout(db, patch, racks, { transaction = null } = {}) {
   const { RackRow, RackRowModule, PatchRackRow, PatchRackRowModule } = db.models;
+  // Take the patch first, for the same reason the rack layout route takes its
+  // rack: this REPLACES every row the patch holds, so two of them running at
+  // once would each delete the rows they can see and then insert their own —
+  // neither delete seeing the other's insert — and the patch would be left
+  // carrying both copies of its arrangement.
+  if (transaction) {
+    await db.models.Patch.findOne({ where: { id: patch.id }, transaction, lock: transaction.LOCK.UPDATE });
+  }
   await PatchRackRow.destroy({ where: { patch_id: patch.id }, transaction });
   if (racks.length === 0) return 0;
   const rows = await RackRow.findAll({
