@@ -258,6 +258,33 @@ describe('VoicePatchPanel', () => {
     expect(engines.map((o) => o.element.value)).toEqual(['webspeech', 'whisper']);
   });
 
+  // A self-hosted box usually runs a Chromium with no key for Google's speech
+  // servers, so the browser's recogniser fails the same way every time. The
+  // way out is already installed.
+  it('offers local Whisper when the browser’s recogniser cannot reach its service', async () => {
+    const wrapper = await open();
+    expect(wrapper.find('[data-test="voice-use-whisper"]').exists()).toBe(false);
+
+    recognisers.at(-1).onerror({ error: 'network' });
+    await flushPromises();
+    expect(wrapper.find('[data-test="voice-message"]').text()).toContain(
+      'could not reach its speech service'
+    );
+
+    // jsdom has no getUserMedia, so Whisper is not on offer here — the button
+    // only appears where it could actually be taken.
+    expect(wrapper.find('[data-test="voice-use-whisper"]').exists()).toBe(false);
+    navigator.mediaDevices = { getUserMedia: vi.fn() };
+    const withMic = await open();
+    recognisers.at(-1).onerror({ error: 'network' });
+    await flushPromises();
+    await withMic.find('[data-test="voice-use-whisper"]').trigger('click');
+    await flushPromises();
+    expect(withMic.find('[data-test="voice-engine"]').element.value).toBe('whisper');
+    expect(withMic.find('[data-test="voice-use-whisper"]').exists()).toBe(false);
+    delete navigator.mediaDevices;
+  });
+
   it('lets go of the microphone when the page does', async () => {
     const wrapper = await open();
     expect(recognisers.length).toBeGreaterThan(0);

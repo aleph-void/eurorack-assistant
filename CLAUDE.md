@@ -22,17 +22,29 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
 - `server/src/jobs/` — `worker.js` is the queue ENGINE (claiming, leases,
   retries, quota/budget pauses); `handlers.js` holds the per-job-type logic;
   `enqueue.js` the queueing helpers. All are re-exported from `worker.js`.
-- `client/src/views/` — one view per route. The two big detail pages are
-  split into section components: `client/src/components/moduledetail/` and
-  `client/src/components/patchdetail/`, each with a `use*Facts.js` composable
-  for the shared derived state. Sections take `:module`/`:patch` + id props
-  and emit `reload`. A patch is TWO pages: `PatchDetailView` is the picture
-  and the two ways of patching a cable (diagram, cable list, voice), and
-  `PatchConfigView` (`/patches/:id/config`) is everything that is set up once
-  and read rarely — control settings, buses, links, off-rack gear, flow,
-  normalled connections, the scope, notes, the module snapshot. Both read the
-  same `GET /api/patches/:id` and reload it after every write.
-- `client/tests/views/` — one test file per view.
+- `client/src/views/` — one view per route. A MODULE and a PATCH are each a
+  PAGE PER THING there is to know about them, not one scrolling page: the
+  sections live in `client/src/components/moduledetail/` and
+  `client/src/components/patchdetail/` (each with a `use*Facts.js` composable
+  for the shared derived state, taking `:module`/`:patch` + id props and
+  emitting `reload`), and every section is a route of its own.
+  `/modules/:id` is the front plate and the summary; `/components`,
+  `/values`, `/normalizations`, `/switches`, `/routes`, `/pairs`,
+  `/expanders`, `/bridges`, `/documents`, `/videos` and `/notes` are the
+  rest. `/patches/:id` is the picture of the case and the drag that patches a
+  cable on it; `/cables`, `/voice`, `/settings`, `/flow`, `/links`, `/scope`,
+  `/notes` and `/modules` are the rest (`/patches/:id/config`, the one page
+  that used to hold all of those, redirects to `/settings`). Every page reads
+  the SAME `GET /api/modules/:id` / `GET /api/patches/:id` and reloads it
+  after every write — `useModuleRecord.js` / `usePatchRecord.js` — and draws
+  `ModuleDetailHeader` / `PatchDetailHeader`, which is what tells the nav
+  drawer (`stores/detail.js`) which record's pages to offer at the top of it.
+  Arranging a marker is the one thing that needs the plate and a component's
+  row together, so the components page draws the plate WHILE ARRANGING and
+  the module page sends a marker click there (`?arrange=<component id>`).
+- `client/tests/views/` — one test file per view; the payloads they are
+  tested against are shared in `client/tests/moduleFixtures.js` and
+  `client/tests/patchFixtures.js`.
 - Schema: the migrations in `server/migrations/` are the source of truth
   (never `sequelize.sync()`); models in `server/src/db/models.js`. Each
   migration is a module exporting `up`/`down` against the helpers in
@@ -129,7 +141,7 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   that end at one are counted in the "not drawn" line instead.
 - A patch payload is served WITHOUT PROSE (`describe: false` in
   routes/patches/core.js): what each control does is a megabyte of description
-  on a whole-studio patch and neither patch page shows it. The LLM-facing
+  on a whole-studio patch and none of the patch pages shows it. The LLM-facing
   readers (services/ask.js) and the scope keep the default.
 - Every kind of thing on a panel — the ten COMPONENT_TYPES — has ONE colour,
   and every picture of a panel uses it: the module page's front plate, the

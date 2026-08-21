@@ -264,6 +264,14 @@ pre {
   border-left-color: var(--accent);
   color: var(--text);
 }
+/* The pages of the one record the reader is inside, listed above the app's
+   own sections: indented under their heading so the drawer reads as "this
+   module, then everything else" rather than as one long list. */
+.nav-drawer a.nav-sub {
+  padding-left: 1.35rem;
+  font-size: 0.9rem;
+}
+
 .nav-drawer .nav-foot {
   margin-top: auto;
   padding-top: 0.9rem;
@@ -484,6 +492,17 @@ tr:hover td.module-actions-cell {
 }
 .panel-arrangement-filter button {
   margin: 0;
+}
+
+/* The front plate, drawn on the components page only while a marker is being
+   put right on it — the one thing on that page that needs to see the
+   hardware. It is sticky so the marker stays in reach while the reader
+   scrolls the list looking for the row it belongs to. */
+.arrange-panel {
+  position: sticky;
+  top: 0.5rem;
+  z-index: 5;
+  border-color: var(--accent);
 }
 
 details.expander {

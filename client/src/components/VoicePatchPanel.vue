@@ -14,7 +14,12 @@
 
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { api } from '../api.js';
-import { createSpeechInput, engineAvailability, ENGINES } from '../speechInput.js';
+import {
+  createSpeechInput,
+  engineAvailability,
+  ENGINE_UNUSABLE,
+  ENGINES,
+} from '../speechInput.js';
 import { WHISPER_MODELS } from '../whisperInput.js';
 import { ACTIVATION_MODES, createVoiceActivation, isContinuous } from '../voiceActivation.js';
 import { createPatchSounds } from '../patchSounds.js';
@@ -78,6 +83,21 @@ if (!available.value[settings.engine])
 const engineOptions = computed(() =>
   ENGINES.map((e) => ({ ...e, disabled: !available.value[e.value] }))
 );
+
+// The browser's recogniser is present but its service is out of reach — the
+// usual answer on a self-hosted box, where Chromium ships without a key for
+// Google's speech servers. Whisper is the way out and it is one click away,
+// but it fetches a model the first time, so it is offered rather than taken.
+const engineUnreachable = ref(false);
+const canFallBackToWhisper = computed(
+  () => engineUnreachable.value && settings.engine === 'webspeech' && available.value.whisper
+);
+
+function useWhisperInstead() {
+  engineUnreachable.value = false;
+  settings.engine = 'whisper';
+  say('Switched to local Whisper — the model is fetched once, then nothing leaves this machine.');
+}
 
 // ---- what is going on right now ----
 
@@ -273,7 +293,8 @@ function build() {
         trimmed === transcript ? alternatives : [{ transcript: trimmed, confidence: 1 }];
       handle(trimmed, readings);
     },
-    onError: (text) => {
+    onError: (text, code) => {
+      if (ENGINE_UNUSABLE.includes(code)) engineUnreachable.value = true;
       sounds?.failure(text);
       say(text, 'error');
     },
@@ -469,6 +490,16 @@ const bindingText = computed(() =>
       <p v-if="partial" class="muted" data-test="voice-partial">“{{ partial }}”</p>
       <p v-if="heard" class="muted" data-test="voice-heard">Heard: “{{ heard }}”</p>
       <p v-if="message" :class="messageKind" data-test="voice-message">{{ message }}</p>
+      <p v-if="canFallBackToWhisper">
+        <button
+          type="button"
+          style="margin: 0"
+          data-test="voice-use-whisper"
+          @click="useWhisperInstead"
+        >
+          Use local Whisper instead
+        </button>
+      </p>
 
       <div v-if="pending && !options.length" class="row" data-test="voice-confirm-row">
         <div class="shrink">

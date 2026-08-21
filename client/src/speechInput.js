@@ -20,6 +20,31 @@ export const ENGINES = Object.freeze([
   { value: 'whisper', label: 'Local Whisper (offline, private)' },
 ]);
 
+// What the browser's recogniser says when it goes wrong, said in terms of
+// what to do about it. `network` is the one that catches people out: Chrome's
+// recogniser is not on this machine — it streams the audio to Google's
+// servers, and a Chromium built without a key for them (most Linux distro
+// packages, ungoogled builds, Electron) can never reach the service, so it
+// fails this way every single time rather than intermittently. Whisper is the
+// answer, and it is already here.
+const SERVICE_UNREACHABLE =
+  'The browser’s recogniser could not reach its speech service. It is not on this ' +
+  'machine — Chrome streams your voice to Google to transcribe it, and many ' +
+  'Chromium builds have no key for that service. Switch Recognition to Local ' +
+  'Whisper to transcribe on this machine instead.';
+
+export const WEB_SPEECH_ERRORS = Object.freeze({
+  'not-allowed': 'Microphone permission was refused',
+  'audio-capture': 'No microphone was found',
+  network: SERVICE_UNREACHABLE,
+  'service-not-allowed': SERVICE_UNREACHABLE,
+  'language-not-supported': 'The browser’s recogniser does not speak this language',
+});
+
+// The errors that mean this engine will never work here, whatever is said
+// into it — as opposed to one bad attempt.
+export const ENGINE_UNUSABLE = Object.freeze(['network', 'service-not-allowed']);
+
 const nativeRecognition = () =>
   typeof window === 'undefined'
     ? null
@@ -100,11 +125,8 @@ function createWebSpeechInput({
       // "no-speech" and "aborted" are what a held-and-released button sounds
       // like when nobody said anything. They are not worth a noise.
       if (event.error === 'no-speech' || event.error === 'aborted') return;
-      onError(
-        event.error === 'not-allowed'
-          ? 'Microphone permission was refused'
-          : `Speech recognition failed (${event.error})`
-      );
+      const said = WEB_SPEECH_ERRORS[event.error];
+      onError(said || `Speech recognition failed (${event.error})`, event.error);
     };
     engine.onend = () => {
       recognition = null;

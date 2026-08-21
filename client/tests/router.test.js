@@ -58,3 +58,49 @@ describe('route guard', () => {
     expect(adminRoutes.sort()).toEqual(['config', 'users']);
   });
 });
+
+// A module and a patch are each a page per thing there is to know about them,
+// every one of them taking the record's id as a prop.
+describe('detail sub-pages', () => {
+  const under = (prefix) =>
+    routes.filter((r) => r.path.startsWith(prefix) && r.path !== prefix);
+
+  it('gives every part of a module its own route', () => {
+    const paths = under('/modules/:id/').map((r) => r.path.split('/').pop());
+    expect(paths.sort()).toEqual([
+      'bridges',
+      'components',
+      'documents',
+      'expanders',
+      'normalizations',
+      'notes',
+      'pairs',
+      'routes',
+      'switches',
+      'values',
+      'videos',
+    ]);
+    expect(under('/modules/:id/').every((r) => r.props === true)).toBe(true);
+  });
+
+  it('gives every part of a patch its own route', () => {
+    const pages = under('/patches/:id/').filter((r) => r.component);
+    expect(pages.map((r) => r.path.split('/').pop()).sort()).toEqual([
+      'cables',
+      'flow',
+      'links',
+      'modules',
+      'notes',
+      'scope',
+      'settings',
+      'voice',
+    ]);
+    expect(pages.every((r) => r.props === true)).toBe(true);
+  });
+
+  it('sends the old one-page configuration URL to the control settings', () => {
+    const config = routes.find((r) => r.path === '/patches/:id/config');
+    expect(config.component).toBeUndefined();
+    expect(config.redirect({ params: { id: '7' } })).toBe('/patches/7/settings');
+  });
+});

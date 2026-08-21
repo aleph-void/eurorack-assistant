@@ -24,3 +24,13 @@ export async function openPanels(wrapper) {
     await details.trigger('toggle');
   }
 }
+
+// Typing into an autocomplete picker, then taking the highlighted match with
+// Enter — how a cable is named rather than clicked together.
+export async function pick(wrapper, test, text) {
+  const input = wrapper.find(`[data-test="${test}"]`);
+  await input.trigger('focus');
+  await input.setValue(text);
+  await input.trigger('keydown', { key: 'Enter' });
+  return input;
+}

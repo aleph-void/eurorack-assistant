@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth.js';
 import { useJobsStore } from './stores/jobs.js';
 import { useDevicesStore } from './stores/devices.js';
+import { useDetailStore } from './stores/detail.js';
 import { createProgressSocket } from './progressSocket.js';
 import ConfirmDialog from './components/ConfirmDialog.vue';
 import ToastStack from './components/ToastStack.vue';
@@ -11,6 +12,7 @@ import ToastStack from './components/ToastStack.vue';
 const auth = useAuthStore();
 const jobs = useJobsStore();
 const devices = useDevicesStore();
+const detail = useDetailStore();
 const router = useRouter();
 const route = useRoute();
 
@@ -49,6 +51,51 @@ function onKeydown(event) {
 }
 onMounted(() => window.addEventListener('keydown', onKeydown));
 onUnmounted(() => window.removeEventListener('keydown', onKeydown));
+
+// ---- the record the reader is inside ----
+// A module and a patch are each a dozen routes over one record. Whichever of
+// them is open says so (stores/detail.js), and the drawer answers with that
+// record's own pages, at the top, above the rest of the app.
+const MODULE_PAGES = [
+  { path: '', label: 'Front panel & summary', exact: true },
+  { path: '/components', label: 'Components' },
+  { path: '/values', label: 'Component values' },
+  { path: '/normalizations', label: 'Normalled connections' },
+  { path: '/switches', label: 'Routing switches' },
+  { path: '/routes', label: 'Internal signal paths' },
+  { path: '/pairs', label: 'Stereo pairs' },
+  { path: '/expanders', label: 'Expander panels' },
+  { path: '/bridges', label: 'Dual panels' },
+  { path: '/documents', label: 'Documents' },
+  { path: '/videos', label: 'Videos' },
+  { path: '/notes', label: 'Your notes' },
+];
+
+const PATCH_PAGES = [
+  { path: '', label: 'Diagram', exact: true },
+  { path: '/cables', label: 'Cables' },
+  { path: '/voice', label: 'Patch by voice' },
+  { path: '/settings', label: 'Control settings' },
+  { path: '/flow', label: 'Signal flow' },
+  { path: '/links', label: 'Links, buses & gear' },
+  { path: '/scope', label: 'Oscilloscope' },
+  { path: '/notes', label: 'Notes' },
+  { path: '/modules', label: 'Modules in this patch' },
+];
+
+const detailPages = computed(() => (detail.kind === 'patch' ? PATCH_PAGES : MODULE_PAGES));
+const detailHeading = computed(() => detail.label || (detail.kind === 'patch' ? 'This patch' : 'This module'));
+
+// Previous/next stay in the rack the reader came from, so the sub-page links
+// have to carry it as well or the walk through a rack ends at the first jump.
+const detailBase = computed(() => {
+  if (!detail.kind || !detail.id) return null;
+  return detail.kind === 'patch' ? `/patches/${detail.id}` : `/modules/${detail.id}`;
+});
+const detailSuffix = computed(() =>
+  detail.kind === 'module' && route.query.rack ? `?rack=${route.query.rack}` : ''
+);
+const detailHref = (page) => `${detailBase.value}${page.path}${detailSuffix.value}`;
 
 async function logout() {
   menuOpen.value = false;
@@ -91,6 +138,20 @@ async function logout() {
     :class="{ open: menuOpen }"
     :aria-hidden="menuOpen ? 'false' : 'true'"
   >
+    <template v-if="detailBase">
+      <p class="nav-heading" data-test="nav-detail-heading">{{ detailHeading }}</p>
+      <RouterLink
+        v-for="page in detailPages"
+        :key="page.path"
+        :to="detailHref(page)"
+        class="nav-sub"
+        :active-class="page.exact ? '' : 'router-link-active'"
+        :data-test="`nav-detail-${page.path.slice(1) || 'index'}`"
+      >
+        {{ page.label }}
+      </RouterLink>
+    </template>
+
     <p class="nav-heading">Your system</p>
     <RouterLink to="/modules">Modules</RouterLink>
     <RouterLink to="/racks">Racks</RouterLink>

@@ -1,36 +1,49 @@
 <script setup>
-import { onMounted, ref, shallowRef } from 'vue';
-import { useRouter } from 'vue-router';
+// The picture of the patch: the case as it stood when the patch was made,
+// with every cable drawn on it. Patching by dragging between two jacks
+// happens here; the cable list, the voice panel and everything the patch is
+// set up with are pages of their own, reached from the nav drawer.
+import { ref, toRef } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import PatchDiagram from '../components/PatchDiagram.vue';
-import ShareButton from '../components/ShareButton.vue';
-import VoicePatchPanel from '../components/VoicePatchPanel.vue';
-import CablesSection from '../components/patchdetail/CablesSection.vue';
-import {
-  FROM_TYPES,
-  TO_TYPES,
-  usePatchFacts,
-} from '../components/patchdetail/usePatchFacts.js';
+import PatchDetailHeader from '../components/patchdetail/PatchDetailHeader.vue';
+import { usePatchFacts } from '../components/patchdetail/usePatchFacts.js';
+import { usePatchRecord } from '../components/patchdetail/usePatchRecord.js';
 
 const props = defineProps({ id: { type: String, required: true } });
-const router = useRouter();
 
-// A big patch is a few thousand components and panel placements, and none of
-// this page ever writes into the payload — every section reads it and asks
-// the server for a fresh one. So it is held SHALLOW: making all of it deeply
-// reactive doubles the cost of every render of the diagram and triples the
-// memory it sits in, buying nothing.
-const patch = shallowRef(null);
-const error = ref('');
+const { patch, error, load } = usePatchRecord(toRef(props, 'id'));
+const { modules, moduleLabel } = usePatchFacts(patch);
 
-const { modules, modulesById, moduleLabel, cables, jackCandidates } = usePatchFacts(patch);
+// The diagram's drag gesture creates and pulls out a cable exactly as the
+// cable list does. The write lives here because this is the page the gesture
+// happens on, and the diagram refreshes from the server's canonical state
+// rather than from what the pointer did.
+const cableError = ref('');
 
-// The diagram's drag gesture creates a cable exactly like the cable form
-// does, so the write (and its error display) lives in the cables section.
-const cablesSection = ref(null);
-const connectDiagramCable = (ends) => cablesSection.value?.connectCable(ends);
-const disconnectDiagramCable = (cable) => cablesSection.value?.removeCable(cable);
+async function connectDiagramCable(ends) {
+  cableError.value = '';
+  try {
+    await api.post(`/api/patches/${props.id}/cables`, ends);
+    await load();
+  } catch (e) {
+    cableError.value = e.message;
+  }
+}
+
+// Unplugging is not gated behind a modal: patching is done by plugging and
+// unplugging over and over, and a cable is one drag away from being plugged
+// again.
+async function disconnectDiagramCable(cable) {
+  cableError.value = '';
+  try {
+    await api.delete(`/api/patches/${props.id}/cables/${cable.id}`);
+    await load();
+  } catch (e) {
+    cableError.value = e.message;
+  }
+}
 
 // Correcting which way a jack runs from the diagram. A jack's direction is a
 // fact about the MODULE — the analysis reads a mult's jacks as plain inputs
@@ -46,23 +59,6 @@ async function retypeDiagramJack({ module_id: moduleId, component_id: componentI
   }
 }
 
-// ---- renaming ----
-const renaming = ref(false);
-const renameValue = ref('');
-const renameError = ref('');
-
-// Cables worth plugging next, learned from the user's other patches.
-const suggestions = ref([]);
-
-async function loadSuggestions() {
-  try {
-    const res = await api.get(`/api/patches/${props.id}/suggestions`, { quiet: true });
-    suggestions.value = res?.suggestions ?? [];
-  } catch {
-    suggestions.value = [];
-  }
-}
-
 // Catch the patch up with the racks it stands in. A patch draws the studio
 // as it stood when it was made, so this is the only thing that ever changes
 // its arrangement — asked for, never quietly.
@@ -72,7 +68,9 @@ async function resyncLayout() {
     title: 'Match the current rack layout',
     message:
       `Redraw '${patch.value.name}' the way ${
-        patch.value.system_name ? `system '${patch.value.system_name}'` : `rack '${patch.value.rack_name}'`
+        patch.value.system_name
+          ? `system '${patch.value.system_name}'`
+          : `rack '${patch.value.rack_name}'`
       } is organised now? The patch keeps its cables — only the arrangement of the panels changes.`,
     confirmLabel: 'Match layout',
   });
@@ -88,135 +86,11 @@ async function resyncLayout() {
     resyncing.value = false;
   }
 }
-
-async function load() {
-  try {
-    const loaded = await api.get(`/api/patches/${props.id}`);
-    // Somebody else's patch, shared with you: this page is an editor and none
-    // of it would work, so the read-only page is where that belongs.
-    if (loaded.shared) {
-      router.replace(`/shared/patch/${props.id}`);
-      return;
-    }
-    patch.value = loaded;
-    await loadSuggestions();
-  } catch (e) {
-    error.value = e.message;
-  }
-}
-onMounted(load);
-
-// Copy the whole patch: the same instances, cables, settings and buses under
-// a new name, as the starting point for the next version of it.
-const duplicating = ref(false);
-
-async function duplicatePatch() {
-  error.value = '';
-  duplicating.value = true;
-  try {
-    const copy = await api.post(`/api/patches/${props.id}/clone`, {});
-    router.push(`/patches/${copy.id}`);
-  } catch (e) {
-    error.value = e.message;
-  } finally {
-    duplicating.value = false;
-  }
-}
-
-// ---- the same two lists, said out loud ----
-// Voice needs the ends kept whole rather than parsed from one line, the
-// cables already plugged (so they can be pulled out by name), and the words
-// this rack uses — a recogniser has never heard of Mimeophon and does better
-// when it is told the names it should expect.
-const voiceFrom = () => jackCandidates(FROM_TYPES, false);
-const voiceTo = () => jackCandidates(TO_TYPES, true);
-const cableCandidates = () =>
-  cables.value.map((c) => ({
-    cable_id: c.id,
-    module_label: `${moduleLabel(modulesById.value.get(c.from_patch_module_id))} ${c.from_component_name}`,
-    jack_name: `${moduleLabel(modulesById.value.get(c.to_patch_module_id))} ${c.to_component_name}`,
-  }));
-const vocabulary = () => {
-  const words = new Set();
-  for (const pm of modules.value) {
-    words.add(pm.manufacturer);
-    words.add(pm.module_name);
-    if (pm.label) words.add(pm.label);
-    for (const c of pm.components) words.add(c.name);
-  }
-  return [...words].filter(Boolean);
-};
-
-async function rename() {
-  renameError.value = '';
-  try {
-    await api.put(`/api/patches/${props.id}`, { name: renameValue.value });
-    renaming.value = false;
-    await load();
-  } catch (e) {
-    renameError.value = e.message;
-  }
-}
 </script>
 
 <template>
-  <p><RouterLink to="/patches">← All patches</RouterLink></p>
-  <p v-if="error" class="error" data-test="error">{{ error }}</p>
+  <PatchDetailHeader :patch="patch" :patch-id="id" :error="error" @reload="load" />
   <template v-if="patch">
-    <template v-if="renaming">
-      <form class="actions" @submit.prevent="rename">
-        <input v-model="renameValue" data-test="rename-input" />
-        <button type="submit" data-test="rename-save">Save</button>
-        <button type="button" @click="renaming = false">Cancel</button>
-      </form>
-      <p v-if="renameError" class="error">{{ renameError }}</p>
-    </template>
-    <!-- The title and its small actions on one centered line: without the
-         flex row the buttons baseline-align against the heading text and sit
-         at odd heights beside it. -->
-    <h1 v-else class="actions">
-      {{ patch.name }}
-      <button
-        style="font-size: 0.8rem"
-        data-test="rename"
-        @click="renaming = true; renameValue = patch.name"
-      >
-        Rename
-      </button>
-      <button
-        style="font-size: 0.8rem"
-        class="secondary"
-        :disabled="duplicating"
-        data-test="duplicate-patch"
-        @click="duplicatePatch"
-      >
-        Duplicate
-      </button>
-      <RouterLink
-        :to="`/patches/${props.id}/config`"
-        style="font-size: 0.8rem"
-        data-test="configure-patch"
-        title="Control settings, buses, linked instances, off-rack gear, the scope and the notes"
-      >
-        Configure
-      </RouterLink>
-      <ShareButton :id="props.id" type="patch" :label="patch.name" small />
-      <a
-        :href="`/api/patches/${props.id}/export`"
-        style="font-size: 0.8rem"
-        data-test="export-patch"
-        title="Download this patch as a JSON file"
-      >
-        Export JSON
-      </a>
-      <RouterLink
-        :to="`/ask?patch=${props.id}`"
-        style="font-size: 0.8rem"
-        data-test="ask-about-patch"
-      >
-        Ask about this patch
-      </RouterLink>
-    </h1>
     <p v-if="patch.system_id" class="muted" data-test="snapshot-note">
       Snapshot of every rack in system '{{ patch.system_name }}' as of
       {{ new Date(patch.created_at).toLocaleString() }} — a cable may run from any jack on any of
@@ -229,6 +103,7 @@ async function rename() {
       this patch.
     </p>
     <p v-if="patch.description" style="white-space: pre-wrap">{{ patch.description }}</p>
+    <p v-if="cableError" class="error" data-test="cable-error">{{ cableError }}</p>
 
     <PatchDiagram
       :modules="modules"
@@ -253,22 +128,5 @@ async function rename() {
         Match the rack's layout now
       </button>
     </p>
-
-    <VoicePatchPanel
-      :patch-id="props.id"
-      :from-candidates="voiceFrom"
-      :to-candidates="voiceTo"
-      :cable-candidates="cableCandidates"
-      :vocabulary="vocabulary"
-      @changed="load"
-    />
-
-    <CablesSection
-      ref="cablesSection"
-      :patch="patch"
-      :patch-id="id"
-      :suggestions="suggestions"
-      @reload="load"
-    />
   </template>
 </template>

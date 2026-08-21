@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createSpeechInput, engineAvailability } from '../src/speechInput.js';
+import { createSpeechInput, engineAvailability, ENGINE_UNUSABLE } from '../src/speechInput.js';
 import { createWhisperRecogniser, resampleTo16k, rms, createLevelGate } from '../src/whisperInput.js';
 
 // ---- a recogniser that never hears anything ----
@@ -82,7 +82,37 @@ describe('the browser recogniser', () => {
     made[0].onerror({ error: 'aborted' });
     expect(onError).not.toHaveBeenCalled();
     made[0].onerror({ error: 'not-allowed' });
-    expect(onError).toHaveBeenCalledWith('Microphone permission was refused');
+    expect(onError).toHaveBeenCalledWith('Microphone permission was refused', 'not-allowed');
+  });
+
+  // Chrome's recogniser is not on this machine: it streams the audio to
+  // Google, and a Chromium built without a key for that service fails this
+  // way every single time. Saying "network" alone reads as a flaky connection
+  // and sends people looking in the wrong place.
+  it('explains a recogniser whose service is out of reach, and says to use Whisper', () => {
+    const { FakeRecognition, made } = fakeRecognition();
+    const onError = vi.fn();
+    createSpeechInput({ RecognitionImpl: FakeRecognition, onError }).start();
+
+    made[0].onerror({ error: 'network' });
+    const [said, code] = onError.mock.calls[0];
+    expect(said).toContain('could not reach its speech service');
+    expect(said).toContain('Local Whisper');
+    // The code rides along so the panel can offer the way out.
+    expect(code).toBe('network');
+    expect(ENGINE_UNUSABLE).toContain('network');
+    expect(ENGINE_UNUSABLE).toContain('service-not-allowed');
+  });
+
+  it('still passes an error it has no better words for through', () => {
+    const { FakeRecognition, made } = fakeRecognition();
+    const onError = vi.fn();
+    createSpeechInput({ RecognitionImpl: FakeRecognition, onError }).start();
+    made[0].onerror({ error: 'bad-grammar' });
+    expect(onError).toHaveBeenCalledWith(
+      'Speech recognition failed (bad-grammar)',
+      'bad-grammar'
+    );
   });
 
   it('says so when the browser has no recogniser at all', () => {

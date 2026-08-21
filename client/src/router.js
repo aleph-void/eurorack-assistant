@@ -3,11 +3,29 @@ import { useAuthStore } from './stores/auth.js';
 import LoginView from './views/LoginView.vue';
 import ModulesView from './views/ModulesView.vue';
 import ModuleDetailView from './views/ModuleDetailView.vue';
+import ModuleComponentsView from './views/ModuleComponentsView.vue';
+import ModuleValuesView from './views/ModuleValuesView.vue';
+import ModuleNormalizationsView from './views/ModuleNormalizationsView.vue';
+import ModuleSwitchesView from './views/ModuleSwitchesView.vue';
+import ModuleRoutesView from './views/ModuleRoutesView.vue';
+import ModulePairsView from './views/ModulePairsView.vue';
+import ModuleExpandersView from './views/ModuleExpandersView.vue';
+import ModuleBridgesView from './views/ModuleBridgesView.vue';
+import ModuleDocumentsView from './views/ModuleDocumentsView.vue';
+import ModuleVideosView from './views/ModuleVideosView.vue';
+import ModuleNotesView from './views/ModuleNotesView.vue';
 import RacksView from './views/RacksView.vue';
 import SystemsView from './views/SystemsView.vue';
 import PatchesView from './views/PatchesView.vue';
 import PatchDetailView from './views/PatchDetailView.vue';
-import PatchConfigView from './views/PatchConfigView.vue';
+import PatchCablesView from './views/PatchCablesView.vue';
+import PatchVoiceView from './views/PatchVoiceView.vue';
+import PatchSettingsView from './views/PatchSettingsView.vue';
+import PatchFlowView from './views/PatchFlowView.vue';
+import PatchLinksView from './views/PatchLinksView.vue';
+import PatchScopeView from './views/PatchScopeView.vue';
+import PatchNotesView from './views/PatchNotesView.vue';
+import PatchModulesView from './views/PatchModulesView.vue';
 import ImportView from './views/ImportView.vue';
 import SearchView from './views/SearchView.vue';
 import ManualTextView from './views/ManualTextView.vue';
@@ -32,19 +50,80 @@ export const routes = [
   // Per-user LLM provider account and settings.
   { path: '/account/llm', name: 'llm-settings', component: LlmSettingsView },
   { path: '/modules', name: 'modules', component: ModulesView },
+  // A module is a page per thing there is to know about it. The detail page
+  // itself is the front plate and what the manual says the module is;
+  // everything else is its own route, offered in the nav drawer while any of
+  // them is open. Each reads the same GET /api/modules/:id.
   { path: '/modules/:id', name: 'module-detail', component: ModuleDetailView, props: true },
+  {
+    path: '/modules/:id/components',
+    name: 'module-components',
+    component: ModuleComponentsView,
+    props: true,
+  },
+  { path: '/modules/:id/values', name: 'module-values', component: ModuleValuesView, props: true },
+  {
+    path: '/modules/:id/normalizations',
+    name: 'module-normalizations',
+    component: ModuleNormalizationsView,
+    props: true,
+  },
+  {
+    path: '/modules/:id/switches',
+    name: 'module-switches',
+    component: ModuleSwitchesView,
+    props: true,
+  },
+  { path: '/modules/:id/routes', name: 'module-routes', component: ModuleRoutesView, props: true },
+  { path: '/modules/:id/pairs', name: 'module-pairs', component: ModulePairsView, props: true },
+  {
+    path: '/modules/:id/expanders',
+    name: 'module-expanders',
+    component: ModuleExpandersView,
+    props: true,
+  },
+  {
+    path: '/modules/:id/bridges',
+    name: 'module-bridges',
+    component: ModuleBridgesView,
+    props: true,
+  },
+  {
+    path: '/modules/:id/documents',
+    name: 'module-documents',
+    component: ModuleDocumentsView,
+    props: true,
+  },
+  { path: '/modules/:id/videos', name: 'module-videos', component: ModuleVideosView, props: true },
+  { path: '/modules/:id/notes', name: 'module-notes', component: ModuleNotesView, props: true },
   { path: '/racks', name: 'racks', component: RacksView },
   { path: '/systems', name: 'systems', component: SystemsView },
   { path: '/patches', name: 'patches', component: PatchesView },
+  // A patch is likewise a page per thing: the detail page is the picture of
+  // the case and the two-jack drag that patches a cable on it, and everything
+  // else — the cable list, the voice panel, how the patch is set up, the
+  // scope, the notes — is its own route in the nav drawer.
   { path: '/patches/:id', name: 'patch-detail', component: PatchDetailView, props: true },
-  // Everything about a patch that is not the picture of it, kept off the
-  // patch view so that page is the diagram and the cables and nothing else.
+  { path: '/patches/:id/cables', name: 'patch-cables', component: PatchCablesView, props: true },
+  { path: '/patches/:id/voice', name: 'patch-voice', component: PatchVoiceView, props: true },
   {
-    path: '/patches/:id/config',
-    name: 'patch-config',
-    component: PatchConfigView,
+    path: '/patches/:id/settings',
+    name: 'patch-settings',
+    component: PatchSettingsView,
     props: true,
   },
+  { path: '/patches/:id/flow', name: 'patch-flow', component: PatchFlowView, props: true },
+  { path: '/patches/:id/links', name: 'patch-links', component: PatchLinksView, props: true },
+  { path: '/patches/:id/scope', name: 'patch-scope', component: PatchScopeView, props: true },
+  { path: '/patches/:id/notes', name: 'patch-notes', component: PatchNotesView, props: true },
+  {
+    path: '/patches/:id/modules',
+    name: 'patch-modules',
+    component: PatchModulesView,
+    props: true,
+  },
+  // Where the one page that held all of the above used to be.
+  { path: '/patches/:id/config', redirect: (to) => `/patches/${to.params.id}/settings` },
   { path: '/import', name: 'import', component: ImportView },
   { path: '/search', name: 'search', component: SearchView },
   // A manual read as text, addressed by the document's content hash.

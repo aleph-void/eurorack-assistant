@@ -30,6 +30,7 @@ import App from '../src/App.vue';
 import { useAuthStore } from '../src/stores/auth.js';
 import { useJobsStore } from '../src/stores/jobs.js';
 import { useDevicesStore } from '../src/stores/devices.js';
+import { useDetailStore } from '../src/stores/detail.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -44,7 +45,13 @@ function mountApp(user = { id: 1, username: 'nick', is_admin: false }) {
   auth.user = user;
   auth.loaded = true;
   const wrapper = mount(App, { global });
-  return { wrapper, auth, jobs: useJobsStore(), devices: useDevicesStore() };
+  return {
+    wrapper,
+    auth,
+    jobs: useJobsStore(),
+    devices: useDevicesStore(),
+    detail: useDetailStore(),
+  };
 }
 
 describe('App', () => {
@@ -135,6 +142,68 @@ describe('App', () => {
     // Open, the drawer shows its own badges, so the dot steps aside.
     await wrapper.find('[data-test="nav-toggle"]').trigger('click');
     expect(wrapper.find('[data-test="nav-dot"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  // A module and a patch are each a dozen routes over one record, so the
+  // drawer answers with that record's own pages while one of them is open.
+  it('offers the open module’s pages at the top of the drawer', async () => {
+    const { wrapper, detail } = mountApp();
+    await flushPromises();
+    expect(wrapper.find('[data-test="nav-detail-heading"]').exists()).toBe(false);
+
+    const claim = detail.set('module', '4', 'Make Noise Maths');
+    await nextTick();
+    expect(wrapper.find('[data-test="nav-detail-heading"]').text()).toBe('Make Noise Maths');
+    expect(wrapper.find('[data-test="nav-detail-index"]').attributes('to')).toBe('/modules/4');
+    expect(wrapper.find('[data-test="nav-detail-components"]').attributes('to')).toBe(
+      '/modules/4/components'
+    );
+    expect(wrapper.find('[data-test="nav-detail-bridges"]').text()).toBe('Dual panels');
+    // A patch's pages are not on offer while a module is open.
+    expect(wrapper.find('[data-test="nav-detail-cables"]').exists()).toBe(false);
+
+    // The rack the reader came from rides along, so previous/next keeps
+    // walking that rack from whichever page they are on.
+    route.query = { rack: '2' };
+    await nextTick();
+    expect(wrapper.find('[data-test="nav-detail-videos"]').attributes('to')).toBe(
+      '/modules/4/videos?rack=2'
+    );
+
+    // A route swap mounts the arriving header before the departing one lets
+    // go, so a header only ever gives up the claim it was granted.
+    detail.set('module', '5', 'Mutable Rings');
+    detail.clear(claim);
+    await nextTick();
+    expect(wrapper.find('[data-test="nav-detail-heading"]').text()).toBe('Mutable Rings');
+
+    detail.clear(detail.claim);
+    await nextTick();
+    expect(wrapper.find('[data-test="nav-detail-heading"]').exists()).toBe(false);
+    route.query = {};
+    wrapper.unmount();
+  });
+
+  it('offers the open patch’s pages instead, when a patch is what is open', async () => {
+    const { wrapper, detail } = mountApp();
+    await flushPromises();
+
+    detail.set('patch', '7', 'Krell');
+    await nextTick();
+    expect(wrapper.find('[data-test="nav-detail-heading"]').text()).toBe('Krell');
+    expect(wrapper.find('[data-test="nav-detail-index"]').attributes('to')).toBe('/patches/7');
+    expect(wrapper.find('[data-test="nav-detail-cables"]').attributes('to')).toBe(
+      '/patches/7/cables'
+    );
+    expect(wrapper.find('[data-test="nav-detail-scope"]').text()).toBe('Oscilloscope');
+    // A patch has no rack query to carry.
+    route.query = { rack: '2' };
+    await nextTick();
+    expect(wrapper.find('[data-test="nav-detail-notes"]').attributes('to')).toBe(
+      '/patches/7/notes'
+    );
+    route.query = {};
     wrapper.unmount();
   });
 
