@@ -335,6 +335,41 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="arrange-component-3"]').exists()).toBe(true);
   });
 
+  // A panel of a hundred markers is a curtain of them, and the key under it
+  // is where "just the jacks, please" is asked.
+  it('filters the markers to the types pressed in the key', async () => {
+    api.get.mockResolvedValue({
+      ...structuredClone(moduleResponse),
+      panel: {
+        source: 'image',
+        url: '/api/panels/abc.png',
+        width: 400,
+        height: 1200,
+        crop: { x: 0, y: 0, w: 1, h: 1 },
+        components: [
+          { id: 5, component_id: 1, name: 'Signal In', type: 'input_jack', shape: 'jack', x: 0.5, y: 0.9 },
+          { id: 6, component_id: 2, name: 'EOR', type: 'output_jack', shape: 'jack', x: 0.5, y: 0.7 },
+          { id: 7, component_id: 3, name: 'Rise', type: 'knob', shape: 'knob', x: 0.5, y: 0.3 },
+        ],
+      },
+    });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    const markers = () => wrapper.findAll('[data-test="module-panel-svg"] g').length;
+    expect(markers()).toBe(3);
+
+    await wrapper.find('[data-test="legend-knob"]').trigger('click');
+    expect(markers()).toBe(1);
+    // Several at once, each its own toggle.
+    await wrapper.find('[data-test="legend-input_jack"]').trigger('click');
+    expect(markers()).toBe(2);
+    // And pressing one again takes only that one back off.
+    await wrapper.find('[data-test="legend-knob"]').trigger('click');
+    expect(markers()).toBe(1);
+    await wrapper.find('[data-test="legend-input_jack"]').trigger('click');
+    expect(markers()).toBe(3);
+  });
+
   // A marker whose component_id is null is drawn on the plate, is in none of
   // the lists, and is the same violet an output jack is drawn in — so it
   // reads as an output jack that has gone missing.

@@ -1375,6 +1375,9 @@ describe('filling in what modules are missing', () => {
       manual_text: '# Manual\n\nA function generator with four channels.\n',
       analysis_status: 'complete',
       panel_status: 'complete',
+      // A finished module has had its documents read for a menu too — the
+      // status says the question was asked, not that anything was found.
+      parameters_status: 'complete',
       summary: 'A function generator.',
       hp: 20,
       ...fields,
@@ -1438,6 +1441,32 @@ describe('filling in what modules are missing', () => {
     expect(after.panel_status).toBe('complete');
     expect((await ctx.db.models.Module.findByPk(noAnalysis.id)).analysis_status).toBe('pending');
     expect((await ctx.db.models.Module.findByPk(noPanel.id)).panel_status).toBe('pending');
+  });
+
+  // Reading a module's menu is a gap like a missing summary: the sweep is
+  // how every module analyzed before menus existed gets one.
+  it('counts a menu nobody has read as a gap the narrow pass fills', async () => {
+    const module = await completeModule();
+    await ctx.db.models.Module.update(
+      { parameters_status: 'pending' },
+      { where: { id: module.id } }
+    );
+    const res = await reanalyze();
+    expect(res.body.queued).toEqual({
+      find_manual: 0,
+      analyze_manual: 0,
+      panel_image: 0,
+      extract_manual: 0,
+      describe_components: 1,
+    });
+    // And once it has been read — whether or not the module had a menu — the
+    // sweep leaves it alone rather than paying for the pass again.
+    await ctx.db.models.Module.update(
+      { parameters_status: 'complete' },
+      { where: { id: module.id } }
+    );
+    await ctx.db.models.Job.destroy({ where: {} });
+    expect((await reanalyze()).body).toMatchObject({ complete: 1, queued: { describe_components: 0 } });
   });
 
   it('counts an analysis that produced no components as missing', async () => {

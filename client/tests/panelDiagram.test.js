@@ -771,8 +771,9 @@ describe('ModulePanel', () => {
     const untyped = wrapper.find('[data-test="panel-marker-?"]');
     expect(untyped.attributes('stroke')).toBeUndefined();
     expect(untyped.classes()).not.toContain('typed');
-    // And the key beside the picture names what is on it, in order.
-    expect(wrapper.findAll('[data-test="component-legend"] > span').map((s) => s.text())).toEqual([
+    // And the key beside the picture names what is on it, in order. On a
+    // panel the key is also the filter, so each entry is a button.
+    expect(wrapper.findAll('[data-test="component-legend"] > button').map((s) => s.text())).toEqual([
       'input jack',
       'output jack',
       'bidirectional jack',

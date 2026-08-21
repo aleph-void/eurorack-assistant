@@ -27,12 +27,17 @@ export function moduleParameterRoutes(db) {
   // Returns { ok: true, id } — id null for a parameter of the whole module —
   // or { error }.
   async function resolveComponent(module, raw) {
-    if (raw === undefined || raw === null || raw === '') return { ok: true, id: null };
+    if (raw === undefined || raw === null || raw === '') {
+      return { ok: true, id: null, name: null };
+    }
     const component = await ModuleComponent.findOne({
       where: { id: Number(raw) || 0, module_id: module.id },
     });
     if (!component) return { error: 'Component not found on this module' };
-    return { ok: true, id: component.id };
+    // The name travels with the id: a re-analysis destroys every component
+    // row, and the name is what the parameter is put back onto the new one by
+    // (services/manualAnalyzer.js).
+    return { ok: true, id: component.id, name: component.name };
   }
 
   function readValueType(raw) {
@@ -78,6 +83,7 @@ export function moduleParameterRoutes(db) {
     const row = await ModuleParameter.create({
       module_id: module.id,
       component_id: component.id,
+      component_name: component.name,
       name,
       group_label: text(req.body?.group_label),
       value_type: valueType.type,
@@ -105,6 +111,7 @@ export function moduleParameterRoutes(db) {
       const component = await resolveComponent(module, req.body.component_id);
       if (component.error) return res.status(400).json({ error: component.error });
       updates.component_id = component.id;
+      updates.component_name = component.name;
     }
     if (req.body?.value_type !== undefined) {
       const valueType = readValueType(req.body.value_type);

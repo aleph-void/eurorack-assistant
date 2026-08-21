@@ -153,6 +153,7 @@ function parseParameter(raw, componentByName) {
   }
   return {
     component_id: component ? component.id : null,
+    component_name: component ? component.name : null,
     name,
     group_label: clean(raw.group),
     value_type: valueType,
@@ -244,6 +245,7 @@ export async function findParametersForModule(db, backend, module, manualPaths) 
     const row = await ModuleParameter.create({
       module_id: module.id,
       component_id: p.component_id,
+      component_name: p.component_name,
       name: p.name,
       group_label: p.group_label,
       value_type: p.value_type,

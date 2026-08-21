@@ -81,6 +81,12 @@ export function defineModels(sequelize) {
       // Progress of the front-panel picture: found/drawn or not (migration
       // 016). Independent of the analysis, which it runs after.
       panel_status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'pending' },
+      // Whether the module's MENU has been read out of its documents
+      // (migration 037). 'complete' as soon as the pass has run, whether or
+      // not it found anything: most modules keep nothing in a menu, and
+      // "found none" has to be distinguishable from "never looked" or the
+      // fill-the-blanks sweep asks about every module in the rack forever.
+      parameters_status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'pending' },
       // Panel width in HP, where the import stated it or the panel job worked
       // it out (migration 017). Null until something knows it.
       hp: { type: DataTypes.REAL },
@@ -473,6 +479,10 @@ export function defineModels(sequelize) {
       id,
       module_id: { type: DataTypes.INTEGER, allowNull: false },
       component_id: { type: DataTypes.INTEGER },
+      // The component's name, kept beside its id: a re-analysis destroys and
+      // recreates every module_components row, and this is what the parameter
+      // is put back onto the new one by.
+      component_name: { type: DataTypes.TEXT },
       name: { type: DataTypes.TEXT, allowNull: false },
       group_label: { type: DataTypes.TEXT },
       value_type: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'enum' },

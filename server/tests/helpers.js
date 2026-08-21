@@ -293,6 +293,10 @@ export async function insertModule(db, userId, fields = {}) {
     manual_status = manual_hash ? 'found' : 'pending',
     analysis_status = 'pending',
     panel_status = 'pending',
+    // Whether the module's menu has been read out of its documents. Pending
+    // by default like every other step, so a fixture that stands for a
+    // FINISHED module has to say so.
+    parameters_status = 'pending',
     hp = null,
     summary = null,
   } = fields;
@@ -302,6 +306,7 @@ export async function insertModule(db, userId, fields = {}) {
     manual_status,
     analysis_status,
     panel_status,
+    parameters_status,
     hp,
     summary,
   });

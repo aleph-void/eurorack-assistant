@@ -369,8 +369,9 @@ async function reanalyzeAll() {
     title: 'Fill in missing details',
     message:
       `Queue work for every module ${where} that is missing a manual, an analysis, ` +
-      `a panel image, an HP width, the searchable text of its manual, or descriptions ` +
-      `for components added by hand?${extra}${panels}`,
+      `a panel image, an HP width, the searchable text of its manual, descriptions ` +
+      `for components added by hand, or a reading of its menu parameters — the ` +
+      `settings a module keeps behind an encoder rather than under a knob?${extra}${panels}`,
     confirmLabel: 'Fill in',
   });
   if (!ok) return;

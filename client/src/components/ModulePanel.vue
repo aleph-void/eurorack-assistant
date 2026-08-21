@@ -8,7 +8,7 @@
 // there in the first place was an estimate, and the person looking at the
 // photograph can simply see the answer.
 
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import ComponentLegend from './ComponentLegend.vue';
 import { componentColor } from '../componentTypes.js';
 import { panelThumbUrl, placementFraction } from '../panelLayout.js';
@@ -102,12 +102,29 @@ const viewBox = computed(() => {
 
 const highlighted = computed(() => new Set(props.highlight));
 
+// The component types the picture is filtered to, toggled from the key under
+// it. Empty is everything — a panel of a hundred markers is a curtain of
+// them, and "just the jacks" is the question actually being asked of it.
+// Cleared when the picture changes: a filter belongs to the panel you set it
+// on, not to the next module you open.
+const shownTypes = ref([]);
+watch(
+  () => props.panel,
+  () => {
+    shownTypes.value = [];
+  }
+);
+const filtered = computed(() => shownTypes.value.length > 0);
+
 const markers = computed(() =>
   (props.panel.components ?? [])
     .filter(
       (placement) =>
         props.onlyComponentId === null || placement.component_id === props.onlyComponentId
     )
+    // A marker with no type at all — a placement the analysis never attached
+    // to a component — is in no key entry, so it goes while one is pressed.
+    .filter((placement) => !filtered.value || shownTypes.value.includes(placement.type))
     .map((placement) => {
       const held = dragging.value?.id === placement.id ? dragging.value : null;
       const { fx, fy } = held
@@ -128,7 +145,7 @@ const markers = computed(() =>
     .filter(Boolean)
 );
 const markerCountText = computed(() =>
-  props.onlyComponentId === null
+  props.onlyComponentId === null && !filtered.value
     ? `${markers.value.length} component(s) located on it`
     : `${markers.value.length} of ${(props.panel.components ?? []).length} component(s) shown`
 );
@@ -263,7 +280,12 @@ function endDrag() {
         Marker contrast: {{ scheme.name }}
       </button>
     </div>
-    <ComponentLegend :items="panel.components ?? []" />
+    <ComponentLegend
+      :items="panel.components ?? []"
+      selectable
+      :selected="shownTypes"
+      @update:selected="shownTypes = $event"
+    />
     <figcaption class="muted">
       <template v-if="panel.source === 'upload'">
         Panel picture you uploaded — {{ markerCountText }}{{

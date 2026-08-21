@@ -54,6 +54,7 @@ export const LLM_JOB_TYPES = [
   'extract_manual',
   'panel_image',
   'describe_components',
+  'find_parameters',
   'analyze_video',
   'scope_question',
   'answer_question',

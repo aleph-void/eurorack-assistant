@@ -226,8 +226,11 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   rack organizer's rows and the patch diagram. `client/src/componentTypes.js`
   holds the list (mirroring `services/manualAnalyzer.js`, which is what the
   server validates against), the labels and the colours; `ComponentLegend.vue`
-  draws the key under each picture, listing only the types on it. The colour
-  goes on the marker itself (a `fill`/`stroke` attribute, because it is data),
+  draws the key under each picture, listing only the types on it — and under a
+  PANEL each entry is also the filter: press one and the picture shows that
+  type alone, press several for several, press again to take it off
+  (`shownTypes` in ModulePanel.vue), because a panel of a hundred markers is a
+  curtain of them. The colour goes on the marker itself (a `fill`/`stroke` attribute, because it is data),
   so no stylesheet may set either or it would win over the type. Each panel
   placement carries the `type` of the component behind it (`panelJson()` in
   services/panelImage.js), so a renderer colours a marker without loading the
@@ -367,9 +370,8 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
 ## Big-picture flow
 
 Everything slow is a DB-backed job (`jobs` table): import → find_manual (per
-module) → analyze_manual → panel_image; extract_manual runs alongside;
-find_parameters is asked for by hand, from the module's Menu parameters page;
-questions run scope_question → user review → answer_question; attached
+module) → analyze_manual → panel_image + find_parameters; extract_manual runs
+alongside; questions run scope_question → user review → answer_question; attached
 YouTube videos run download_video (yt-dlp + ffmpeg frames/transcript, no
 LLM) → analyze_video (techniques summary onto `module_videos`, then the
 work files are deleted); a rack-scoped channel scan (`services/youtube.js`)

@@ -28,6 +28,9 @@ export const valueJson = (row) => ({
 export const parameterJson = (p, extra = {}) => ({
   id: p.id,
   component_id: p.component_id,
+  // The component's name as it stood when the parameter was recorded — what
+  // the page has left to show when an analysis has taken the component away.
+  component_name: p.component_name,
   name: p.name,
   group_label: p.group_label,
   value_type: p.value_type,

@@ -6,6 +6,9 @@ import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { createTestApp, createUser, fakeBackend, insertModule, login } from './helpers.js';
 import { findParametersForModule } from '../src/services/moduleParameters.js';
+import { analyzeManualForModule } from '../src/services/manualAnalyzer.js';
+import { moduleFactGaps } from '../src/services/componentDescriber.js';
+import { createHandlers } from '../src/jobs/handlers.js';
 import { patchTextDocument } from '../src/services/patchDocument.js';
 
 // alice has ALM's Pamela's Pro Workout in her rack: one encoder, one screen
@@ -372,5 +375,124 @@ describe('recording a menu setting in a patch', () => {
     // jack, then the menu entry of it.
     const text = patchTextDocument(res.body);
     expect(text).toContain('"OUT 1" menu setting "Clock division": /4');
+  });
+});
+
+
+// The menu is read once per module, by whichever pass gets there first: the
+// analysis chains it for a freshly imported module, and the fill-the-blanks
+// sweep picks up everything analyzed before any of this existed.
+describe('the menu in the pipeline', () => {
+  it('survives a re-analysis, rebound onto the component of the same name', async () => {
+    const ctx = await withMenuModule();
+    const parameter = await ctx.db.models.ModuleParameter.create({
+      module_id: ctx.module.id,
+      component_id: ctx.out1.id,
+      component_name: 'OUT 1',
+      name: 'Clock division',
+      description: 'What I typed myself.',
+    });
+    await ctx.db.models.ModuleParameterOption.create({ parameter_id: parameter.id, value: '/4' });
+
+    const backend = fakeBackend({
+      analyzeDocument: JSON.stringify({
+        summary: 'A clock source.',
+        components: [
+          { type: 'output_jack', name: 'OUT 1' },
+          { type: 'output_jack', name: 'OUT 3' },
+        ],
+        normalizations: [],
+      }),
+    });
+    await analyzeManualForModule(ctx.db, backend, ctx.module, '/tmp/pams.pdf');
+
+    // The analysis destroys and recreates every component row, so the
+    // parameter's old component id is gone — it has to come back on the new
+    // OUT 1, with its hand-written description and its options intact.
+    const newOut1 = await ctx.db.models.ModuleComponent.findOne({
+      where: { module_id: ctx.module.id, name: 'OUT 1' },
+    });
+    expect(newOut1.id).not.toBe(ctx.out1.id);
+    await parameter.reload();
+    expect(parameter.component_id).toBe(newOut1.id);
+    expect(parameter.description).toBe('What I typed myself.');
+    expect(
+      await ctx.db.models.ModuleParameterOption.count({ where: { parameter_id: parameter.id } })
+    ).toBe(1);
+  });
+
+  it('loses only the link when the component it named is gone', async () => {
+    const ctx = await withMenuModule();
+    const parameter = await ctx.db.models.ModuleParameter.create({
+      module_id: ctx.module.id,
+      component_id: ctx.out2.id,
+      component_name: 'OUT 2',
+      name: 'Wave',
+    });
+    const backend = fakeBackend({
+      analyzeDocument: JSON.stringify({
+        summary: 'x',
+        components: [{ type: 'output_jack', name: 'OUT 1' }],
+        normalizations: [],
+      }),
+    });
+    await analyzeManualForModule(ctx.db, backend, ctx.module, '/tmp/pams.pdf');
+    await parameter.reload();
+    expect(parameter.component_id).toBe(null);
+    expect(parameter.component_name).toBe('OUT 2');
+  });
+
+  it('counts a menu nobody has read as a gap, and stops counting it once read', async () => {
+    const ctx = await withMenuModule();
+    expect((await moduleFactGaps(ctx.db, ctx.module)).parameters).toBe(true);
+    await ctx.db.models.Module.update(
+      { parameters_status: 'complete' },
+      { where: { id: ctx.module.id } }
+    );
+    // 'complete' with nothing found is still complete: most modules keep
+    // nothing in a menu, and asking again every sweep costs a model run each.
+    expect((await moduleFactGaps(ctx.db, ctx.module)).parameters).toBe(false);
+  });
+
+  it('reads the menu from the fill-the-blanks pass, and says it is done', async () => {
+    const ctx = await withMenuModule();
+    const manual = await ctx.db.models.Manual.create({
+      module_id: ctx.module.id,
+      user_id: null,
+      hash: 'c'.repeat(64),
+      source: 'found',
+      analysis_scope: true,
+    });
+    expect(manual.id).toBeTruthy();
+    // Every component already described and the module complete otherwise:
+    // the menu is the only blank left, so the pass is the menu pass alone.
+    await ctx.db.models.ModuleComponent.update(
+      { description: 'Described.' },
+      { where: { module_id: ctx.module.id } }
+    );
+    await ctx.db.models.Module.update(
+      { summary: 'A clock source.', hp: 8 },
+      { where: { id: ctx.module.id } }
+    );
+
+    const backend = fakeBackend({
+      analyzeDocument: JSON.stringify({
+        parameters: [{ name: 'Clock division', component: 'OUT 1', options: [{ value: '/4' }] }],
+      }),
+    });
+    const lines = [];
+    const handlers = createHandlers(ctx.db, { manualsDir: '/tmp' });
+    await handlers.describe_components(
+      { module_id: ctx.module.id, user_id: ctx.alice.id },
+      backend,
+      (m) => lines.push(m)
+    );
+
+    const rows = await ctx.db.models.ModuleParameter.findAll({ where: { module_id: ctx.module.id } });
+    expect(rows.map((r) => r.name)).toEqual(['Clock division']);
+    expect(rows[0].component_id).toBe(ctx.out1.id);
+    const record = await ctx.db.models.Module.findByPk(ctx.module.id);
+    expect(record.parameters_status).toBe('complete');
+    expect(lines.join(' ')).toContain('menu parameters found: 1');
   });
 });

@@ -597,6 +597,10 @@ describe('worker', () => {
     const { rows: jobs } = await db.query('SELECT type, payload FROM jobs ORDER BY id');
     expect(jobs.filter((j) => j.type === 'extract_manual')).toHaveLength(2);
     expect(jobs.filter((j) => j.type === 'panel_image')).toHaveLength(1);
+    // A module's MENU — what it can be set to that has no control on the
+    // panel — is read behind the analysis that just wrote the jacks those
+    // settings belong to.
+    expect(jobs.filter((j) => j.type === 'find_parameters')).toHaveLength(1);
   });
   it('reanalyze_components falls back to the manual alone when research fails', async () => {
     const db = await createTestDb();

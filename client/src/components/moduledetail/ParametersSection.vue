@@ -40,6 +40,10 @@ const componentsById = computed(
   () => new Map((props.module?.components || []).map((c) => [c.id, c]))
 );
 const parameters = computed(() => props.module?.parameters || []);
+// Whether the documents have been read for a menu at all: 'complete' with no
+// parameters means this module keeps nothing in one, which is a different
+// thing from nobody having looked.
+const status = computed(() => props.module?.parameters_status || 'pending');
 
 // Grouped by the component they configure, because that is how they are read:
 // "what can I set on OUT 1" rather than "what parameters does this module
@@ -246,11 +250,25 @@ async function removeOption(parameter, option) {
           Read the menu from the documents
         </button>
         <span class="muted"> — one model pass that only ever adds; your corrections stay.</span>
+        <span v-if="status === 'complete'" class="badge found" data-test="parameters-status">read</span>
       </p>
       <p v-if="error" class="error" data-test="parameters-error">{{ error }}</p>
 
       <p v-if="parameters.length === 0" class="muted" data-test="parameters-empty">
-        No menu parameters recorded. Most modules have none — everything they do is on the panel.
+        <template v-if="status === 'complete'">
+          The documents have been read and this module keeps nothing in a menu — everything it
+          does is on the panel. Add one by hand below if that is wrong.
+        </template>
+        <template v-else-if="status === 'reading'">
+          Reading the documents for this module's menu now.
+        </template>
+        <template v-else-if="status === 'failed'">
+          Reading this module's menu failed. Try again, or add what it holds by hand.
+        </template>
+        <template v-else>
+          Nobody has read this module's menu yet. Most modules have none — everything they do is
+          on the panel — but a menu-driven one keeps its whole personality here.
+        </template>
       </p>
 
       <div v-for="group in groups" :key="group.key" class="parameter-group" :data-test="`parameter-group-${group.key}`">

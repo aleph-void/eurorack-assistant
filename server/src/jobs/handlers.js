@@ -24,7 +24,8 @@
 //                     manual analysis with every page that was found attached
 //   describe_components — write descriptions for components that have none
 //                     (added by hand after the import) from the module's
-//                     documents, touching nothing that is already described
+//                     documents, touching nothing that is already described;
+//                     also reads the module's menu when nobody has yet
 //   find_parameters — read the module's documents for the settings it keeps
 //                     in a MENU rather than under a control, and the options
 //                     each one offers. Adds only: a parameter already
@@ -258,6 +259,21 @@ export function createHandlers(
     if (analyzed > 0 && (await enqueueModuleJob(db, 'panel_image', module, job.user_id))) {
       progress('queued front panel image');
     }
+    // The MENU is chained behind the analysis for the same reason: a
+    // parameter belongs to the jack it configures, and the jacks have only
+    // just been written. It runs once per module — 'complete' means the
+    // documents have been read for a menu, whether or not they held one — so
+    // an ordinary re-analysis does not pay for the pass again; the two
+    // re-analysis routes and the module's own button ask for it explicitly by
+    // setting the status back to pending.
+    const record = await Module.findByPk(module.id);
+    if (
+      analyzed > 0 &&
+      record?.parameters_status !== 'complete' &&
+      (await enqueueModuleJob(db, 'find_parameters', module, job.user_id))
+    ) {
+      progress('queued the menu parameter pass');
+    }
   }
 
   // The module's shared documents and the one among them that is the manual
@@ -336,7 +352,7 @@ export function createHandlers(
     if (!record) throw new Error(`Module ${job.module_id} no longer exists`);
     const module = record.get({ plain: true });
     const gaps = await moduleFactGaps(db, module);
-    if (gaps.components.length === 0 && !gaps.summary && !gaps.hp) {
+    if (gaps.components.length === 0 && !gaps.summary && !gaps.hp && !gaps.parameters) {
       progress('nothing is missing — every fact is already filled in');
       return;
     }
@@ -358,22 +374,52 @@ export function createHandlers(
       missing.length > 0 ? `${missing.length} component description(s)` : null,
       gaps.summary ? 'the summary' : null,
       gaps.hp ? 'the HP width' : null,
+      gaps.parameters ? 'the menu parameters' : null,
     ].filter(Boolean);
+    const paths = candidates.map((m) => manualPath(manualsDir, m.hash));
     progress(
       `filling in ${wanted.join(', ')} from ` +
         candidates.map((m) => m.original_name || `${m.hash}.pdf`).join(', ')
     );
-    const result = await describeComponentsForModule(
-      db,
-      backend,
-      module,
-      candidates.map((m) => manualPath(manualsDir, m.hash))
-    );
-    progress(
-      `descriptions written: ${result.described} of ${missing.length}` +
-        (result.summary ? '; summary filled in' : '') +
-        (result.hp ? '; HP filled in' : '')
-    );
+    if (missing.length > 0 || gaps.summary || gaps.hp) {
+      const result = await describeComponentsForModule(db, backend, module, paths);
+      progress(
+        `descriptions written: ${result.described} of ${missing.length}` +
+          (result.summary ? '; summary filled in' : '') +
+          (result.hp ? '; HP filled in' : '')
+      );
+    }
+    // The menu is a blank like any other, and this is the pass that fills
+    // blanks — but it asks a different question of the documents and answers
+    // with rows rather than sentences, so it is its own model call
+    // (services/moduleParameters.js) rather than more of the same prompt.
+    // Pure fill, like everything else here: it adds parameters that are not
+    // recorded and fills an EMPTY option list, and rewrites nothing.
+    if (gaps.parameters) {
+      await db.models.Module.update(
+        { parameters_status: 'reading' },
+        { where: { id: module.id } }
+      );
+      try {
+        const menu = await findParametersForModule(db, backend, module, paths);
+        await db.models.Module.update(
+          { parameters_status: 'complete' },
+          { where: { id: module.id } }
+        );
+        progress(
+          menu.asked === 0
+            ? 'no menu settings — everything this module does is on the panel'
+            : `menu parameters found: ${menu.asked}; added: ${menu.created}` +
+              (menu.options > 0 ? `; option lists filled in: ${menu.options}` : '')
+        );
+      } catch (e) {
+        await db.models.Module.update(
+          { parameters_status: 'failed' },
+          { where: { id: module.id } }
+        );
+        throw e;
+      }
+    }
   }
 
   // The module's MENU: everything a user can set on it that has no control of
@@ -386,6 +432,7 @@ export function createHandlers(
     const record = await Module.findByPk(job.module_id);
     if (!record) throw new Error(`Module ${job.module_id} no longer exists`);
     const module = record.get({ plain: true });
+    await Module.update({ parameters_status: 'reading' }, { where: { id: module.id } });
     const { manual } = await sharedManualDocuments(module);
     const scoped = (await analysisScopeDocuments(module, job.user_id)).filter(
       (m) => m.id !== manual?.id
@@ -402,12 +449,22 @@ export function createHandlers(
     progress(
       `reading the menu from ${candidates.map((m) => m.original_name || `${m.hash}.pdf`).join(', ')}`
     );
-    const result = await findParametersForModule(
-      db,
-      backend,
-      module,
-      candidates.map((m) => manualPath(manualsDir, m.hash))
-    );
+    let result;
+    try {
+      result = await findParametersForModule(
+        db,
+        backend,
+        module,
+        candidates.map((m) => manualPath(manualsDir, m.hash))
+      );
+    } catch (e) {
+      await Module.update({ parameters_status: 'failed' }, { where: { id: module.id } });
+      throw e;
+    }
+    // 'complete' whether or not there was a menu: most modules keep nothing
+    // in one, and the point of the status is that the question has been
+    // asked, so the fill-the-blanks sweep does not ask it again every time.
+    await Module.update({ parameters_status: 'complete' }, { where: { id: module.id } });
     if (result.asked === 0) {
       progress('this module has no menu settings — everything it does is on the panel');
       return;

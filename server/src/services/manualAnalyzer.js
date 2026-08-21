@@ -837,6 +837,7 @@ export async function analyzeManualForModule(
     ComponentValue,
     ComponentPair,
     ModulePathHint,
+    ModuleParameter,
   } = db.models;
   // Replacing the component inventory and marking the analysis complete is
   // one atomic step — a failure mid-way must not leave the module stripped of
@@ -850,9 +851,10 @@ export async function analyzeManualForModule(
     // the explicit destroy keeps pg-mem (tests) honest too.
     const previous = await ModuleComponent.findAll({
       where: { module_id: module.id },
-      attributes: ['id'],
+      attributes: ['id', 'name'],
       transaction,
     });
+    const componentNameById = new Map(previous.map((c) => [c.id, c.name]));
     if (previous.length > 0) {
       await ComponentValue.destroy({
         where: { component_id: previous.map((c) => c.id) },
@@ -885,6 +887,26 @@ export async function analyzeManualForModule(
     await ComponentPair.destroy({ where: { module_id: module.id }, transaction });
     await ComponentRoute.destroy({ where: { module_id: module.id }, transaction });
     await ComponentNormalization.destroy({ where: { module_id: module.id }, transaction });
+    // The MENU is not rebuilt here — it is read by its own pass, and a
+    // parameter carries hand corrections and a list of options that cost a
+    // model run. But it hangs off the components about to be destroyed, and
+    // would cascade away with them: let go of the component ids first, and
+    // put each parameter back on the component of the same NAME below. A
+    // parameter whose component the new inventory no longer has keeps its
+    // name and loses the link, which is what the module page shows as a
+    // parameter of a component that is gone.
+    const parameters = await ModuleParameter.findAll({
+      where: { module_id: module.id },
+      transaction,
+    });
+    const parameterNames = new Map();
+    for (const parameter of parameters) {
+      const name = parameter.component_name ?? componentNameById.get(parameter.component_id) ?? null;
+      parameterNames.set(parameter.id, name);
+      if (parameter.component_id !== null) {
+        await parameter.update({ component_id: null, component_name: name }, { transaction });
+      }
+    }
     await ModuleComponent.destroy({ where: { module_id: module.id }, transaction });
     await ModuleComponent.bulkCreate(
       // values and panel are not columns: values become component_values rows
@@ -899,6 +921,18 @@ export async function analyzeManualForModule(
       order: [['id', 'ASC']],
       transaction,
     });
+    // Every menu parameter back onto the component it names, now that the
+    // new inventory has its ids.
+    if (parameters.length > 0) {
+      const byName = new Map(
+        created.map((c) => [String(c.name ?? '').trim().toLowerCase(), c.id])
+      );
+      for (const parameter of parameters) {
+        const name = parameterNames.get(parameter.id);
+        const id = name ? byName.get(String(name).trim().toLowerCase()) : null;
+        if (id) await parameter.update({ component_id: id }, { transaction });
+      }
+    }
     resolved = resolveNormalizations(normalizations, created);
     if (resolved.length > 0) {
       await ComponentNormalization.bulkCreate(

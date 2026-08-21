@@ -67,13 +67,22 @@ export async function undescribedComponents(db, moduleId) {
 }
 
 // The blanks this pass may fill for a module: components with no
-// description, a missing summary, a missing HP width.
+// description, a missing summary, a missing HP width, and a menu nobody has
+// read yet.
+//
+// The menu is its own model pass (services/moduleParameters.js) rather than
+// part of the description prompt — it asks a different question and answers
+// with rows rather than sentences — but it is the same KIND of gap, so it is
+// filled from the same job and reported here. 'pending' is what makes it a
+// gap: a module whose documents have been read and hold no menu is complete,
+// and asking again every sweep would cost a model run per module forever.
 export async function moduleFactGaps(db, module) {
   const record = await db.models.Module.findByPk(module.id);
   return {
     components: await undescribedComponents(db, module.id),
     summary: !String(record?.summary ?? '').trim(),
     hp: record?.hp == null,
+    parameters: (record?.parameters_status ?? 'pending') === 'pending',
   };
 }
 

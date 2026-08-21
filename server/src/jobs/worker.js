@@ -99,6 +99,11 @@ export async function resetJobTarget(db, job, status, message) {
       { analysis_status: status === 'failed' ? 'failed' : 'pending' },
       { where: { id: job.module_id } }
     );
+  } else if (job.type === 'find_parameters' && job.module_id) {
+    await Module.update(
+      { parameters_status: status === 'failed' ? 'failed' : 'pending' },
+      { where: { id: job.module_id } }
+    );
   } else if (job.type === 'panel_image' && job.module_id) {
     await Module.update(
       { panel_status: status === 'failed' ? 'failed' : 'pending' },

@@ -167,11 +167,18 @@ export function moduleCoreRoutes(db, { manualsDir }) {
       return null;
     }
     // The facts the narrow pass can fill: blank component descriptions, a
-    // blank summary, a missing width. A module going back to the panel step
-    // has its width researched there, so only the first two count then.
+    // blank summary, a missing width, and a MENU nobody has read yet. A
+    // module going back to the panel step has its width researched there, so
+    // that one only counts when nothing upstream will run.
+    //
+    // The menu counts as a gap only while the status is 'pending': most
+    // modules keep nothing in a menu, and "asked, found none" has to be
+    // distinguishable from "never asked" or every sweep would pay for a model
+    // run on every module in the rack, forever.
     const factGaps = (module, step) =>
       undescribed.has(module.id) ||
       !String(module.summary ?? '').trim() ||
+      (module.parameters_status ?? 'pending') === 'pending' ||
       (step === null && module.hp == null);
 
     const queued = {
@@ -264,7 +271,14 @@ export function moduleCoreRoutes(db, { manualsDir }) {
     if (!job) {
       return res.status(409).json({ error: 'A re-analysis is already queued for this module' });
     }
-    await Module.update({ analysis_status: 'pending' }, { where: { id: module.id } });
+    // Fresh pages may describe a menu the manual alone did not, and the
+    // analysis chains the menu pass for a module whose status is not
+    // 'complete'. Asking for a re-analysis by hand is asking for that too;
+    // the pass still only ever adds.
+    await Module.update(
+      { analysis_status: 'pending', parameters_status: 'pending' },
+      { where: { id: module.id } }
+    );
     res.status(202).json({ job_id: job.id });
   }));
 
@@ -289,7 +303,10 @@ export function moduleCoreRoutes(db, { manualsDir }) {
     if (!job) {
       return res.status(409).json({ error: 'An analysis is already queued for this module' });
     }
-    await Module.update({ analysis_status: 'pending' }, { where: { id: module.id } });
+    await Module.update(
+      { analysis_status: 'pending', parameters_status: 'pending' },
+      { where: { id: module.id } }
+    );
     res.status(202).json({ job_id: job.id });
   }));
 
