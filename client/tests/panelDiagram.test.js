@@ -511,6 +511,34 @@ describe('ModulePanel', () => {
     expect(wrapper.text()).toContain('8HP');
   });
 
+  // The assignment view says what each hole IS, not only where it is: the
+  // same blue/green/yellow the patch diagram draws jacks in.
+  it('marks each jack in the colour of the direction it runs', () => {
+    const wrapper = mount(ModulePanel, {
+      props: {
+        panel: panelFor([
+          { component_id: 1, name: 'EOR', shape: 'jack', x: 0.3, y: 0.8, w: 0.06, h: 0.06 },
+          { component_id: 2, name: 'IN', shape: 'jack', x: 0.6, y: 0.8, w: 0.06, h: 0.06 },
+          { component_id: 3, name: '1', shape: 'jack', x: 0.4, y: 0.5, w: 0.06, h: 0.06 },
+          { component_id: 4, name: 'Rise', shape: 'knob', x: 0.5, y: 0.2, w: 0.1, h: 0.1 },
+        ]),
+        components: [
+          { id: 1, type: 'output_jack', name: 'EOR' },
+          { id: 2, type: 'input_jack', name: 'IN' },
+          { id: 3, type: 'bidirectional_jack', name: '1' },
+          { id: 4, type: 'knob', name: 'Rise' },
+        ],
+      },
+      global: testGlobal(),
+    });
+    expect(wrapper.find('[data-test="panel-marker-1"]').classes()).toContain('jack-out');
+    expect(wrapper.find('[data-test="panel-marker-2"]').classes()).toContain('jack-in');
+    expect(wrapper.find('[data-test="panel-marker-3"]').classes()).toContain('jack-both');
+    // A control has no direction, so it keeps the chosen marker colour.
+    const knob = wrapper.find('[data-test="panel-marker-4"]').classes();
+    expect(knob.some((c) => c.startsWith('jack-'))).toBe(false);
+  });
+
   it('highlights the components it is asked to', () => {
     const wrapper = mount(ModulePanel, {
       props: {

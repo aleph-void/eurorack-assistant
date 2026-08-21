@@ -47,6 +47,10 @@ const props = defineProps({
   // When arranging one component, hide every other marker without changing
   // the underlying panel data. null leaves the complete panel visible.
   onlyComponentId: { type: Number, default: null },
+  // The module's components, so a jack marker can be drawn in the colour its
+  // direction is drawn in everywhere else. Without them every marker is
+  // simply the chosen scheme colour.
+  components: { type: Array, default: () => [] },
 });
 
 const emit = defineEmits(['move', 'select']);
@@ -97,6 +101,18 @@ const viewBox = computed(() => {
 
 const highlighted = computed(() => new Set(props.highlight));
 
+// Which way a jack runs, in the colours the patch diagram uses: blue out,
+// green in, yellow for a jack whose direction the patch decides (a mult, one
+// end of a dual module's bridged wire). Controls keep the scheme colour —
+// they carry no direction, and the point of the scheme is being visible on a
+// panel of any colour, which the halo behind every marker preserves.
+const JACK_CLASS = {
+  output_jack: 'jack-out',
+  input_jack: 'jack-in',
+  bidirectional_jack: 'jack-both',
+};
+const typeById = computed(() => new Map(props.components.map((c) => [c.id, c.type])));
+
 const markers = computed(() =>
   (props.panel.components ?? [])
     .filter(
@@ -115,6 +131,7 @@ const markers = computed(() =>
         cy: Math.min(1, Math.max(0, fy)) * props.height,
         on: highlighted.value.has(placement.component_id),
         held: Boolean(held),
+        direction: JACK_CLASS[typeById.value.get(placement.component_id)] ?? null,
       };
     })
     .filter(Boolean)
@@ -233,7 +250,7 @@ function endDrag() {
           :cy="m.cy"
           r="9"
           class="marker"
-          :class="{ on: m.on, editable, held: m.held }"
+          :class="[m.direction, { on: m.on, editable, held: m.held }]"
           :data-test="`panel-marker-${m.component_id ?? m.name}`"
           @pointerdown="startDrag(m, $event)"
         >
@@ -304,6 +321,34 @@ function endDrag() {
 .marker.on {
   fill: var(--marker-ring);
   fill-opacity: 0.45;
+  stroke-width: 3;
+}
+/* A jack is drawn in the colour of the direction it runs — the same blue,
+   green and yellow the patch diagram uses — so the assignment view says what
+   each hole IS as well as where it is. The halo behind it still supplies the
+   contrast the scheme colours were chosen for. */
+.marker.jack-out {
+  stroke: var(--accent-2);
+  fill: var(--accent-2);
+  fill-opacity: 0.2;
+}
+.marker.jack-in {
+  stroke: #4ade80;
+  fill: #4ade80;
+  fill-opacity: 0.2;
+}
+.marker.jack-both {
+  stroke: #facc15;
+  fill: #facc15;
+  fill-opacity: 0.2;
+}
+.marker.jack-out.on,
+.marker.jack-in.on,
+.marker.jack-both.on,
+.marker.jack-out.held,
+.marker.jack-in.held,
+.marker.jack-both.held {
+  fill-opacity: 0.55;
   stroke-width: 3;
 }
 .marker.editable {

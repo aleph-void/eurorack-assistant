@@ -833,6 +833,7 @@ watch(() => props.id, () => {
         <ModulePanel
           v-if="module.panel"
           :panel="module.panel"
+          :components="module.components || []"
           :only-component-id="arrangedComponentId"
           editable
           @move="movePanelMarker"
