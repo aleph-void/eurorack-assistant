@@ -192,20 +192,6 @@ const ends = computed(() =>
 
 const undrawn = computed(() => props.cables.length - drawn.value.length);
 
-// Jacks with no place on the picture are drawn in a strip under the panel and
-// always carry their name — otherwise a dot below a module means nothing.
-const spareLabels = computed(() =>
-  diagram.value.panels.flatMap((placed) =>
-    placed.spare
-      .map((jack) => ({
-        key: `${placed.pm.id}:${jack.id}`,
-        anchor: diagram.value.anchors.get(`${placed.pm.id}:${jack.id}`),
-        name: jack.name,
-      }))
-      .filter((s) => s.anchor)
-  )
-);
-
 const componentAt = (patchModuleId, componentId) =>
   props.modules.find((pm) => pm.id === patchModuleId)?.components.find((c) => c.id === componentId) ?? null;
 
@@ -474,18 +460,6 @@ const draftCable = computed(() =>
 
             <path v-if="draftCable" :d="draftCable" class="cable draft-cable" />
 
-            <!-- Jacks with no place on the picture sit below the panel and
-                 say what they are. -->
-            <text
-              v-for="s in spareLabels"
-              :key="`label-${s.key}`"
-              :x="s.anchor.x + 9"
-              :y="s.anchor.y + 4"
-              class="spare-label"
-            >
-              {{ s.name }}
-            </text>
-
             <path
               v-for="c in drawn"
               :key="c.cable.id"
@@ -571,8 +545,9 @@ const draftCable = computed(() =>
             <br />
           </template>
           Panels are the front plates found for each module, or a drawing made from its manual
-          where no picture was found. A jack the panel could not place is shown in the strip
-          underneath it.
+          where no picture was found. A jack the picture does not place is out of frame and is
+          not drawn — patch it from the cable list below, and correct where it sits on the
+          module's own page.
         </p>
       </template>
     </div>
@@ -681,8 +656,7 @@ const draftCable = computed(() =>
   margin: 0;
   width: auto;
 }
-.jack-label,
-.spare-label {
+.jack-label {
   fill: var(--muted);
   font-size: 15px;
 }

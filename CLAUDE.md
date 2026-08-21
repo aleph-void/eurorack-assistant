@@ -96,7 +96,16 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   `wrap` is off whenever rack rows drive the layout), and module names are off
   by default because there is nowhere to put them. The picture zooms instead
   (the SVG's CSS width; the coordinate space never changes, so every hit test
-  follows).
+  follows). A jack the picture does not place is OUT OF FRAME and is not drawn
+  — nothing hangs below a panel, which is what kept the rows apart; cables
+  that end at one are counted in the "not drawn" line instead.
+- A patch is made of the connections a person can reach, so a connector that
+  is not a patch point never appears in one: an EXPANSION HEADER
+  (`port_kind: 'ribbon'` — the connector an expander's ribbon cable plugs into,
+  behind the panel) is filtered out of the diagram and out of every cable
+  picker (`isPatchPoint()` in `panelLayout.js` and `usePatchFacts.js`). It is
+  still a component of the module and still shown on the module page: the pair
+  it joins is declared as an expander, not patched.
 - Arrangements are saved by REPLACEMENT — `PUT /api/racks/:id/layout` and
   `snapshotRackLayout()` both delete every row of the rack/patch and write the
   ones they were sent. Two of those running at once is a corruption, not a

@@ -378,6 +378,34 @@ describe('PatchDetailView', () => {
     expect(jack.element.value).toBe('M2 (mult 1)');
   });
 
+  // An expansion header is the ribbon connector an expander's cable plugs
+  // into, behind the panel: signal crosses it, but never a patch cable.
+  it('never offers an expansion header as an end of a cable', async () => {
+    const withHeader = {
+      ...patchResponse,
+      modules: patchResponse.modules.map((pm) =>
+        pm.id === 11
+          ? {
+              ...pm,
+              components: [
+                ...pm.components,
+                { id: 99, type: 'input_jack', name: 'EXP', port_kind: 'ribbon', values: [] },
+              ],
+            }
+          : pm
+      ),
+    };
+    api.get.mockResolvedValue(withHeader);
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+
+    await pick(wrapper, 'cable-to-module', 'maths');
+    const jack = wrapper.find('[data-test="cable-to-jack"]');
+    await jack.trigger('focus');
+    await jack.setValue('exp');
+    expect(wrapper.findAll('[data-test^="cable-to-jack-option-"]')).toHaveLength(0);
+  });
+
   it('shows an input that already has a cable in it as unavailable', async () => {
     api.get.mockResolvedValue(patchResponse);
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });

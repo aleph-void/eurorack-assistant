@@ -7,6 +7,12 @@ export const TO_TYPES = ['input_jack', 'bidirectional_jack'];
 
 export const portKindLabel = (kind) => (kind ? kind.replace(/_/g, ' ') : null);
 
+// An EXPANSION HEADER is the ribbon connector an expander's cable plugs into,
+// behind the panel rather than on it. It carries signal between two modules,
+// but never a signal a person patches — the pair is declared an expander
+// instead — so a patch never offers one.
+export const isPatchPoint = (component) => component?.port_kind !== 'ribbon';
+
 export function jackLabel(c) {
   const port = portKindLabel(c.port_kind);
   const suffix = c.type === 'bidirectional_jack' ? ` (mult${c.group_label ? ` ${c.group_label}` : ''})` : '';
@@ -87,7 +93,7 @@ function conditionText(condition) {
 // on a module whose outputs are unnamed has to land somewhere.
 const jackCandidates = (types, forDestination) =>
   modules.value.flatMap((pm) => {
-    const wanted = pm.components.filter((c) => types.includes(c.type));
+    const wanted = pm.components.filter((c) => types.includes(c.type) && isPatchPoint(c));
     const seen = new Map();
     return wanted.map((c) => {
       const index = (seen.get(c.type) || 0) + 1;

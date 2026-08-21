@@ -6,6 +6,7 @@ import AutocompleteSelect from '../AutocompleteSelect.vue';
 import {
   FROM_TYPES,
   TO_TYPES,
+  isPatchPoint,
   jackLabel,
   usePatchFacts,
 } from './usePatchFacts.js';
@@ -49,23 +50,18 @@ watch(toModuleId, () => {
   toComponentId.value = '';
 });
 
-const fromModules = computed(() =>
-  modules.value.filter((m) => m.components.some((c) => FROM_TYPES.includes(c.type)))
-);
-const toModules = computed(() =>
-  modules.value.filter((m) => m.components.some((c) => TO_TYPES.includes(c.type)))
-);
+// A cable's ends are the jacks a person can reach: an expansion header
+// carries signal between two panels but is a connector behind the panel, so
+// it is never one of them (usePatchFacts.js).
+const canSend = (c) => FROM_TYPES.includes(c.type) && isPatchPoint(c);
+const canReceive = (c) => TO_TYPES.includes(c.type) && isPatchPoint(c);
+const fromModules = computed(() => modules.value.filter((m) => m.components.some(canSend)));
+const toModules = computed(() => modules.value.filter((m) => m.components.some(canReceive)));
 const fromJacks = computed(
-  () =>
-    modulesById.value.get(Number(fromModuleId.value))?.components.filter((c) =>
-      FROM_TYPES.includes(c.type)
-    ) || []
+  () => modulesById.value.get(Number(fromModuleId.value))?.components.filter(canSend) || []
 );
 const toJacks = computed(
-  () =>
-    modulesById.value.get(Number(toModuleId.value))?.components.filter((c) =>
-      TO_TYPES.includes(c.type)
-    ) || []
+  () => modulesById.value.get(Number(toModuleId.value))?.components.filter(canReceive) || []
 );
 
 const fromModuleOptions = computed(() => moduleOptions(fromModules.value));
@@ -247,7 +243,7 @@ const jackOf = (pmId, componentId) =>
 function reversible(cable) {
   const from = jackOf(cable.from_patch_module_id, cable.from_component_id);
   const to = jackOf(cable.to_patch_module_id, cable.to_component_id);
-  return Boolean(from && to && TO_TYPES.includes(from.type) && FROM_TYPES.includes(to.type));
+  return Boolean(from && to && canReceive(from) && canSend(to));
 }
 
 async function reverseCable(cable) {
@@ -271,7 +267,7 @@ const looseEnds = computed(() => {
       fed.has(pm.id) &&
       !sending.has(pm.id) &&
       !pm.external &&
-      pm.components.some((c) => FROM_TYPES.includes(c.type))
+      pm.components.some(canSend)
   );
 });
 

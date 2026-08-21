@@ -126,15 +126,36 @@ describe('panel layout geometry', () => {
   });
 
   // A photograph only carries the jacks the LLM could actually see on it;
-  // inventing a spot for the rest would put a marker over the wrong hole.
-  it('puts a jack the panel could not place in the strip below it', () => {
-    const [maths] = modules();
+  // inventing a spot for the rest would put a marker over the wrong hole, and
+  // hanging them under the panel is what pushed the rows of a case apart.
+  it('leaves a jack the panel could not place out of the picture', () => {
+    const [maths, lpg] = modules();
     maths.components.push({ id: 9, type: 'output_jack', name: 'UNITY' });
     expect(spareJacks(maths).map((c) => c.id)).toEqual([9]);
-    const { anchors, panels } = layoutDiagram([maths]);
-    const spare = anchors.get('11:9');
-    expect(spare.on_panel).toBe(false);
-    expect(spare.y).toBeGreaterThan(panels[0].y + panels[0].height);
+    const { anchors, panels } = layoutDiagram([maths, lpg], { rowStarts: [1] });
+    expect(anchors.get('11:9')).toBeUndefined();
+    // ...so the row below still sits straight under the row above.
+    expect(panels[1].y).toBe(panels[0].y + panels[0].height);
+  });
+
+  // The ribbon connector an expander's cable plugs into is behind the panel,
+  // not a hole anybody patches.
+  it('keeps an expansion header out of the picture', () => {
+    const [maths] = modules();
+    maths.components.push({ id: 8, type: 'input_jack', name: 'EXP', port_kind: 'ribbon' });
+    maths.panel.components.push({
+      component_id: 8,
+      name: 'EXP',
+      shape: 'jack',
+      x: 0.5,
+      y: 0.1,
+      w: 0.06,
+      h: 0.06,
+    });
+    expect(spareJacks(maths).map((c) => c.id)).toEqual([]);
+    const { anchors } = layoutDiagram([maths]);
+    expect(anchors.get('11:8')).toBeUndefined();
+    expect(anchors.get('11:1')).toBeTruthy();
   });
 
   it('arranges the jacks of a module with no panel inside its placeholder', () => {

@@ -17,8 +17,6 @@ export const ROW_GAP = 0;
 // would overlap on panels this close together), and below it for the jacks
 // that have no position on the picture.
 export const LABEL_HEIGHT = 30;
-export const SPARE_ROW_HEIGHT = 26;
-export const SPARE_COLUMNS = 2;
 export const MAX_ROW_WIDTH = 1750;
 export const MARGIN = 20;
 
@@ -30,6 +28,13 @@ const MAX_PANEL_WIDTH = 720;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const isJack = (c) => typeof c?.type === 'string' && c.type.endsWith('_jack');
+
+// Connections that are not patch points and have no business in a picture of
+// a patch. An EXPANSION HEADER is the ribbon connector an expander's cable
+// plugs into — behind the panel, not on it, and joined by declaring the two
+// modules an expander pair rather than by any cable a person patches.
+const HIDDEN_PORT_KINDS = new Set(['ribbon']);
+export const isPatchPoint = (component) => !HIDDEN_PORT_KINDS.has(component?.port_kind);
 
 // The visible part of a panel image: a product photo is cropped to the front
 // plate, a drawn panel is all panel.
@@ -108,17 +113,20 @@ export function placementFraction(panel, placement) {
 
 // Jacks the panel does not place. On a photograph the LLM only marks what it
 // could actually see, and a jack it missed must NOT be given an invented spot
-// on the picture — it goes in a strip under the panel instead, where a cable
-// can still reach it and nothing claims to know where it really is.
+// on the picture.
+//
+// A module with a picture simply does not draw them: they used to hang in a
+// strip beneath the panel, which is the one thing in the diagram that pushed
+// the rows of a case apart — a gap under every module whose photograph was
+// read imperfectly. The cables that end at one are counted and reported
+// instead. A module with NO picture is the other case: there is no frame for
+// them to be outside of, so they are arranged inside its placeholder.
 export function spareJacks(pm) {
   const placed = new Set(
     (pm.panel?.components ?? []).map((p) => p.component_id).filter((id) => id !== null)
   );
-  return (pm.components ?? []).filter((c) => isJack(c) && !placed.has(c.id));
+  return (pm.components ?? []).filter((c) => isJack(c) && isPatchPoint(c) && !placed.has(c.id));
 }
-
-const spareHeight = (count) =>
-  count === 0 ? 0 : Math.ceil(count / SPARE_COLUMNS) * SPARE_ROW_HEIGHT + 6;
 
 // Lay the modules out left to right. Returns the placed panels (in diagram
 // coordinates), the anchor point of every jack, and the size of the whole
@@ -140,15 +148,11 @@ export function layoutDiagram(
   let rowStart = 0;
   let x = MARGIN;
   let y = MARGIN;
-  let rowSpare = 0;
 
   const closeRow = () => {
-    // Every panel in a row shares the row's height, so the row below clears
-    // the longest spare strip in it.
-    y += labelBand + height + rowSpare + ROW_GAP;
+    y += labelBand + height + ROW_GAP;
     x = MARGIN;
     rowStart = panels.length;
-    rowSpare = 0;
   };
 
   for (const [moduleIndex, pm] of modules.entries()) {
@@ -159,12 +163,7 @@ export function layoutDiagram(
     ) {
       closeRow();
     }
-    // Jacks with no place on the panel go in a strip under it — but a module
-    // with no panel at all has no picture to be off, so its jacks are drawn
-    // inside its placeholder and cost the row no extra height.
     const loose = spareJacks(pm);
-    const spare = pm.panel ? loose : [];
-    rowSpare = Math.max(rowSpare, spareHeight(spare.length));
     panels.push({
       pm,
       x,
@@ -172,14 +171,13 @@ export function layoutDiagram(
       width,
       height,
       labelY: y + labelBand - 9,
-      spare,
       loose,
       row: rowStart,
     });
     x += width + PANEL_GAP;
   }
 
-  const totalHeight = panels.length === 0 ? 0 : y + labelBand + height + rowSpare + MARGIN;
+  const totalHeight = panels.length === 0 ? 0 : y + labelBand + height + MARGIN;
   const totalWidth =
     panels.length === 0
       ? 0
@@ -187,9 +185,14 @@ export function layoutDiagram(
 
   for (const placed of panels) {
     const { pm } = placed;
-    // Positions the panel knows about.
+    // Positions the panel knows about, minus the connectors that are not
+    // patch points (an expander's ribbon header is on the circuit board).
+    const hidden = new Set(
+      (pm.components ?? []).filter((c) => !isPatchPoint(c)).map((c) => c.id)
+    );
     for (const placement of pm.panel?.components ?? []) {
       if (placement.component_id === null || placement.component_id === undefined) continue;
+      if (hidden.has(placement.component_id)) continue;
       const { fx, fy } = placementFraction(pm.panel, placement);
       if (!Number.isFinite(fx) || !Number.isFinite(fy)) continue;
       anchors.set(`${pm.id}:${placement.component_id}`, {
@@ -217,16 +220,9 @@ export function layoutDiagram(
       });
       continue;
     }
-    // Jacks the panel could not place go under it.
-    placed.spare.forEach((jack, i) => {
-      anchors.set(`${pm.id}:${jack.id}`, {
-        x: placed.x + ((Math.floor(i % SPARE_COLUMNS) + 0.5) / SPARE_COLUMNS) * placed.width,
-        y: placed.y + placed.height + 10 + Math.floor(i / SPARE_COLUMNS) * SPARE_ROW_HEIGHT,
-        name: jack.name,
-        shape: 'jack',
-        on_panel: false,
-      });
-    });
+    // A jack the picture does not place is out of frame: the diagram says so
+    // by not drawing it (and by counting the cables it could not draw),
+    // rather than by inventing a place for it.
   }
 
   return { panels, anchors, width: totalWidth, height: totalHeight };
