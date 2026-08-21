@@ -234,6 +234,55 @@ describe('RacksView', () => {
     expect(api.put).not.toHaveBeenCalled();
   });
 
+  // A native drag swallows the wheel, so nothing scrolls while a module is
+  // in hand unless the view takes the wheel itself for the length of the
+  // gesture.
+  it('scrolls the page with the wheel while a module is being dragged', async () => {
+    const wrapper = await openReorderable();
+    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
+    const wheel = (init = {}) => {
+      const event = new WheelEvent('wheel', { deltaY: 120, cancelable: true, ...init });
+      window.dispatchEvent(event);
+      return event;
+    };
+
+    // Empty-handed the wheel is the browser's business.
+    wheel();
+    expect(scrollBy).not.toHaveBeenCalled();
+
+    await wrapper.find('[data-test="placed-module-0-0"]').trigger('dragstart');
+    const event = wheel();
+    expect(scrollBy).toHaveBeenCalledWith(0, 120);
+    expect(event.defaultPrevented).toBe(true);
+
+    // And it is handed back the moment the module is put down.
+    await wrapper.find('[data-test="placed-module-0-0"]').trigger('dragend');
+    wheel();
+    expect(scrollBy).toHaveBeenCalledTimes(1);
+    scrollBy.mockRestore();
+  });
+
+  it('slides a row wider than its box along on a shift-wheel mid-drag', async () => {
+    const wrapper = await openReorderable();
+    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
+    const row = wrapper.find('[data-test="rack-row-0"] .rack-row-slots').element;
+    Object.defineProperty(row, 'scrollLeft', { value: 0, writable: true });
+    const original = document.elementFromPoint;
+    document.elementFromPoint = () => row;
+
+    await wrapper.find('[data-test="placed-module-0-0"]').trigger('dragstart');
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: 90, shiftKey: true, cancelable: true }));
+    expect(row.scrollLeft).toBe(90);
+    expect(scrollBy).not.toHaveBeenCalled();
+
+    // Without shift the page moves instead, even over a row.
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: 90, cancelable: true }));
+    expect(row.scrollLeft).toBe(90);
+    expect(scrollBy).toHaveBeenCalledWith(0, 90);
+    scrollBy.mockRestore();
+    document.elementFromPoint = original;
+  });
+
   it('steps the focused module along its row with the arrow keys', async () => {
     const wrapper = await openReorderable(document.body);
     await wrapper.find('[data-test="placed-module-0-0"]').trigger('keydown.right');

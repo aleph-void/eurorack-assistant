@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import ShareButton from '../components/ShareButton.vue';
@@ -212,12 +212,37 @@ function startDrag(module, rowIndex = null, index = null) {
   // WHICH copy is in hand — a row may hold two of the same module, and the
   // one dragged is the one that has to move.
   dragged.value = { module: { ...module, module_id: module.module_id ?? module.id }, rowIndex, index };
+  window.addEventListener('wheel', onDragWheel, wheelOptions);
 }
 
 function endDrag() {
   dragged.value = null;
   dropHint.value = null;
+  window.removeEventListener('wheel', onDragWheel, wheelOptions);
 }
+
+// A native drag swallows the wheel, so the page stands still while a module
+// is in hand: a row further down, or a slot further along a row wider than
+// its box, cannot be reached without dropping the module first. For as long
+// as a drag is running the wheel is ours, and it does what it would do over
+// the same boxes empty-handed — plain scrolls the page, shift scrolls the
+// row under the cursor sideways.
+const wheelOptions = { passive: false, capture: true };
+
+function onDragWheel(event) {
+  if (!dragged.value) return;
+  const delta = event.deltaY || event.deltaX;
+  if (!delta) return;
+  const under = document.elementFromPoint?.(event.clientX, event.clientY);
+  const row = event.shiftKey ? under?.closest('.rack-row-slots') : null;
+  event.preventDefault();
+  if (row) row.scrollLeft += delta;
+  else window.scrollBy(0, delta);
+}
+
+// A drag left running when the view goes away (a drop that navigates, a
+// route change mid-gesture) would otherwise leave the wheel handler behind.
+onBeforeUnmount(endDrag);
 
 // Which slot the cursor is aiming at: the first module whose left half it is
 // over, else the end of the row. Measured against the DOM, which still holds
@@ -416,6 +441,8 @@ async function nudge(rowIndex, index, delta) {
         Add 3U and 1U rows, set their HP, then drag each module copy into its physical row. Drop a
         module between two others to place it there — that is how a row is reordered — or focus one
         and press <kbd>←</kbd>/<kbd>→</kbd> to step it along. A row cannot exceed its HP capacity.
+        The wheel still scrolls the page with a module in hand; hold <kbd>Shift</kbd> to slide a row
+        wider than its box along.
       </p>
       <div class="available-modules" data-test="available-modules" @dragover.prevent @drop="dropIntoAvailable">
         <h3>Available modules</h3>
