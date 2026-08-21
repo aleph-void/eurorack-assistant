@@ -1546,3 +1546,255 @@ describe('managing links between instances', () => {
     expect((await unlink(host.module.id, 'abc')).status).toBe(404);
   });
 });
+
+describe('dual modules (declared on the hardware)', () => {
+  // A 7Path pair is ONE module record racked twice: the two panels are
+  // instance 1 and instance 2, joined by an ethernet cable rather than by
+  // patch cables.
+  async function dual(f, { quantity = 2 } = {}) {
+    return withComponents(f, {
+      manufacturer: 'Omnitone',
+      name: '7Path',
+      quantity,
+      components: [
+        { type: 'bidirectional_jack', name: '1', group: '1' },
+        { type: 'bidirectional_jack', name: '2', group: '2' },
+      ],
+    });
+  }
+
+  const declare = (f, moduleId, body) =>
+    request(f.app)
+      .post(`/api/modules/${moduleId}/bridges`)
+      .set('Cookie', f.aliceCookie)
+      .send(body);
+
+  it('wires every patch built from the rack, without being asked', async () => {
+    const f = await fixture();
+    const { module } = await dual(f);
+    await withComponents(f, {
+      manufacturer: 'Doepfer',
+      name: 'A-110',
+      components: [{ type: 'output_jack', name: 'SAW' }],
+    });
+    const { module: filter } = await withComponents(f, {
+      manufacturer: 'Mutable',
+      name: 'Ripples',
+      components: [{ type: 'input_jack', name: 'IN' }],
+    });
+    expect(filter).toBeTruthy();
+
+    const declared = await declare(f, module.id, { bridge_module_id: module.id });
+    expect(declared.status).toBe(201);
+    expect(declared.body).toMatchObject({ self: true, module_id: module.id });
+
+    const patch = await createPatch(f);
+    let body = await detail(f, patch.id);
+    // The pair is linked in the fresh patch — nobody declared it there.
+    expect(body.links).toHaveLength(1);
+    expect(body.links[0].kind).toBe('bridge');
+    expect(body.links[0].jacks.map((j) => j.a_component_name).sort()).toEqual(['1', '2']);
+
+    const a = instanceOf(body, '7Path', 1);
+    const b = instanceOf(body, '7Path', 2);
+    const osc = instanceOf(body, 'A-110');
+    const ripples = instanceOf(body, 'Ripples');
+    for (const cable of [
+      {
+        from_patch_module_id: osc.id,
+        from_component_id: jack(osc, 'SAW').id,
+        to_patch_module_id: a.id,
+        to_component_id: jack(a, '1').id,
+      },
+      {
+        from_patch_module_id: b.id,
+        from_component_id: jack(b, '1').id,
+        to_patch_module_id: ripples.id,
+        to_component_id: jack(ripples, 'IN').id,
+      },
+    ]) {
+      const res = await request(f.app)
+        .post(`/api/patches/${patch.id}/cables`)
+        .set('Cookie', f.aliceCookie)
+        .send(cable);
+      expect(res.status).toBe(201);
+    }
+    body = await detail(f, patch.id);
+    const bridged = flatFlow(body).find((n) => n.via === 'bridge');
+    expect(bridged).toMatchObject({ name: '1', patch_module_id: b.id });
+  });
+
+  it('takes the input at one end of a wire only', async () => {
+    const f = await fixture();
+    const { module } = await dual(f);
+    await withComponents(f, {
+      manufacturer: 'Doepfer',
+      name: 'A-110',
+      components: [
+        { type: 'output_jack', name: 'SAW' },
+        { type: 'output_jack', name: 'SQUARE' },
+      ],
+    });
+    expect((await declare(f, module.id, { bridge_module_id: module.id })).status).toBe(201);
+
+    const patch = await createPatch(f);
+    const body = await detail(f, patch.id);
+    const a = instanceOf(body, '7Path', 1);
+    const b = instanceOf(body, '7Path', 2);
+    const osc = instanceOf(body, 'A-110');
+    const cable = (payload) =>
+      request(f.app)
+        .post(`/api/patches/${patch.id}/cables`)
+        .set('Cookie', f.aliceCookie)
+        .send(payload);
+
+    const first = await cable({
+      from_patch_module_id: osc.id,
+      from_component_id: jack(osc, 'SAW').id,
+      to_patch_module_id: a.id,
+      to_component_id: jack(a, '1').id,
+    });
+    expect(first.status).toBe(201);
+
+    // The far end of that wire is now the OUTPUT; a second source cannot
+    // drive it from the other panel.
+    const clash = await cable({
+      from_patch_module_id: osc.id,
+      from_component_id: jack(osc, 'SQUARE').id,
+      to_patch_module_id: b.id,
+      to_component_id: jack(b, '1').id,
+    });
+    expect(clash.status).toBe(409);
+    expect(clash.body.error).toMatch(/already the input of that bridged wire/);
+
+    // ... and the driven end does not also send the signal back out.
+    const backwards = await cable({
+      from_patch_module_id: a.id,
+      from_component_id: jack(a, '1').id,
+      to_patch_module_id: b.id,
+      to_component_id: jack(b, '2').id,
+    });
+    expect(backwards.status).toBe(409);
+    expect(backwards.body.error).toMatch(/is the input end of that bridged wire/);
+
+    // The other wire of the same pair is free, in either direction.
+    const other = await cable({
+      from_patch_module_id: osc.id,
+      from_component_id: jack(osc, 'SQUARE').id,
+      to_patch_module_id: b.id,
+      to_component_id: jack(b, '2').id,
+    });
+    expect(other.status).toBe(201);
+  });
+
+  it('refuses a cable between the two ends of one wire', async () => {
+    const f = await fixture();
+    const { module } = await dual(f);
+    expect((await declare(f, module.id, { bridge_module_id: module.id })).status).toBe(201);
+    const patch = await createPatch(f);
+    const body = await detail(f, patch.id);
+    const a = instanceOf(body, '7Path', 1);
+    const b = instanceOf(body, '7Path', 2);
+    const res = await request(f.app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', f.aliceCookie)
+      .send({
+        from_patch_module_id: a.id,
+        from_component_id: jack(a, '1').id,
+        to_patch_module_id: b.id,
+        to_component_id: jack(b, '1').id,
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/two ends of one bridged wire/);
+  });
+
+  it('links the pair when the second panel joins a patch later', async () => {
+    const f = await fixture();
+    const { module } = await dual(f);
+    expect((await declare(f, module.id, { bridge_module_id: module.id })).status).toBe(201);
+    const patch = await createPatch(f);
+
+    // Drop one panel out of the patch and put it back: the pair re-forms.
+    let body = await detail(f, patch.id);
+    const b = instanceOf(body, '7Path', 2);
+    expect(
+      (
+        await request(f.app)
+          .delete(`/api/patches/${patch.id}/modules/${b.id}`)
+          .set('Cookie', f.aliceCookie)
+      ).status
+    ).toBe(200);
+    body = await detail(f, patch.id);
+    expect(body.links).toHaveLength(0);
+
+    const added = await request(f.app)
+      .post(`/api/patches/${patch.id}/modules`)
+      .set('Cookie', f.aliceCookie)
+      .send({ module_id: module.id });
+    expect(added.status).toBe(201);
+    body = await detail(f, patch.id);
+    expect(body.links).toHaveLength(1);
+    expect(body.links[0].kind).toBe('bridge');
+  });
+
+  it('needs a second panel before a module is its own other half', async () => {
+    const f = await fixture();
+    const { module } = await dual(f, { quantity: 1 });
+    const res = await declare(f, module.id, { bridge_module_id: module.id });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/two of them/);
+
+    // Two separate records whose panels share no jack names cannot pair up.
+    const { module: other } = await withComponents(f, {
+      manufacturer: 'Omnitone',
+      name: '7Path Mini',
+      components: [{ type: 'bidirectional_jack', name: 'A' }],
+    });
+    const mismatch = await declare(f, module.id, { bridge_module_id: other.id });
+    expect(mismatch.status).toBe(400);
+    expect(mismatch.body.error).toMatch(/share no jack names/);
+  });
+
+  it('pairs two separate records, wire by wire, and unlinks from either panel', async () => {
+    const f = await fixture();
+    const { module: send, components: sendJacks } = await withComponents(f, {
+      manufacturer: 'Omnitone',
+      name: 'Path A',
+      components: [{ type: 'bidirectional_jack', name: 'A1' }],
+    });
+    const { module: receive, components: receiveJacks } = await withComponents(f, {
+      manufacturer: 'Omnitone',
+      name: 'Path B',
+      components: [{ type: 'bidirectional_jack', name: 'B1' }],
+    });
+    const declared = await declare(f, send.id, {
+      bridge_module_id: receive.id,
+      jacks: [{ a_component_id: sendJacks.A1.id, b_component_id: receiveJacks.B1.id }],
+    });
+    expect(declared.status).toBe(201);
+    expect(declared.body.self).toBe(false);
+
+    const patch = await createPatch(f);
+    let body = await detail(f, patch.id);
+    expect(body.links).toHaveLength(1);
+    expect(body.links[0].jacks[0]).toMatchObject({ a_component_name: 'A1', b_component_name: 'B1' });
+
+    // The far panel's page shows the same pair and can undo it.
+    const far = await request(f.app)
+      .get(`/api/modules/${receive.id}`)
+      .set('Cookie', f.aliceCookie);
+    expect(far.status).toBe(200);
+    expect(far.body.bridges).toHaveLength(1);
+    expect(far.body.bridges[0]).toMatchObject({ module_id: send.id, self: false });
+    const removed = await request(f.app)
+      .delete(`/api/modules/${receive.id}/bridges/${far.body.bridges[0].id}`)
+      .set('Cookie', f.aliceCookie);
+    expect(removed.status).toBe(200);
+
+    // Patches already built keep the pair they were built with.
+    body = await detail(f, patch.id);
+    expect(body.links).toHaveLength(1);
+    const fresh = await detail(f, (await createPatch(f, 'Later patch')).id);
+    expect(fresh.links).toHaveLength(0);
+  });
+});

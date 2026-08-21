@@ -27,6 +27,8 @@ export function moduleDetailRoutes(db) {
     ComponentValue,
     ComponentPair,
     ModuleExpander,
+    ModuleBridge,
+    ModuleBridgeJack,
     Manual,
     ManualDocument,
     ModuleVideo,
@@ -143,6 +145,46 @@ export function moduleDetailRoutes(db) {
         manufacturer: partner?.manufacturer ?? null,
         name: partner?.name ?? null,
         description: e.description,
+      };
+    });
+    // Dual panels: two panels of one product joined by a link cable, jack for
+    // jack (migration 033). Unlike an expander neither side is the host, so
+    // the pair reads the same from either panel — and a dual racked as one
+    // record with quantity 2 is declared against ITSELF.
+    const bridgeRows = await ModuleBridge.findAll({
+      where: { [Op.or]: [{ a_module_id: module.id }, { b_module_id: module.id }] },
+      order: [['id', 'ASC']],
+    });
+    const bridgeJackRows = bridgeRows.length
+      ? await ModuleBridgeJack.findAll({
+          where: { bridge_id: bridgeRows.map((b) => b.id) },
+          order: [['id', 'ASC']],
+        })
+      : [];
+    const bridgePartnerIds = bridgeRows.map((b) =>
+      b.a_module_id === module.id ? b.b_module_id : b.a_module_id
+    );
+    const bridgePartners = bridgePartnerIds.length
+      ? await Module.findAll({
+          where: { id: bridgePartnerIds },
+          attributes: ['id', 'manufacturer', 'name'],
+        })
+      : [];
+    const bridgePartnerById = new Map(bridgePartners.map((m) => [m.id, m]));
+    const bridges = bridgeRows.map((b) => {
+      const partnerId = b.a_module_id === module.id ? b.b_module_id : b.a_module_id;
+      const partner = bridgePartnerById.get(partnerId);
+      return {
+        id: b.id,
+        module_id: partnerId,
+        manufacturer: partner?.manufacturer ?? null,
+        name: partner?.name ?? null,
+        // Both halves are this same module record, racked twice.
+        self: b.a_module_id === b.b_module_id,
+        description: b.description,
+        jacks: bridgeJackRows
+          .filter((j) => j.bridge_id === b.id)
+          .map((j) => ({ a_component_id: j.a_component_id, b_component_id: j.b_component_id })),
       };
     });
     // The components of those panels, so the GUI can offer them when
@@ -277,6 +319,9 @@ export function moduleDetailRoutes(db) {
       pairs: pairs.map(pairJson),
       expanders,
       expander_components: partnerComponents,
+      // The other half of a dual — two panels of one product joined by a
+      // link cable, whose jacks pair up one to one.
+      bridges,
       // Panels this module's manual named that are not linked to a module
       // record — usually because the expander has not been imported yet.
       expander_suggestions: await unlinkedExpanderHints(db, module),

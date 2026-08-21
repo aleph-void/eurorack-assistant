@@ -4,6 +4,7 @@ import { moduleCoreRoutes } from './core.js';
 import { moduleDetailRoutes } from './detail.js';
 import { moduleSignalRoutes } from './signals.js';
 import { moduleExpanderRoutes } from './expanders.js';
+import { moduleBridgeRoutes } from './bridges.js';
 import { moduleComponentRoutes } from './components.js';
 import { modulePanelRoutes } from './panel.js';
 import { moduleManualRoutes } from './manuals.js';
@@ -28,6 +29,7 @@ export function moduleRoutes(
   router.use(moduleDetailRoutes(db));
   router.use(moduleSignalRoutes(db));
   router.use(moduleExpanderRoutes(db));
+  router.use(moduleBridgeRoutes(db));
   router.use(moduleComponentRoutes(db));
   router.use(modulePanelRoutes(db, { panelsDir, fetchImpl }));
   router.use(moduleManualRoutes(db, { manualsDir }));

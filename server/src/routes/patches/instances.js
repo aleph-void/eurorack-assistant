@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Op } from 'sequelize';
 import { moduleJson, portJson } from '../../services/patchDetail.js';
+import { materializeBridges } from '../../services/moduleBridges.js';
 import { PORT_KINDS } from '../../services/manualAnalyzer.js';
 import { ownPatchModule, requireOwnedPatch } from './helpers.js';
 import { asyncHandler } from '../asyncHandler.js';
@@ -81,6 +82,9 @@ export function patchInstanceRoutes(db) {
       external,
       label: String(req.body?.label || '').trim() || null,
     });
+    // Adding the second panel of a dual module wires the pair up: the link
+    // cable between them is a fact about the hardware, not a patch decision.
+    if (moduleId) await materializeBridges(db, patch);
     res.status(201).json(moduleJson(pm, { live: Boolean(moduleId), components: [] }));
   }));
 

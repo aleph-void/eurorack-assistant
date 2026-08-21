@@ -339,6 +339,38 @@ export function defineModels(sequelize) {
     { tableName: 'module_expanders', createdAt: 'created_at', updatedAt: false }
   );
 
+  // Two panels of ONE product joined by a link cable rather than by patch
+  // cables (Omnitone 7Path's ethernet pair, migration 033). Neither side is
+  // the host: jack N of one panel is wired to jack N of the other, and those
+  // jacks are bidirectional — the end a cable is patched into is the input,
+  // and the matching jack on the opposite panel is the output. Both columns
+  // may name the SAME module: a dual imported once with quantity 2 pairs its
+  // two instances up.
+  const ModuleBridge = define(
+    'ModuleBridge',
+    {
+      id,
+      a_module_id: { type: DataTypes.INTEGER, allowNull: false },
+      b_module_id: { type: DataTypes.INTEGER, allowNull: false },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'module_bridges', createdAt: 'created_at', updatedAt: false }
+  );
+
+  // Which jack on one panel of a dual is the same wire as which jack on the
+  // other. Only needed when the two panels label the same wire differently: a
+  // pair with no rows pairs its jacks by name.
+  const ModuleBridgeJack = define(
+    'ModuleBridgeJack',
+    {
+      id,
+      bridge_id: { type: DataTypes.INTEGER, allowNull: false },
+      a_component_id: { type: DataTypes.INTEGER, allowNull: false },
+      b_component_id: { type: DataTypes.INTEGER, allowNull: false },
+    },
+    { tableName: 'module_bridge_jacks', timestamps: false }
+  );
+
   // Something a manual states that could not be stored as a row yet: a signal
   // path running to another panel, or the name of an expander whose module
   // record does not exist or is not linked. Kept by name and materialized
@@ -980,6 +1012,11 @@ export function defineModels(sequelize) {
   ModuleExpander.belongsTo(Module, { foreignKey: 'host_module_id', as: 'Host' });
   ModuleExpander.belongsTo(Module, { foreignKey: 'expander_module_id', as: 'Expander' });
 
+  ModuleBridge.belongsTo(Module, { foreignKey: 'a_module_id', as: 'PanelA' });
+  ModuleBridge.belongsTo(Module, { foreignKey: 'b_module_id', as: 'PanelB' });
+  ModuleBridge.hasMany(ModuleBridgeJack, { foreignKey: 'bridge_id' });
+  ModuleBridgeJack.belongsTo(ModuleBridge, { foreignKey: 'bridge_id' });
+
   Module.hasMany(ComponentPair, { foreignKey: 'module_id' });
   ComponentPair.belongsTo(Module, { foreignKey: 'module_id' });
   ComponentPair.belongsTo(ModuleComponent, { foreignKey: 'a_component_id', as: 'A' });
@@ -1108,6 +1145,8 @@ export function defineModels(sequelize) {
     ComponentValue,
     ComponentPair,
     ModuleExpander,
+    ModuleBridge,
+    ModuleBridgeJack,
     ModulePathHint,
     Patch,
     PatchModule,

@@ -1,4 +1,3 @@
-import { Op } from 'sequelize';
 import { componentJson, portJson } from '../../services/patchDetail.js';
 
 // Helpers shared by the /api/patches sub-routers. Each takes db explicitly so
@@ -38,31 +37,73 @@ export async function switchMemberIds(db, moduleId) {
   return ids;
 }
 
-// The jacks of an instance that are bridged to another instance. Like
-// switch jacks, these are exempt from the mult rules: a bridge pairs jacks
-// one to one, so several jacks of one panel legitimately take cables — a
-// 7Path's jacks are interchangeable but they are not copies of each other.
-export async function bridgeMemberIds(db, patch, patchModuleId) {
+// Every bridged jack of a patch, mapped to the jack at the OTHER end of its
+// wire. A bridge — the two panels of a dual module, joined by a link cable
+// rather than by patch cables — pairs jacks one to one, so this is both the
+// list of jacks exempt from the mult rules (a 7Path's jacks are
+// interchangeable but they are not copies of each other) and what says which
+// jack a signal patched into one panel comes out of.
+//
+// Keyed by component id AND by jack name, because a link's jack rows keep
+// both and the id half goes null on anything imported against a module whose
+// components could not be resolved.
+export async function bridgePartners(db, patch) {
   const { PatchModuleLink, PatchModuleLinkJack } = db.models;
   const links = await PatchModuleLink.findAll({
-    where: {
-      patch_id: patch.id,
-      kind: 'bridge',
-      [Op.or]: [{ a_patch_module_id: patchModuleId }, { b_patch_module_id: patchModuleId }],
-    },
+    where: { patch_id: patch.id, kind: 'bridge' },
   });
-  if (links.length === 0) return new Set();
+  const partners = new Map();
+  if (links.length === 0) return partners;
   const jacks = await PatchModuleLinkJack.findAll({
     where: { link_id: links.map((l) => l.id) },
   });
   const linkById = new Map(links.map((l) => [l.id, l]));
-  const ids = new Set();
+  const add = (pmId, componentId, name, partner) => {
+    if (componentId !== null && componentId !== undefined) {
+      partners.set(`${pmId}:c${componentId}`, partner);
+    }
+    const key = String(name ?? '').trim().toLowerCase();
+    if (key) partners.set(`${pmId}:n${key}`, partner);
+  };
   for (const j of jacks) {
     const link = linkById.get(j.link_id);
-    if (link.a_patch_module_id === patchModuleId) ids.add(j.a_component_id);
-    if (link.b_patch_module_id === patchModuleId) ids.add(j.b_component_id);
+    if (!link) continue;
+    const a = {
+      patch_module_id: link.a_patch_module_id,
+      component_id: j.a_component_id,
+      name: j.a_component_name,
+    };
+    const b = {
+      patch_module_id: link.b_patch_module_id,
+      component_id: j.b_component_id,
+      name: j.b_component_name,
+    };
+    add(a.patch_module_id, a.component_id, a.name, b);
+    add(b.patch_module_id, b.component_id, b.name, a);
+  }
+  return partners;
+}
+
+// Every jack of one instance that sits on a bridged wire. Like switch jacks
+// these are exempt from the mult rules: a bridge pairs jacks one to one, so
+// several jacks of one panel legitimately take cables.
+export function bridgedIdsOf(partners, pmId) {
+  const ids = new Set();
+  const prefix = `${pmId}:c`;
+  for (const key of partners.keys()) {
+    if (key.startsWith(prefix)) ids.add(Number(key.slice(prefix.length)));
   }
   return ids;
+}
+
+// The far end of the wire one jack of a patch sits on, or null when the jack
+// is not bridged at all.
+export function bridgePartnerOf(partners, pm, component) {
+  return (
+    partners.get(`${pm.id}:c${component.id}`) ??
+    partners.get(`${pm.id}:n${String(component.name ?? '').trim().toLowerCase()}`) ??
+    null
+  );
 }
 
 // Every jack of one instance: an analyzed module's components, or the
@@ -112,11 +153,16 @@ export async function cableProblem(db, patch, from, to, existing) {
   // The interchangeable jacks of one mult section: same module, same group
   // label (ungrouped bidirectional jacks count as one group).
   const groupKey = (c) => (c.group_label || '').trim().toLowerCase();
+  // A dual module's two panels: which jack each end of a cable is wired to on
+  // the other panel, when it is wired to one at all.
+  const partners = await bridgePartners(db, patch);
+  const fromPartner = bridgePartnerOf(partners, from.pm, from.component);
+  const toPartner = bridgePartnerOf(partners, to.pm, to.component);
   // Switch-section and bridged jacks opt out of every mult rule below.
   const exemptJacks = async (end) => {
     if (end.component.type !== BIDIRECTIONAL) return new Set();
     const ids = await switchMemberIds(db, end.pm.module_id);
-    for (const id of await bridgeMemberIds(db, patch, end.pm.id)) ids.add(id);
+    for (const id of bridgedIdsOf(partners, end.pm.id)) ids.add(id);
     return ids;
   };
   const fromSwitchJacks = await exemptJacks(from);
@@ -144,6 +190,53 @@ export async function cableProblem(db, patch, from, to, existing) {
       error: `'${to.component.name}' on ${to.pm.manufacturer} ${to.pm.module_name} already has a cable in it`,
     };
   }
+  // Dual-module rules. A bridged wire carries ONE signal in ONE direction:
+  // the end a cable is patched into is the input, and the matching jack on
+  // the OPPOSITE panel is where it comes out. So a wire takes a cable in at
+  // one end only, and neither end is an input and an output at once.
+  const cabledInto = (end) =>
+    existing.some(
+      (c) => c.to_patch_module_id === end.patch_module_id && c.to_component_id === end.component_id
+    );
+  const cabledOutOf = (end) =>
+    existing.some(
+      (c) =>
+        c.from_patch_module_id === end.patch_module_id && c.from_component_id === end.component_id
+    );
+  if (fromPartner && toPartner) {
+    const sameWire =
+      fromPartner.patch_module_id === to.pm.id && fromPartner.component_id === to.component.id;
+    if (sameWire) {
+      return {
+        status: 400,
+        error: 'these two jacks are the two ends of one bridged wire — that cable does nothing',
+      };
+    }
+  }
+  if (toPartner) {
+    if (cabledInto(toPartner)) {
+      return {
+        status: 409,
+        error: `the other panel's '${toPartner.name}' is already the input of that bridged wire — its signal comes out here`,
+      };
+    }
+    if (cabledOutOf({ patch_module_id: to.pm.id, component_id: to.component.id })) {
+      return {
+        status: 409,
+        error: `'${to.component.name}' is already carrying the bridged signal out — the input goes into '${toPartner.name}' on the other panel`,
+      };
+    }
+  }
+  if (
+    fromPartner &&
+    cabledInto({ patch_module_id: from.pm.id, component_id: from.component.id })
+  ) {
+    return {
+      status: 409,
+      error: `'${from.component.name}' is the input end of that bridged wire — the signal comes out of '${fromPartner.name}' on the other panel`,
+    };
+  }
+
   // Mult rules. Cabling INTO a bidirectional jack makes it its group's
   // input, so the jack must not already carry a copy out, and the group
   // must not already have an input on another jack.

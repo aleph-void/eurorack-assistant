@@ -9,6 +9,7 @@ import SwitchesSection from '../components/moduledetail/SwitchesSection.vue';
 import RoutesSection from '../components/moduledetail/RoutesSection.vue';
 import PairsSection from '../components/moduledetail/PairsSection.vue';
 import ExpandersSection from '../components/moduledetail/ExpandersSection.vue';
+import BridgesSection from '../components/moduledetail/BridgesSection.vue';
 import ValuesSection from '../components/moduledetail/ValuesSection.vue';
 import DocumentsSection from '../components/moduledetail/DocumentsSection.vue';
 import VideosSection from '../components/moduledetail/VideosSection.vue';
@@ -293,6 +294,16 @@ const expanderCandidates = computed(() =>
     (m) =>
       m.id !== Number(props.id) &&
       !(module.value?.expanders || []).some((e) => e.module_id === m.id)
+  )
+);
+
+// The other half of a dual may be a separate module record — or this same
+// record racked twice, which the section offers on its own.
+const bridgeCandidates = computed(() =>
+  rackModules.value.filter(
+    (m) =>
+      m.id !== Number(props.id) &&
+      !(module.value?.bridges || []).some((b) => b.module_id === m.id)
   )
 );
 
@@ -918,6 +929,12 @@ watch(() => props.id, () => {
       :module="module"
       :module-id="id"
       :candidates="expanderCandidates"
+      @reload="load"
+    />
+    <BridgesSection
+      :module="module"
+      :module-id="id"
+      :candidates="bridgeCandidates"
       @reload="load"
     />
     <ValuesSection :module="module" :module-id="id" @reload="load" />

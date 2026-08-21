@@ -9,6 +9,7 @@ import {
   resyncRackLayout,
   snapshotRackLayout,
 } from '../../services/patchLayout.js';
+import { materializeBridges } from '../../services/moduleBridges.js';
 import { readableResource, removeShares } from '../../services/sharing.js';
 import { requireOwnedPatch } from './helpers.js';
 import { asyncHandler } from '../asyncHandler.js';
@@ -194,6 +195,10 @@ export function patchCoreRoutes(db) {
         }
       }
       if (linkRows.length > 0) await PatchModuleLink.bulkCreate(linkRows, { transaction });
+      // Dual modules arrive wired together too — their link cable is already
+      // plugged in, jack for jack, so the patch records the pair without
+      // being asked (services/moduleBridges.js).
+      await materializeBridges(db, patch, { transaction });
     });
     res.status(201).json(patchJson(patch, { module_count: snapshot.length, cable_count: 0 }));
   }));

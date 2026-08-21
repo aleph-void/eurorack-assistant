@@ -1383,6 +1383,74 @@ describe('ModuleDetailView signal-path detail', () => {
     expect(api.delete).toHaveBeenCalledWith('/api/modules/1/expanders/71');
   });
 
+  // A dual module: two panels of one product joined by a link cable, whose
+  // jacks pair up one to one (Omnitone 7Path). Declared on the hardware, so
+  // every patch wires it up without being asked.
+  const dualModule = {
+    ...conditionalModule,
+    quantity: 2,
+    racks: [{ id: 1, name: 'main rack', quantity: 2 }],
+    bridges: [
+      {
+        id: 91,
+        module_id: 1,
+        manufacturer: 'Omnitone',
+        name: '7Path',
+        self: true,
+        description: null,
+        jacks: [],
+      },
+    ],
+  };
+
+  it('shows a declared dual and how its wires are paired', async () => {
+    api.get.mockResolvedValue(dualModule);
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const row = wrapper.find('[data-test="bridge-91"]');
+    expect(row.text()).toContain('a second copy of this module');
+    expect(row.text()).toContain('paired by jack name');
+    // The pair is already declared, so a second copy is no longer offered.
+    const options = wrapper.findAll('[data-test="bridge-target"] option').map((o) => o.text());
+    expect(options.some((t) => t.includes('A second copy'))).toBe(false);
+  });
+
+  it('declares a dual against a second copy of the same module', async () => {
+    api.get.mockResolvedValue({ ...dualModule, bridges: [] });
+    api.post.mockResolvedValue({ id: 92 });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const options = wrapper.findAll('[data-test="bridge-target"] option').map((o) => o.text());
+    expect(options.some((t) => t.includes('A second copy'))).toBe(true);
+    await wrapper.find('[data-test="bridge-target"]').setValue('1');
+    await wrapper.find('[data-test="bridges"] form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/bridges', { bridge_module_id: 1 });
+  });
+
+  it('unlinks a dual once the user confirms', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.get.mockResolvedValue(dualModule);
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="delete-bridge-91"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/bridges/91');
+  });
+
+  it('offers no second copy of a module that is only racked once', async () => {
+    api.get.mockResolvedValue({ ...conditionalModule, bridges: [] });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    const options = wrapper.findAll('[data-test="bridge-target"] option').map((o) => o.text());
+    expect(options.some((t) => t.includes('A second copy'))).toBe(false);
+    expect(wrapper.find('[data-test="bridges"]').text()).toContain('not half of a dual');
+  });
+
   it('points out a panel the manual named that is not linked yet', async () => {
     api.get.mockResolvedValue(conditionalModule);
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });

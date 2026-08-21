@@ -193,7 +193,7 @@ describe('rollback', () => {
     const db = await createTestDb();
 
     const reverted = await rollback(db, { steps: 999 });
-    expect(reverted[0]).toBe('032_rack_row_position_unique');
+    expect(reverted[0]).toBe('033_dual_modules');
     expect(reverted[reverted.length - 1]).toBe('001_init');
 
     const { rows } = await db.query(
