@@ -121,7 +121,12 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   `openPanels()` from tests/setup.js first). The patch payload is held in a
   `shallowRef`, never a deep one — nothing on either page writes into it, and
   deep reactivity doubles every render and triples the memory.
-- The patch diagram draws the case, not a poster of it: panels sit flush
+- The patch diagram draws the case, not a poster of it: every panel is as
+  wide as the module's HP says it is (`panelWidth()` in panelLayout.js — the
+  same measure the rack organizer and a row's capacity use, so a row is drawn
+  exactly as wide as its rails; only a module with NO stated HP is measured
+  off the shape of its picture, and only that one is held to a fixed maximum
+  width), panels sit flush
   against each other and rows sit straight on top of each other (`PANEL_GAP`
   / `ROW_GAP` are 0), a PHYSICAL rack row is never folded in two (it scrolls —
   `wrap` is off whenever rack rows drive the layout), and module names are off

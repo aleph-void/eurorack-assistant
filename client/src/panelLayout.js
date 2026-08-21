@@ -27,8 +27,23 @@ export const ROW_UNIT = 3;
 // A module with no panel at all (off-rack gear, or one deleted from the rack)
 // is drawn as a plain outline of about this width.
 export const FALLBACK_WIDTH = 150;
+// The bounds a width MEASURED OFF A PHOTOGRAPH is held to — a picture that
+// takes in the module's box or its neighbour is the wrong shape, and there is
+// nothing to check it against when the module's own width is unknown. They do
+// not apply to a width taken from HP, which is the hardware fact itself.
 const MIN_PANEL_WIDTH = 54;
 const MAX_PANEL_WIDTH = 720;
+// A rack is 128.5mm tall in 3U and one HP is 5.08mm wide, so a module's HP
+// and the height 3U is drawn at are the whole of how wide its plate is.
+const HP_MM = 5.08;
+const PANEL_MM_HEIGHT = 128.5;
+// Past this a width is not a module's, it is bad data (a whole row's HP typed
+// into one module) — measure the picture instead.
+const MAX_PANEL_HP = 200;
+
+// How wide `hp` HP of rack is drawn, where 3U stands `height` tall. Not the
+// row's own height: a 1U module of 10HP is exactly as wide as a 3U one.
+export const hpWidth = (hp, height = PANEL_HEIGHT) => (hp * HP_MM * height) / PANEL_MM_HEIGHT;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const isJack = (c) => typeof c?.type === 'string' && c.type.endsWith('_jack');
@@ -100,8 +115,24 @@ export function imageWidthFor(panel, drawnWidth) {
   return drawnWidth / cropOf(panel).w;
 }
 
-// How wide the panel is drawn, at the diagram's fixed panel height.
-export function panelWidth(pm, height = PANEL_HEIGHT) {
+// How wide the panel is drawn, at the diagram's fixed panel height. `height`
+// is how tall this panel is drawn (a 1U row is a third of a 3U one) and
+// `fullHeight` how tall 3U is, which is what HP is measured against.
+//
+// HP IS THE WIDTH. It is the hardware fact, it is what the rack organizer
+// draws every module at, and it is what a rack row's capacity is counted in,
+// so a diagram built from it has rows exactly as wide as the rails they are
+// screwed to. The photograph only decides the width of a module whose HP is
+// unknown: a plate's shape in a product shot is the photographer's crop as
+// much as the hardware, and measuring it meant every module wider than
+// MAX_PANEL_WIDTH (43HP at the default height) came out THE SAME WIDTH —
+// an 84HP Modulor 114, a 72HP 248t and a 60HP DFAM all drawn at 720.
+//
+// Markers are fractions of the box, so a picture whose crop is a little off
+// is fitted to the plate and carries its markers with it.
+export function panelWidth(pm, height = PANEL_HEIGHT, fullHeight = height) {
+  const hp = Number(pm?.hp);
+  if (hp > 0 && hp <= MAX_PANEL_HP) return Math.round(hpWidth(hp, fullHeight));
   const panel = pm?.panel;
   if (!panel?.width || !panel?.height) return FALLBACK_WIDTH;
   const crop = cropOf(panel);
@@ -167,10 +198,10 @@ export function floorBlocks(rows, { widthOf = () => 0 } = {}) {
       });
     }
     const block = blocks.get(key);
-    // As wide as its widest row is DRAWN. A case is its panels, and the plan's
-    // HP is a different measure of the same thing — mixing the two leaves a
-    // strip of empty floor beside every rack whose pictures are narrower than
-    // its rails.
+    // As wide as its widest row is DRAWN — the modules actually standing in
+    // it, not the rails they are screwed to, so a half-empty row does not put
+    // a strip of empty floor beside the rack. Same scale as the plan's HP
+    // either way, since that is what a panel is drawn at (`panelWidth`).
     block.width = Math.max(block.width, widthOf(row));
     block.heightU += row.unit || ROW_UNIT;
     block.rows.push(row);
@@ -205,10 +236,9 @@ export function floorBlocks(rows, { widthOf = () => 0 } = {}) {
 // place on that floor, plus its own place inside the rack, and the picture
 // is the room rather than one tall column of rows.
 //
-// Panels are drawn at the size their pictures want, which is not the same
-// scale as the plan's HP: the whole floor is scaled by the tightest row on it
-// — the one whose panels need the most room per HP — so no rack's panels ever
-// run into the rack beside it, and the gaps of the plan are kept.
+// Panels are drawn at their HP, the same measure the plan places racks in, so
+// a rack takes up as much floor as its modules really do and no rack's panels
+// run into the rack beside it. The gaps of the plan are kept.
 function placeFloorRows(rows, { height, labels }) {
   const band = labels ? LABEL_HEIGHT : 0;
   // What one U covers vertically, and how tall a row of `unit` U is drawn.
@@ -216,7 +246,7 @@ function placeFloorRows(rows, { height, labels }) {
   const panelHeight = (unit) => ((unit || ROW_UNIT) * height) / ROW_UNIT;
 
   const widthsOf = (row) =>
-    (row.modules ?? []).map((pm) => panelWidth(pm, panelHeight(row.unit)));
+    (row.modules ?? []).map((pm) => panelWidth(pm, panelHeight(row.unit), height));
   const rowWidth = (row) =>
     widthsOf(row).reduce((sum, width) => sum + width + PANEL_GAP, 0);
   const blocks = floorBlocks(rows, { widthOf: rowWidth });

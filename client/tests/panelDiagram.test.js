@@ -96,7 +96,23 @@ const cable = (extra = {}) => ({
 });
 
 describe('panel layout geometry', () => {
-  it('sizes a panel from the visible part of its image', () => {
+  it('sizes a panel from the HP of the module, so two widths are two widths', () => {
+    // 3U is 128.5mm tall and an HP is 5.08mm, so at a 420-unit height an HP
+    // is 16.6 units: the hardware's own measure, matching the rack organizer.
+    expect(panelWidth({ hp: 84, panel: panelFor([]) }, 420)).toBe(1395);
+    expect(panelWidth({ hp: 60, panel: panelFor([]) }, 420)).toBe(996);
+    expect(panelWidth({ hp: 2, panel: panelFor([]) }, 420)).toBe(33);
+    // A 1U module is a third as tall and exactly as wide as a 3U one: HP is
+    // measured against the height of 3U, not against the row's own height.
+    expect(panelWidth({ hp: 12, panel: panelFor([]) }, 140, 420)).toBe(199);
+    // Bad data — a whole row's HP recorded on one module — is not a width.
+    expect(panelWidth({ hp: 504, panel: panelFor([]) }, 420)).toBe(84);
+  });
+
+  // Only when the module's HP is unknown, and only then is a fixed ceiling
+  // right: with nothing to check it against, a photograph that took in the
+  // module's box would otherwise draw a panel the width of the case.
+  it('falls back to the visible part of its image when the HP is unknown', () => {
     const pm = { panel: panelFor([]) };
     // 200x1000 at a 420-unit height.
     expect(panelWidth(pm, 420)).toBe(84);
