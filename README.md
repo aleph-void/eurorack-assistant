@@ -345,7 +345,15 @@ installation; on other distros install Docker yourself first):
    the database, and
 4. creates the `admin` account — **its random password is printed once during
    setup and stored only as a bcrypt hash**. The admin must set their own
-   password at the first login.
+   password at the first login, and
+5. installs `/etc/systemd/system/eurorack-assistant.service` (rendered from
+   `deploy/eurorack-assistant.service`) and enables it, so the stack comes up at
+   boot. The containers' own `restart: unless-stopped` covers crashes and
+   reboots only until someone runs `docker compose stop` — after that Docker
+   leaves them down across every later boot, and the unit is what makes it
+   unconditional. Run `SKIP_BOOT_SERVICE=1 ./setup.sh` to leave the host's
+   boot alone; under rootless Docker setup skips it and prints the user-unit
+   equivalent instead, since a system unit would drive the wrong daemon.
 
 The app is then at <http://localhost:8080>.
 
@@ -382,6 +390,7 @@ docker compose logs -f server   # watch the job worker
 ./backup-db.sh [--files]        # dump the database to /tmp on the host (or pass a path)
 ./restore-db.sh [--files <zip>] <dump-file>   # replace the database with a dump (stops the app during the restore)
 docker compose down             # stop (data persists in volumes)
+sudo systemctl status eurorack-assistant   # the boot unit (start/stop/restart drive compose)
 ```
 
 `backup-db.sh` runs `pg_dump` inside the db container and streams the dump to

@@ -12,6 +12,8 @@
 #   4. Generates secrets, builds containers, migrates the database.
 #   5. Creates the admin account — its random password is printed ONCE below
 #      and stored nowhere else in cleartext.
+#   6. Installs the systemd unit that starts the stack at boot
+#      (SKIP_BOOT_SERVICE=1 to leave the host's boot alone).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -188,6 +190,68 @@ setup_tls() {
   fi
 }
 
+# ----------------------------------------------------------------- boot ----
+# Bring the stack up at boot. The containers' own `restart: unless-stopped`
+# covers crashes and reboots only until someone runs `docker compose stop` —
+# after that Docker leaves them down forever. A systemd unit makes it
+# unconditional. Set SKIP_BOOT_SERVICE=1 to leave the host's boot alone.
+UNIT_NAME="eurorack-assistant.service"
+UNIT_PATH="/etc/systemd/system/$UNIT_NAME"
+
+ensure_boot_service() {
+  if [ "${SKIP_BOOT_SERVICE:-0}" = "1" ]; then
+    info "SKIP_BOOT_SERVICE=1 — not installing the $UNIT_NAME boot unit"
+    return
+  fi
+  if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+    info "no systemd on this host; skipping the boot unit"
+    return
+  fi
+  if [ ! -f "deploy/$UNIT_NAME" ]; then
+    warn "deploy/$UNIT_NAME missing; skipping the boot unit"
+    return
+  fi
+  # A root unit drives the ROOT docker daemon. Under rootless docker the stack
+  # belongs to the user's own daemon, which a system unit cannot see.
+  if $DOCKER info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+    warn "rootless docker: a system-wide boot unit would drive the wrong daemon."
+    warn "Start at boot with a user unit instead:"
+    warn "  sudo loginctl enable-linger $USER"
+    warn "  install -Dm644 deploy/$UNIT_NAME ~/.config/systemd/user/$UNIT_NAME  # drop the [Install] WantedBy for default.target"
+    return
+  fi
+
+  local docker_bin rendered
+  docker_bin=$(command -v docker)
+  rendered=$(mktemp)
+  sed -e "s|@APP_DIR@|$PWD|g" -e "s|@DOCKER_BIN@|$docker_bin|g" "deploy/$UNIT_NAME" > "$rendered"
+
+  # /etc/systemd/system is world-readable, so compare without sudo — no
+  # password prompt before the line that explains why one is wanted.
+  if [ -r "$UNIT_PATH" ] && cmp -s "$rendered" "$UNIT_PATH"; then
+    info "$UNIT_NAME already installed and current"
+  else
+    info "installing $UNIT_NAME so the app starts at boot (requires sudo)..."
+    if ! sudo install -m 644 "$rendered" "$UNIT_PATH"; then
+      rm -f "$rendered"
+      warn "could not write $UNIT_PATH; the app will NOT start at boot."
+      warn "Install it later by re-running ./setup.sh with sudo available."
+      return
+    fi
+    sudo systemctl daemon-reload || true
+  fi
+  rm -f "$rendered"
+
+  # `enable` alone would leave the unit inactive while the containers this run
+  # just started are up — so `systemctl stop` would be a no-op and `status`
+  # would lie. Starting it is a second `compose up -d`, which is a no-op here,
+  # and leaves systemd's view matching reality.
+  sudo systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || \
+    warn "could not enable $UNIT_NAME; the app will not start at boot."
+  sudo systemctl start "$UNIT_NAME" || \
+    warn "could not start $UNIT_NAME; check: systemctl status $UNIT_NAME"
+}
+
 # ------------------------------------------------------------------- app ----
 random_hex() {
   if command -v openssl >/dev/null 2>&1; then
@@ -271,6 +335,8 @@ fi
 
 info "starting all services..."
 $DOCKER compose up -d
+
+ensure_boot_service
 
 echo ""
 if [ "$TLS_ENABLED" = "1" ]; then

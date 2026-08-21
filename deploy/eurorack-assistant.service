@@ -1,18 +1,21 @@
-# eurorack-web — brings the compose stack up at boot.
+# eurorack-assistant — brings the compose stack up at boot.
 #
 # The containers already carry `restart: unless-stopped`, which is enough to
-# survive a crash but NOT an explicit `docker compose stop`/`down`: Docker
-# remembers that you stopped them and leaves them stopped forever after. This
-# unit is what makes boot unconditional.
+# survive a crash or a reboot but NOT an explicit `docker compose stop`/`down`:
+# Docker remembers that you stopped them and leaves them stopped across every
+# later boot. This unit is what makes boot unconditional.
 #
-# Install:
-#   sudo cp deploy/eurorack-web.service /etc/systemd/system/
+# TEMPLATE: @APP_DIR@ and @DOCKER_BIN@ are substituted at install time.
+# ./setup.sh installs it (skip with SKIP_BOOT_SERVICE=1); to do it by hand:
+#
+#   sed -e "s|@APP_DIR@|$PWD|" -e "s|@DOCKER_BIN@|$(command -v docker)|" \
+#     deploy/eurorack-assistant.service | sudo tee /etc/systemd/system/eurorack-assistant.service
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now eurorack-web.service
+#   sudo systemctl enable --now eurorack-assistant.service
 
 [Unit]
-Description=eurorack-web (docker compose stack)
-Documentation=https://github.com/nstarke/eurorack-web
+Description=Eurorack Assistant (docker compose stack)
+Documentation=https://github.com/aleph-void/eurorack-assistant
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
@@ -20,13 +23,14 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/home/nick/Documents/git/eurorack-web
+WorkingDirectory=@APP_DIR@
 
 # Compose reads .env from WorkingDirectory, which is where setup.sh writes
-# POSTGRES_PASSWORD, APP_PORT and (with TLS) COMPOSE_FILE.
-ExecStart=/usr/bin/docker compose up -d --remove-orphans
-ExecStop=/usr/bin/docker compose stop
-ExecReload=/usr/bin/docker compose up -d --remove-orphans
+# POSTGRES_PASSWORD, APP_PORT and — once TLS is on — COMPOSE_FILE, so turning
+# HTTPS on later needs no change here.
+ExecStart=@DOCKER_BIN@ compose up -d --remove-orphans
+ExecStop=@DOCKER_BIN@ compose stop
+ExecReload=@DOCKER_BIN@ compose up -d --remove-orphans
 
 # Pulling or building an image on a cold boot can take a while; never let
 # systemd kill the stack half-created.
