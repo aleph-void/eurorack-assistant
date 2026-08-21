@@ -325,6 +325,13 @@ const {
     id: row.id,
     rack_id: row.rack_id,
     rack_name: row.rack_name,
+    // Where this row stands in the studio: its rack's own place on the
+    // system's floor plan (x in HP, y in rack units) plus the row's place
+    // inside that rack. A single-rack patch has one rack at the origin, so
+    // this is 0/0 and the rows simply stack.
+    rack_x: row.rack_x ?? 0,
+    rack_y: row.rack_y ?? 0,
+    position: row.position,
     unit: row.unit,
     hp: row.hp,
     modules: rowPlacements

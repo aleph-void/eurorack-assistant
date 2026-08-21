@@ -30,8 +30,9 @@ const props = defineProps({
   // The patch editor can connect a physical output to a physical input by
   // dragging between their markers. Read-only diagrams keep their old view.
   interactive: { type: Boolean, default: false },
-  // Saved physical rack rows, expressed as patch-module ids. When present,
-  // they determine the diagram's row breaks and instance order.
+  // The studio's own arrangement: the patch's frozen copy of every rack row,
+  // each naming the patch-module ids standing in it and where its rack stood
+  // on the system's floor plan. When present, the picture IS that plan.
   rackRows: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['connect', 'disconnect', 'retype']);
@@ -56,35 +57,52 @@ const visibleModules = computed(() =>
   showAll.value ? props.modules : usedModules(props.modules, props.cables)
 );
 const organized = computed(() => {
-  if (!props.rackRows.length) return { modules: visibleModules.value, rowStarts: [] };
+  if (!props.rackRows.length) return { modules: visibleModules.value, rows: null };
   const byId = new Map(props.modules.map((module) => [module.id, module]));
   const visible = new Set(visibleModules.value.map((module) => module.id));
   const picked = new Set();
   const modules = [];
-  const rowStarts = [];
-  for (const row of props.rackRows) {
-    const rowModules = (row.modules || []).map((id) => byId.get(id)).filter((module) => module && visible.has(module.id));
-    if (!rowModules.length) continue;
-    rowStarts.push(modules.length);
+  // Every row of the studio, in its own place — including the ones with
+  // nothing visible on them, so a hidden row does not slide the rows below it
+  // up the case.
+  const rows = props.rackRows.map((row) => {
+    const rowModules = (row.modules || [])
+      .map((id) => byId.get(id))
+      .filter((module) => module && visible.has(module.id));
     rowModules.forEach((module) => picked.add(module.id));
     modules.push(...rowModules);
-  }
+    return { ...row, modules: rowModules };
+  });
   // A patch is a snapshot; modules added after arranging the rack remain
-  // visible below the organized rows rather than vanishing from the patch.
+  // visible below the studio rather than vanishing from the patch.
   const unplaced = visibleModules.value.filter((module) => !picked.has(module.id));
-  if (unplaced.length && modules.length) rowStarts.push(modules.length);
-  modules.push(...unplaced);
-  return { modules, rowStarts };
+  if (unplaced.length) {
+    // Standing on their own, below the whole studio: a plan y no rack can
+    // have puts them in the last band of the floor (panelLayout.js).
+    const hp = props.rackRows.reduce((widest, row) => Math.max(widest, Number(row.hp) || 0), 84);
+    rows.push({
+      id: 'unplaced',
+      rack_id: 'unplaced',
+      rack_x: 0,
+      rack_y: Number.MAX_SAFE_INTEGER,
+      unit: 3,
+      hp,
+      modules: unplaced,
+    });
+    modules.push(...unplaced);
+  }
+  return { modules, rows };
 });
 const shown = computed(() => organized.value.modules);
 
 const diagram = computed(() =>
   layoutDiagram(shown.value, {
     height: PANEL_HEIGHT,
-    rowStarts: organized.value.rowStarts,
+    // The studio as its floor plan has it, when the patch carries one.
+    rows: organized.value.rows,
     // A physical rack row is never folded in two — it scrolls. Only a diagram
     // with no rack layout behind it wraps to keep itself on the page.
-    wrap: !organized.value.rowStarts.length,
+    wrap: !organized.value.rows,
     labels: showModuleNames.value,
   })
 );
@@ -126,6 +144,11 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 const MIN_ZOOM = 0.15;
 const MAX_ZOOM = 6;
+// A whole studio fitted to the page lands around 15%, where a panel is a
+// thumbnail and a jack is two pixels across — nothing on it can be read or
+// patched. So the picture OPENS no smaller than this and scrolls instead;
+// zooming out further is still there for taking in the whole room at once.
+const FIT_MIN_ZOOM = 0.35;
 const wrap = ref(null);
 const zoom = ref(1);
 const userZoomed = ref(false);
@@ -137,16 +160,21 @@ function fitZoom() {
   // jsdom (and a wrap that has not been laid out yet) measures nothing;
   // 1:1 is the honest answer then.
   if (available <= 0 || !width) return;
-  zoom.value = clampZoom(Math.min(1, available / width));
+  const fitted = Math.min(1, available / width);
+  // 'Fit' means fit — it is asked for. Opening the page is not.
+  zoom.value = clampZoom(userFitted ? fitted : Math.max(fitted, FIT_MIN_ZOOM));
 }
 function zoomBy(factor) {
   userZoomed.value = true;
   zoom.value = clampZoom(zoom.value * factor);
 }
+let userFitted = false;
 function resetZoom() {
   userZoomed.value = false;
+  userFitted = true;
   zoom.value = 1;
   fitZoom();
+  userFitted = false;
 }
 // Ctrl/⌘ + wheel is the zoom gesture everywhere else that draws on a canvas,
 // and it is what a trackpad pinch sends. A bare wheel still scrolls the
@@ -276,6 +304,12 @@ const inView = (box) => {
 // read it anyway. A jack is always drawn, at every zoom.
 const CONTROL_ZOOM = 0.55;
 const showControls = computed(() => zoom.value >= CONTROL_ZOOM);
+// Zoomed out past this — a whole studio taken in at once — a marker is two
+// pixels of a panel the size of a stamp, and six thousand of them are drawn
+// for nothing. The picture is then the case itself; the cables are still on
+// it, and the jacks come back as soon as anything can be read.
+const MARKER_ZOOM = 0.25;
+const showMarkers = computed(() => zoom.value >= MARKER_ZOOM);
 
 // Each panel is fetched at the size it is actually painted — its drawn width,
 // at the current zoom, at the screen's own pixel density. Widths come in a
@@ -369,18 +403,65 @@ const undrawn = computed(() => props.cables.length - drawn.value.length);
 const componentAt = (patchModuleId, componentId) =>
   props.modules.find((pm) => pm.id === patchModuleId)?.components.find((c) => c.id === componentId) ?? null;
 
+// ---- which way a mult runs, once something is plugged into it ----
+// The jacks of a mult section are interchangeable HARDWARE: any of them can
+// be the input. A patch decides which — the one a cable is plugged into is
+// the input, and every other jack in the section carries a copy out — and
+// that is the same rule the server patches by (routes/patches/helpers.js).
+// So once a mult is fed, the picture stops calling its jacks bidirectional
+// and draws the fed one as an input and the rest as outputs: in the type's
+// own colour, offered for dragging the way an output is, and refused as a
+// destination the way an output is.
+//
+// A section is: same instance, same group label, with the unlabelled
+// bidirectional jacks of a module counting as one section — again as the
+// server has it.
+const BIDIRECTIONAL = 'bidirectional_jack';
+const multSection = (patchModuleId, component) =>
+  `${patchModuleId}:${(component.group_label || '').trim().toLowerCase()}`;
+
+const multDirections = computed(() => {
+  const fed = new Map();
+  for (const cable of props.cables) {
+    const component = componentAt(cable.to_patch_module_id, cable.to_component_id);
+    if (component?.type !== BIDIRECTIONAL) continue;
+    fed.set(multSection(cable.to_patch_module_id, component), component.id);
+  }
+  const directions = new Map();
+  if (fed.size === 0) return directions;
+  for (const pm of props.modules) {
+    for (const component of pm.components ?? []) {
+      if (component.type !== BIDIRECTIONAL) continue;
+      const input = fed.get(multSection(pm.id, component));
+      if (input === undefined) continue;
+      directions.set(
+        `${pm.id}:${component.id}`,
+        input === component.id ? 'input_jack' : 'output_jack'
+      );
+    }
+  }
+  return directions;
+});
+
 const allAnchors = computed(() =>
   [...diagram.value.anchors.entries()].map(([key, anchor]) => {
     const [patchModuleId, componentId] = key.split(':').map(Number);
     const component = componentAt(patchModuleId, componentId);
+    // What this connector is IN THIS PATCH: its own type, unless it is a mult
+    // jack the patch has given a direction.
+    const type = multDirections.value.get(key) ?? component?.type ?? null;
     return {
       key,
       patchModuleId,
       componentId,
       component,
+      type,
+      // A mult jack that the patch has pointed one way is drawn as what it
+      // now is, so the picture and the cable rules never disagree.
+      multed: Boolean(component) && type !== component.type,
       // Every marker is drawn in the colour of its component type, the same
       // colours the module page marks the same panel in (componentTypes.js).
-      color: component ? componentColor(component.type) : MARKER_NEUTRAL,
+      color: component ? componentColor(type) : MARKER_NEUTRAL,
       ...anchor,
     };
   })
@@ -389,24 +470,28 @@ const allAnchors = computed(() =>
 // Everything else about a marker — the legend below, what a cable may be
 // dragged to — is a fact about the whole diagram and keeps counting them all,
 // so scrolling never changes what the picture SAYS, only what it draws.
-const visibleAnchors = computed(() =>
-  allAnchors.value.filter(
+const visibleAnchors = computed(() => {
+  if (!showMarkers.value) return [];
+  return allAnchors.value.filter(
     (a) =>
       visibleModuleIds.value.has(a.patchModuleId) &&
-      (showControls.value || Boolean(a.component?.type?.endsWith('_jack')))
-  )
-);
+      (showControls.value || Boolean(a.type?.endsWith('_jack')))
+  );
+});
 
 // The key under the picture: what is actually on this diagram, not the whole
-// catalogue of types.
-const shownComponents = computed(() => allAnchors.value.map((a) => a.component).filter(Boolean));
+// catalogue of types — and a mult the patch has pointed one way counts as
+// what it is now, so the key never names a colour the picture is not using.
+const shownComponents = computed(() =>
+  allAnchors.value.filter((a) => a.component).map((a) => ({ type: a.type }))
+);
 // What a cable may be dragged TO, and what it may be dragged FROM. A
 // bidirectional jack is both: which way it runs is decided by the patch, so
 // the diagram lets it be either end and the server's cable rules decide
 // whether that particular cable is legal.
 const CABLE_IN = ['input_jack', 'bidirectional_jack'];
 const CABLE_OUT = ['output_jack', 'bidirectional_jack'];
-const inputs = computed(() => allAnchors.value.filter((a) => CABLE_IN.includes(a.component?.type)));
+const inputs = computed(() => allAnchors.value.filter((a) => CABLE_IN.includes(a.type)));
 
 // ---- correcting a jack's direction ----
 // The analysis reads a mult's jacks as plain inputs or outputs often enough
@@ -659,17 +744,28 @@ const draftCable = computed(() =>
               "
               :stroke-width="markerStroke"
               :class="{
-                patchable: CABLE_OUT.includes(a.component?.type),
-                jack: Boolean(a.component?.type?.endsWith('_jack')),
+                patchable: CABLE_OUT.includes(a.type),
+                jack: Boolean(a.type?.endsWith('_jack')),
                 selected:
                   selected?.patchModuleId === a.patchModuleId &&
                   selected?.componentId === a.componentId,
               }"
               :data-test="`diagram-jack-${a.patchModuleId}-${a.componentId}`"
-              @pointerdown="CABLE_OUT.includes(a.component?.type) && startCable(a, $event)"
+              @pointerdown="CABLE_OUT.includes(a.type) && startCable(a, $event)"
               @click="selectJack(a)"
             >
-              <title>{{ a.name }}{{ a.component ? ` (${a.component.type})` : '' }}</title>
+              <title>
+                {{ a.name
+                }}{{
+                  a.multed
+                    ? a.type === 'input_jack'
+                      ? ' (this mult\'s input)'
+                      : ' (mult output — a copy of what is patched into it)'
+                    : a.component
+                      ? ` (${a.component.type})`
+                      : ''
+                }}
+              </title>
             </circle>
 
             <path v-if="draftCable" :d="draftCable" class="cable draft-cable" />

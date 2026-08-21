@@ -367,6 +367,54 @@ describe('PatchDiagram', () => {
     expect(wrapper.find('[data-test="diagram-svg"]').exists()).toBe(false);
   });
 
+  // A mult's jacks are interchangeable hardware until a cable arrives: the
+  // one it is plugged into is the section's input and the rest carry copies
+  // out. The picture says so, in the colours of what they now are — the same
+  // rule the server patches by.
+  it('points a mult the way the patch has plugged it', async () => {
+    const mult = {
+      id: 13,
+      module_id: 3,
+      manufacturer: 'Doepfer',
+      module_name: 'A-180',
+      instance: 1,
+      live: true,
+      components: [
+        { id: 5, type: 'bidirectional_jack', name: 'M1', group_label: 'A' },
+        { id: 6, type: 'bidirectional_jack', name: 'M2', group_label: 'A' },
+        { id: 7, type: 'bidirectional_jack', name: 'M3', group_label: 'A' },
+        // A second section on the same panel, which this cable says nothing
+        // about.
+        { id: 8, type: 'bidirectional_jack', name: 'N1', group_label: 'B' },
+      ],
+      panel: panelFor([
+        { component_id: 5, name: 'M1', shape: 'jack', x: 0.2, y: 0.2, w: 0.06, h: 0.06 },
+        { component_id: 6, name: 'M2', shape: 'jack', x: 0.2, y: 0.4, w: 0.06, h: 0.06 },
+        { component_id: 7, name: 'M3', shape: 'jack', x: 0.2, y: 0.6, w: 0.06, h: 0.06 },
+        { component_id: 8, name: 'N1', shape: 'jack', x: 0.6, y: 0.2, w: 0.06, h: 0.06 },
+      ]),
+    };
+    const into = cable({ id: 22, to_patch_module_id: 13, to_component_id: 5, to_component_name: 'M1' });
+    const wrapper = mountDiagram({ modules: [...modules(), mult], cables: [into], interactive: true });
+    const fillOf = (id) => wrapper.find(`[data-test="diagram-jack-13-${id}"]`).attributes('fill');
+
+    expect(fillOf(5)).toBe(componentColor('input_jack'));
+    expect(fillOf(6)).toBe(componentColor('output_jack'));
+    expect(fillOf(7)).toBe(componentColor('output_jack'));
+    // The other section is untouched: nothing is plugged into it.
+    expect(fillOf(8)).toBe(componentColor('bidirectional_jack'));
+
+    // And the picture offers the same cables the server would accept: a copy
+    // may be dragged out of a sibling, never out of the jack being fed.
+    expect(wrapper.find('[data-test="diagram-jack-13-6"]').classes()).toContain('patchable');
+    expect(wrapper.find('[data-test="diagram-jack-13-5"]').classes()).not.toContain('patchable');
+
+    // Unplug it and the section goes back to being interchangeable.
+    await wrapper.setProps({ cables: [] });
+    expect(fillOf(5)).toBe(componentColor('bidirectional_jack'));
+    expect(fillOf(6)).toBe(componentColor('bidirectional_jack'));
+  });
+
   // Patching is close work on a picture wider than the page: the diagram can
   // take the whole display, and refits itself to what it is given.
   it('fills the screen on request, and comes back out again', async () => {

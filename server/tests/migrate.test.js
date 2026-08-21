@@ -193,7 +193,15 @@ describe('rollback', () => {
     const db = await createTestDb();
 
     const reverted = await rollback(db, { steps: 999 });
-    expect(reverted[0]).toBe('033_dual_modules');
+    // Newest first, oldest last. Read from the directory rather than named
+    // here, so adding a migration does not mean editing this test.
+    const newest = fs
+      .readdirSync(path.join(import.meta.dirname, '..', 'migrations'))
+      .filter((name) => /^\d+_.*\.js$/.test(name))
+      .sort()
+      .pop()
+      .replace(/\.js$/, '');
+    expect(reverted[0]).toBe(newest);
     expect(reverted[reverted.length - 1]).toBe('001_init');
 
     const { rows } = await db.query(

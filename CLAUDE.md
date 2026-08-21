@@ -121,6 +121,9 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   bead in a curtain of them, and the jacks are what a cable goes in. Panel
   pictures are re-fetched at a new size only once a zoom gesture SETTLES.
   Every module in the rack is drawn by default: the picture is of the case.
+  The picture OPENS no smaller than `FIT_MIN_ZOOM` (a whole studio fitted to
+  the page is 15%, where nothing can be read or patched) — it scrolls instead;
+  'Fit' still fits. Below `MARKER_ZOOM` no markers are drawn at all.
   A jack the picture does not place is OUT OF FRAME and is not drawn
   — nothing hangs below a panel, which is what kept the rows apart; cables
   that end at one are counted in the "not drawn" line instead.
@@ -246,12 +249,17 @@ rack in it at once — that is what makes a cable from a jack in one rack to a
 jack in another legal, with no change to the cable rules — and each
 `patch_modules` row carries the `rack_id`/`rack_name` it came from, soft like
 everything else in a patch, so `rack_layout` matches each placement to an
-instance OF THE SAME RACK and the patch outlives the system. The FLOOR PLAN is the arrangement: a patch reads
-the racks of a system in the order they stand on it (top band first, left to
-right — `inFloorOrder()` in services/patchLayout.js), and freezes that order
-in `patch_rack_rows.rack_position`, so a patch made before a rack was moved
-keeps reading the studio the way it stood. `racks.system_position` only
-records the order the last floor-plan save happened to send. Racks on a
+instance OF THE SAME RACK and the patch outlives the system. The FLOOR PLAN is the arrangement, and a patch of a
+system DRAWS IT: each rack's floor coordinates are frozen into the snapshot
+(`patch_rack_rows.rack_x`/`rack_y`, migration 034, plus the reading order in
+`rack_position`), and `floorBlocks()` in client/src/panelLayout.js lays the
+studio out from them — racks whose tops are level form a band in left-to-right
+order, each band below the deepest rack of the one above. A plan may legally
+hold OVERLAPPING racks (the no-overlap rule only bites on the rack being
+dragged), so a rack that would land on its neighbour comes to rest flush
+beside it instead of on top of it, and a case is drawn as wide as its own
+panels are rather than as wide as its rails in HP. `racks.system_position`
+only records the order the last floor-plan save happened to send. Racks on a
 system's floor plan may not overlap: the footprint geometry and the rule live
 in `services/racks.js`, the layout route enforces it, and the plan slides a
 dropped rack clear rather than refusing the drop. `systems.floor_width` /

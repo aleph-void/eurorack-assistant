@@ -522,6 +522,10 @@ export function defineModels(sequelize) {
       rack_id: { type: DataTypes.INTEGER },
       rack_name: { type: DataTypes.TEXT },
       rack_position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      // Where the rack stood on the system's floor plan when the patch was
+      // made: x in HP, y in rack units (migration 034).
+      rack_x: { type: DataTypes.REAL, allowNull: false, defaultValue: 0 },
+      rack_y: { type: DataTypes.REAL, allowNull: false, defaultValue: 0 },
       unit: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 3 },
       hp: { type: DataTypes.REAL, allowNull: false },
       position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },

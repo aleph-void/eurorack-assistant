@@ -19,6 +19,10 @@ export const ROW_GAP = 0;
 export const LABEL_HEIGHT = 30;
 export const MAX_ROW_WIDTH = 1750;
 export const MARGIN = 20;
+// A standard rack row. The floor plan measures height in U and width in HP,
+// so this is what turns one into the other: PANEL_HEIGHT is how tall 3U is
+// drawn, and a 1U tile row is a third of it.
+export const ROW_UNIT = 3;
 
 // A module with no panel at all (off-rack gear, or one deleted from the rack)
 // is drawn as a plain outline of about this width.
@@ -133,6 +137,122 @@ export function spareJacks(pm) {
   return (pm.components ?? []).filter((c) => isJack(c) && isPatchPoint(c) && !placed.has(c.id));
 }
 
+// The racks of a studio, each as a block of rows, placed the way the floor
+// plan has them — but never on top of one another.
+//
+// A plan is allowed to hold racks that overlap: the rule only bites on the
+// rack being dragged, so a studio arranged before the rule (or grown by
+// dropping case after case at the origin) has its furniture piled up. Drawn
+// literally that is one panel over another with nothing readable underneath.
+// So the plan is read for what it SAYS — which cases stand in a row together,
+// in what order, and which stand below them — and a rack that would land on
+// its neighbour comes to rest flush beside it instead, which is exactly what
+// the floor plan does with a rack dropped onto another.
+//
+// Racks whose tops are level form a band, in the order they stand left to
+// right; each band sits below the deepest rack of the band above it. Gaps a
+// plan really has are kept: a rack only moves when it would overlap.
+export function floorBlocks(rows, { widthOf = () => 0 } = {}) {
+  const blocks = new Map();
+  for (const row of rows) {
+    const key = `${row.rack_id ?? 'none'}:${Number(row.rack_x) || 0}:${Number(row.rack_y) || 0}`;
+    if (!blocks.has(key)) {
+      blocks.set(key, {
+        key,
+        planX: Number(row.rack_x) || 0,
+        planY: Number(row.rack_y) || 0,
+        width: 0,
+        heightU: 0,
+        rows: [],
+      });
+    }
+    const block = blocks.get(key);
+    // As wide as its widest row is DRAWN. A case is its panels, and the plan's
+    // HP is a different measure of the same thing — mixing the two leaves a
+    // strip of empty floor beside every rack whose pictures are narrower than
+    // its rails.
+    block.width = Math.max(block.width, widthOf(row));
+    block.heightU += row.unit || ROW_UNIT;
+    block.rows.push(row);
+  }
+  const ordered = [...blocks.values()].sort(
+    (a, b) => Math.round(a.planY) - Math.round(b.planY) || a.planX - b.planX
+  );
+  let bandY = 0;
+  let bandTop = null;
+  let bandDepth = 0;
+  let cursor = 0;
+  for (const block of ordered) {
+    if (bandTop === null || Math.round(block.planY) !== bandTop) {
+      if (bandTop !== null) bandY += bandDepth;
+      bandTop = Math.round(block.planY);
+      bandDepth = 0;
+      cursor = 0;
+    }
+    block.x = cursor;
+    block.y = bandY;
+    cursor += block.width;
+    bandDepth = Math.max(bandDepth, block.heightU);
+  }
+  return ordered;
+}
+
+// Where each row of a studio goes, as the floor plan has it.
+//
+// A system is racks standing side by side and one below another — a wall of
+// cases with a skiff under the desk — and the patch carries the coordinates
+// each rack stood at (x in HP, y in U). So a row is placed at ITS RACK'S
+// place on that floor, plus its own place inside the rack, and the picture
+// is the room rather than one tall column of rows.
+//
+// Panels are drawn at the size their pictures want, which is not the same
+// scale as the plan's HP: the whole floor is scaled by the tightest row on it
+// — the one whose panels need the most room per HP — so no rack's panels ever
+// run into the rack beside it, and the gaps of the plan are kept.
+function placeFloorRows(rows, { height, labels }) {
+  const band = labels ? LABEL_HEIGHT : 0;
+  // What one U covers vertically, and how tall a row of `unit` U is drawn.
+  const perU = (height + band) / ROW_UNIT;
+  const panelHeight = (unit) => ((unit || ROW_UNIT) * height) / ROW_UNIT;
+
+  const widthsOf = (row) =>
+    (row.modules ?? []).map((pm) => panelWidth(pm, panelHeight(row.unit)));
+  const rowWidth = (row) =>
+    widthsOf(row).reduce((sum, width) => sum + width + PANEL_GAP, 0);
+  const blocks = floorBlocks(rows, { widthOf: rowWidth });
+
+  const panels = [];
+  let index = 0;
+  for (const block of blocks) {
+    // How far into its own rack a row sits, in U. Counted over EVERY row,
+    // including the ones with nothing visible on them, so hiding a row does
+    // not slide the rows below it up the case.
+    let offset = 0;
+    for (const row of block.rows) {
+      const top = MARGIN + (block.y + offset) * perU + band;
+      offset += row.unit || ROW_UNIT;
+      let x = MARGIN + block.x;
+      const widths = widthsOf(row);
+      (row.modules ?? []).forEach((pm, moduleIndex) => {
+        const width = widths[moduleIndex];
+        panels.push({
+          pm,
+          x,
+          y: top,
+          width,
+          height: panelHeight(row.unit),
+          labelY: top - 9,
+          loose: spareJacks(pm),
+          row: index,
+        });
+        x += width + PANEL_GAP;
+      });
+      index += 1;
+    }
+  }
+  return panels;
+}
+
 // Lay the modules out left to right. Returns the placed panels (in diagram
 // coordinates), the anchor point of every jack, and the size of the whole
 // drawing.
@@ -143,46 +263,60 @@ export function spareJacks(pm) {
 // you. `wrap` is for a diagram with no rack rows behind it, where the only
 // row breaks there are to find are the ones that keep the drawing on a page.
 // `labels` reserves the band each panel's name is drawn in.
+//
+// `rows` is the studio as its floor plan has it — each row with the modules
+// standing in it and the place its rack stands — and takes over from
+// `modules`/`rowStarts` entirely when it is given.
 export function layoutDiagram(
   modules,
-  { height = PANEL_HEIGHT, maxRowWidth = MAX_ROW_WIDTH, rowStarts = [], wrap = true, labels = false } = {}
+  {
+    height = PANEL_HEIGHT,
+    maxRowWidth = MAX_ROW_WIDTH,
+    rowStarts = [],
+    wrap = true,
+    labels = false,
+    rows = null,
+  } = {}
 ) {
   const labelBand = labels ? LABEL_HEIGHT : 0;
-  const panels = [];
   const anchors = new Map(); // `${patch_module_id}:${component_id}` -> point
-  let rowStart = 0;
-  let x = MARGIN;
-  let y = MARGIN;
+  const panels = rows ? placeFloorRows(rows, { height, labels }) : [];
+  if (!rows) {
+    let rowStart = 0;
+    let x = MARGIN;
+    let y = MARGIN;
 
-  const closeRow = () => {
-    y += labelBand + height + ROW_GAP;
-    x = MARGIN;
-    rowStart = panels.length;
-  };
+    const closeRow = () => {
+      y += labelBand + height + ROW_GAP;
+      x = MARGIN;
+      rowStart = panels.length;
+    };
 
-  for (const [moduleIndex, pm] of modules.entries()) {
-    const width = panelWidth(pm, height);
-    if (
-      (x > MARGIN && rowStarts.includes(moduleIndex)) ||
-      (wrap && x > MARGIN && x + width > maxRowWidth)
-    ) {
-      closeRow();
+    for (const [moduleIndex, pm] of modules.entries()) {
+      const width = panelWidth(pm, height);
+      if (
+        (x > MARGIN && rowStarts.includes(moduleIndex)) ||
+        (wrap && x > MARGIN && x + width > maxRowWidth)
+      ) {
+        closeRow();
+      }
+      const loose = spareJacks(pm);
+      panels.push({
+        pm,
+        x,
+        y: y + labelBand,
+        width,
+        height,
+        labelY: y + labelBand - 9,
+        loose,
+        row: rowStart,
+      });
+      x += width + PANEL_GAP;
     }
-    const loose = spareJacks(pm);
-    panels.push({
-      pm,
-      x,
-      y: y + labelBand,
-      width,
-      height,
-      labelY: y + labelBand - 9,
-      loose,
-      row: rowStart,
-    });
-    x += width + PANEL_GAP;
   }
 
-  const totalHeight = panels.length === 0 ? 0 : y + labelBand + height + MARGIN;
+  const totalHeight =
+    panels.length === 0 ? 0 : Math.max(...panels.map((p) => p.y + p.height)) + MARGIN;
   const totalWidth =
     panels.length === 0
       ? 0

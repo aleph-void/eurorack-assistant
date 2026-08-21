@@ -84,6 +84,10 @@ export async function snapshotRackLayout(db, patch, racks, { transaction = null 
           rack_id: rack.id,
           rack_name: rack.name,
           rack_position: rackPosition,
+          // The plan itself, not just the reading of it: a patch of a system
+          // draws its racks where they stand (migration 034).
+          rack_x: rack.system_x ?? 0,
+          rack_y: rack.system_y ?? 0,
           unit: row.unit,
           hp: row.hp,
           position: row.position,
@@ -156,6 +160,8 @@ export async function copyRackLayout(db, sourcePatchId, patch, { transaction = n
         rack_id: row.rack_id,
         rack_name: row.rack_name,
         rack_position: row.rack_position,
+        rack_x: row.rack_x ?? 0,
+        rack_y: row.rack_y ?? 0,
         unit: row.unit,
         hp: row.hp,
         position: row.position,
