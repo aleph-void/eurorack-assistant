@@ -15,6 +15,8 @@ the patch page, above the Cables panel, and it is off until you turn it on.
 - [What you can say](#what-you-can-say)
 - [How it hears you](#how-it-hears-you)
 - [When it listens](#when-it-listens)
+- [The key phrase](#the-key-phrase)
+- [Which microphone, which speaker](#which-microphone-which-speaker)
 - [What the tones mean](#what-the-tones-mean)
 - [How a sentence becomes two jack ids](#how-a-sentence-becomes-two-jack-ids)
 - [Running it](#running-it)
@@ -33,6 +35,8 @@ the patch page, above the Cables panel, and it is off until you turn it on.
 | cancel, never mind | drops the question it just asked |
 | …to **B** **stacked** / **as optional** | sets the flag on the new cable |
 | one, two, the second one | answers "which of these did you mean?" |
+| create connection between **A** and **B** | the key phrase — see below |
+| disconnect connection between **A** and **B** | the key phrase, the other way |
 
 Both ends are named the way you would name them to someone stood next to the
 case. All of these find the same jack:
@@ -74,15 +78,75 @@ hands are busy. Pick whichever of these fits your bench:
 | **Push to talk** | hold the space bar (or the on-screen button) while you speak | the default; nothing else can trigger it |
 | **Patch mode** | click once to open a session, speak as many cables as you like, click to close | documenting a patch that already exists |
 | **Wake word** | always listening, acts only after "patch…" or "hey rack…" | hands completely full |
+| **Key phrase** | Whisper listens to the room for "create connection between…", the browser transcribes the cable | hands completely full, and you would rather the always-on listening happened on your own machine |
 | **MIDI / footswitch** | a footswitch on the desk arms the microphone | hands completely full, and you have a footswitch |
 
 For MIDI, press **Learn** and then press the switch: the next note or CC it sees
 becomes the binding. A note or a CC above 64 arms it, the release disarms it.
 
-Patch mode and wake word keep the microphone open, so with Whisper they use a
-loudness gate to work out where one command ends and the next begins. The gate
+Patch mode, wake word and key phrase keep the microphone open, so with Whisper
+they use a loudness gate to work out where one command ends and the next
+begins. The gate
 tracks what this room has been doing rather than a fixed threshold, so a held
 chord raises the bar instead of triggering it.
+
+## The key phrase
+
+Wake-word mode leaves whichever recogniser you picked listening to the room all
+evening. If that recogniser is the browser's, the room goes to Google. **Key
+phrase** mode splits the job in two so it does not have to:
+
+- **Whisper listens**, on this machine, always, and does nothing at all until it
+  hears one of your phrases. It is transcribing your studio continuously and
+  none of it leaves the building.
+- **The browser's recogniser** — faster, and it hands back several readings of
+  the same breath, which is the single cheapest accuracy win there is — is
+  opened only once the phrase has been heard, and closed again as soon as the
+  cable has been said.
+
+Two phrases, each editable, each taking a comma-separated list of spellings:
+
+| Phrase | Means |
+| --- | --- |
+| **create connection between** *A* and *B* | plugs a cable |
+| **disconnect connection between** *A* and *B* | pulls that cable out |
+
+The phrase supplies the verb, so what you say after it is just the two ends:
+"create connection between maths out one and 2hp div clock". You can say the
+whole thing in one breath — Whisper heard the cable as well as the phrase, and
+that transcription is used when the browser's recogniser has nothing to add —
+or say the phrase, wait for the blip, and then say the cable, which is the more
+accurate of the two. Either way the phrase is matched fuzzily and wherever in
+the sentence it lands, so "okay, create connection between…" still works.
+
+The on-screen button is still there in this mode, and holding it is the same as
+saying the connect phrase.
+
+Setting the recognition engine to Local Whisper as well makes the whole path
+offline, at the cost of running two Whisper instances at once.
+
+## Which microphone, which speaker
+
+A studio has more than one of each, and the system default is usually the wrong
+one — the interface that is recording the rack, or the monitors the cues would
+get mixed into. Both are chosen under **Microphone and speaker** in the panel,
+and both are kept in this browser under your own account: a device id means
+nothing on another machine, so none of it is sent to the server.
+
+Device names are blank until the browser has handed over a microphone once —
+**Show device names** asks for it, and the list fills in. An interface switched
+on mid-session appears by itself, and a device unplugged after being chosen
+falls back to the system default rather than failing.
+
+Two limits worth knowing, both the browser's rather than this app's:
+
+- **The browser's own recogniser cannot be pointed at a device.** Web Speech
+  opens the system default microphone itself. The choice reaches Local Whisper
+  only — which is another reason the key phrase is listened for by Whisper.
+- **Choosing an output needs `setSinkId`** (Chrome 110 and up). Where it is
+  missing the picker is disabled and the tones play wherever the system sends
+  them. Errors read out loud always follow the system output, everywhere:
+  speech synthesis has no routing at all.
 
 ## What the tones mean
 
@@ -109,7 +173,7 @@ Nothing is plugged on a maybe. The path is deliberately conservative:
    numbers turned into digits, and interchangeable words folded together. So
    "channel one" and "Ch1" arrive as the same two tokens, and "two h p" and
    "2hp" both arrive as `2 hp`.
-2. **Every "to" is tried as the join.** In "…out one **to** **two** hp div…" the
+2. **Every "to" — and every "and" — is tried as the join.** In "…out one **to** **two** hp div…" the
    first is the join and the second is the manufacturer's name; the reading that
    explains the whole sentence best wins, rather than a rule deciding in advance.
 3. **Each half is scored against the jacks that direction allows.** Sources are
@@ -145,7 +209,10 @@ To keep the model weights in-house as well, put the model folder under the
 client's `public/` directory and set `VITE_WHISPER_MODEL_PATH` at build time.
 Nothing is then fetched from the internet at all.
 
-Settings live in `localStorage` under `eurorack-assistant.voice`, per browser.
+Settings live in `localStorage` under `eurorack-assistant.voice.<user id>`, per
+browser and per account — a studio machine is logged into by more than one
+person and a microphone is a personal choice. Settings saved before accounts
+were on the key are read once as the starting point for whoever logs in next.
 
 ## Teaching it your rack's words
 
@@ -175,7 +242,8 @@ a module set up as the bass voice answers to "bass".
 | `client/src/speechInput.js` | one interface over both recognisers |
 | `client/src/whisperInput.js` | microphone capture, resampling, the loudness gate |
 | `client/src/whisperWorker.js` | transformers.js, off the main thread |
-| `client/src/voiceActivation.js` | the four ways of deciding when to listen |
+| `client/src/voiceActivation.js` | the five ways of deciding when to listen, and the key phrases |
+| `client/src/audioDevices.js` | listing microphones and speakers, and routing the cues to one |
 | `client/src/patchSounds.js` | the tones |
 | `client/src/components/VoicePatchPanel.vue` | the panel on the patch page |
 

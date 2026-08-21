@@ -11,7 +11,9 @@
 // reading names a real cable than the recogniser is (see parseBestAlternative).
 //
 // Every browser API used here is injectable, so the tests never touch a
-// microphone.
+// microphone. One asymmetry is worth knowing about: `deviceId` reaches Whisper
+// and cannot reach the browser's recogniser, which opens the system default
+// microphone itself (see audioDevices.js).
 
 import { createWhisperRecogniser } from './whisperInput.js';
 
@@ -65,6 +67,11 @@ export function engineAvailability({
 function createWebSpeechInput({
   lang = 'en-US',
   continuous = false,
+  // Accepted and ignored: Web Speech opens the system default microphone
+  // itself and offers no way to point it at a device. Taking the option
+  // silently is what lets the panel hold one input setting for both engines —
+  // the panel is the one that says so out loud.
+  deviceId = '', // eslint-disable-line no-unused-vars
   maxAlternatives = 5,
   vocabulary = [],
   onPartial = () => {},

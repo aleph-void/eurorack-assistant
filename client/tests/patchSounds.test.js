@@ -127,3 +127,40 @@ describe('reading errors out loud', () => {
     expect(spoken).toEqual(["'Clock' already has a cable in it"]);
   });
 });
+
+describe('which speaker they come out of', () => {
+  const routable = () => {
+    const sinks = [];
+    const { context, AudioContextImpl } = fakeAudio();
+    context.setSinkId = async (id) => {
+      sinks.push(id);
+    };
+    return { sinks, AudioContextImpl };
+  };
+
+  it('sends the cues to the chosen output', async () => {
+    const { sinks, AudioContextImpl } = routable();
+    createPatchSounds({ AudioContextImpl, outputDeviceId: 'out-1' }).success();
+    await Promise.resolve();
+    expect(sinks).toEqual(['out-1']);
+  });
+
+  it('follows a change of speaker without being rebuilt', async () => {
+    const { sinks, AudioContextImpl } = routable();
+    const sounds = createPatchSounds({ AudioContextImpl });
+    sounds.success();
+    sounds.update({ outputDeviceId: 'out-2' });
+    await Promise.resolve();
+    expect(sinks).toEqual(['out-2']);
+    // Setting it to the same thing again is not a reroute.
+    sounds.update({ outputDeviceId: 'out-2' });
+    await Promise.resolve();
+    expect(sinks).toEqual(['out-2']);
+  });
+
+  it('still plays where the browser cannot choose an output', () => {
+    const { played, AudioContextImpl } = fakeAudio();
+    createPatchSounds({ AudioContextImpl, outputDeviceId: 'out-1' }).success();
+    expect(played.length).toBeGreaterThan(0);
+  });
+});

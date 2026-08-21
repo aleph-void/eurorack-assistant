@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { testGlobal } from './setup.js';
+import { openPanels, testGlobal } from './setup.js';
 
 vi.mock('../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -8,6 +8,7 @@ vi.mock('../src/api.js', () => ({
 
 import { api } from '../src/api.js';
 import { toast } from '../src/toast.js';
+import { useAuthStore } from '../src/stores/auth.js';
 import VoicePatchPanel from '../src/components/VoicePatchPanel.vue';
 
 // The panel builds its own recogniser out of whatever the browser offers, so
@@ -343,5 +344,135 @@ describe('VoicePatchPanel', () => {
     const wrapper = await open();
     expect(recognisers.length).toBeGreaterThan(0);
     expect(() => wrapper.unmount()).not.toThrow();
+  });
+});
+
+// ---- which microphone, which speaker ----
+
+const fakeDevices = (devices) => {
+  const listeners = new Map();
+  const mediaDevices = {
+    enumerateDevices: async () => devices,
+    getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop() {} }] })),
+    addEventListener: (type, fn) => listeners.set(type, fn),
+    removeEventListener: (type) => listeners.delete(type),
+  };
+  Object.defineProperty(navigator, 'mediaDevices', { value: mediaDevices, configurable: true });
+  return { mediaDevices, fire: (type) => listeners.get(type)?.() };
+};
+
+describe('the microphone and the speaker', () => {
+  const devices = [
+    { kind: 'audioinput', deviceId: 'mic-1', label: 'Scarlett 2i2' },
+    { kind: 'audioinput', deviceId: 'mic-2', label: 'Headset' },
+    { kind: 'audiooutput', deviceId: 'out-1', label: 'Studio monitors' },
+  ];
+
+  it('lists what this machine has, and offers the system default first', async () => {
+    fakeDevices(devices);
+    const wrapper = mount(VoicePatchPanel, {
+      props: { patchId: '7', fromCandidates, toCandidates },
+      global: testGlobal(),
+    });
+    await flushPromises();
+    await openPanels(wrapper);
+    const inputs = wrapper.find('[data-test="voice-input-device"]').findAll('option');
+    expect(inputs.map((o) => o.element.value)).toEqual(['', 'mic-1', 'mic-2']);
+    expect(inputs[1].text()).toBe('Scarlett 2i2');
+    expect(
+      wrapper.find('[data-test="voice-output-device"]').findAll('option').map((o) => o.element.value)
+    ).toEqual(['', 'out-1']);
+  });
+
+  // Chosen here, and used by Whisper — the browser's own recogniser opens the
+  // system default itself and has no way to be pointed anywhere else.
+  it('hands the chosen microphone to the recogniser', async () => {
+    fakeDevices(devices);
+    const wrapper = mount(VoicePatchPanel, {
+      props: { patchId: '7', fromCandidates, toCandidates },
+      global: testGlobal(),
+    });
+    await flushPromises();
+    await openPanels(wrapper);
+    await wrapper.find('[data-test="voice-enabled"]').setValue(true);
+    await wrapper.find('[data-test="voice-input-device"]').setValue('mic-2');
+    await flushPromises();
+    expect(JSON.parse(localStorage.getItem('eurorack-assistant.voice')).inputDeviceId).toBe('mic-2');
+  });
+
+  it('forgets a device that has been unplugged since it was chosen', async () => {
+    localStorage.setItem(
+      'eurorack-assistant.voice',
+      JSON.stringify({ inputDeviceId: 'mic-gone', outputDeviceId: 'out-gone' })
+    );
+    fakeDevices(devices);
+    const wrapper = mount(VoicePatchPanel, {
+      props: { patchId: '7', fromCandidates, toCandidates },
+      global: testGlobal(),
+    });
+    await flushPromises();
+    await openPanels(wrapper);
+    expect(wrapper.find('[data-test="voice-input-device"]').element.value).toBe('');
+    expect(wrapper.find('[data-test="voice-output-device"]').element.value).toBe('');
+  });
+
+  it('asks for the microphone once when the browser is withholding the names', async () => {
+    const { mediaDevices } = fakeDevices([{ kind: 'audioinput', deviceId: 'mic-1', label: '' }]);
+    const wrapper = mount(VoicePatchPanel, {
+      props: { patchId: '7', fromCandidates, toCandidates },
+      global: testGlobal(),
+    });
+    await flushPromises();
+    await openPanels(wrapper);
+    const button = wrapper.find('[data-test="voice-devices-refresh"]');
+    expect(button.text()).toBe('Show device names');
+    await button.trigger('click');
+    await flushPromises();
+    expect(mediaDevices.getUserMedia).toHaveBeenCalled();
+  });
+
+  it('will not offer an output this browser cannot route to', async () => {
+    fakeDevices(devices);
+    const wrapper = mount(VoicePatchPanel, {
+      props: { patchId: '7', fromCandidates, toCandidates },
+      global: testGlobal(),
+    });
+    await flushPromises();
+    await openPanels(wrapper);
+    // jsdom has no AudioContext at all, so it certainly has no setSinkId.
+    expect(wrapper.find('[data-test="voice-output-device"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('[data-test="voice-device-help"]').text()).toContain('cannot choose an output');
+  });
+
+  // A studio desktop is logged into by more than one person, and a microphone
+  // is a personal choice. None of it goes to the server — a device id means
+  // nothing on another machine — so the account's name is on the key instead.
+  it('keeps each account’s settings apart in the same browser', async () => {
+    fakeDevices(devices);
+    const global = testGlobal();
+    useAuthStore().user = { id: 12 };
+    const wrapper = mount(VoicePatchPanel, {
+      props: { patchId: '7', fromCandidates, toCandidates },
+      global,
+    });
+    await flushPromises();
+    await openPanels(wrapper);
+    await wrapper.find('[data-test="voice-input-device"]').setValue('mic-1');
+    await flushPromises();
+    expect(JSON.parse(localStorage.getItem('eurorack-assistant.voice.12')).inputDeviceId).toBe('mic-1');
+    expect(localStorage.getItem('eurorack-assistant.voice')).toBeNull();
+  });
+
+  it('starts a new account off from what this browser was already set to', async () => {
+    localStorage.setItem('eurorack-assistant.voice', JSON.stringify({ mode: 'toggle' }));
+    fakeDevices(devices);
+    const global = testGlobal();
+    useAuthStore().user = { id: 12 };
+    const wrapper = mount(VoicePatchPanel, {
+      props: { patchId: '7', fromCandidates, toCandidates },
+      global,
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-test="voice-mode"]').element.value).toBe('toggle');
   });
 });

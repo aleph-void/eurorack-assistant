@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createVoiceActivation, afterWakeWord, isContinuous } from '../src/voiceActivation.js';
+import {
+  createVoiceActivation,
+  afterWakeWord,
+  isContinuous,
+  matchKeyPhrase,
+} from '../src/voiceActivation.js';
 
-const fakeInput = () => ({ start: vi.fn(), stop: vi.fn(), starts: 0 });
+const fakeInput = () => ({ start: vi.fn(), stop: vi.fn(), close: vi.fn(), starts: 0 });
 
 // A window that only remembers who asked to be told about what.
 function fakeTarget() {
@@ -109,7 +114,191 @@ describe('wake words', () => {
 
   it('passes the whole sentence through in every other mode', () => {
     const activation = createVoiceActivation({ mode: 'ptt', input: fakeInput(), target: fakeTarget() });
-    expect(activation.commandFrom('connect maths to div')).toBe('connect maths to div');
+    expect(activation.commandFrom('connect maths to div')).toEqual({
+      transcript: 'connect maths to div',
+      alternatives: [{ transcript: 'connect maths to div', confidence: 1 }],
+    });
+  });
+
+  // The recogniser hands back several readings of one breath, and the wake
+  // word has to come off all of them — dropping to the best one throws away
+  // the readings the parser is better at choosing between than the recogniser.
+  it('takes the wake word off every reading of the same breath', () => {
+    const activation = createVoiceActivation({ mode: 'wake', input: fakeInput(), target: fakeTarget() });
+    const command = activation.commandFrom('patch maths to div', [
+      { transcript: 'patch maths to div', confidence: 0.9 },
+      { transcript: 'patch mats to dave', confidence: 0.4 },
+    ]);
+    expect(command.transcript).toBe('maths to div');
+    expect(command.alternatives).toEqual([
+      { transcript: 'maths to div', confidence: 0.9 },
+      { transcript: 'mats to dave', confidence: 0.4 },
+    ]);
+  });
+});
+
+// ---- the key phrase ----
+
+// The phrase listener is a second recogniser: Whisper, always on, hearing the
+// room. The command recogniser is the one `input` stands for, and it is only
+// ever opened after the phrase has been heard.
+function phraseSetup(options = {}) {
+  const input = fakeInput();
+  const listener = { start: vi.fn(), stop: vi.fn(), close: vi.fn(), onResult: null };
+  const onCommand = vi.fn();
+  const onPhrase = vi.fn();
+  const activation = createVoiceActivation({
+    mode: 'phrase',
+    input,
+    target: fakeTarget(),
+    createPhraseInput: (opts) => {
+      listener.onResult = opts.onResult;
+      return listener;
+    },
+    onCommand,
+    onPhrase,
+    ...options,
+  });
+  const hears = (transcript) => listener.onResult({ transcript, alternatives: [] });
+  return { activation, input, listener, hears, onCommand, onPhrase };
+}
+
+describe('the key phrase', () => {
+  it('finds the phrase wherever in the sentence it was said, and what followed it', () => {
+    expect(matchKeyPhrase('create connection between maths and div')).toEqual({
+      phrase: 'create connection between',
+      intent: 'connect',
+      rest: 'maths and div',
+    });
+    expect(matchKeyPhrase('okay, create connection between maths and div').rest).toBe(
+      'maths and div'
+    );
+    expect(matchKeyPhrase('create connection between').rest).toBe('');
+    expect(matchKeyPhrase('connect maths to div')).toBeNull();
+  });
+
+  it('tells the two phrases apart even though they share two words', () => {
+    expect(matchKeyPhrase('disconnect connection between maths and div')).toMatchObject({
+      intent: 'disconnect',
+      rest: 'maths and div',
+    });
+    expect(matchKeyPhrase('creates connection between maths and div')).toMatchObject({
+      intent: 'connect',
+    });
+  });
+
+  it('listens to the room without opening the command recogniser', async () => {
+    const { activation, input, listener } = phraseSetup();
+    await activation.attach();
+    expect(listener.start).toHaveBeenCalledTimes(1);
+    expect(input.start).not.toHaveBeenCalled();
+    expect(activation.armed).toBe(false);
+    expect(activation.waiting).toBe(true);
+  });
+
+  it('opens the command recogniser once the phrase is heard, and closes the listener', async () => {
+    const { activation, input, listener, hears, onPhrase } = phraseSetup();
+    await activation.attach();
+    hears('the filter sounds good');
+    expect(input.start).not.toHaveBeenCalled();
+
+    hears('create connection between');
+    expect(onPhrase).toHaveBeenCalledWith('connect', '');
+    expect(input.start).toHaveBeenCalledTimes(1);
+    expect(listener.stop).toHaveBeenCalledTimes(1);
+    expect(activation.armed).toBe(true);
+  });
+
+  it('puts the verb the phrase meant in front of what the browser then heard', async () => {
+    const { activation, hears, input, listener } = phraseSetup();
+    await activation.attach();
+    hears('disconnect connection between');
+    const command = activation.commandFrom('maths eor and div clock', [
+      { transcript: 'maths eor and div clock', confidence: 0.9 },
+      { transcript: 'mats e o r and dave clock', confidence: 0.3 },
+    ]);
+    expect(command.transcript).toBe('disconnect maths eor and div clock');
+    expect(command.alternatives[1].transcript).toBe('disconnect mats e o r and dave clock');
+    // The turn is over: the room goes back to being listened to for the phrase.
+    expect(activation.armed).toBe(false);
+    expect(input.stop).toHaveBeenCalled();
+    expect(listener.start).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores what the command recogniser hears when no phrase was said', async () => {
+    const { activation } = phraseSetup();
+    await activation.attach();
+    expect(activation.commandFrom('maths and div')).toBeNull();
+  });
+
+  it('uses what Whisper already heard when the whole cable was said in one breath', async () => {
+    vi.useFakeTimers();
+    try {
+      const { activation, hears, onCommand, listener } = phraseSetup({ fallbackMs: 2000 });
+      await activation.attach();
+      hears('create connection between maths out and div clock');
+      expect(onCommand).not.toHaveBeenCalled();
+      // The browser's recogniser is given its moment to hear the cable said
+      // again before what Whisper heard is used.
+      vi.advanceTimersByTime(2000);
+      expect(onCommand).toHaveBeenCalledWith('connect maths out and div clock', [
+        { transcript: 'connect maths out and div clock', confidence: 1 },
+      ]);
+      expect(activation.armed).toBe(false);
+      expect(listener.start).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not say it twice when the browser answered first', async () => {
+    vi.useFakeTimers();
+    try {
+      const { activation, hears, onCommand } = phraseSetup({ fallbackMs: 2000 });
+      await activation.attach();
+      hears('create connection between maths out and div clock');
+      activation.commandFrom('maths out and div clock', []);
+      vi.advanceTimersByTime(5000);
+      expect(onCommand).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes the command recogniser again when nothing at all is said', async () => {
+    vi.useFakeTimers();
+    try {
+      const { activation, hears, input } = phraseSetup({ commandWindowMs: 8000 });
+      await activation.attach();
+      hears('create connection between');
+      expect(activation.armed).toBe(true);
+      vi.advanceTimersByTime(8000);
+      expect(activation.armed).toBe(false);
+      expect(input.stop).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives the microphone back when the page is left', async () => {
+    const { activation, listener } = phraseSetup();
+    await activation.attach();
+    activation.detach();
+    expect(listener.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('holding the button is holding it to say a cable', async () => {
+    const { activation, input, onPhrase } = phraseSetup();
+    await activation.attach();
+    activation.press();
+    expect(onPhrase).toHaveBeenCalledWith('connect', '');
+    expect(input.start).toHaveBeenCalledTimes(1);
+    activation.release();
+    expect(activation.armed).toBe(false);
+  });
+
+  it('is one utterance at a time, like push to talk', () => {
+    expect(isContinuous('phrase')).toBe(false);
   });
 });
 

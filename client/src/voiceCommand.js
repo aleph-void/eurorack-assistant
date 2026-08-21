@@ -51,8 +51,13 @@ const DISCONNECT_VERBS = new Set(['disconnect', 'unplug', 'unpatch', 'remove', '
 
 // Every word that might be the join. "two" and "too" are in here because a
 // recogniser writes all three of these the same way about a third of the time,
-// and the scoring is a better judge of which one this was than a rule is.
+// and the scoring is a better judge of which one this was than a rule is. So
+// is "and": "create connection between maths out AND div clock" is the only
+// way that key phrase can end, and a module with an AND jack on it still finds
+// it, because every join is tried and the best reading of the whole sentence
+// wins rather than the first one.
 const JOIN_WORDS = new Set([
+  'and',
   'to',
   'too',
   'two',

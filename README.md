@@ -233,7 +233,10 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   maths out one to 2hp div clock in" — and a tone tells you whether it went in,
   so your hands and your eyes stay on the case. Recognition runs either through
   the browser or through Whisper on your own machine; the microphone opens on a
-  held key, a patch-mode session, a wake word or a MIDI footswitch. Both ends
+  held key, a patch-mode session, a wake word, a key phrase Whisper listens for
+  on your own machine ("create connection between…" / "disconnect connection
+  between…"), or a MIDI footswitch; the microphone and the speaker the cues come
+  out of are yours to choose, per browser and per account. Both ends
   are matched against this patch's jacks with the names speech reliably gets
   wrong already accounted for ("mats" → Maths, "two h p" → 2hp), and anything
   it is not sure of is asked about rather than guessed. See

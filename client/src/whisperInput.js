@@ -11,6 +11,8 @@
 // injectable, and so is `transcribe`, so tests do all of this without a
 // microphone or a 40 MB download.
 
+import { microphoneConstraints } from './audioDevices.js';
+
 export const WHISPER_MODELS = Object.freeze([
   { value: 'Xenova/whisper-tiny.en', label: 'Tiny (English) — ~40 MB, fastest' },
   { value: 'Xenova/whisper-base.en', label: 'Base (English) — ~150 MB, more accurate' },
@@ -135,6 +137,7 @@ function defaultTranscriber({ model, createWorker }) {
 export function createWhisperRecogniser({
   continuous = false,
   model = 'Xenova/whisper-tiny.en',
+  deviceId = '',
   blockSize = 4096,
   maxUtteranceMs = 15000,
   onPartial = () => {},
@@ -251,12 +254,24 @@ export function createWhisperRecogniser({
       return false;
     }
     try {
-      stream = await mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-    } catch {
-      onError('Microphone permission was refused');
-      return false;
+      stream = await mediaDevices.getUserMedia({ audio: microphoneConstraints(deviceId) });
+    } catch (e) {
+      // A chosen microphone is asked for exactly, so that a device unplugged
+      // since it was picked is refused rather than silently swapped for the
+      // one pointed at the rack. Refused is not the same as forbidden, though:
+      // fall back to the default microphone and say which one is being used.
+      if (deviceId && e?.name === 'OverconstrainedError') {
+        onError('That microphone is gone — using the default one instead');
+        try {
+          stream = await mediaDevices.getUserMedia({ audio: microphoneConstraints('') });
+        } catch {
+          onError('Microphone permission was refused');
+          return false;
+        }
+      } else {
+        onError('Microphone permission was refused');
+        return false;
+      }
     }
     context = new AudioContextImpl();
     source = context.createMediaStreamSource(stream);

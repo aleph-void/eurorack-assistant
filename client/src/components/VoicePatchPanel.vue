@@ -2,11 +2,16 @@
 // Patching by voice. "Connect Make Noise Maths out one to 2hp Div clock in",
 // and the cable is documented before your hand is back on the case.
 //
-// The panel is a lid over four small modules that each do one thing:
+// The panel is a lid over five small modules that each do one thing:
 // speechInput turns a microphone into words, voiceActivation decides when the
-// microphone is open, voiceCommand turns words into two jack ids, and
-// patchSounds says whether it worked — because you are looking at the rack,
-// not at this screen, and the beep is the whole answer.
+// microphone is open, voiceCommand turns words into two jack ids, audioDevices
+// says which microphone and which speaker, and patchSounds says whether it
+// worked — because you are looking at the rack, not at this screen, and the
+// beep is the whole answer.
+//
+// Every setting here is kept in this browser and under this account's own key.
+// A deviceId means nothing on another machine, and a shared studio desktop is
+// two people with two headsets — so none of it goes to the server.
 //
 // Nothing is plugged on a maybe. Below the confidence you set, the panel says
 // what it thinks it heard and waits, and the tone it plays for that is not the
@@ -15,6 +20,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { api } from '../api.js';
 import { toast } from '../toast.js';
+import { useAuthStore } from '../stores/auth.js';
 import {
   createSpeechInput,
   engineAvailability,
@@ -23,6 +29,12 @@ import {
 } from '../speechInput.js';
 import { WHISPER_MODELS } from '../whisperInput.js';
 import { ACTIVATION_MODES, createVoiceActivation, isContinuous } from '../voiceActivation.js';
+import {
+  listAudioDevices,
+  nameDevices,
+  outputRoutingSupported,
+  watchAudioDevices,
+} from '../audioDevices.js';
 import { createPatchSounds } from '../patchSounds.js';
 import { parseBestAlternative, pickedOption, describeEndpoint } from '../voiceCommand.js';
 
@@ -50,6 +62,10 @@ const DEFAULTS = {
   mode: 'ptt',
   key: 'Space',
   wakeWords: 'patch, hey rack',
+  connectPhrase: 'create connection between',
+  disconnectPhrase: 'disconnect connection between',
+  inputDeviceId: '',
+  outputDeviceId: '',
   binding: null,
   confirmBelow: 0.75,
   volume: 0.7,
@@ -58,16 +74,26 @@ const DEFAULTS = {
 };
 const settings = reactive({ ...DEFAULTS });
 
+// One key per account, because a studio machine is logged into by more than
+// one person and a microphone is a personal choice. The old shared key is read
+// as the starting point so that nobody's settings vanish on the way in, and it
+// is never written to again.
+const auth = useAuthStore();
+const storageKey = () => (auth.user?.id ? `${STORAGE_KEY}.${auth.user.id}` : STORAGE_KEY);
+
 function loadSettings() {
-  try {
-    Object.assign(settings, DEFAULTS, JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'));
-  } catch {
-    /* first run, or a browser that will not keep anything */
-  }
+  const read = (key) => {
+    try {
+      return JSON.parse(localStorage.getItem(key) || '{}');
+    } catch {
+      return {};
+    }
+  };
+  Object.assign(settings, DEFAULTS, read(STORAGE_KEY), read(storageKey()));
 }
 function saveSettings() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...settings }));
+    localStorage.setItem(storageKey(), JSON.stringify({ ...settings }));
   } catch {
     /* nothing here is worth failing over */
   }
@@ -146,6 +172,35 @@ function useWhisperInstead() {
   say('Switched to local Whisper — the model is fetched once, then nothing leaves this machine.');
 }
 
+// ---- which microphone, which speaker ----
+
+// Devices are listed rather than assumed, refreshed when one is plugged in,
+// and named only once the microphone has been granted — before that the
+// browser hands back a list of blanks, which is what `deviceNames` is for.
+const inputs = ref([]);
+const outputs = ref([]);
+const deviceNames = ref(false);
+const canRouteOutput = ref(outputRoutingSupported());
+let unwatchDevices = () => {};
+
+async function refreshDevices() {
+  const found = await listAudioDevices();
+  inputs.value = found.inputs;
+  outputs.value = found.outputs;
+  deviceNames.value = found.named;
+  // A device that has been unplugged since it was chosen would otherwise sit
+  // in the picker as a blank line that cannot be selected again.
+  if (settings.inputDeviceId && !found.inputs.some((d) => d.deviceId === settings.inputDeviceId))
+    settings.inputDeviceId = '';
+  if (settings.outputDeviceId && !found.outputs.some((d) => d.deviceId === settings.outputDeviceId))
+    settings.outputDeviceId = '';
+}
+
+async function askForDeviceNames() {
+  if (!(await nameDevices())) return say('The microphone was refused, so its name cannot be read', 'error');
+  return refreshDevices();
+}
+
 // ---- what is going on right now ----
 
 const status = ref('off'); // off | idle | listening | thinking | working
@@ -160,6 +215,10 @@ const level = ref(0);
 // The activation layer is a plain object, so what it knows about being armed
 // has to be mirrored into a ref for the template to follow it.
 const armed = ref(false);
+// The key-phrase listener runs beside the command recogniser and has a state
+// of its own — it is downloading a model, or it is listening to the room.
+const phraseState = ref('idle');
+const phraseIntent = ref('');
 
 let input = null;
 let activation = null;
@@ -315,7 +374,24 @@ function teardown() {
   status.value = 'off';
   level.value = 0;
   armed.value = false;
+  phraseState.value = 'idle';
+  phraseIntent.value = '';
 }
+
+// The phrases the key-phrase listener is waiting for, and what each of them
+// means. Several of either can be given, comma separated — a room hears
+// "create" as "great" often enough that a second spelling is worth having.
+const phraseList = (text, intent) =>
+  String(text || '')
+    .split(',')
+    .map((phrase) => phrase.trim())
+    .filter(Boolean)
+    .map((phrase) => ({ phrase, intent }));
+const keyPhrases = computed(() => [
+  ...phraseList(settings.connectPhrase, 'connect'),
+  ...phraseList(settings.disconnectPhrase, 'disconnect'),
+]);
+const firstPhrase = computed(() => keyPhrases.value[0]?.phrase || '');
 
 function build() {
   teardown();
@@ -325,20 +401,21 @@ function build() {
   input = createSpeechInput({
     engine: settings.engine,
     model: settings.model,
+    deviceId: settings.inputDeviceId,
     continuous,
     vocabulary: listOf(props.vocabulary),
     onPartial: (text) => {
       partial.value = text;
     },
     onResult: ({ transcript, alternatives }) => {
-      // In wake-word mode the sentence only counts from the wake word on.
-      const command = activation?.commandFrom(transcript);
-      if (command === null) return;
-      const trimmed = String(command).trim();
-      if (!trimmed) return;
-      const readings =
-        trimmed === transcript ? alternatives : [{ transcript: trimmed, confidence: 1 }];
-      handle(trimmed, readings);
+      // What counts as a command is the activation layer's to say: in wake-word
+      // mode the sentence only starts at the wake word, and in key-phrase mode
+      // the phrase already said whether this is a cable going in or coming out.
+      // Every reading survives that, because the parser is the better judge of
+      // which of them names a real cable.
+      const command = activation?.commandFrom(transcript, alternatives);
+      if (!command) return;
+      handle(command.transcript, command.alternatives);
     },
     onError: (text, code) => {
       // An engine that cannot reach its service will fail this way every time,
@@ -367,11 +444,43 @@ function build() {
     key: settings.key,
     binding: settings.binding,
     wakeWords: settings.wakeWords.split(',').map((w) => w.trim()).filter(Boolean),
+    keyPhrases: keyPhrases.value,
+    // The room is listened to all evening in this mode, so what listens is
+    // Whisper — on this machine, whatever the command recogniser is set to.
+    createPhraseInput: (options) =>
+      createSpeechInput({
+        engine: 'whisper',
+        model: settings.model,
+        deviceId: settings.inputDeviceId,
+        onState: (next) => {
+          phraseState.value = next;
+        },
+        onPartial: () => {},
+        onLevel: (value) => {
+          level.value = value;
+        },
+        ...options,
+      }),
+    onPhrase: (intent, rest) => {
+      phraseIntent.value = intent;
+      partial.value = '';
+      clearPending();
+      sounds?.listening();
+      say(
+        rest
+          ? `Heard the phrase — reading “${rest}”`
+          : `Heard the phrase — say the ${intent === 'disconnect' ? 'cable to pull out' : 'cable'}`
+      );
+    },
+    // Said in one breath, so the browser's recogniser never heard the cable
+    // and what Whisper already transcribed is the whole command.
+    onCommand: (text, readings) => handle(text, readings),
     onArm: () => {
       armed.value = true;
     },
     onDisarm: () => {
       armed.value = false;
+      phraseIntent.value = '';
     },
     onBinding: (binding) => {
       settings.binding = binding;
@@ -391,50 +500,83 @@ onMounted(() => {
     volume: settings.volume,
     enabled: settings.sounds,
     speakErrors: settings.speakErrors,
+    outputDeviceId: settings.outputDeviceId,
   });
+  refreshDevices();
+  // An interface switched on halfway through a session is a device that was
+  // not in the list when the page loaded.
+  unwatchDevices = watchAudioDevices(refreshDevices);
   if (settings.enabled) build();
 });
 onBeforeUnmount(() => {
   teardown();
+  unwatchDevices();
   sounds?.close();
 });
 
 // Anything that changes the shape of the microphone rebuilds it; anything that
 // only changes what it sounds like does not.
 watch(
-  () => [settings.enabled, settings.engine, settings.mode, settings.model, settings.wakeWords, settings.key],
+  () => [
+    settings.enabled,
+    settings.engine,
+    settings.mode,
+    settings.model,
+    settings.wakeWords,
+    settings.connectPhrase,
+    settings.disconnectPhrase,
+    settings.inputDeviceId,
+    settings.key,
+  ],
   () => {
     saveSettings();
     build();
   }
 );
 watch(
-  () => [settings.volume, settings.sounds, settings.speakErrors, settings.confirmBelow],
+  () => [
+    settings.volume,
+    settings.sounds,
+    settings.speakErrors,
+    settings.confirmBelow,
+    settings.outputDeviceId,
+  ],
   () => {
     saveSettings();
     sounds?.update({
       volume: settings.volume,
       enabled: settings.sounds,
       speakErrors: settings.speakErrors,
+      outputDeviceId: settings.outputDeviceId,
     });
   }
 );
 
-const statusText = computed(
-  () =>
-    ({
+// In key-phrase mode there are two recognisers and the honest answer is
+// whichever of them the room is being heard by: until the phrase is said, what
+// is going on is Whisper listening for it.
+const statusText = computed(() => {
+  const plain =
+    {
       off: 'Off',
       idle: 'Ready',
       listening: 'Listening…',
       thinking: 'Working out what you said…',
       working: 'Plugging it in…',
-    })[status.value] || status.value
-);
+    }[status.value] || status.value;
+  if (settings.mode !== 'phrase' || status.value === 'off' || status.value === 'working')
+    return plain;
+  if (armed.value) return phraseIntent.value === 'disconnect' ? 'Which cable?' : 'Say the cable…';
+  if (phraseState.value === 'thinking') return 'Listening for the phrase…';
+  if (phraseState.value === 'listening') return `Waiting for “${firstPhrase.value}”`;
+  return 'Starting Whisper…';
+});
 const holdLabel = computed(() =>
   ({
     ptt: `Hold to talk (or hold ${settings.key === 'Space' ? 'the space bar' : settings.key})`,
     toggle: armed.value ? 'Stop patch mode' : 'Start patch mode',
     wake: 'Listening for the wake word',
+    phrase: armed.value ? 'Say the cable' : `Or hold this instead of saying “${firstPhrase.value}”`,
     midi: 'Waiting for the footswitch',
   })[settings.mode]
 );
@@ -488,7 +630,7 @@ const bindingText = computed(() =>
             </option>
           </select>
         </div>
-        <div v-if="settings.engine === 'whisper'">
+        <div v-if="settings.engine === 'whisper' || settings.mode === 'phrase'">
           <label for="voice-model">Whisper model</label>
           <select id="voice-model" v-model="settings.model" data-test="voice-model">
             <option v-for="option in WHISPER_MODELS" :key="option.value" :value="option.value">
@@ -512,6 +654,34 @@ const bindingText = computed(() =>
           <input id="voice-wake" v-model="settings.wakeWords" data-test="voice-wake" />
         </div>
       </div>
+      <template v-if="settings.mode === 'phrase'">
+        <div class="row">
+          <div>
+            <label for="voice-connect-phrase">Phrase to plug a cable in (comma separated)</label>
+            <input
+              id="voice-connect-phrase"
+              v-model="settings.connectPhrase"
+              data-test="voice-connect-phrase"
+            />
+          </div>
+          <div>
+            <label for="voice-disconnect-phrase">Phrase to pull one out (comma separated)</label>
+            <input
+              id="voice-disconnect-phrase"
+              v-model="settings.disconnectPhrase"
+              data-test="voice-disconnect-phrase"
+            />
+          </div>
+        </div>
+        <p class="muted" data-test="voice-phrase-help">
+          Whisper listens to the room on this machine and does nothing until it hears one of these
+          phrases; the cable that follows is transcribed by
+          {{ engineLabel(settings.engine) }}. Say it in one breath — "create connection between
+          maths out one and 2hp div clock" — or say the phrase, wait for the blip, then say the
+          cable. Nothing but the phrase leaves the room either way, and nothing at all leaves it
+          while the recognition setting is Local Whisper.
+        </p>
+      </template>
       <div v-if="settings.mode === 'midi'" class="row">
         <div>
           <label>Footswitch — {{ bindingText }}</label>
@@ -582,6 +752,61 @@ const bindingText = computed(() =>
           {{ index + 1 }}. {{ option.module_label }} — {{ option.jack_name }}
         </button>
       </div>
+
+      <details class="subpanel">
+        <summary>Microphone and speaker</summary>
+        <div class="row">
+          <div>
+            <label for="voice-input-device">Microphone</label>
+            <select
+              id="voice-input-device"
+              v-model="settings.inputDeviceId"
+              data-test="voice-input-device"
+            >
+              <option value="">System default</option>
+              <option v-for="device in inputs" :key="device.deviceId" :value="device.deviceId">
+                {{ device.label }}
+              </option>
+            </select>
+          </div>
+          <div>
+            <label for="voice-output-device">Cues play through</label>
+            <select
+              id="voice-output-device"
+              v-model="settings.outputDeviceId"
+              data-test="voice-output-device"
+              :disabled="!canRouteOutput"
+            >
+              <option value="">System default</option>
+              <option v-for="device in outputs" :key="device.deviceId" :value="device.deviceId">
+                {{ device.label }}
+              </option>
+            </select>
+          </div>
+          <div class="shrink">
+            <label>&nbsp;</label>
+            <button
+              type="button"
+              style="margin: 0"
+              data-test="voice-devices-refresh"
+              @click="deviceNames ? refreshDevices() : askForDeviceNames()"
+            >
+              {{ deviceNames ? 'Refresh list' : 'Show device names' }}
+            </button>
+          </div>
+        </div>
+        <p class="muted" data-test="voice-device-help">
+          Kept in this browser under your account and never sent to the server — a device id means
+          nothing on another machine. The microphone reaches Local Whisper only: the browser's own
+          recogniser opens the system default itself and offers no way to point it elsewhere, which
+          is another reason the key phrase is listened for by Whisper.
+          <span v-if="!canRouteOutput">
+            This browser cannot choose an output either, so the cues play wherever the system sends
+            them.
+          </span>
+          Errors read out loud always follow the system output.
+        </p>
+      </details>
 
       <details class="subpanel">
         <summary>Sound and confidence</summary>

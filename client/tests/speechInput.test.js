@@ -54,6 +54,16 @@ describe('the browser recogniser', () => {
     });
   });
 
+  it('is handed the input device and cannot use it', () => {
+    const { FakeRecognition } = fakeRecognition();
+    // Web Speech opens the system default microphone itself. The option is
+    // taken and ignored so that the panel can hold one setting for both
+    // engines; what must not happen is a refusal to build.
+    expect(() =>
+      createSpeechInput({ RecognitionImpl: FakeRecognition, deviceId: 'mic-1' }).start()
+    ).not.toThrow();
+  });
+
   it('reports what is still being said separately', () => {
     const { FakeRecognition, made } = fakeRecognition();
     const onPartial = vi.fn();
@@ -214,6 +224,43 @@ describe('Whisper on this machine', () => {
     });
     await input.start();
     expect(onError).toHaveBeenCalledWith('Microphone permission was refused');
+  });
+
+  it('asks for the chosen microphone exactly', async () => {
+    const { FakeAudioContext, mediaDevices } = fakeAudio();
+    const input = createWhisperRecogniser({
+      mediaDevices,
+      AudioContextImpl: FakeAudioContext,
+      transcribe: async () => '',
+      deviceId: 'mic-1',
+    });
+    await input.start();
+    expect(mediaDevices.getUserMedia).toHaveBeenCalledWith({
+      audio: expect.objectContaining({ deviceId: { exact: 'mic-1' } }),
+    });
+  });
+
+  // A microphone unplugged since it was chosen is refused outright by `exact`,
+  // and a refused microphone reads as "permission denied" to everybody looking
+  // at it. Falling back keeps voice working; saying so keeps it honest.
+  it('falls back to the default microphone when the chosen one has gone', async () => {
+    const { FakeAudioContext } = fakeAudio();
+    const onError = vi.fn();
+    const getUserMedia = vi.fn(async ({ audio }) => {
+      if (audio.deviceId) throw Object.assign(new Error('gone'), { name: 'OverconstrainedError' });
+      return { getTracks: () => [] };
+    });
+    const input = createWhisperRecogniser({
+      mediaDevices: { getUserMedia },
+      AudioContextImpl: FakeAudioContext,
+      transcribe: async () => '',
+      deviceId: 'mic-gone',
+      onError,
+    });
+    await input.start();
+    expect(onError).toHaveBeenCalledWith('That microphone is gone — using the default one instead');
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(input.state).toBe('listening');
   });
 
   it('lets go of the microphone when it is closed', async () => {

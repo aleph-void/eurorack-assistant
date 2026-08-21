@@ -14,6 +14,15 @@
 // Short, quiet and dry — a reverb tail would sit on top of whatever the rack
 // is doing. The AudioContext is made on first use, because browsers will not
 // start one before the page has been touched, and is injectable for tests.
+//
+// Which speaker they come out of is the rack owner's choice too: a studio's
+// default output is often the one going into the mixer, and a cue mixed into
+// the take is not a cue. That needs `setSinkId` (audioDevices.js) — where the
+// browser has no such thing the cues go wherever the system sends them, and
+// spoken errors go there whatever happens, since speech synthesis has no
+// routing anywhere.
+
+import { routeOutput } from './audioDevices.js';
 
 const CUES = {
   listening: { steps: [[1320, 0.05]], type: 'sine', gain: 0.18 },
@@ -56,13 +65,20 @@ export function createPatchSounds({
   volume = 0.7,
   enabled = true,
   speakErrors = false,
+  outputDeviceId = '',
 } = {}) {
   let context = null;
-  const settings = { volume, enabled, speakErrors };
+  const settings = { volume, enabled, speakErrors, outputDeviceId };
 
   function open() {
     if (!settings.enabled || !AudioContextImpl) return null;
-    if (!context) context = new AudioContextImpl();
+    if (!context) {
+      context = new AudioContextImpl();
+      // Routing is a promise and a cue is not: the first blip after a change
+      // of speaker may still come out of the old one. Everything after it is
+      // where it was asked for, which is what matters over an evening.
+      routeOutput(context, settings.outputDeviceId);
+    }
     // Suspended is what an AudioContext made before the first click looks like.
     if (context.state === 'suspended') context.resume?.();
     return context;
@@ -125,11 +141,14 @@ export function createPatchSounds({
     // one as you move the slider.
     preview: (name) => play(name),
     update(next = {}) {
+      const before = settings.outputDeviceId;
       Object.assign(settings, next);
       if (!settings.enabled && context) {
         context.close?.();
         context = null;
       }
+      if (context && settings.outputDeviceId !== before)
+        routeOutput(context, settings.outputDeviceId);
     },
     get settings() {
       return { ...settings };
