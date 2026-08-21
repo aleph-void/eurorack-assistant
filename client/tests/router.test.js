@@ -82,6 +82,7 @@ describe('detail sub-pages', () => {
       'notes',
       'pairs',
       'parameters',
+      'questions',
       'routes',
       'switches',
       'values',
@@ -102,6 +103,7 @@ describe('detail sub-pages', () => {
       'links',
       'modules',
       'notes',
+      'questions',
       'scope',
       'settings',
     ]);

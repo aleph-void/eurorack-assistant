@@ -1199,6 +1199,22 @@ describe('scopeQuestion', () => {
     expect(links.map((l) => l.module_id)).toEqual([module.id]);
   });
 
+  // A question asked from a module's page carries that module's scope link
+  // before the model ever reads it — and the wording need never name it.
+  it('keeps the module a question was asked about in scope', async () => {
+    const { db, module, question } = await fixture();
+    await db.query('INSERT INTO question_modules (question_id, module_id) VALUES ($1, $2)', [
+      question.id,
+      module.id,
+    ]);
+
+    const backend = fakeBackend({ completeText: '[]' });
+    const scoped = await scopeQuestion(db, backend, question);
+    expect(scoped.map((m) => m.id)).toEqual([module.id]);
+    const { rows: links } = await db.query('SELECT module_id FROM question_modules');
+    expect(links.map((l) => l.module_id)).toEqual([module.id]);
+  });
+
   it('leaves the scope empty when no modules match', async () => {
     const { db, question } = await fixture();
     const backend = fakeBackend({ completeText: '[]' });

@@ -30,16 +30,16 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   emitting `reload`), and every section is a route of its own.
   `/modules/:id` is the front plate and the summary; `/components`,
   `/values`, `/parameters`, `/normalizations`, `/switches`, `/routes`,
-  `/pairs`, `/expanders`, `/bridges`, `/documents`, `/videos` and `/notes`
-  are the rest. EVERY COMPONENT TYPE ALSO HAS A PAGE OF ITS OWN — the list of
+  `/pairs`, `/expanders`, `/bridges`, `/documents`, `/videos`, `/notes` and
+  `/questions` are the rest. EVERY COMPONENT TYPE ALSO HAS A PAGE OF ITS OWN — the list of
   all of a module's components is a page you scroll rather than read, while
   "the knobs" is a page you can take in: `/jacks/input`, `/jacks/output`,
   `/jacks/bidirectional` for the things a cable goes in, `/parts/<type>`
   (knob, slider, button, toggle, switch, display, other) for the rest, all of
   them ONE view (`ModuleComponentTypeView.vue`) over a component type. `/patches/:id` is the picture of the case and the drag that patches a
   cable on it; `/cables`, `/settings`, `/flow`, `/links`, `/scope`,
-  `/notes` and `/modules` are the rest (`/patches/:id/config`, the one page
-  that used to hold all of those, redirects to `/settings`). Every page reads
+  `/notes`, `/modules` and `/questions` are the rest (`/patches/:id/config`,
+  the one page that used to hold all of those, redirects to `/settings`). Every page reads
   the SAME `GET /api/modules/:id` / `GET /api/patches/:id` and reloads it
   after every write — `useModuleRecord.js` / `usePatchRecord.js` — with ONE
   exception: plugging and unplugging a cable ON THE PICTURE puts the row the
@@ -386,6 +386,19 @@ that account (or the whole queue for unowned work), budgets make queued work
 wait rather than fail. Patch tables snapshot module names with SOFT integer
 refs (no FK) so patches keep rendering after modules move, re-analyze, or
 disappear; live rows are joined opportunistically at read time.
+
+ASKING ABOUT ONE RECORD is a page of that record, not a mode of the Ask page:
+`/modules/:id/questions` and `/patches/:id/questions` list the questions
+already asked about it (`GET /api/questions?module_id=` / `?patch_id=`, which
+read the scope links and the patch attachments) and are where the next one is
+asked. Both draw the SAME `components/QuestionsPanel.vue` — one list of one
+kind of record, only the word and the query key differ. Asking there sends
+`module_ids`/`patch_ids` with the prompt, so the record is in the question's
+scope BEFORE the scoping model reads a word: a question asked from a module's
+page is about that module even when the wording never names it ("why is this
+so quiet?"), and `scopeQuestion()` keeps the links it finds already written
+rather than replacing them with what the model picked. The general Ask page is
+still there for a question about the whole system.
 
 A **system** is a collection of racks patched together as one instrument
 (migration 028). Racks stay the unit of inventory and physical row layout;

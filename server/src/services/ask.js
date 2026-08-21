@@ -165,6 +165,24 @@ export async function scopeQuestion(db, backend, question, { log = () => {} } = 
 
   const scoped = await determineScope(backend, question.prompt, modules);
 
+  // A question asked FROM a module's page already carries that module's scope
+  // link, written when the question was created. It is what the question is
+  // about — the wording may never name the module ("why is this so quiet?") —
+  // so it goes in scope on top of what the model picked, and survives the
+  // rewrite at the end of this function.
+  const seededLinks = await QuestionModule.findAll({ where: { question_id: question.id } });
+  if (seededLinks.length > 0) {
+    const seeded = new Set(seededLinks.map((l) => l.module_id));
+    const already = new Set(scoped.map((m) => m.id));
+    const added = modules.filter((m) => seeded.has(m.id) && !already.has(m.id));
+    if (added.length > 0) {
+      log(
+        `in scope as asked: ${added.map((m) => `${m.manufacturer} ${m.name}`).join(', ')}`
+      );
+      scoped.push(...added);
+    }
+  }
+
   // A question asked about a patch is about the modules that patch uses,
   // whatever the model made of the wording — they go in scope on top of what
   // it picked, and the user can still take them out during review.

@@ -100,6 +100,7 @@ const MODULE_PAGES = [
   { path: '/documents', label: 'Documents' },
   { path: '/videos', label: 'Videos' },
   { path: '/notes', label: 'Your notes' },
+  { path: '/questions', label: 'Questions' },
 ];
 
 const PATCH_PAGES = [
@@ -111,6 +112,7 @@ const PATCH_PAGES = [
   { path: '/scope', label: 'Oscilloscope' },
   { path: '/notes', label: 'Notes' },
   { path: '/modules', label: 'Modules in this patch' },
+  { path: '/questions', label: 'Questions' },
 ];
 
 const detailPages = computed(() => (detail.kind === 'patch' ? PATCH_PAGES : MODULE_PAGES));

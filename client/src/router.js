@@ -23,6 +23,7 @@ const ModuleBridgesView = () => import('./views/ModuleBridgesView.vue');
 const ModuleDocumentsView = () => import('./views/ModuleDocumentsView.vue');
 const ModuleVideosView = () => import('./views/ModuleVideosView.vue');
 const ModuleNotesView = () => import('./views/ModuleNotesView.vue');
+const ModuleQuestionsView = () => import('./views/ModuleQuestionsView.vue');
 const RacksView = () => import('./views/RacksView.vue');
 const SystemsView = () => import('./views/SystemsView.vue');
 const PatchesView = () => import('./views/PatchesView.vue');
@@ -34,6 +35,7 @@ const PatchLinksView = () => import('./views/PatchLinksView.vue');
 const PatchScopeView = () => import('./views/PatchScopeView.vue');
 const PatchNotesView = () => import('./views/PatchNotesView.vue');
 const PatchModulesView = () => import('./views/PatchModulesView.vue');
+const PatchQuestionsView = () => import('./views/PatchQuestionsView.vue');
 const ImportView = () => import('./views/ImportView.vue');
 const SearchView = () => import('./views/SearchView.vue');
 const ManualTextView = () => import('./views/ManualTextView.vue');
@@ -134,6 +136,14 @@ export const routes = [
   },
   { path: '/modules/:id/videos', name: 'module-videos', component: ModuleVideosView, props: true },
   { path: '/modules/:id/notes', name: 'module-notes', component: ModuleNotesView, props: true },
+  // Asking the assistant about THIS module: the questions already asked about
+  // it, and the box that asks the next one with it already in scope.
+  {
+    path: '/modules/:id/questions',
+    name: 'module-questions',
+    component: ModuleQuestionsView,
+    props: true,
+  },
   { path: '/racks', name: 'racks', component: RacksView },
   { path: '/systems', name: 'systems', component: SystemsView },
   { path: '/patches', name: 'patches', component: PatchesView },
@@ -158,6 +168,14 @@ export const routes = [
     path: '/patches/:id/modules',
     name: 'patch-modules',
     component: PatchModulesView,
+    props: true,
+  },
+  // The same for a patch — and asking from here attaches the patch, which is
+  // what makes the answer about these cables and these settings.
+  {
+    path: '/patches/:id/questions',
+    name: 'patch-questions',
+    component: PatchQuestionsView,
     props: true,
   },
   // Where the one page that held all of the above used to be.
