@@ -144,6 +144,39 @@ describe('VideoSearchPanel', () => {
     expect(wrapper.emitted('imported')).toHaveLength(1);
   });
 
+  it('goes back to the unsearched view when the module changes', async () => {
+    const wrapper = await searchedWrapper();
+    await wrapper.find('[data-test="search-pick-AAAAAAAAAA1"]').setValue(true);
+    expect(wrapper.find('[data-test="video-search-summary"]').exists()).toBe(true);
+
+    // Previous/Next keeps the panel mounted and only swaps the id.
+    await wrapper.setProps({ moduleId: '6' });
+    await flushPromises();
+    expect(wrapper.find('[data-test="video-search-summary"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="search-pick-AAAAAAAAAA1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="video-search-button"]').text()).toBe('Search YouTube');
+
+    // And the new module searches for itself.
+    api.post.mockResolvedValueOnce(structuredClone(searchResponse));
+    await wrapper.find('[data-test="video-search-button"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenLastCalledWith('/api/modules/6/videos/search', {});
+  });
+
+  it('drops a search that lands after the reader has walked on', async () => {
+    let settle;
+    api.post.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+    const wrapper = mount(VideoSearchPanel, { props: { moduleId: '5' }, global: testGlobal() });
+    await wrapper.find('[data-test="video-search-button"]').trigger('click');
+    await wrapper.setProps({ moduleId: '6' });
+    settle(structuredClone(searchResponse));
+    await flushPromises();
+
+    // The hits belong to module 5 and must not appear under module 6.
+    expect(wrapper.find('[data-test="video-search-summary"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="video-search-button"]').text()).toBe('Search YouTube');
+  });
+
   it('explains keyless results and shows search errors', async () => {
     api.post.mockResolvedValueOnce({
       query: 'Make Noise Maths eurorack',

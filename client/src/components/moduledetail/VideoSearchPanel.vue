@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { api } from '../../api.js';
 
 // Search YouTube for tutorials about this module, then queue the ones the
@@ -28,11 +28,15 @@ async function search(page = null) {
   error.value = '';
   notice.value = '';
   searching.value = true;
+  // Which module this search was started for: a slow one must not land on
+  // the next module the user walked to while it was in flight.
+  const forModule = props.moduleId;
   try {
     const res = await api.post(
       `/api/modules/${props.moduleId}/videos/search`,
       page ? { page } : {}
     );
+    if (props.moduleId !== forModule) return;
     if (page && result.value) {
       // Search pages can overlap at the edges; a video the list already
       // shows is dropped rather than listed twice.
@@ -44,11 +48,27 @@ async function search(page = null) {
       selected.value = new Set();
     }
   } catch (e) {
-    error.value = e.message;
+    if (props.moduleId === forModule) error.value = e.message;
   } finally {
-    searching.value = false;
+    if (props.moduleId === forModule) searching.value = false;
   }
 }
+
+// Previous and Next keep this component mounted and only swap the id, so
+// without this the last module's hits (and anything ticked on them) stay on
+// screen under the new module's name — and Import would queue them against
+// the wrong module. Every switch goes back to the unsearched view.
+watch(
+  () => props.moduleId,
+  () => {
+    result.value = null;
+    selected.value = new Set();
+    error.value = '';
+    notice.value = '';
+    searching.value = false;
+    importing.value = false;
+  }
+);
 
 function toggle(video) {
   const next = new Set(selected.value);

@@ -175,6 +175,12 @@ export const useJobsStore = defineStore('jobs', {
       });
       if (this.feed.length > this.feedLimit) this.feed.length = this.feedLimit;
     },
+    // Wipe the live feed. Purely local: the lines are only ever what this
+    // page has seen since it opened, so there is nothing on the server to
+    // clear and new events start filling it again straight away.
+    clearFeed() {
+      this.feed = [];
+    },
     // Navigate an invisible anchor so the browser saves the file without
     // leaving the page.
     triggerDownload(url) {

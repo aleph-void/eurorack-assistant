@@ -263,6 +263,19 @@ onMounted(async () => {
       <h2>Live progress</h2>
     </summary>
     <div class="panel-body">
+      <!-- The feed is only ever what this page has seen since it opened, so
+           clearing it is a local wipe — a way to watch the next job without
+           the last one's lines above it. -->
+      <div class="actions end spaced" data-test="feed-actions">
+        <button
+          class="secondary"
+          :disabled="jobs.feed.length === 0"
+          data-test="clear-feed"
+          @click="jobs.clearFeed()"
+        >
+          Clear live log
+        </button>
+      </div>
       <div ref="feed" class="feed" data-test="feed">
         <div v-for="(line, i) in jobs.feed" :key="i" class="feed-line">
           <span class="muted">[job {{ line.jobId }} · {{ line.type }}]</span> {{ line.message }}
@@ -347,45 +360,48 @@ onMounted(async () => {
             <td>{{ job.attempts }}</td>
             <td class="muted">{{ job.error || '' }}</td>
             <!-- Up to four controls share this cell (Download, Retry, Stop,
-                 Delete): the shared action bar keeps them side by side and
-                 wraps them only when the column truly cannot hold them. -->
-            <td class="actions">
-              <!-- Finished exports normally download themselves; the link
-                   covers a missed event (page closed). It dies once used —
-                   the server deletes the zip after serving it. -->
-              <a
-                v-if="job.download && job.status === 'complete'"
-                :href="job.download"
-                :data-test="`download-${job.id}`"
-              >
-                Download
-              </a>
-              <button
-                v-if="job.status === 'failed' || job.stalled"
-                class="secondary"
-                :data-test="`retry-${job.id}`"
-                @click="retry(job)"
-              >
-                Retry
-              </button>
-              <!-- Owner-only: an admin sees everyone's jobs but may not stop
-                   or delete work someone else is waiting on. -->
-              <button
-                v-if="job.own !== false && (job.status === 'pending' || job.status === 'running')"
-                class="secondary"
-                :data-test="`stop-${job.id}`"
-                @click="stop(job)"
-              >
-                Stop
-              </button>
-              <button
-                v-if="job.own !== false"
-                class="danger"
-                :data-test="`delete-${job.id}`"
-                @click="remove(job)"
-              >
-                Delete
-              </button>
+                 Delete). The cell claims only the width they need and the bar
+                 inside holds them on one line: the error column beside it
+                 takes everything else, and a wrapping bar stacks them. -->
+            <td class="actions-cell">
+              <div class="actions nowrap">
+                <!-- Finished exports normally download themselves; the link
+                     covers a missed event (page closed). It dies once used —
+                     the server deletes the zip after serving it. -->
+                <a
+                  v-if="job.download && job.status === 'complete'"
+                  :href="job.download"
+                  :data-test="`download-${job.id}`"
+                >
+                  Download
+                </a>
+                <button
+                  v-if="job.status === 'failed' || job.stalled"
+                  class="secondary"
+                  :data-test="`retry-${job.id}`"
+                  @click="retry(job)"
+                >
+                  Retry
+                </button>
+                <!-- Owner-only: an admin sees everyone's jobs but may not stop
+                     or delete work someone else is waiting on. -->
+                <button
+                  v-if="job.own !== false && (job.status === 'pending' || job.status === 'running')"
+                  class="secondary"
+                  :data-test="`stop-${job.id}`"
+                  @click="stop(job)"
+                >
+                  Stop
+                </button>
+                <button
+                  v-if="job.own !== false"
+                  class="danger"
+                  :data-test="`delete-${job.id}`"
+                  @click="remove(job)"
+                >
+                  Delete
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>

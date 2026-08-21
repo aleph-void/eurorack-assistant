@@ -163,41 +163,45 @@ const groupedModules = computed(() => [
             </thead>
             <tbody>
               <tr v-for="pm in entry.members" :key="pm.id" :data-test="`instance-${pm.id}`">
-                <td class="actions">
-                  <input
-                    v-model="nameDraft[nameKey(pm)].manufacturer"
-                    :data-test="`manufacturer-input-${pm.id}`"
-                    placeholder="Manufacturer"
-                    @keyup.enter="saveName(pm)"
-                  />
-                  <input
-                    v-model="nameDraft[nameKey(pm)].module_name"
-                    :data-test="`module-name-input-${pm.id}`"
-                    placeholder="Module name"
-                    @keyup.enter="saveName(pm)"
-                  />
-                  <span class="muted">#{{ pm.instance }}</span>
-                  <button
-                    :disabled="!nameValid(pm)"
-                    :data-test="`name-save-${pm.id}`"
-                    @click="saveName(pm)"
-                  >
-                    Save
-                  </button>
+                <td class="actions-cell">
+                  <div class="actions nowrap">
+                    <input
+                      v-model="nameDraft[nameKey(pm)].manufacturer"
+                      :data-test="`manufacturer-input-${pm.id}`"
+                      placeholder="Manufacturer"
+                      @keyup.enter="saveName(pm)"
+                    />
+                    <input
+                      v-model="nameDraft[nameKey(pm)].module_name"
+                      :data-test="`module-name-input-${pm.id}`"
+                      placeholder="Module name"
+                      @keyup.enter="saveName(pm)"
+                    />
+                    <span class="muted">#{{ pm.instance }}</span>
+                    <button
+                      :disabled="!nameValid(pm)"
+                      :data-test="`name-save-${pm.id}`"
+                      @click="saveName(pm)"
+                    >
+                      Save
+                    </button>
+                  </div>
                 </td>
-                <td class="actions">
-                  <input
-                    v-model="labelDraft[labelKey(pm)]"
-                    :data-test="`label-input-${pm.id}`"
-                    placeholder="e.g. snare voice"
-                    @keyup.enter="saveInstance(pm, { label: labelDraft[pm.id] })"
-                  />
-                  <button
-                    :data-test="`label-save-${pm.id}`"
-                    @click="saveInstance(pm, { label: labelDraft[pm.id] })"
-                  >
-                    Save
-                  </button>
+                <td class="actions-cell">
+                  <div class="actions nowrap">
+                    <input
+                      v-model="labelDraft[labelKey(pm)]"
+                      :data-test="`label-input-${pm.id}`"
+                      placeholder="e.g. snare voice"
+                      @keyup.enter="saveInstance(pm, { label: labelDraft[pm.id] })"
+                    />
+                    <button
+                      :data-test="`label-save-${pm.id}`"
+                      @click="saveInstance(pm, { label: labelDraft[pm.id] })"
+                    >
+                      Save
+                    </button>
+                  </div>
                 </td>
                 <td>
                   <select

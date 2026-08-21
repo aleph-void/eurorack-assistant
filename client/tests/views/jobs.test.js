@@ -71,6 +71,44 @@ describe('JobsView', () => {
     expect(wrapper.find('[data-test="feed"]').text()).toContain('manual saved:');
   });
 
+  it('clears the live log on request, and only locally', async () => {
+    api.get.mockResolvedValue([]);
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="clear-feed"]').attributes('disabled')).toBeDefined();
+
+    const store = useJobsStore();
+    store.applyEvent({
+      kind: 'job',
+      event: 'progress',
+      at: '2026-08-17T13:05:00Z',
+      job: { id: 26, type: 'find_manual' },
+      message: 'manual saved: maths.pdf',
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-test="feed"]').text()).toContain('manual saved:');
+
+    api.delete.mockClear();
+    await wrapper.find('[data-test="clear-feed"]').trigger('click');
+    await flushPromises();
+    expect(store.feed).toEqual([]);
+    expect(wrapper.find('[data-test="feed"]').text()).toContain('No live events yet');
+    // Nothing to clear on the server: the feed is only what this page saw.
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="clear-feed"]').attributes('disabled')).toBeDefined();
+  });
+
+  it('keeps a job row\'s buttons on one line', async () => {
+    api.get.mockResolvedValue([
+      { id: 1, type: 'find_manual', status: 'failed', attempts: 3, error: 'No manual PDF found' },
+    ]);
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+    const cell = wrapper.find('[data-test="retry-1"]').element.parentElement;
+    expect(cell.className).toContain('nowrap');
+    expect(cell.parentElement.className).toContain('actions-cell');
+  });
+
   it('retries all failed jobs, but not stalled jobs', async () => {
     api.get.mockResolvedValue([
       { id: 1, type: 'find_manual', status: 'failed', attempts: 3, error: 'No manual PDF found' },
