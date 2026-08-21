@@ -91,7 +91,7 @@ const organized = computed(() => {
     });
     modules.push(...unplaced);
   }
-  return { modules, rows };
+  return { modules, rows, unplaced };
 });
 const shown = computed(() => organized.value.modules);
 
@@ -399,6 +399,12 @@ const ends = computed(() =>
 );
 
 const undrawn = computed(() => props.cables.length - drawn.value.length);
+
+// Modules the patch holds that the studio's rows do not place — a copy the
+// rack organizer never put in a row, or one added after the arrangement was
+// made. They are drawn on their own below the floor, which reads as a mistake
+// unless the picture says what it is.
+const unplaced = computed(() => organized.value.unplaced ?? []);
 
 const componentAt = (patchModuleId, componentId) =>
   props.modules.find((pm) => pm.id === patchModuleId)?.components.find((c) => c.id === componentId) ?? null;
@@ -843,6 +849,15 @@ const draftCable = computed(() =>
           </button>
         </div>
 
+        <p v-if="unplaced.length" class="muted" data-test="diagram-unplaced">
+          {{ unplaced.length }} {{ unplaced.length === 1 ? 'module stands' : 'modules stand' }}
+          below the studio — {{ unplaced.length === 1 ? 'it is' : 'they are' }} not placed in any
+          row of {{ unplaced.length === 1 ? 'its' : 'their' }} rack:
+          {{ unplaced.map((pm) => label(pm)).join(', ') }}. Put
+          {{ unplaced.length === 1 ? 'it' : 'them' }} in a row on the
+          <RouterLink to="/racks">Organize rack</RouterLink> page, then match this patch to the
+          layout again.
+        </p>
         <p v-if="undrawn > 0" class="muted" data-test="diagram-undrawn">
           {{ undrawn }} {{ undrawn === 1 ? 'cable is' : 'cables are' }} not drawn — an end of
           {{ undrawn === 1 ? 'it' : 'them' }} is a connection point with no place on a panel.

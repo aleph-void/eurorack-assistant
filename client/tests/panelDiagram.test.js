@@ -367,6 +367,27 @@ describe('PatchDiagram', () => {
     expect(wrapper.find('[data-test="diagram-svg"]').exists()).toBe(false);
   });
 
+  // A module the rack organizer never put in a row still belongs to the
+  // patch. It is drawn on its own below the studio, which reads as a mistake
+  // unless the picture says what it is.
+  it('says which modules the rack does not place', () => {
+    const [maths, lpg] = modules();
+    const rackRows = [{ id: 1, rack_id: 4, rack_x: 0, rack_y: 0, unit: 3, hp: 84, modules: [11] }];
+    const wrapper = mountDiagram({ modules: [maths, lpg], cables: [], rackRows });
+    const note = wrapper.find('[data-test="diagram-unplaced"]').text();
+    expect(note).toContain('1 module stands');
+    expect(note).toContain('Optomix LPG');
+    expect(note).toContain('Organize rack');
+
+    // Nothing to say when the studio places everything.
+    const placed = mountDiagram({
+      modules: [maths, lpg],
+      cables: [],
+      rackRows: [{ ...rackRows[0], modules: [11, 12] }],
+    });
+    expect(placed.find('[data-test="diagram-unplaced"]').exists()).toBe(false);
+  });
+
   // A mult's jacks are interchangeable hardware until a cable arrives: the
   // one it is plugged into is the section's input and the rest carry copies
   // out. The picture says so, in the colours of what they now are — the same
