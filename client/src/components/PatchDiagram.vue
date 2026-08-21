@@ -34,6 +34,10 @@ const props = defineProps({
   // each naming the patch-module ids standing in it and where its rack stood
   // on the system's floor plan. When present, the picture IS that plan.
   rackRows: { type: Array, default: () => [] },
+  // The patch's routing switch sections (common jack + the steps it selects
+  // between). Which way a switch's bidirectional jacks run is a fact about
+  // the SECTION, not about each jack, so the picture needs the sections.
+  switches: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['connect', 'disconnect', 'retype']);
 
@@ -425,25 +429,79 @@ const componentAt = (patchModuleId, componentId) =>
 const BIDIRECTIONAL = 'bidirectional_jack';
 const multSection = (patchModuleId, component) =>
   `${patchModuleId}:${(component.group_label || '').trim().toLowerCase()}`;
+const jackKey = (patchModuleId, componentId) => `${patchModuleId}:${componentId}`;
 
+// The jacks a cable is plugged INTO: that is what points a bidirectional jack
+// one way rather than the other.
+const fedJacks = computed(
+  () => new Set(props.cables.map((c) => jackKey(c.to_patch_module_id, c.to_component_id)))
+);
+
+// A ROUTING SWITCH is not a mult, and the difference is the whole of this
+// section: a switch SELECTS one of its steps, where a mult COPIES to all of
+// them. So a Doepfer A-151's four step jacks are four alternative ends of ONE
+// connection to the common jack, and cabling one of them says which way the
+// whole section runs: a cable into a step makes every step an input and the
+// common the output (many-to-one, one live at a time), a cable into the
+// common makes the common the input and every step an output (one-to-many).
+// It never makes the OTHER steps outputs — the signal does not come back out
+// of them, and the mult rule below would say it did.
+const switchSections = computed(() =>
+  props.switches.map((section) => ({
+    common: jackKey(section.common_patch_module_id, section.common_component_id),
+    steps: (section.steps ?? []).map((step) => jackKey(step.patch_module_id, step.component_id)),
+  }))
+);
+// Every jack that belongs to one, so the mult rule leaves them alone — the
+// same exclusion the server's tracer makes (services/patchFlow.js).
+const switchJackKeys = computed(() => {
+  const keys = new Set();
+  for (const section of switchSections.value) {
+    keys.add(section.common);
+    for (const step of section.steps) keys.add(step);
+  }
+  return keys;
+});
+
+// What each bidirectional jack IS in this patch, once the cables have pointed
+// it one way: switch sections first, then the mult groups that are left.
 const multDirections = computed(() => {
-  const fed = new Map();
+  const directions = new Map();
+  const fed = fedJacks.value;
+  // Only a jack the hardware leaves open is given a direction; one the panel
+  // already calls an input or an output is what it says it is.
+  const points = (key, type) => {
+    const [patchModuleId, componentId] = key.split(':').map(Number);
+    if (componentAt(patchModuleId, componentId)?.type !== BIDIRECTIONAL) return;
+    directions.set(key, type);
+  };
+
+  for (const section of switchSections.value) {
+    const commonFed = fed.has(section.common);
+    const stepFed = section.steps.some((step) => fed.has(step));
+    // Nothing patched yet, or driven at both ends: the section says nothing
+    // about which way it runs, so its jacks stay bidirectional.
+    if (commonFed === stepFed) continue;
+    points(section.common, commonFed ? 'input_jack' : 'output_jack');
+    for (const step of section.steps) points(step, commonFed ? 'output_jack' : 'input_jack');
+  }
+
+  const multFed = new Map();
   for (const cable of props.cables) {
+    const key = jackKey(cable.to_patch_module_id, cable.to_component_id);
+    if (switchJackKeys.value.has(key)) continue;
     const component = componentAt(cable.to_patch_module_id, cable.to_component_id);
     if (component?.type !== BIDIRECTIONAL) continue;
-    fed.set(multSection(cable.to_patch_module_id, component), component.id);
+    multFed.set(multSection(cable.to_patch_module_id, component), component.id);
   }
-  const directions = new Map();
-  if (fed.size === 0) return directions;
+  if (multFed.size === 0) return directions;
   for (const pm of props.modules) {
     for (const component of pm.components ?? []) {
       if (component.type !== BIDIRECTIONAL) continue;
-      const input = fed.get(multSection(pm.id, component));
+      if (switchJackKeys.value.has(jackKey(pm.id, component.id))) continue;
+      const input = multFed.get(multSection(pm.id, component));
       if (input === undefined) continue;
-      directions.set(
-        `${pm.id}:${component.id}`,
-        input === component.id ? 'input_jack' : 'output_jack'
-      );
+      points(jackKey(pm.id, component.id), input === component.id ? 'input_jack' : 'output_jack');
     }
   }
   return directions;

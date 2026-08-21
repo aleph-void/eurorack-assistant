@@ -11,6 +11,12 @@ import {
   snapshotRackLayout,
 } from '../../services/patchLayout.js';
 import { materializeBridges } from '../../services/moduleBridges.js';
+import {
+  freePatchName,
+  isNameConflict,
+  nameTakenMessage,
+  patchNamed,
+} from '../../services/patchNames.js';
 import { readableResource, removeShares } from '../../services/sharing.js';
 import { requireOwnedPatch } from './helpers.js';
 import { asyncHandler } from '../asyncHandler.js';
@@ -35,6 +41,22 @@ export function patchCoreRoutes(db) {
     PatchModuleLinkJack,
   } = db.models;
   const router = Router();
+
+  // Every write that takes a patch name checks the name is free first, and
+  // then does the write through this: two requests can both find one free,
+  // and the unique index behind the check catches the second. That one gets
+  // the same 409 the check gives rather than a 500. Answers false when it
+  // has answered the request itself.
+  const takingName = async (name, res, write) => {
+    try {
+      await write();
+      return true;
+    } catch (e) {
+      if (!isNameConflict(e)) throw e;
+      res.status(409).json({ error: nameTakenMessage(name) });
+      return false;
+    }
+  };
 
   router.get('/', asyncHandler(async (req, res) => {
     const patches = await Patch.findAll({
@@ -74,6 +96,11 @@ export function patchCoreRoutes(db) {
   router.post('/', asyncHandler(async (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
+    // One name per account: the patch list, a question and an exported file
+    // all say which patch they mean by name.
+    if (await patchNamed(db, req.user.id, name)) {
+      return res.status(409).json({ error: nameTakenMessage(name) });
+    }
     const wantsSystem =
       req.body?.system_id !== undefined &&
       req.body?.system_id !== null &&
@@ -149,57 +176,60 @@ export function patchCoreRoutes(db) {
     });
     let patch;
     let created = [];
-    await db.sequelize.transaction(async (transaction) => {
-      patch = await Patch.create(
-        {
-          user_id: req.user.id,
-          // A system patch is not filed under any one rack; rack_name is
-          // NOT NULL and reads as the thing the patch was built from, so
-          // the system's name stands in it as well as in system_name.
-          rack_id: system ? null : racks[0].id,
-          rack_name: system ? system.name : racks[0].name,
-          system_id: system?.id ?? null,
-          system_name: system?.name ?? null,
-          name,
-          description: description || null,
-        },
-        { transaction }
-      );
-      await PatchModule.bulkCreate(
-        snapshot.map((m) => ({ ...m, patch_id: patch.id })),
-        { transaction }
-      );
-      created = await PatchModule.findAll({
-        where: { patch_id: patch.id },
-        order: [['id', 'ASC']],
-        transaction,
-      });
-      // The patch takes its own copy of how these racks are laid out right
-      // now, so the diagram keeps drawing the studio as it stood today
-      // however the cases are rebuilt afterwards.
-      await snapshotRackLayout(db, patch, racks, { transaction });
-      const instancesOf = (moduleId) => created.filter((pm) => pm.module_id === moduleId);
-      const linkRows = [];
-      for (const pair of expanderPairs) {
-        const hosts = instancesOf(pair.host_module_id);
-        const expanders = instancesOf(pair.expander_module_id);
-        // Pair them off in order; a spare panel on either side is left
-        // unlinked for the user to wire up by hand.
-        for (let i = 0; i < Math.min(hosts.length, expanders.length); i += 1) {
-          linkRows.push({
-            patch_id: patch.id,
-            a_patch_module_id: hosts[i].id,
-            b_patch_module_id: expanders[i].id,
-            kind: 'expander',
-          });
+    const wrote = await takingName(name, res, () =>
+      db.sequelize.transaction(async (transaction) => {
+        patch = await Patch.create(
+          {
+            user_id: req.user.id,
+            // A system patch is not filed under any one rack; rack_name is
+            // NOT NULL and reads as the thing the patch was built from, so
+            // the system's name stands in it as well as in system_name.
+            rack_id: system ? null : racks[0].id,
+            rack_name: system ? system.name : racks[0].name,
+            system_id: system?.id ?? null,
+            system_name: system?.name ?? null,
+            name,
+            description: description || null,
+          },
+          { transaction }
+        );
+        await PatchModule.bulkCreate(
+          snapshot.map((m) => ({ ...m, patch_id: patch.id })),
+          { transaction }
+        );
+        created = await PatchModule.findAll({
+          where: { patch_id: patch.id },
+          order: [['id', 'ASC']],
+          transaction,
+        });
+        // The patch takes its own copy of how these racks are laid out right
+        // now, so the diagram keeps drawing the studio as it stood today
+        // however the cases are rebuilt afterwards.
+        await snapshotRackLayout(db, patch, racks, { transaction });
+        const instancesOf = (moduleId) => created.filter((pm) => pm.module_id === moduleId);
+        const linkRows = [];
+        for (const pair of expanderPairs) {
+          const hosts = instancesOf(pair.host_module_id);
+          const expanders = instancesOf(pair.expander_module_id);
+          // Pair them off in order; a spare panel on either side is left
+          // unlinked for the user to wire up by hand.
+          for (let i = 0; i < Math.min(hosts.length, expanders.length); i += 1) {
+            linkRows.push({
+              patch_id: patch.id,
+              a_patch_module_id: hosts[i].id,
+              b_patch_module_id: expanders[i].id,
+              kind: 'expander',
+            });
+          }
         }
-      }
-      if (linkRows.length > 0) await PatchModuleLink.bulkCreate(linkRows, { transaction });
-      // Dual modules arrive wired together too — their link cable is already
-      // plugged in, jack for jack, so the patch records the pair without
-      // being asked (services/moduleBridges.js).
-      await materializeBridges(db, patch, { transaction });
-    });
+        if (linkRows.length > 0) await PatchModuleLink.bulkCreate(linkRows, { transaction });
+        // Dual modules arrive wired together too — their link cable is already
+        // plugged in, jack for jack, so the patch records the pair without
+        // being asked (services/moduleBridges.js).
+        await materializeBridges(db, patch, { transaction });
+      })
+    );
+    if (!wrote) return;
     res.status(201).json(patchJson(patch, { module_count: snapshot.length, cable_count: 0 }));
   }));
 
@@ -356,12 +386,18 @@ export function patchCoreRoutes(db) {
     if (req.body?.name !== undefined) {
       const name = String(req.body.name || '').trim();
       if (!name) return res.status(400).json({ error: 'name is required' });
+      // Its own name is not a clash with itself: renaming a patch to what it
+      // is already called, to fix a description alongside, is fine.
+      if (await patchNamed(db, req.user.id, name, { exceptId: patch.id })) {
+        return res.status(409).json({ error: nameTakenMessage(name) });
+      }
       updates.name = name;
     }
     if (req.body?.description !== undefined) {
       updates.description = String(req.body.description || '').trim() || null;
     }
-    await patch.update(updates);
+    const wrote = await takingName(updates.name ?? patch.name, res, () => patch.update(updates));
+    if (!wrote) return;
     res.json(patchJson(patch));
   }));
 
@@ -385,7 +421,14 @@ export function patchCoreRoutes(db) {
   // Body: { name? }
   router.post('/:id/clone', requireOwnedPatch(db), asyncHandler(async (req, res) => {
     const source = req.patch;
-    const name = String(req.body?.name || '').trim() || `${source.name} (copy)`;
+    const asked = String(req.body?.name || '').trim();
+    // A name the user typed and cannot have is refused; the '(copy)' the app
+    // makes up on their behalf takes the next free one instead, so copying a
+    // patch twice gives 'X (copy)' and 'X (copy) 2' rather than an error.
+    if (asked && (await patchNamed(db, req.user.id, asked))) {
+      return res.status(409).json({ error: nameTakenMessage(asked) });
+    }
+    const name = asked || (await freePatchName(db, req.user.id, `${source.name} (copy)`));
 
     const where = { patch_id: source.id };
     const modules = await PatchModule.findAll({ where, order: [['id', 'ASC']] });
@@ -410,141 +453,144 @@ export function patchCoreRoutes(db) {
           });
 
     let copy;
-    await db.sequelize.transaction(async (transaction) => {
-      copy = await Patch.create(
-        {
-          user_id: req.user.id,
-          rack_id: source.rack_id,
-          rack_name: source.rack_name,
-          system_id: source.system_id,
-          system_name: source.system_name,
-          name,
-          description: source.description,
-        },
-        { transaction }
-      );
-
-      // Buses first: instances point at them.
-      const groupMap = new Map();
-      for (const g of groups) {
-        const created = await PatchGroup.create(
+    const wrote = await takingName(name, res, () =>
+      db.sequelize.transaction(async (transaction) => {
+        copy = await Patch.create(
           {
-            patch_id: copy.id,
-            name: g.name,
-            description: g.description,
-            position: g.position,
+            user_id: req.user.id,
+            rack_id: source.rack_id,
+            rack_name: source.rack_name,
+            system_id: source.system_id,
+            system_name: source.system_name,
+            name,
+            description: source.description,
           },
           { transaction }
         );
-        groupMap.set(g.id, created.id);
-      }
 
-      const moduleMap = new Map();
-      for (const pm of modules) {
-        const created = await PatchModule.create(
-          {
-            patch_id: copy.id,
-            module_id: pm.module_id,
-            manufacturer: pm.manufacturer,
-            module_name: pm.module_name,
-            instance: pm.instance,
-            rack_id: pm.rack_id,
-            rack_name: pm.rack_name,
-            label: pm.label,
-            external: pm.external,
-            group_id: pm.group_id === null ? null : (groupMap.get(pm.group_id) ?? null),
-          },
-          { transaction }
-        );
-        moduleMap.set(pm.id, created.id);
-      }
-      // A clone is a copy of the patch, not a fresh look at the studio: it
-      // inherits the arrangement the original froze rather than whatever the
-      // racks look like today.
-      await copyRackLayout(db, source.id, copy, { transaction });
-
-      // Connection points declared inside the patch, and the map that
-      // rewrites cable ends referring to them.
-      const portMap = new Map();
-      for (const p of ports) {
-        const created = await PatchModulePort.create(
-          {
-            patch_module_id: moduleMap.get(p.patch_module_id),
-            name: p.name,
-            type: p.type,
-            port_kind: p.port_kind,
-            description: p.description,
-            position: p.position,
-          },
-          { transaction }
-        );
-        portMap.set(p.id, created.id);
-      }
-      // A component id belongs to the ports table only when its instance
-      // has no analyzed module behind it.
-      const declared = new Set(modules.filter((pm) => !pm.module_id).map((pm) => pm.id));
-      const componentIdIn = (patchModuleId, componentId) =>
-        declared.has(patchModuleId) && portMap.has(componentId)
-          ? portMap.get(componentId)
-          : componentId;
-
-      for (const c of cables) {
-        await PatchCable.create(
-          {
-            patch_id: copy.id,
-            from_patch_module_id: moduleMap.get(c.from_patch_module_id),
-            from_component_id: componentIdIn(c.from_patch_module_id, c.from_component_id),
-            from_component_name: c.from_component_name,
-            to_patch_module_id: moduleMap.get(c.to_patch_module_id),
-            to_component_id: componentIdIn(c.to_patch_module_id, c.to_component_id),
-            to_component_name: c.to_component_name,
-            note: c.note,
-            optional: c.optional,
-            stacked: c.stacked,
-            alt_group: c.alt_group,
-          },
-          { transaction }
-        );
-      }
-
-      for (const s of settings) {
-        await PatchSetting.create(
-          {
-            patch_id: copy.id,
-            patch_module_id: moduleMap.get(s.patch_module_id),
-            component_id: s.component_id,
-            component_name: s.component_name,
-            value: s.value,
-          },
-          { transaction }
-        );
-      }
-
-      for (const link of links) {
-        const created = await PatchModuleLink.create(
-          {
-            patch_id: copy.id,
-            a_patch_module_id: moduleMap.get(link.a_patch_module_id),
-            b_patch_module_id: moduleMap.get(link.b_patch_module_id),
-            kind: link.kind,
-            description: link.description,
-          },
-          { transaction }
-        );
-        for (const jack of linkJacks.filter((j) => j.link_id === link.id)) {
-          await PatchModuleLinkJack.create(
+        // Buses first: instances point at them.
+        const groupMap = new Map();
+        for (const g of groups) {
+          const created = await PatchGroup.create(
             {
-              link_id: created.id,
-              a_component_id: componentIdIn(link.a_patch_module_id, jack.a_component_id),
-              a_component_name: jack.a_component_name,
-              b_component_id: componentIdIn(link.b_patch_module_id, jack.b_component_id),
-              b_component_name: jack.b_component_name,
+              patch_id: copy.id,
+              name: g.name,
+              description: g.description,
+              position: g.position,
+            },
+            { transaction }
+          );
+          groupMap.set(g.id, created.id);
+        }
+
+        const moduleMap = new Map();
+        for (const pm of modules) {
+          const created = await PatchModule.create(
+            {
+              patch_id: copy.id,
+              module_id: pm.module_id,
+              manufacturer: pm.manufacturer,
+              module_name: pm.module_name,
+              instance: pm.instance,
+              rack_id: pm.rack_id,
+              rack_name: pm.rack_name,
+              label: pm.label,
+              external: pm.external,
+              group_id: pm.group_id === null ? null : (groupMap.get(pm.group_id) ?? null),
+            },
+            { transaction }
+          );
+          moduleMap.set(pm.id, created.id);
+        }
+        // A clone is a copy of the patch, not a fresh look at the studio: it
+        // inherits the arrangement the original froze rather than whatever the
+        // racks look like today.
+        await copyRackLayout(db, source.id, copy, { transaction });
+
+        // Connection points declared inside the patch, and the map that
+        // rewrites cable ends referring to them.
+        const portMap = new Map();
+        for (const p of ports) {
+          const created = await PatchModulePort.create(
+            {
+              patch_module_id: moduleMap.get(p.patch_module_id),
+              name: p.name,
+              type: p.type,
+              port_kind: p.port_kind,
+              description: p.description,
+              position: p.position,
+            },
+            { transaction }
+          );
+          portMap.set(p.id, created.id);
+        }
+        // A component id belongs to the ports table only when its instance
+        // has no analyzed module behind it.
+        const declared = new Set(modules.filter((pm) => !pm.module_id).map((pm) => pm.id));
+        const componentIdIn = (patchModuleId, componentId) =>
+          declared.has(patchModuleId) && portMap.has(componentId)
+            ? portMap.get(componentId)
+            : componentId;
+
+        for (const c of cables) {
+          await PatchCable.create(
+            {
+              patch_id: copy.id,
+              from_patch_module_id: moduleMap.get(c.from_patch_module_id),
+              from_component_id: componentIdIn(c.from_patch_module_id, c.from_component_id),
+              from_component_name: c.from_component_name,
+              to_patch_module_id: moduleMap.get(c.to_patch_module_id),
+              to_component_id: componentIdIn(c.to_patch_module_id, c.to_component_id),
+              to_component_name: c.to_component_name,
+              note: c.note,
+              optional: c.optional,
+              stacked: c.stacked,
+              alt_group: c.alt_group,
             },
             { transaction }
           );
         }
-      }
-    });
+
+        for (const s of settings) {
+          await PatchSetting.create(
+            {
+              patch_id: copy.id,
+              patch_module_id: moduleMap.get(s.patch_module_id),
+              component_id: s.component_id,
+              component_name: s.component_name,
+              value: s.value,
+            },
+            { transaction }
+          );
+        }
+
+        for (const link of links) {
+          const created = await PatchModuleLink.create(
+            {
+              patch_id: copy.id,
+              a_patch_module_id: moduleMap.get(link.a_patch_module_id),
+              b_patch_module_id: moduleMap.get(link.b_patch_module_id),
+              kind: link.kind,
+              description: link.description,
+            },
+            { transaction }
+          );
+          for (const jack of linkJacks.filter((j) => j.link_id === link.id)) {
+            await PatchModuleLinkJack.create(
+              {
+                link_id: created.id,
+                a_component_id: componentIdIn(link.a_patch_module_id, jack.a_component_id),
+                a_component_name: jack.a_component_name,
+                b_component_id: componentIdIn(link.b_patch_module_id, jack.b_component_id),
+                b_component_name: jack.b_component_name,
+              },
+              { transaction }
+            );
+          }
+        }
+      })
+    );
+    if (!wrote) return;
 
     res.status(201).json(
       patchJson(copy, {

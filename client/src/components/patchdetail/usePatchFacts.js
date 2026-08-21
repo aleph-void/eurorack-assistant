@@ -59,6 +59,24 @@ const cablesOutOf = (pmId, componentId) =>
     (c) => c.from_patch_module_id === pmId && c.from_component_id === componentId
   );
 
+// ---- routing switches ----
+// A switch SELECTS one of its connections where a mult COPIES to all of them,
+// so a cable into a switch jack means something else entirely: it comes out
+// at the OTHER side of the section, not at its siblings. This says which
+// jacks are in a section and which side of it each one is, so nothing offers
+// a switch step as a copy of the step next to it.
+const switchRoles = computed(() => {
+  const roles = new Map();
+  for (const section of patch.value?.switches || []) {
+    roles.set(`${section.common_patch_module_id}:${section.common_component_id}`, 'common');
+    for (const step of section.steps || []) {
+      roles.set(`${step.patch_module_id}:${step.component_id}`, 'step');
+    }
+  }
+  return roles;
+});
+const switchRoleOf = (pmId, componentId) => switchRoles.value.get(`${pmId}:${componentId}`) ?? null;
+
 // ---- what the pickers offer ----
 // Options are searched on their hint as well as their label, so a module can
 // also be found by the role the patch gives it and a jack by what is already
@@ -121,6 +139,7 @@ const jackCandidates = (types, forDestination) =>
     cables,
     cableInto,
     cablesOutOf,
+    switchRoleOf,
     jackCandidates,
     conditionText,
   };

@@ -108,6 +108,7 @@ async function resyncLayout() {
     <PatchDiagram
       :modules="modules"
       :cables="patch.cables"
+      :switches="patch.switches || []"
       :label-for="moduleLabel"
       :rack-rows="patch.rack_layout"
       interactive

@@ -871,6 +871,27 @@ describe('routing switches', () => {
     });
   });
 
+  // The picture cannot tell which way a switch's bidirectional jacks run
+  // without knowing which jacks make up the section, so the patch payload
+  // says: the common jack, and the steps it selects between, on instances.
+  it('names its switch sections on the patch, resolved onto instances', async () => {
+    const fixture = await withSwitchFixture();
+    const { switchJacks } = fixture;
+    const { refresh, sw } = await switchPatch(fixture);
+    const detail = await refresh();
+    expect(detail.switches).toHaveLength(1);
+    expect(detail.switches[0]).toMatchObject({
+      name: 'Section 1',
+      patch_module_id: sw.id,
+      common_patch_module_id: sw.id,
+      common_component_id: switchJacks['O/I'].id,
+    });
+    expect(detail.switches[0].steps).toEqual([
+      { patch_module_id: sw.id, component_id: switchJacks['I/O 1'].id },
+      { patch_module_id: sw.id, component_id: switchJacks['I/O 2'].id },
+    ]);
+  });
+
   it('keeps mult rules for mult jacks while exempting switch jacks', async () => {
     const fixture = await withMultFixture();
     const { app, aliceCookie, output, multJacks } = fixture;
@@ -1349,6 +1370,79 @@ describe('patches API', () => {
           .set('Cookie', aliceCookie)
       ).status
     ).toBe(404);
+  });
+});
+
+// A patch is referred to by its name, so one account holds each name once
+// (migration 035). Deleting a patch gives its name back: only live patches
+// are in anybody's way.
+describe('patch names', () => {
+  it('refuses a second patch of the same name, and lets a deleted one go', async () => {
+    const fixture = await withPatchFixture();
+    const { app, aliceCookie } = fixture;
+    const first = await createPatch(fixture);
+    expect(first.status).toBe(201);
+
+    const again = await createPatch(fixture);
+    expect(again.status).toBe(409);
+    expect(again.body.error).toBe("you already have a patch called 'Krell'");
+    // A name is only taken while the patch holding it is there.
+    await request(app).delete(`/api/patches/${first.body.id}`).set('Cookie', aliceCookie);
+    expect((await createPatch(fixture)).status).toBe(201);
+  });
+
+  // Per account, not globally: two people may each call a patch 'Krell'.
+  it('is one name per user, not one name for everybody', async () => {
+    const fixture = await withPatchFixture();
+    const { db, admin } = fixture;
+    expect((await createPatch(fixture)).status).toBe(201);
+    await expect(
+      db.query('INSERT INTO patches (user_id, rack_name, name) VALUES ($1, $2, $3)', [
+        admin.id,
+        'admin rack',
+        'Krell',
+      ])
+    ).resolves.toBeDefined();
+  });
+
+  it('refuses a rename onto another patch, and allows one onto itself', async () => {
+    const fixture = await withPatchFixture();
+    const { app, aliceCookie } = fixture;
+    const krell = (await createPatch(fixture)).body;
+    const drone = (await createPatch(fixture, { name: 'Drone' })).body;
+
+    const clash = await request(app)
+      .put(`/api/patches/${drone.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'Krell' });
+    expect(clash.status).toBe(409);
+    expect(clash.body.error).toContain("you already have a patch called 'Krell'");
+
+    // Its own name is not a clash: this is how a description is edited
+    // without renaming anything.
+    const itself = await request(app)
+      .put(`/api/patches/${krell.id}`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'Krell', description: 'the good one' });
+    expect(itself.status).toBe(200);
+    expect(itself.body).toMatchObject({ name: 'Krell', description: 'the good one' });
+  });
+
+  it('numbers the copies of a patch and refuses a copy name that is taken', async () => {
+    const fixture = await withPatchFixture();
+    const { app, aliceCookie } = fixture;
+    const patch = (await createPatch(fixture)).body;
+    const clone = () =>
+      request(app).post(`/api/patches/${patch.id}/clone`).set('Cookie', aliceCookie).send({});
+    expect((await clone()).body.name).toBe('Krell (copy)');
+    expect((await clone()).body.name).toBe('Krell (copy) 2');
+
+    const named = await request(app)
+      .post(`/api/patches/${patch.id}/clone`)
+      .set('Cookie', aliceCookie)
+      .send({ name: 'Krell (copy)' });
+    expect(named.status).toBe(409);
+    expect(named.body.error).toContain("you already have a patch called 'Krell (copy)'");
   });
 });
 

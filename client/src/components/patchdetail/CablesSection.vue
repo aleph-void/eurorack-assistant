@@ -18,7 +18,7 @@ const props = defineProps({
 });
 const emit = defineEmits(['reload']);
 
-const { modules, modulesById, moduleLabel, moduleOptions, cables, cableInto, cablesOutOf, jackCandidates } = usePatchFacts(toRef(props, 'patch'));
+const { modules, modulesById, moduleLabel, moduleOptions, cables, cableInto, cablesOutOf, jackCandidates, switchRoleOf } = usePatchFacts(toRef(props, 'patch'));
 
 // ---- cable form ----
 const fromModuleId = ref(''); // patch_module id
@@ -75,8 +75,17 @@ const fromJackOptions = computed(() => {
     const feeding = cableInto(pmId, c.id);
     const out = cablesOutOf(pmId, c.id).length;
     let hint;
-    if (feeding && c.type === 'bidirectional_jack') hint = 'mult input — copies come out of the others';
-    else if (out) hint = out === 1 ? '1 cable already' : `${out} cables already`;
+    // A fed switch jack is not a mult jack: the signal comes out at the other
+    // SIDE of the section, not at the jacks beside it.
+    const role = switchRoleOf(pmId, c.id);
+    if (feeding && role) {
+      hint =
+        role === 'common'
+          ? 'switch input — it comes out of the selected step'
+          : 'switch input — it comes out of the common';
+    } else if (feeding && c.type === 'bidirectional_jack') {
+      hint = 'mult input — copies come out of the others';
+    } else if (out) hint = out === 1 ? '1 cable already' : `${out} cables already`;
     return { value: c.id, label: jackLabel(c), hint };
   });
 });

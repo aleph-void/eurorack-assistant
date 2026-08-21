@@ -169,6 +169,17 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   position falls outside the panel's crop) first moves it to the middle of the
   plate: arranging is how a marker is put right, so it has to start somewhere
   it can be taken hold of.
+- A ROUTING SWITCH is not a mult, and every picture of one has to know the
+  difference: a mult COPIES its input to all its siblings, a switch SELECTS
+  one of its steps. So the patch payload names its switch sections
+  (`switches` — the common jack and its steps, resolved onto instances, from
+  `topology.switches`), and the diagram points a section by the SECTION: a
+  cable into any step makes every step an input and the common the output, a
+  cable into the common makes the common the input and every step an output,
+  and an unpatched section stays bidirectional (`multDirections` in
+  PatchDiagram.vue, which excludes switch jacks from the mult rule exactly as
+  `services/patchFlow.js` does). The cable pickers say the same thing in
+  their hints (`switchRoleOf` in usePatchFacts.js).
 - A patch is made of the connections a person can reach, so a connector that
   is not a patch point never appears in one. `isPatchPoint()` (defined in
   `panelLayout.js`, re-exported by `usePatchFacts.js` so the diagram and the
@@ -187,6 +198,13 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   (`lock: transaction.LOCK.UPDATE`) first, `rack_rows` has a unique
   `(rack_id, position)` (migration 032), and the organizer keeps only one save
   in the air — a save asked for while one is running is made when it lands.
+- A patch NAME is one per account (unique `(user_id, name)`, migration 035;
+  the rule and its helpers are `services/patchNames.js`). Only live patches
+  count — a patch is really deleted, so its name comes free with it — and it
+  is per account, not global: two users may each have an 'Evening drone'.
+  A name the USER typed and cannot have is refused (409, the name in the
+  message); one the APP made up for them — a clone's `(copy)`, the name an
+  imported file carries — takes the next free `<name> 2`, `<name> 3` instead.
 - Failures are said twice: inline where the work is, and as a toast over the
   page (`client/src/toast.js` + `components/ToastStack.vue`, mounted once in
   `App.vue`, styled in `style.css`). `api.js` raises the red one itself for

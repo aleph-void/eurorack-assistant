@@ -7,6 +7,7 @@ import {
   parsePatchDocument,
   patchFileName,
 } from '../../services/patchIO.js';
+import { isNameConflict, nameTakenMessage, patchNamed } from '../../services/patchNames.js';
 import { requireOwnedPatch } from './helpers.js';
 import { asyncHandler } from '../asyncHandler.js';
 
@@ -51,12 +52,25 @@ export function patchIoRoutes(db) {
     }
 
     const name = String(body.name || '').trim() || null;
-    const { patch, counts, unresolved_modules: unresolved } = await importPatchDocument(db, {
-      userId: req.user.id,
-      document,
-      rack,
-      name,
-    });
+    // A name the importer chose has to be one they can have; a file read in
+    // under its own name takes the next free one instead (patchNames.js).
+    if (name && (await patchNamed(db, req.user.id, name))) {
+      return res.status(409).json({ error: nameTakenMessage(name) });
+    }
+    const runImport = () =>
+      importPatchDocument(db, { userId: req.user.id, document, rack, name });
+    let imported;
+    try {
+      imported = await runImport();
+    } catch (e) {
+      if (!isNameConflict(e)) throw e;
+      // Another request took the name between choosing it and writing it. A
+      // name the importer typed is theirs to change; one the app picked out
+      // of the file is simply picked again.
+      if (name) return res.status(409).json({ error: nameTakenMessage(name) });
+      imported = await runImport();
+    }
+    const { patch, counts, unresolved_modules: unresolved } = imported;
     res.status(201).json(
       patchJson(patch, {
         module_count: counts.modules,

@@ -452,6 +452,83 @@ describe('PatchDiagram', () => {
     expect(fillOf(6)).toBe(componentColor('bidirectional_jack'));
   });
 
+  // A routing switch is NOT a mult: it selects one of its steps rather than
+  // copying to all of them. So cabling one step of a quad sequential switch
+  // says the whole section runs many-to-one — every step is an input, and the
+  // common is where the selected one comes out.
+  it('points a routing switch by the section, not jack by jack', async () => {
+    const seq = {
+      id: 14,
+      module_id: 4,
+      manufacturer: 'Doepfer',
+      module_name: 'A-151',
+      instance: 1,
+      live: true,
+      components: [
+        { id: 40, type: 'bidirectional_jack', name: 'Out' },
+        { id: 41, type: 'bidirectional_jack', name: '1' },
+        { id: 42, type: 'bidirectional_jack', name: '2' },
+        { id: 43, type: 'bidirectional_jack', name: '3' },
+        { id: 44, type: 'bidirectional_jack', name: '4' },
+      ],
+      panel: panelFor([
+        { component_id: 40, name: 'Out', shape: 'jack', x: 0.5, y: 0.1, w: 0.06, h: 0.06 },
+        { component_id: 41, name: '1', shape: 'jack', x: 0.5, y: 0.3, w: 0.06, h: 0.06 },
+        { component_id: 42, name: '2', shape: 'jack', x: 0.5, y: 0.45, w: 0.06, h: 0.06 },
+        { component_id: 43, name: '3', shape: 'jack', x: 0.5, y: 0.6, w: 0.06, h: 0.06 },
+        { component_id: 44, name: '4', shape: 'jack', x: 0.5, y: 0.75, w: 0.06, h: 0.06 },
+      ]),
+    };
+    const switches = [
+      {
+        id: 1,
+        patch_module_id: 14,
+        name: 'Sequential switch',
+        common_patch_module_id: 14,
+        common_component_id: 40,
+        steps: [41, 42, 43, 44].map((component_id) => ({ patch_module_id: 14, component_id })),
+      },
+    ];
+    const intoStep = cable({ id: 23, to_patch_module_id: 14, to_component_id: 41, to_component_name: '1' });
+    const wrapper = mountDiagram({
+      modules: [...modules(), seq],
+      cables: [intoStep],
+      switches,
+      interactive: true,
+    });
+    const fillOf = (id) => wrapper.find(`[data-test="diagram-jack-14-${id}"]`).attributes('fill');
+
+    // The other three steps are the alternative SOURCES, not copies of the
+    // one being fed: they take cables too, and the common carries the
+    // selection out.
+    expect(fillOf(41)).toBe(componentColor('input_jack'));
+    expect(fillOf(42)).toBe(componentColor('input_jack'));
+    expect(fillOf(43)).toBe(componentColor('input_jack'));
+    expect(fillOf(44)).toBe(componentColor('input_jack'));
+    expect(fillOf(40)).toBe(componentColor('output_jack'));
+    // ...and the picture offers exactly those cables: out of the common,
+    // into the steps.
+    expect(wrapper.find('[data-test="diagram-jack-14-40"]').classes()).toContain('patchable');
+    expect(wrapper.find('[data-test="diagram-jack-14-42"]').classes()).not.toContain('patchable');
+
+    // Cabled into the common instead, the same section runs the other way.
+    const intoCommon = cable({
+      id: 24,
+      to_patch_module_id: 14,
+      to_component_id: 40,
+      to_component_name: 'Out',
+    });
+    await wrapper.setProps({ cables: [intoCommon] });
+    expect(fillOf(40)).toBe(componentColor('input_jack'));
+    expect(fillOf(41)).toBe(componentColor('output_jack'));
+    expect(fillOf(44)).toBe(componentColor('output_jack'));
+
+    // Nothing patched: the section says nothing about which way it runs.
+    await wrapper.setProps({ cables: [] });
+    expect(fillOf(40)).toBe(componentColor('bidirectional_jack'));
+    expect(fillOf(41)).toBe(componentColor('bidirectional_jack'));
+  });
+
   // Patching is close work on a picture wider than the page: the diagram can
   // take the whole display, and refits itself to what it is given.
   it('fills the screen on request, and comes back out again', async () => {

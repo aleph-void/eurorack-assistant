@@ -113,7 +113,10 @@ describe('importing a patch', () => {
 
     const res = await importPatch(app, aliceCookie, { document: doc, rack_id: rackId });
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ name: 'Krell', rack_name: 'main rack', module_count: 2 });
+    // Patch names are one per account, and the account it goes back into
+    // still holds the 'Krell' it was exported from: the copy takes the next
+    // free name rather than the import being refused.
+    expect(res.body).toMatchObject({ name: 'Krell 2', rack_name: 'main rack', module_count: 2 });
     expect(res.body.unresolved_modules).toEqual([]);
     expect(res.body.id).not.toBe(patch.id);
 
@@ -292,6 +295,28 @@ describe('importing a patch', () => {
       name: 'Krell mk2',
     });
     expect(res.body.name).toBe('Krell mk2');
+  });
+
+  // Names are one per account. A name the importer typed is theirs to get
+  // right; the one that comes out of the file is the app's own choice, so
+  // reading the same file in again is another copy rather than a refusal.
+  it('takes the next free name for itself, but refuses one it was given', async () => {
+    const { app, aliceCookie, patch, rackId } = await withPatch();
+    const doc = JSON.parse((await exportPatch(app, aliceCookie, patch.id)).text);
+    const first = await importPatch(app, aliceCookie, { document: doc, rack_id: rackId });
+    const second = await importPatch(app, aliceCookie, { document: doc, rack_id: rackId });
+    expect([first.body.name, second.body.name]).toEqual(['Krell 2', 'Krell 3']);
+
+    const taken = await importPatch(app, aliceCookie, {
+      document: doc,
+      rack_id: rackId,
+      name: 'Krell 2',
+    });
+    expect(taken.status).toBe(409);
+    expect(taken.body.error).toContain("you already have a patch called 'Krell 2'");
+    // Nothing was written for the refused import.
+    const list = (await request(app).get('/api/patches').set('Cookie', aliceCookie)).body;
+    expect(list.map((p) => p.name).sort()).toEqual(['Krell', 'Krell 2', 'Krell 3']);
   });
 
   // A file is a file: it can be anything at all.

@@ -15,6 +15,7 @@
 // is what makes a patch from a stranger's rack render at all.
 
 import { snapshotRackLayout } from './patchLayout.js';
+import { freePatchName } from './patchNames.js';
 
 export const PATCH_FORMAT = 'eurorack-assistant.patch';
 export const PATCH_FORMAT_VERSION = 2;
@@ -428,6 +429,13 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
   const resolved = await resolveModules(db, userId, document.modules);
   const byRef = new Map(resolved.map((m) => [m.ref, m]));
 
+  // Patch names are one per account (services/patchNames.js). The importer
+  // may have typed one, in which case the route has already checked they can
+  // have it; the name that comes out of the file is the app's own choice, so
+  // it takes the next free one — reading the same file in twice is a second
+  // copy of the patch, not a refusal.
+  const patchName = name || (await freePatchName(db, userId, document.name || 'Imported patch'));
+
   let patch;
   await db.sequelize.transaction(async (transaction) => {
     patch = await Patch.create(
@@ -441,7 +449,7 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
         // a multi-rack patch still reads in an account that has no such
         // system.
         system_name: rack ? null : (document.system_name ?? null),
-        name: name || document.name || 'Imported patch',
+        name: patchName,
         description: document.description,
       },
       { transaction }

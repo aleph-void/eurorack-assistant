@@ -377,6 +377,12 @@ const {
       // Jacks that carry the two halves of one signal, per instance, so the
       // GUI can offer "patch the stereo pair" as one action.
       pairs: topology.pairs,
+      // The routing switch sections of this patch — the common jack and the
+      // steps it selects between, resolved onto instances. A switch SELECTS
+      // one of its connections where a mult COPIES to all of them, so the
+      // picture cannot tell which way a bidirectional switch jack runs
+      // without knowing the section it belongs to.
+      switches: topology.switches,
       // Normalled connections, resolved against THIS patch: each one is
       // active until the cable that cancels it is patched, and its signal
       // is traced through the chain to where it really comes from.
