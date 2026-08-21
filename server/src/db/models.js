@@ -461,6 +461,44 @@ export function defineModels(sequelize) {
     { tableName: 'component_values', createdAt: 'created_at', updatedAt: false }
   );
 
+  // A menu parameter: a setting the module holds behind an encoder and a
+  // display rather than under a control of its own. component_id is the panel
+  // thing it configures — usually an output jack, whose clock division,
+  // waveform and level are all parameters of it — and is null for a parameter
+  // of the whole module. Extracted from the manual by the find_parameters
+  // job; users may add/edit/delete rows.
+  const ModuleParameter = define(
+    'ModuleParameter',
+    {
+      id,
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      component_id: { type: DataTypes.INTEGER },
+      name: { type: DataTypes.TEXT, allowNull: false },
+      group_label: { type: DataTypes.TEXT },
+      value_type: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'enum' },
+      unit: { type: DataTypes.TEXT },
+      value_min: { type: DataTypes.TEXT },
+      value_max: { type: DataTypes.TEXT },
+      default_value: { type: DataTypes.TEXT },
+      description: { type: DataTypes.TEXT },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'module_parameters', createdAt: 'created_at', updatedAt: 'updated_at' }
+  );
+
+  // One selectable setting of an 'enum' parameter, in menu order.
+  const ModuleParameterOption = define(
+    'ModuleParameterOption',
+    {
+      id,
+      parameter_id: { type: DataTypes.INTEGER, allowNull: false },
+      value: { type: DataTypes.TEXT, allowNull: false },
+      description: { type: DataTypes.TEXT },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'module_parameter_options', createdAt: 'created_at', updatedAt: false }
+  );
+
   // A user's patch: cables + settings against a snapshot of a rack. rack_id
   // and the module/component ids on the snapshot tables are soft references
   // (no FK): the patch keeps rendering from its denormalized name columns
@@ -636,7 +674,14 @@ export function defineModels(sequelize) {
       patch_id: { type: DataTypes.INTEGER, allowNull: false },
       patch_module_id: { type: DataTypes.INTEGER, allowNull: false },
       component_id: { type: DataTypes.INTEGER },
-      component_name: { type: DataTypes.TEXT, allowNull: false },
+      // Null on a setting of a module-wide menu parameter, which sits on no
+      // component at all.
+      component_name: { type: DataTypes.TEXT },
+      // Soft reference to a module_parameters row, with its name snapshotted
+      // beside it: one component may carry a dozen of these (an output jack's
+      // division, wave and level) where a knob carries exactly one value.
+      parameter_id: { type: DataTypes.INTEGER },
+      parameter_name: { type: DataTypes.TEXT },
       value: { type: DataTypes.TEXT, allowNull: false },
     },
     { tableName: 'patch_settings', createdAt: 'created_at', updatedAt: 'updated_at' }
@@ -1034,6 +1079,12 @@ export function defineModels(sequelize) {
   ModuleComponent.hasMany(ComponentValue, { foreignKey: 'component_id' });
   ComponentValue.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
 
+  Module.hasMany(ModuleParameter, { foreignKey: 'module_id' });
+  ModuleParameter.belongsTo(Module, { foreignKey: 'module_id' });
+  ModuleParameter.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
+  ModuleParameter.hasMany(ModuleParameterOption, { foreignKey: 'parameter_id' });
+  ModuleParameterOption.belongsTo(ModuleParameter, { foreignKey: 'parameter_id' });
+
   System.belongsTo(User, { foreignKey: 'user_id' });
   User.hasMany(System, { foreignKey: 'user_id' });
   System.hasMany(Rack, { foreignKey: 'system_id' });
@@ -1148,6 +1199,8 @@ export function defineModels(sequelize) {
     ComponentSwitchStep,
     ComponentValue,
     ComponentPair,
+    ModuleParameter,
+    ModuleParameterOption,
     ModuleExpander,
     ModuleBridge,
     ModuleBridgeJack,

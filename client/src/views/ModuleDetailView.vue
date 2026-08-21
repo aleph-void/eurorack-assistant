@@ -167,6 +167,34 @@ async function trimPanel() {
   }
 }
 
+// Markers with nothing behind them: drawn on the plate, in none of the
+// lists, and unable to anchor a cable — a placement whose name never matched
+// a component (most often the analysis echoing "PITCH A (knob)" whole). The
+// server matches each to the component it names, and drops the ones that
+// duplicate a component already placed.
+const orphanMarkers = computed(
+  () => (module.value?.panel?.components || []).filter((p) => !p.component_id).length
+);
+const relinking = ref(false);
+async function relinkMarkers() {
+  panelError.value = '';
+  panelStatus.value = '';
+  relinking.value = true;
+  try {
+    const result = await api.post(`/api/modules/${props.id}/panel/relink`);
+    await load();
+    panelStatus.value =
+      result.linked || result.removed
+        ? `Put ${result.linked} marker(s) back on their component` +
+          (result.removed ? `, and removed ${result.removed} duplicate(s).` : '.')
+        : 'None of these markers names a component of this module — rename or remove them by hand.';
+  } catch (e) {
+    panelError.value = e.message;
+  } finally {
+    relinking.value = false;
+  }
+}
+
 async function removePanel() {
   const ok = await dialog.confirm({
     title: 'Remove panel image',
@@ -234,6 +262,18 @@ watch(id, () => {
         @click="trimPanel"
       >
         {{ trimmingPanel ? 'Trimming…' : module.panel.trimmed ? 'Panel trimmed' : 'Trim panel' }}
+      </button>
+      <button
+        v-if="orphanMarkers > 0"
+        type="button"
+        class="secondary"
+        style="margin: 0; white-space: nowrap"
+        data-test="panel-relink"
+        :disabled="relinking"
+        title="Match the markers that name no component back to the components they name"
+        @click="relinkMarkers"
+      >
+        {{ relinking ? 'Tidying…' : `Tidy ${orphanMarkers} stray marker(s)` }}
       </button>
     </div>
     <p v-if="reanalyzeNotice" class="muted" data-test="reanalyze-notice">{{ reanalyzeNotice }}</p>

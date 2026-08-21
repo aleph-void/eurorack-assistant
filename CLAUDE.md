@@ -29,10 +29,14 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   for the shared derived state, taking `:module`/`:patch` + id props and
   emitting `reload`), and every section is a route of its own.
   `/modules/:id` is the front plate and the summary; `/components`,
-  `/values`, `/normalizations`, `/switches`, `/routes`, `/pairs`,
-  `/jacks/input`, `/jacks/output`, `/jacks/bidirectional` (three routes over
-  one view), `/expanders`, `/bridges`, `/documents`, `/videos` and `/notes`
-  are the rest. `/patches/:id` is the picture of the case and the drag that patches a
+  `/values`, `/parameters`, `/normalizations`, `/switches`, `/routes`,
+  `/pairs`, `/expanders`, `/bridges`, `/documents`, `/videos` and `/notes`
+  are the rest. EVERY COMPONENT TYPE ALSO HAS A PAGE OF ITS OWN — the list of
+  all of a module's components is a page you scroll rather than read, while
+  "the knobs" is a page you can take in: `/jacks/input`, `/jacks/output`,
+  `/jacks/bidirectional` for the things a cable goes in, `/parts/<type>`
+  (knob, slider, button, toggle, switch, display, other) for the rest, all of
+  them ONE view (`ModuleComponentTypeView.vue`) over a component type. `/patches/:id` is the picture of the case and the drag that patches a
   cable on it; `/cables`, `/settings`, `/flow`, `/links`, `/scope`,
   `/notes` and `/modules` are the rest (`/patches/:id/config`, the one page
   that used to hold all of those, redirects to `/settings`). Every page reads
@@ -50,11 +54,14 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   drawer (`stores/detail.js`) which record's pages to offer at the top of it.
   Arranging a marker needs the plate and the row together, so the mode itself
   is `moduledetail/useArranging.js` and every page that draws a plate has it:
-  the module page and the three jack pages draw
-  `moduledetail/PanelJacksSection.vue` (the plate, with the jacks of that page
-  listed beside it, each row a toggle and each marker the same toggle from the
-  other side), and the components page draws the plate WHILE ARRANGING because
-  a knob's row is a long way down a long table. The components page still
+  the module page and the per-type pages draw
+  `moduledetail/PanelJacksSection.vue` (the plate, with a scrolling ribbon of
+  components beside it, each row a toggle and each marker the same toggle from
+  the other side). A per-type page lists ITS type; the module page lists
+  EVERY component, because a knob's marker is as wrong as a jack's and the
+  front panel page is where a marker is put right. The components page draws
+  the plate WHILE ARRANGING because a knob's row is a long way down a long
+  table. The components page still
   takes `?arrange=<component id>`.
 - PATCHING BY VOICE is an account setting, not a page of a patch: one
   microphone, one footswitch, whatever patch is open. The settings live in
@@ -113,6 +120,18 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   its crop recorded, so anything drawing a panel as a plain `<img>` must
   offset it with `panelCropStyle()` (client/src/panelLayout.js), or a
   photograph's backdrop is drawn as panel.
+- A panel marker with NO component behind it is drawn on the plate, is in
+  none of the lists, and — because the untyped fallback colour is the same
+  violet an output jack is drawn in — reads as an output jack that has gone
+  missing. They came from placement names the analysis echoed whole out of the
+  prompt's `- PITCH A (knob)` list: `matchComponent()` in
+  services/panelImage.js now reads the type off the name, which is also the
+  only way to tell a knob from the jack of the same name apart. The ones
+  already stored are put right by `POST /api/modules/:id/panel/relink`
+  (`relinkPanelPlacements()`, offered on the module page only while there are
+  any): a marker naming a component with no marker becomes that component's
+  marker, one naming a component that already has its own is the duplicate it
+  looks like and goes.
 - Panel pictures are also served at a handful of fixed widths: `?w=<px>` on
   `GET /api/panels/:hash.:ext` renders a WEBP copy once, keeps it in
   `panels/thumbs/`, and serves it under the same immutable policy
@@ -120,6 +139,24 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   draw — `panelImageUrl()`/`panelThumbUrl()` in `client/src/panelLayout.js`,
   never a bare `panel.url` — because a stored panel is the multi-megabyte file
   the manufacturer published and a patch draws forty of them at once.
+- A MENU PARAMETER is a setting a module keeps behind an encoder and a screen
+  rather than under a control of its own. The component inventory plus
+  `component_values` covers a filter whose LP/BP/HP switch you can see; it
+  does not cover Pamela's Pro Workout, whose eight outputs' clock divisions,
+  waveforms and levels are all chosen by turning ONE encoder through a menu —
+  a dozen settings belonging to a single jack, and jacks are not settable at
+  all. So `module_parameters` (+ `module_parameter_options`, migration 036)
+  is its own hardware fact: each row hangs off the component it configures
+  (usually an output jack) or off nothing at all when it belongs to the whole
+  module, and carries the list of settings to pick from. A patch records one
+  through the SAME `patch_settings` table — `parameter_id`/`parameter_name`
+  beside the component, so a knob still carries exactly one value while a jack
+  carries as many as its menu has entries — which is what puts menu settings
+  into the patch document every question is asked with, and through
+  export/import by name. `services/moduleParameters.js` holds the loader and
+  the `find_parameters` job's model pass, which is a PURE FILL like
+  `componentDescriber.js`: it adds parameters that are not recorded and fills
+  an EMPTY option list, and rewrites nothing.
 - A DUAL module is two panels of one product joined by a link cable rather
   than by patch cables (Omnitone 7Path's ethernet pair). Neither side is a
   host — that is what makes it not an expander — and BOTH SIDES MAY BE THE
@@ -133,6 +170,14 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   patched into is the input and the matching jack on the opposite panel is the
   output, which `cableProblem()` enforces (bridged jacks are otherwise exempt
   from the mult rules — they are paired, not copies).
+- The picture is MOVED the way a map is: pressing anywhere on the diagram
+  that is not a jack and dragging scrolls the box under the pointer (`startPan`
+  in PatchDiagram.vue), because a studio is far wider than any screen and the
+  scroll bar is a long way from the panel being patched. A cable drag has
+  already claimed the gesture by the time the wrap sees it, so patching wins.
+  A cable is also what you alt-click to unplug, so its stroke is widened by
+  the zoom below 1:1 (`--cable-width`) rather than thinning to a hairline
+  nothing can hit.
 - ONLY WHAT IS ON SCREEN IS BUILT. A studio is two hundred panels and six
   thousand markers, and the picture is far wider than any screen: the diagram
   renders the panels whose box intersects the scroll viewport (plus a margin),
@@ -323,6 +368,7 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
 
 Everything slow is a DB-backed job (`jobs` table): import → find_manual (per
 module) → analyze_manual → panel_image; extract_manual runs alongside;
+find_parameters is asked for by hand, from the module's Menu parameters page;
 questions run scope_question → user review → answer_question; attached
 YouTube videos run download_video (yt-dlp + ffmpeg frames/transcript, no
 LLM) → analyze_video (techniques summary onto `module_videos`, then the

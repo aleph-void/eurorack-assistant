@@ -8,12 +8,13 @@
 // alone, pick it again (or Done) and the whole panel comes back. A marker on
 // the plate is the same toggle from the other side.
 //
-// Drawn on the module's own page and on each of the jack pages, over whatever
-// kinds of jack that page is about.
+// Drawn on the module's own page — where the ribbon beside the plate lists
+// EVERY component, because any of them may be the one sitting in the wrong
+// place — and on each per-type page, over the one kind that page is about.
 
 import { computed } from 'vue';
 import ModulePanel from '../ModulePanel.vue';
-import { componentColor, typeLabel } from '../../componentTypes.js';
+import { COMPONENT_TYPES, componentColor, typeLabel } from '../../componentTypes.js';
 
 const props = defineProps({
   module: { type: Object, required: true },
@@ -23,10 +24,13 @@ const props = defineProps({
   // whole is also what lets the plate and the rows be one mode: a page that
   // draws this block twice would otherwise have two.
   arranging: { type: Object, required: true },
-  // The jack types this block is about, in the order they are listed.
+  // The component types this block is about, in the order they are listed.
+  // Everything on the panel, by default: the front panel page is where a
+  // marker is put right, and a knob's marker is as wrong as a jack's. A page
+  // about one kind passes just that kind.
   kinds: {
     type: Array,
-    default: () => ['input_jack', 'output_jack', 'bidirectional_jack'],
+    default: () => COMPONENT_TYPES,
   },
 });
 

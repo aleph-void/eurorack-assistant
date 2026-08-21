@@ -145,6 +145,10 @@ export async function exportPatchDocument(db, patch) {
         module: refs.get(s.patch_module_id) ?? null,
         control: s.component_name,
         type: componentType.get(s.component_id) ?? null,
+        // The MENU parameter this value belongs to, by name, for the
+        // menu-driven modules whose settings hang off a jack (or off nothing
+        // at all) rather than off a control with a position.
+        parameter: s.parameter_name ?? null,
         value: s.value,
       })),
       links: links.map((l) => ({
@@ -307,10 +311,16 @@ export function parsePatchDocument(input) {
     if (!isObject(s)) fail('every setting must be an object');
     const ref = integer(s.module, -1);
     if (!seenRefs.has(ref)) fail(`setting ${at + 1} refers to a module that is not in the file`);
+    // A menu parameter of the whole module names no control at all, so the
+    // control is only compulsory for a setting that is a control's position.
+    const parameter = text(s.parameter, `setting ${at + 1} parameter`, { required: false });
     return {
       module: ref,
-      control: text(s.control ?? s.component, `setting ${at + 1} control`),
+      control: text(s.control ?? s.component, `setting ${at + 1} control`, {
+        required: !parameter,
+      }),
       type: componentType(s.type, `setting ${at + 1} type`),
+      parameter,
       value: text(s.value, `setting ${at + 1} value`, { max: LIMITS.body }),
     };
   });
@@ -360,7 +370,7 @@ export function parsePatchDocument(input) {
 // not own stays a name, so importing a patch never quietly hands anybody a
 // module they have not imported.
 async function resolveModules(db, userId, documentModules) {
-  const { Module, Rack, RackModule, ModuleComponent } = db.models;
+  const { Module, Rack, RackModule, ModuleComponent, ModuleParameter } = db.models;
   const key = (manufacturer, name) =>
     `${String(manufacturer ?? '').trim().toLowerCase()}|${String(name ?? '').trim().toLowerCase()}`;
 
@@ -399,6 +409,23 @@ async function resolveModules(db, userId, documentModules) {
     names.set(`${lower}\u0000${c.type}`, c.id);
   }
 
+  // The menu parameters of the same modules, keyed by the component they hang
+  // off and their name, so a setting of "OUT 1"'s "Clock division" finds the
+  // row it means and not the identically named parameter of "OUT 2".
+  const parameters = moduleIds.length
+    ? await ModuleParameter.findAll({
+        where: { module_id: moduleIds },
+        attributes: ['id', 'module_id', 'component_id', 'name'],
+      })
+    : [];
+  const parametersByModule = new Map();
+  for (const p of parameters) {
+    if (!parametersByModule.has(p.module_id)) parametersByModule.set(p.module_id, new Map());
+    parametersByModule
+      .get(p.module_id)
+      .set(`${p.component_id ?? 0}\u0000${String(p.name).trim().toLowerCase()}`, p.id);
+  }
+
   return documentModules.map((m) => {
     // Off-rack gear declares its own connection points and never stands for a
     // module record, however it happens to be named.
@@ -407,6 +434,7 @@ async function resolveModules(db, userId, documentModules) {
       ...m,
       module_id: moduleId,
       components: moduleId === null ? new Map() : (componentsByModule.get(moduleId) ?? new Map()),
+      parameters: moduleId === null ? new Map() : (parametersByModule.get(moduleId) ?? new Map()),
     };
   });
 }
@@ -511,6 +539,15 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
       return portIds.get(ref)?.get(lower) ?? null;
     };
 
+    // A menu parameter of the module an instance resolved to, by the jack it
+    // belongs to and its name.
+    const parameterId = (ref, componentId, parameterName) => {
+      const m = byRef.get(ref);
+      if (!m || m.module_id === null) return null;
+      const lower = String(parameterName ?? '').trim().toLowerCase();
+      return m.parameters.get(`${componentId ?? 0}\u0000${lower}`) ?? null;
+    };
+
     for (const c of document.cables) {
       await PatchCable.create(
         {
@@ -531,12 +568,19 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
     }
 
     for (const s of document.settings) {
+      const componentId = s.control ? jackId(s.module, s.control, s.type) : null;
       await PatchSetting.create(
         {
           patch_id: patch.id,
           patch_module_id: rowIds.get(s.module),
-          component_id: jackId(s.module, s.control, s.type),
+          component_id: componentId,
           component_name: s.control,
+          // Matched by name against the menu of the module that resolved,
+          // like everything else in a patch file: a parameter that no longer
+          // exists (or a module that did not resolve) keeps its name and
+          // loses only the live reference.
+          parameter_id: s.parameter ? parameterId(s.module, componentId, s.parameter) : null,
+          parameter_name: s.parameter,
           value: s.value,
         },
         { transaction }

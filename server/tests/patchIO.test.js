@@ -84,7 +84,13 @@ describe('exporting a patch', () => {
     expect(cable.note).toBe('slowly');
     expect(doc.patch.modules.some((m) => m.ref === cable.from.module)).toBe(true);
     expect(doc.patch.settings).toEqual([
-      { module: cable.from.module, control: 'RISE', type: 'knob', value: '2 o’clock' },
+      {
+        module: cable.from.module,
+        control: 'RISE',
+        type: 'knob',
+        parameter: null,
+        value: '2 o’clock',
+      },
     ]);
     expect(JSON.stringify(doc)).not.toContain('module_id');
   });

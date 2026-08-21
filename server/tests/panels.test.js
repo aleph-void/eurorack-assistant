@@ -368,6 +368,29 @@ describe('placement normalization', () => {
     expect(placements).toHaveLength(1);
   });
 
+  // The prompt lists the components as "- PITCH A (knob)", and a model that
+  // copies the line whole is naming that knob. Matching the literal string
+  // left a marker with nothing behind it: drawn on the plate, in none of the
+  // lists, and — because the untyped fallback is the same violet an output
+  // jack is drawn in — looking exactly like an output jack gone missing.
+  it('reads a type off a placement name, and tells two components of one name apart', () => {
+    const named = [
+      { id: 1, name: 'PITCH A', type: 'input_jack' },
+      { id: 2, name: 'PITCH A', type: 'knob' },
+    ];
+    const placements = normalizePlacements(
+      [
+        { name: 'PITCH A (knob)', x: 0.5, y: 0.2 },
+        { name: 'PITCH A (input_jack)', x: 0.5, y: 0.8 },
+      ],
+      named
+    );
+    expect(placements.map((p) => [p.component_id, p.name])).toEqual([
+      [2, 'PITCH A'],
+      [1, 'PITCH A'],
+    ]);
+  });
+
   it('drops entries with no position at all', () => {
     expect(normalizePlacements([{ name: 'SAW' }, null, 'nonsense'], components)).toEqual([]);
   });

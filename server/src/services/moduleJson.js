@@ -23,6 +23,31 @@ export const valueJson = (row) => ({
   description: row.description,
 });
 
+// A menu parameter and one of its selectable settings. `options` is filled in
+// by whoever loads them; a parameter with none is a number or free text.
+export const parameterJson = (p, extra = {}) => ({
+  id: p.id,
+  component_id: p.component_id,
+  name: p.name,
+  group_label: p.group_label,
+  value_type: p.value_type,
+  unit: p.unit,
+  value_min: p.value_min,
+  value_max: p.value_max,
+  default_value: p.default_value,
+  description: p.description,
+  position: p.position,
+  ...extra,
+});
+
+export const parameterOptionJson = (o) => ({
+  id: o.id,
+  parameter_id: o.parameter_id,
+  value: o.value,
+  description: o.description,
+  position: o.position,
+});
+
 export const normalizationJson = (n) => ({
   id: n.id,
   target_component_id: n.target_component_id,

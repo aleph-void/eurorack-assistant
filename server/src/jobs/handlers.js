@@ -25,6 +25,10 @@
 //   describe_components — write descriptions for components that have none
 //                     (added by hand after the import) from the module's
 //                     documents, touching nothing that is already described
+//   find_parameters — read the module's documents for the settings it keeps
+//                     in a MENU rather than under a control, and the options
+//                     each one offers. Adds only: a parameter already
+//                     recorded is never rewritten
 //   scope_question  — determine which modules/jacks a question applies to,
 //                     then leave the question 'scoped' for the user to review
 //   answer_question — ask the LLM with the reviewed scope and attachments
@@ -53,6 +57,7 @@ import {
   describeComponentsForModule,
   moduleFactGaps,
 } from '../services/componentDescriber.js';
+import { findParametersForModule } from '../services/moduleParameters.js';
 import { extractManualDocument } from '../services/manualText.js';
 import { buildPanelForModule, trimPanelImage } from '../services/panelImage.js';
 import { downloadVideoForModule, removeVideoFiles } from '../services/videos.js';
@@ -371,6 +376,48 @@ export function createHandlers(
     );
   }
 
+  // The module's MENU: everything a user can set on it that has no control of
+  // its own — Pamela's Pro Workout's eight outputs and their clock divisions,
+  // waveforms and levels. One narrow model pass over the same documents the
+  // analysis reads, adding only what is not recorded yet
+  // (services/moduleParameters.js).
+  async function handleFindParameters(job, backend, progress) {
+    const { Module } = db.models;
+    const record = await Module.findByPk(job.module_id);
+    if (!record) throw new Error(`Module ${job.module_id} no longer exists`);
+    const module = record.get({ plain: true });
+    const { manual } = await sharedManualDocuments(module);
+    const scoped = (await analysisScopeDocuments(module, job.user_id)).filter(
+      (m) => m.id !== manual?.id
+    );
+    const seen = new Set();
+    const candidates = (manual ? [manual, ...scoped] : scoped).filter((m) => {
+      if (seen.has(m.hash)) return false;
+      seen.add(m.hash);
+      return true;
+    });
+    if (candidates.length === 0) {
+      throw new Error('This module has no documents to read a menu from');
+    }
+    progress(
+      `reading the menu from ${candidates.map((m) => m.original_name || `${m.hash}.pdf`).join(', ')}`
+    );
+    const result = await findParametersForModule(
+      db,
+      backend,
+      module,
+      candidates.map((m) => manualPath(manualsDir, m.hash))
+    );
+    if (result.asked === 0) {
+      progress('this module has no menu settings — everything it does is on the panel');
+      return;
+    }
+    progress(
+      `menu parameters found: ${result.asked}; added: ${result.created}` +
+        (result.options > 0 ? `; option lists filled in: ${result.options}` : '')
+    );
+  }
+
   async function handleAnalyzeManual(job, backend, progress) {
     const { Module } = db.models;
     const record = await Module.findByPk(job.module_id);
@@ -653,6 +700,7 @@ export function createHandlers(
     analyze_manual: handleAnalyzeManual,
     reanalyze_components: handleReanalyzeComponents,
     describe_components: handleDescribeComponents,
+    find_parameters: handleFindParameters,
     extract_manual: handleExtractManual,
     panel_image: handlePanelImage,
     download_video: handleDownloadVideo,

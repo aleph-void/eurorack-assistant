@@ -10,6 +10,7 @@ import { resolveNormalledSignals } from './patchSignals.js';
 import { buildSignalFlow } from './patchFlow.js';
 import { loadPanels } from './panelImage.js';
 import { loadPatchRackLayout } from './patchLayout.js';
+import { parametersByModule as loadParametersByModule } from './moduleParameters.js';
 
 export const patchJson = (patch, extra = {}) => ({
   id: patch.id,
@@ -71,7 +72,7 @@ export const cableJson = (c) => ({
   alt_group: c.alt_group ?? null,
 });
 
-export const moduleJson = (pm, { live, components, panel = null, hp = null }) => ({
+export const moduleJson = (pm, { live, components, panel = null, hp = null, parameters = [] }) => ({
   id: pm.id,
   module_id: pm.module_id,
   manufacturer: pm.manufacturer,
@@ -94,6 +95,10 @@ export const moduleJson = (pm, { live, components, panel = null, hp = null }) =>
   // diagram falls back to a plain outline for those.
   panel,
   hp,
+  // The module's MENU — the settings it holds behind an encoder rather than
+  // under a control, each hanging off the jack it configures. Empty for all
+  // but the menu-driven modules.
+  parameters,
 });
 
 // Everything the patch is made of, resolved: the snapshot instances with
@@ -300,6 +305,11 @@ const {
   });
 
   const panels = await loadPanels(db, [...liveIds], { describe });
+  // The menu parameters of every module still in the rack, so the patch pages
+  // can offer them to dial in. Prose travels with `describe`, exactly as a
+  // component's description does: a studio's worth of option descriptions is
+  // a megabyte none of the patch pages shows.
+  const parametersByModule = await loadParametersByModule(db, [...liveIds], { describe });
   // The physical arrangement is the patch's OWN copy of the racks it was
   // built from (services/patchLayout.js), not the racks as they stand today
   // — reorganising a case does not rearrange the patches already made from
@@ -357,6 +367,9 @@ const {
           components: topology.jacksByPatchModule.get(pm.id) ?? [],
           panel: panels.get(pm.module_id) ?? null,
           hp: liveModules.find((module) => module.id === pm.module_id)?.hp ?? null,
+          // The module's menu — what can be dialed in on it that has no
+          // control of its own. Empty for all but the menu-driven modules.
+          parameters: parametersByModule.get(pm.module_id) ?? [],
         })
       ),
       groups: groups.map((g) => ({
@@ -372,6 +385,11 @@ const {
         patch_module_id: s.patch_module_id,
         component_id: s.component_id,
         component_name: s.component_name,
+        // The menu parameter this value belongs to, when it is one: a jack
+        // carries as many of these as its menu has entries, where a control
+        // carries exactly one value.
+        parameter_id: s.parameter_id,
+        parameter_name: s.parameter_name,
         value: s.value,
       })),
       // Jacks that carry the two halves of one signal, per instance, so the

@@ -73,17 +73,25 @@ describe('detail sub-pages', () => {
       'documents',
       'expanders',
       // The three kinds of jack are three pages over one view, so the kind is
-      // in the path rather than in three near-identical route definitions.
+      // in the path rather than in three near-identical route definitions —
+      // and every other component type is the same view again, addressed by
+      // its type.
       ':kind(input|output|bidirectional)',
+      ':type(knob|slider|button|toggle|switch|display|other)',
       'normalizations',
       'notes',
       'pairs',
+      'parameters',
       'routes',
       'switches',
       'values',
       'videos',
     ].sort());
-    expect(under('/modules/:id/').every((r) => r.props === true)).toBe(true);
+    // The jack pages map their path segment onto a component type, so they
+    // pass a props FUNCTION; every other page takes the id straight through.
+    expect(
+      under('/modules/:id/').every((r) => r.props === true || typeof r.props === 'function')
+    ).toBe(true);
   });
 
   it('gives every part of a patch its own route', () => {

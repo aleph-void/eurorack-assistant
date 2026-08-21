@@ -312,6 +312,55 @@ describe('ModuleDetailView', () => {
     expect(api.delete).toHaveBeenCalledWith('/api/modules/1/panel');
   });
 
+  // Every component, not only the jacks: the front panel page is where a
+  // marker is put right, and a knob's marker is as wrong as a jack's.
+  it('lists every component beside the plate, whatever kind it is', async () => {
+    api.get.mockResolvedValue({
+      ...structuredClone(moduleResponse),
+      panel: {
+        source: 'image',
+        url: '/api/panels/abc.png',
+        width: 400,
+        height: 1200,
+        crop: { x: 0, y: 0, w: 1, h: 1 },
+        components: [{ id: 5, component_id: 1, name: 'Signal In', shape: 'jack', x: 0.5, y: 0.9 }],
+      },
+    });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    const rows = wrapper.find('[data-test="panel-jacks"]').text();
+    expect(rows).toContain('Signal In');
+    expect(rows).toContain('EOR');
+    expect(rows).toContain('Rise');
+    expect(wrapper.find('[data-test="arrange-component-3"]').exists()).toBe(true);
+  });
+
+  // A marker whose component_id is null is drawn on the plate, is in none of
+  // the lists, and is the same violet an output jack is drawn in — so it
+  // reads as an output jack that has gone missing.
+  it('offers to tidy the markers that name no component', async () => {
+    const panel = {
+      source: 'image',
+      url: '/api/panels/abc.png',
+      width: 400,
+      height: 1200,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      components: [
+        { id: 5, component_id: 1, name: 'Signal In', shape: 'jack', x: 0.5, y: 0.9 },
+        { id: 6, component_id: null, name: 'Rise (knob)', shape: 'other', x: 0.2, y: 0.2 },
+      ],
+    };
+    api.get.mockResolvedValue({ ...structuredClone(moduleResponse), panel });
+    api.post.mockResolvedValue({ orphans: 1, linked: 1, removed: 0, panel });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="panel-relink"]').text()).toContain('1 stray marker');
+    await wrapper.find('[data-test="panel-relink"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/panel/relink');
+    expect(wrapper.find('[data-test="panel-status"]').text()).toContain('back on their component');
+  });
+
   // The panel's markers are worked out from a photograph and are right most of
   // the time. This is the rest of the time.
   it('saves a marker dragged onto the hardware it names', async () => {

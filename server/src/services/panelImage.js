@@ -308,13 +308,42 @@ const matchKey = (value) =>
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 
+// A placement's name may arrive with the component's TYPE in brackets. The
+// prompt lists the module's components as "- PITCH A (knob)", and a model
+// that copies the line whole is naming that knob, not a control called
+// "PITCH A (knob)" — matching the literal string leaves a marker with nothing
+// behind it, drawn on the plate and in none of the lists. It is also the only
+// way to tell two components apart when a panel names a knob and its jack the
+// same thing, which is exactly when this happens.
+const TYPED_NAME = /^(.*?)\s*\(\s*([a-z][a-z0-9_ -]*)\s*\)\s*$/i;
+
+const typeKey = (type) => String(type ?? '').toLowerCase().replace(/[\s-]+/g, '_');
+
 export function componentIndex(components) {
   const byKey = new Map();
   for (const c of components) {
     const key = matchKey(c.name);
-    if (key && !byKey.has(key)) byKey.set(key, c);
+    if (!key) continue;
+    // The name alone, first one wins — two components of one name are told
+    // apart by the typed key below.
+    if (!byKey.has(key)) byKey.set(key, c);
+    byKey.set(`${key}\u0000${typeKey(c.type)}`, c);
   }
   return byKey;
+}
+
+// The component a placement's name means: by name and type where the name
+// carries one (or the entry states one), by name alone otherwise.
+export function matchComponent(byKey, name, type = null) {
+  const typed = TYPED_NAME.exec(name);
+  const stated = typeKey(type ?? (typed ? typed[2] : ''));
+  const base = typed ? typed[1] : name;
+  return (
+    (stated ? byKey.get(`${matchKey(base)}\u0000${stated}`) : null) ??
+    byKey.get(matchKey(name)) ??
+    byKey.get(matchKey(base)) ??
+    null
+  );
 }
 
 // Turn the LLM's list of placements into rows against the stored components.
@@ -333,7 +362,7 @@ export function normalizePlacements(raw, components, { defaultSize = DEFAULT_MAR
     if (!name) continue;
     const box = readBox(entry, defaultSize);
     if (!box) continue;
-    const component = byKey.get(matchKey(name)) ?? null;
+    const component = matchComponent(byKey, name, entry.type);
     // One position per component, and one per unmatched label: a repeated
     // name is the LLM listing the same control twice, not two controls.
     if (component) {
@@ -354,6 +383,46 @@ export function normalizePlacements(raw, components, { defaultSize = DEFAULT_MAR
     });
   }
   return placements;
+}
+
+// Markers on a stored panel with nothing behind them, matched to the module's
+// components again.
+//
+// A marker whose component_id is null is drawn on the plate but appears in no
+// list and can anchor no cable — and, because the untyped fallback colour is
+// the same violet output jacks are drawn in, it reads as an output jack that
+// has gone missing. They come from a placement whose name did not match a
+// component: most often the model echoing the prompt's "- PITCH A (knob)"
+// line whole. normalizePlacements no longer produces them (matchComponent
+// reads the type off the name), and this puts the ones already stored right:
+// a marker that names a component with no marker becomes that component's
+// marker, and one that names a component which already has its own is the
+// duplicate it looks like, and goes.
+export async function relinkPanelPlacements(db, moduleId) {
+  const { ModulePanel, ModulePanelComponent, ModuleComponent } = db.models;
+  const panel = await ModulePanel.findOne({ where: { module_id: moduleId } });
+  const result = { orphans: 0, linked: 0, removed: 0 };
+  if (!panel) return result;
+  const rows = await ModulePanelComponent.findAll({ where: { panel_id: panel.id } });
+  const orphans = rows.filter((row) => row.component_id === null || row.component_id === undefined);
+  result.orphans = orphans.length;
+  if (orphans.length === 0) return result;
+  const components = await ModuleComponent.findAll({ where: { module_id: moduleId } });
+  const byKey = componentIndex(components.map((c) => c.get({ plain: true })));
+  const placed = new Set(rows.map((row) => row.component_id).filter((id) => id != null));
+  for (const row of orphans) {
+    const component = matchComponent(byKey, row.name);
+    if (!component) continue;
+    if (placed.has(component.id)) {
+      await row.destroy();
+      result.removed += 1;
+      continue;
+    }
+    await row.update({ component_id: component.id, name: component.name });
+    placed.add(component.id);
+    result.linked += 1;
+  }
+  return result;
 }
 
 // Components the LLM did not place, dropped into the free space below the

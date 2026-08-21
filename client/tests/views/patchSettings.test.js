@@ -92,4 +92,80 @@ describe('PatchSettingsView', () => {
       value: 'Cycle',
     });
   });
+
+  // A menu-driven module's settings hang off the JACK they configure, and one
+  // jack carries as many of them as its menu has entries — which is why they
+  // are keyed by the parameter rather than by the component.
+  it('dials in the menu settings of a module that has them', async () => {
+    const withMenu = structuredClone(patchResponse);
+    const maths = withMenu.modules.find((m) => m.id === 11);
+    maths.parameters = [
+      {
+        id: 101,
+        component_id: 2,
+        name: 'Clock division',
+        value_type: 'enum',
+        options: [
+          { id: 1, value: '/4', description: 'Four times slower' },
+          { id: 2, value: 'x2', description: null },
+        ],
+        default_value: null,
+        value_min: null,
+        value_max: null,
+        unit: null,
+        description: 'How fast EOR runs against the clock.',
+      },
+      {
+        id: 102,
+        component_id: null,
+        name: 'Tempo',
+        value_type: 'number',
+        options: [],
+        default_value: '120',
+        value_min: '10',
+        value_max: '300',
+        unit: 'BPM',
+        description: null,
+      },
+    ];
+    withMenu.settings = [
+      {
+        id: 33,
+        patch_module_id: 11,
+        component_id: 2,
+        component_name: 'EOR',
+        parameter_id: 101,
+        parameter_name: 'Clock division',
+        value: '/4',
+      },
+    ];
+    api.get.mockResolvedValue(withMenu);
+    api.put.mockResolvedValue({ id: 34 });
+    const wrapper = mount(PatchSettingsView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+
+    // A recorded menu value says which jack and which menu entry it is.
+    expect(wrapper.find('[data-test="setting-33"]').text()).toContain('EOR · Clock division');
+
+    await pick(wrapper, 'settings-module', 'maths');
+    // The listed settings become a dropdown, prefilled from what is recorded.
+    const division = wrapper.find('[data-test="parameter-input-101"]');
+    expect(division.element.tagName).toBe('SELECT');
+    expect(division.element.value).toBe('/4');
+    expect(division.findAll('option').map((o) => o.text()).join(' ')).toContain('Four times slower');
+    // A range with no listed settings is a number, prefilled from the default.
+    const tempo = wrapper.find('[data-test="parameter-input-102"]');
+    expect(tempo.attributes('type')).toBe('number');
+    expect(tempo.element.value).toBe('120');
+
+    await division.setValue('x2');
+    await wrapper.find('[data-test="parameter-save-101"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/patches/7/settings', {
+      patch_module_id: 11,
+      parameter_id: 101,
+      value: 'x2',
+    });
+  });
 });

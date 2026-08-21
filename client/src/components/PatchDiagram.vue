@@ -228,6 +228,13 @@ const zoomPercent = computed(() => Math.round(zoom.value * 100));
 const MARKER_SCREEN_R = 6;
 const markerRadius = computed(() => clamp(MARKER_SCREEN_R / zoom.value, 2, 18));
 const markerStroke = computed(() => clamp(1.5 / zoom.value, 0.5, 4.5));
+// A cable is also the thing you alt-click to unplug, so it is never thinner
+// on screen than a pointer can comfortably hit: the drawn width holds from
+// 1:1 up, and below that the stroke is widened by the zoom, the same trick
+// the markers use. Handed to the stylesheet as a custom property so the
+// hover rule can thicken it further without a second binding per cable.
+const CABLE_WIDTH = 7;
+const cableStroke = computed(() => clamp(CABLE_WIDTH / zoom.value, CABLE_WIDTH, 26));
 // The dark ring behind every marker, so a bright dot has an edge to be seen
 // against on a photograph of a panel. Kept here rather than in the stylesheet
 // because a marker's colours travel on the element itself — a rule in CSS
@@ -357,6 +364,7 @@ const imageUrl = (placed) =>
 const svgStyle = computed(() => ({
   width: `${Math.max(1, Math.round(diagram.value.width * zoom.value))}px`,
   maxWidth: 'none',
+  '--cable-width': `${cableStroke.value}px`,
 }));
 
 // The panels inside the scroll box, and the instances they belong to. Markers
@@ -721,6 +729,49 @@ function finishCable(event) {
   });
 }
 
+// Dragging the picture moves it, the way a map is moved. A studio is far
+// wider than any screen and the scroll bar is a long way from the panel being
+// patched, so pressing on anything that is NOT a jack and dragging scrolls the
+// box under the pointer. A cable drag has already claimed the gesture by the
+// time this sees it — pointerdown reaches the jack first and sets `dragging` —
+// so patching still wins, and alt/right-click is left to unplugging.
+const panning = ref(null);
+// The elements with a gesture of their own: a jack marker, the jack editor's
+// controls, anything clickable.
+const OWN_GESTURE = 'circle, .jack-editor, input, select, button, a, textarea';
+
+function startPan(event) {
+  if (dragging.value || panning.value) return;
+  if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.target?.closest?.(OWN_GESTURE)) return;
+  const el = wrap.value;
+  if (!el) return;
+  event.preventDefault();
+  panning.value = {
+    id: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    left: el.scrollLeft,
+    top: el.scrollTop,
+  };
+  el.setPointerCapture?.(event.pointerId);
+}
+
+function movePan(event) {
+  const pan = panning.value;
+  const el = wrap.value;
+  if (!pan || !el || event.pointerId !== pan.id) return;
+  el.scrollLeft = pan.left - (event.clientX - pan.x);
+  el.scrollTop = pan.top - (event.clientY - pan.y);
+}
+
+function endPan(event) {
+  const pan = panning.value;
+  if (!pan || event.pointerId !== pan.id) return;
+  wrap.value?.releasePointerCapture?.(event.pointerId);
+  panning.value = null;
+}
+
 // Unplugging from the picture: the same alt-click / right-click gesture the
 // rack organizer uses to pull a module out of a row. The parent does the
 // write, so a read-only diagram keeps the browser's own context menu.
@@ -802,7 +853,17 @@ const draftCable = computed(() =>
         Nothing to draw yet — patch a cable, or tick 'show every module'.
       </p>
       <template v-else>
-        <div ref="wrap" class="diagram-wrap" @wheel="wheelZoom" @scroll="onScroll">
+        <div
+          ref="wrap"
+          class="diagram-wrap"
+          :class="{ panning }"
+          @wheel="wheelZoom"
+          @scroll="onScroll"
+          @pointerdown="startPan"
+          @pointermove="movePan"
+          @pointerup="endPan"
+          @pointercancel="endPan"
+        >
           <svg
             ref="svg"
             class="patch-diagram"
@@ -1058,6 +1119,9 @@ const draftCable = computed(() =>
 }
 .diagram-wrap {
   overflow: auto;
+  /* The background of the picture is a handle: press it and drag to move the
+     case around, rather than reaching for the scroll bars. */
+  cursor: grab;
   /* Zoomed in, the diagram is bigger than the page: it scrolls inside its own
      box so the controls above it stay put while patching. */
   max-height: 80vh;
@@ -1066,6 +1130,10 @@ const draftCable = computed(() =>
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.5rem;
+}
+.diagram-wrap.panning {
+  cursor: grabbing;
+  user-select: none;
 }
 .patch-diagram {
   height: auto;
@@ -1134,12 +1202,14 @@ const draftCable = computed(() =>
 }
 .cable {
   fill: none;
-  stroke-width: 5;
+  /* Set on the <svg> from the zoom, so a cable stays hittable when the whole
+     studio is fitted to the page. */
+  stroke-width: var(--cable-width, 7px);
   stroke-linecap: round;
   opacity: 0.85;
 }
 .cable:hover {
-  stroke-width: 8;
+  stroke-width: calc(var(--cable-width, 7px) * 1.5);
   opacity: 1;
 }
 .cable.unpluggable {

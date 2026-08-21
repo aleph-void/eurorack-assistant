@@ -73,13 +73,24 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 // A module and a patch are each a dozen routes over one record. Whichever of
 // them is open says so (stores/detail.js), and the drawer answers with that
 // record's own pages, at the top, above the rest of the app.
+// Every kind of thing on a panel is a page of its own — the jacks by what a
+// cable does at them, the rest by their type. The list of ALL of a module's
+// components is still there; it is just not where you go to find the knobs.
 const MODULE_PAGES = [
   { path: '', label: 'Front panel & summary', exact: true },
   { path: '/jacks/input', label: 'Input jacks' },
   { path: '/jacks/output', label: 'Output jacks' },
   { path: '/jacks/bidirectional', label: 'Bidirectional jacks' },
+  { path: '/parts/knob', label: 'Knobs' },
+  { path: '/parts/slider', label: 'Sliders' },
+  { path: '/parts/button', label: 'Buttons' },
+  { path: '/parts/toggle', label: 'Toggles' },
+  { path: '/parts/switch', label: 'Switches' },
+  { path: '/parts/display', label: 'Displays' },
+  { path: '/parts/other', label: 'Other components' },
   { path: '/components', label: 'Components' },
   { path: '/values', label: 'Component values' },
+  { path: '/parameters', label: 'Menu parameters' },
   { path: '/normalizations', label: 'Normalled connections' },
   { path: '/switches', label: 'Routing switches' },
   { path: '/routes', label: 'Internal signal paths' },

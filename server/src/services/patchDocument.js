@@ -113,8 +113,16 @@ export function patchTextDocument(patch) {
   if (settings.length === 0) {
     lines.push('No control positions recorded — assume nothing about how the controls are set.');
   } else {
+    // Two kinds of thing sit in this list: the position of a control on the
+    // panel, and the value of a MENU PARAMETER — a setting a module keeps
+    // behind an encoder and a screen, which belongs to a jack or to the
+    // module itself rather than to anything you can see. Saying which is
+    // which is the difference between "the knob is at 4" and "output 4 is
+    // set to divide the clock by 4".
     for (const s of settings) {
-      lines.push(`- ${name(s.patch_module_id)} "${s.component_name}": ${s.value}`);
+      const where = s.component_name ? ` "${s.component_name}"` : '';
+      const what = s.parameter_name ? ` menu setting "${s.parameter_name}"` : '';
+      lines.push(`- ${name(s.patch_module_id)}${where}${what}: ${s.value}`);
     }
   }
 

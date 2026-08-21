@@ -6,6 +6,7 @@ import { moduleSignalRoutes } from './signals.js';
 import { moduleExpanderRoutes } from './expanders.js';
 import { moduleBridgeRoutes } from './bridges.js';
 import { moduleComponentRoutes } from './components.js';
+import { moduleParameterRoutes } from './parameters.js';
 import { modulePanelRoutes } from './panel.js';
 import { moduleManualRoutes } from './manuals.js';
 import { moduleVideoRoutes } from './videos.js';
@@ -31,6 +32,7 @@ export function moduleRoutes(
   router.use(moduleExpanderRoutes(db));
   router.use(moduleBridgeRoutes(db));
   router.use(moduleComponentRoutes(db));
+  router.use(moduleParameterRoutes(db));
   router.use(modulePanelRoutes(db, { panelsDir, fetchImpl }));
   router.use(moduleManualRoutes(db, { manualsDir }));
   router.use(moduleVideoRoutes(db, { videosDir, fetchImpl, runImpl }));

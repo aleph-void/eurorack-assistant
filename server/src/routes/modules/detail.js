@@ -4,6 +4,7 @@ import { loadPanels } from '../../services/panelImage.js';
 import { unlinkedExpanderHints } from '../../services/moduleLinks.js';
 import { readableIds } from '../../services/sharing.js';
 import { videoJson } from '../../services/videos.js';
+import { parametersByModule } from '../../services/moduleParameters.js';
 import { requireOwnedModule } from './helpers.js';
 import {
   componentJson,
@@ -77,6 +78,10 @@ export function moduleDetailRoutes(db) {
     const componentsJson = components.map((c) =>
       componentJson(c, { values: valuesByComponent.get(c.id) ?? [] })
     );
+    // The settings the module keeps in its menu rather than under a control
+    // of its own — each one hanging off the jack or knob it configures, or
+    // off nothing at all when it belongs to the whole module.
+    const parameters = (await parametersByModule(db, [module.id])).get(module.id) ?? [];
     // Normalled connections between the module's components (from the
     // manual analysis); target/source ids reference the components above.
     const normalizations = await ComponentNormalization.findAll({
@@ -313,6 +318,7 @@ export function moduleDetailRoutes(db) {
       ...module,
       panel: panels.get(module.id) ?? null,
       components: componentsJson,
+      parameters,
       normalizations: normalizations.map(normalizationJson),
       routes: routes.map(routeJson),
       switches,

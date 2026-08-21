@@ -13,6 +13,7 @@ import {
   FULL_CROP,
   loadPanels,
   normalizeHp,
+  relinkPanelPlacements,
   savePanel,
   trimIncomingPanel,
   trimPanelImage,
@@ -249,6 +250,20 @@ export function modulePanelRoutes(db, { panelsDir, fetchImpl }) {
     }
     const panels = await loadPanels(db, [module.id]);
     res.json({ panel: panels.get(module.id) ?? null });
+  }));
+
+  // Put the markers with nothing behind them right: link each to the
+  // component it names, and drop the ones that duplicate a component already
+  // placed. Such a marker is drawn on the plate but is in none of the lists
+  // and can anchor no cable, which is exactly how it is noticed
+  // (services/panelImage.js).
+  router.post('/:id/panel/relink', requireOwnedModule(db), asyncHandler(async (req, res) => {
+    const module = req.module;
+    const panel = await ModulePanel.findOne({ where: { module_id: module.id } });
+    if (!panel) return res.status(404).json({ error: 'Module has no panel' });
+    const result = await relinkPanelPlacements(db, module.id);
+    const panels = await loadPanels(db, [module.id]);
+    res.json({ ...result, panel: panels.get(module.id) ?? null });
   }));
 
   // Give an analyzed component the panel marker the image-mapping pass missed.

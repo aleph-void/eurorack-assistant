@@ -11,8 +11,9 @@ import LoginView from './views/LoginView.vue';
 const ModulesView = () => import('./views/ModulesView.vue');
 const ModuleDetailView = () => import('./views/ModuleDetailView.vue');
 const ModuleComponentsView = () => import('./views/ModuleComponentsView.vue');
-const ModuleJacksView = () => import('./views/ModuleJacksView.vue');
+const ModuleComponentTypeView = () => import('./views/ModuleComponentTypeView.vue');
 const ModuleValuesView = () => import('./views/ModuleValuesView.vue');
+const ModuleParametersView = () => import('./views/ModuleParametersView.vue');
 const ModuleNormalizationsView = () => import('./views/ModuleNormalizationsView.vue');
 const ModuleSwitchesView = () => import('./views/ModuleSwitchesView.vue');
 const ModuleRoutesView = () => import('./views/ModuleRoutesView.vue');
@@ -72,16 +73,33 @@ export const routes = [
     component: ModuleComponentsView,
     props: true,
   },
-  // A jack is what a cable goes in, so each kind of them is a page of its
-  // own — with the front plate on it, because where a jack SITS on the
-  // picture is the fact the whole patch diagram is built out of.
+  // Every kind of thing on the panel is a page of its own — with the front
+  // plate on it, because where a component SITS on the picture is the fact
+  // the whole patch diagram is built out of. Jacks keep their own path
+  // because a jack is what a cable goes in and the three kinds are named for
+  // that; the controls are addressed by their type.
   {
     path: '/modules/:id/jacks/:kind(input|output|bidirectional)',
     name: 'module-jacks',
-    component: ModuleJacksView,
+    component: ModuleComponentTypeView,
+    props: (to) => ({ id: to.params.id, type: `${to.params.kind}_jack` }),
+  },
+  {
+    path: '/modules/:id/parts/:type(knob|slider|button|toggle|switch|display|other)',
+    name: 'module-parts',
+    component: ModuleComponentTypeView,
     props: true,
   },
   { path: '/modules/:id/values', name: 'module-values', component: ModuleValuesView, props: true },
+  // The settings the module keeps in a MENU rather than under a control of
+  // its own — a menu-driven module's whole personality, and nowhere else to
+  // record it.
+  {
+    path: '/modules/:id/parameters',
+    name: 'module-parameters',
+    component: ModuleParametersView,
+    props: true,
+  },
   {
     path: '/modules/:id/normalizations',
     name: 'module-normalizations',

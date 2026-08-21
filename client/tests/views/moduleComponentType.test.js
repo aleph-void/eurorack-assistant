@@ -16,7 +16,7 @@ vi.mock('vue-router', async (importOriginal) => {
 });
 
 import { api } from '../../src/api.js';
-import ModuleJacksView from '../../src/views/ModuleJacksView.vue';
+import ModuleComponentTypeView from '../../src/views/ModuleComponentTypeView.vue';
 import { refreshRackModules } from '../../src/components/moduledetail/useModuleRecord.js';
 import { mathsModule } from '../moduleFixtures.js';
 
@@ -39,9 +39,19 @@ const jackModule = {
   ],
 };
 
+const openType = async (type) => {
+  api.get.mockResolvedValue(jackModule);
+  const wrapper = mount(ModuleComponentTypeView, { props: { id: '1', type }, global: testGlobal() });
+  await flushPromises();
+  return wrapper;
+};
+
 const open = async (kind) => {
   api.get.mockResolvedValue(jackModule);
-  const wrapper = mount(ModuleJacksView, { props: { id: '1', kind }, global: testGlobal() });
+  const wrapper = mount(ModuleComponentTypeView, {
+    props: { id: '1', type: `${kind}_jack` },
+    global: testGlobal(),
+  });
   await flushPromises();
   return wrapper;
 };
@@ -56,7 +66,7 @@ beforeEach(() => {
 // A jack is what a cable goes in, so where it sits on the picture is the fact
 // the whole patch diagram is built out of: each kind is a page of its own,
 // with the plate on it.
-describe('ModuleJacksView', () => {
+describe('ModuleComponentTypeView', () => {
   it('lists only the inputs on the input page, beside the front plate', async () => {
     const wrapper = await open('input');
     expect(wrapper.find('[data-test="jacks"] h2').text()).toBe('Input jacks');
@@ -74,7 +84,7 @@ describe('ModuleJacksView', () => {
 
   it('lists only the bidirectional jacks on theirs', async () => {
     const wrapper = await open('bidirectional');
-    expect(wrapper.find('[data-test="jacks"] h2').text()).toBe('Bidirectional jacks');
+    expect(wrapper.find('[data-test="jacks"] h2').text()).toBe('Bidirectional jacks (mults)');
     expect(wrapper.find('[data-test="panel-jacks"]').text()).toContain('M1');
   });
 
@@ -115,10 +125,24 @@ describe('ModuleJacksView', () => {
     expect(wrapper.find('[data-test="panel-arrangement-filter"]').text()).toContain('M1');
   });
 
+  // Every component type is a page, not only the three kinds of jack: the
+  // knobs are as much a thing to look at as the inputs, and their markers are
+  // as likely to be in the wrong place.
+  it('gives the controls pages of their own, over the same view', async () => {
+    const knobs = await openType('knob');
+    expect(knobs.find('[data-test="jacks"] h2').text()).toBe('Knobs');
+    expect(knobs.find('[data-test="panel-jacks"]').text()).toContain('Rise');
+    expect(knobs.find('[data-test="panel-jacks"]').text()).not.toContain('Signal In');
+
+    const displays = await openType('display');
+    expect(displays.find('[data-test="jacks"] h2').text()).toBe('Displays');
+    expect(displays.find('[data-test="panel-jacks-empty"]').exists()).toBe(true);
+  });
+
   it('says so rather than offering an arrange with nothing to arrange on', async () => {
     api.get.mockResolvedValue({ ...jackModule, panel: null });
-    const wrapper = mount(ModuleJacksView, {
-      props: { id: '1', kind: 'input' },
+    const wrapper = mount(ModuleComponentTypeView, {
+      props: { id: '1', type: 'input_jack' },
       global: testGlobal(),
     });
     await flushPromises();
