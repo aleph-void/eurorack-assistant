@@ -133,6 +133,56 @@ describe('SystemsView', () => {
     expect(wrapper.find('[data-test="notice"]').text()).toContain('runs in the background');
   });
 
+  it('fills the gaps for a whole system in one sweep', async () => {
+    api.get.mockResolvedValue(systemsResponse);
+    api.post.mockResolvedValue({
+      modules: 9,
+      queued: { find_manual: 2, analyze_manual: 1, panel_image: 0, extract_manual: 0, describe_components: 3 },
+      skipped: 1,
+      complete: 3,
+    });
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    // A system with no modules has nothing to fill in.
+    expect(wrapper.find('[data-test="fill-gaps-2"]').attributes('disabled')).toBeDefined();
+
+    await wrapper.find('[data-test="fill-gaps-1"]').trigger('click');
+    await flushPromises();
+    expect(confirm.mock.calls[0][0].message).toContain("every module in 'studio'");
+    expect(api.post).toHaveBeenCalledWith('/api/modules/reanalyze', { system_id: 1 });
+    const notice = wrapper.find('[data-test="notice"]').text();
+    expect(notice).toContain('Queued 6 job(s)');
+    expect(notice).toContain('3 of 9 module(s) already complete');
+    expect(notice).toContain('1 already had one waiting');
+  });
+
+  it('says so when a system has no gaps left to fill', async () => {
+    api.get.mockResolvedValue(systemsResponse);
+    api.post.mockResolvedValue({
+      modules: 9,
+      queued: { find_manual: 0, analyze_manual: 0, panel_image: 0, extract_manual: 0, describe_components: 0 },
+      skipped: 0,
+      complete: 9,
+    });
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="fill-gaps-1"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="notice"]').text()).toContain('Nothing to queue');
+  });
+
+  it('queues nothing when the fill-in is not confirmed', async () => {
+    api.get.mockResolvedValue(systemsResponse);
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="fill-gaps-1"]').trigger('click');
+    await flushPromises();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
   it('leaves the panels alone when the trim is not confirmed', async () => {
     api.get.mockResolvedValue(systemsResponse);
     vi.spyOn(dialog, 'confirm').mockResolvedValue(false);

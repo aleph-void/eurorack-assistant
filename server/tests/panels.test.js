@@ -1596,6 +1596,37 @@ describe('filling in what modules are missing', () => {
     expect((await reanalyze({ rack_id: adminRack.id })).status).toBe(404);
   });
 
+  it('narrows to one system: every rack standing in it, and only your own', async () => {
+    // Two racks in the studio system, one loose case that is not part of it.
+    await insertModule(ctx.db, alice.id, { name: 'Maths', rack: 'left case', manual_hash: PDF_HASH });
+    await insertModule(ctx.db, alice.id, { name: 'Rene', rack: 'right case', manual_hash: PDF_HASH });
+    await insertModule(ctx.db, alice.id, { name: 'Wogglebug', rack: 'travel case', manual_hash: PDF_HASH });
+    const system = await ctx.db.models.System.create({ user_id: alice.id, name: 'studio' });
+    await ctx.db.models.Rack.update(
+      { system_id: system.id },
+      { where: { user_id: alice.id, name: ['left case', 'right case'] } }
+    );
+
+    const res = await reanalyze({ system_id: system.id });
+    expect(res.status).toBe(200);
+    expect(res.body.modules).toBe(2);
+
+    // A rack of the system narrows further; a rack outside it matches nothing.
+    const left = await ctx.db.models.Rack.findOne({
+      where: { user_id: alice.id, name: 'left case' },
+    });
+    const travel = await ctx.db.models.Rack.findOne({
+      where: { user_id: alice.id, name: 'travel case' },
+    });
+    expect((await reanalyze({ system_id: system.id, rack_id: left.id })).body.modules).toBe(1);
+    expect((await reanalyze({ system_id: system.id, rack_id: travel.id })).body.modules).toBe(0);
+
+    // Someone else's system is not there to sweep.
+    const admin = await ctx.db.models.User.findOne({ where: { username: 'admin' } });
+    const theirs = await ctx.db.models.System.create({ user_id: admin.id, name: 'their studio' });
+    expect((await reanalyze({ system_id: theirs.id })).status).toBe(404);
+  });
+
   it('leaves another user\'s modules alone', async () => {
     const admin = await ctx.db.models.User.findOne({ where: { username: 'admin' } });
     await insertModule(ctx.db, admin.id, { name: 'Wogglebug', manual_hash: PDF_HASH });

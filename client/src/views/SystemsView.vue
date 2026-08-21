@@ -123,6 +123,49 @@ async function trimPanels(system) {
   }
 }
 
+// Fill in what the pipeline never worked out, for a whole instrument at
+// once. The same sweep the modules page runs (POST /api/modules/reanalyze),
+// scoped to the racks standing in this system — which is the unit a studio is
+// actually filled in at: a rack at a time means remembering which of the six
+// cases the missing manuals were in. Only gaps are queued, so a module that
+// already has everything costs nothing and nothing done by hand is
+// overwritten. The two escape hatches that DO redo finished work
+// (re-discovering manuals, rebuilding every panel) stay on the modules page,
+// where the rack they apply to is in front of you.
+const filling = ref(null);
+async function fillGaps(system) {
+  const ok = await dialog.confirm({
+    title: 'Fill in missing details',
+    message:
+      `Queue work for every module in '${system.name}' that is missing a manual, an ` +
+      'analysis, a panel image, an HP width, the searchable text of its manual, ' +
+      'descriptions for components added by hand, or a reading of its menu parameters — ' +
+      'the settings a module keeps behind an encoder rather than under a knob? Modules ' +
+      'that already have all of it are left alone.',
+    confirmLabel: 'Fill in',
+  });
+  if (!ok) return;
+  error.value = '';
+  notice.value = '';
+  filling.value = system.id;
+  try {
+    const res = await api.post('/api/modules/reanalyze', { system_id: system.id });
+    const queued = Object.values(res.queued).reduce((sum, n) => sum + n, 0);
+    const complete = `${res.complete} of ${res.modules} module(s) already complete`;
+    notice.value =
+      queued === 0
+        ? `Nothing to queue for '${system.name}' — ${complete}` +
+          (res.skipped ? `, and ${res.skipped} already had a job waiting.` : '.')
+        : `Queued ${queued} job(s) for '${system.name}' — ${complete}` +
+          (res.skipped ? `; ${res.skipped} already had one waiting.` : '.') +
+          ' Progress is on the Jobs page.';
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    filling.value = null;
+  }
+}
+
 async function openPlan(system, { force = false } = {}) {
   if (!force && openId.value === system.id) {
     openId.value = null;
@@ -452,6 +495,19 @@ async function assign(rackId, systemId) {
                   @click="startRename(system)"
                 >
                   Rename
+                </button>
+                <button
+                  class="secondary"
+                  :disabled="system.module_count === 0 || filling === system.id"
+                  :title="
+                    system.module_count === 0
+                      ? 'This system has no modules to fill in'
+                      : 'Queue the missing manuals, analyses and panels for this system'
+                  "
+                  :data-test="`fill-gaps-${system.id}`"
+                  @click="fillGaps(system)"
+                >
+                  {{ filling === system.id ? 'Queueing…' : 'Fill in gaps' }}
                 </button>
                 <button
                   class="secondary"

@@ -24,6 +24,7 @@ export function moduleCoreRoutes(db, { manualsDir }) {
     Note,
     NoteModule,
     NoteComponent,
+    System,
   } = db.models;
   const router = Router();
 
@@ -85,7 +86,11 @@ export function moduleCoreRoutes(db, { manualsDir }) {
   // made by hand, so it only happens through the explicit escape hatches
   // below (or the per-module re-analysis buttons).
   //
-  // Body: { rack_id?, rediscover_manuals?: boolean, rebuild_panels?: boolean }.
+  // Body: { rack_id?, system_id?, rediscover_manuals?, rebuild_panels? }. The
+  // sweep is scoped to one rack, to every rack standing in one SYSTEM — the
+  // whole instrument, which is the unit a studio is actually filled in at —
+  // or, with neither, to all of the user's racks. Both at once narrows to
+  // that rack within that system.
   // Re-discovery is off by default: a module missing its analysis usually has
   // a usable manual on disk already, and searching for it again costs a web
   // search. Turning it on sends those modules back to the search first — the
@@ -105,6 +110,13 @@ export function moduleCoreRoutes(db, { manualsDir }) {
   // an early gap fills the later ones behind it without queueing them here.
   router.post('/reanalyze', requireBudget(db), asyncHandler(async (req, res) => {
     const rackWhere = { user_id: req.user.id };
+    if (req.body?.system_id) {
+      const system = await System.findOne({
+        where: { id: Number(req.body.system_id), user_id: req.user.id },
+      });
+      if (!system) return res.status(404).json({ error: 'System not found' });
+      rackWhere.system_id = system.id;
+    }
     if (req.body?.rack_id) {
       const rack = await Rack.findOne({
         where: { id: Number(req.body.rack_id), user_id: req.user.id },
