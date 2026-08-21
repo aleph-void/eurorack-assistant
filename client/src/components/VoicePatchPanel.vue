@@ -12,8 +12,9 @@
 // what it thinks it heard and waits, and the tone it plays for that is not the
 // tone it plays for a cable going in.
 
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { api } from '../api.js';
+import { toast } from '../toast.js';
 import {
   createSpeechInput,
   engineAvailability,
@@ -77,11 +78,57 @@ function saveSettings() {
 // switched on gets two microphones opened on the way in.
 loadSettings();
 const available = ref(engineAvailability());
-if (!available.value[settings.engine])
-  settings.engine = available.value.webspeech ? 'webspeech' : 'whisper';
 
+// Why this browser cannot run each engine, said in terms of what to do about
+// it. The answer is a different one for each: Firefox has no recogniser of its
+// own, and a page served over plain HTTP is never handed a microphone.
+const ENGINE_REFUSALS = {
+  webspeech:
+    'This browser has no speech recognition of its own. Chrome and Edge do; Firefox does not. ' +
+    'Local Whisper runs anywhere a microphone does.',
+  whisper:
+    'This browser will not hand over a microphone here, and Whisper needs one to listen. A page ' +
+    'served over plain HTTP cannot ask for it — reach this app over HTTPS or localhost.',
+};
+
+const engineLabel = (value) => ENGINES.find((e) => e.value === value)?.label || value;
+const workingEngine = () => ENGINES.map((e) => e.value).find((v) => available.value[v]) || null;
+
+// A setting restored from a browser that cannot run it is quietly moved to one
+// that can: nothing has been asked for yet, so there is nothing to report.
+if (!available.value[settings.engine]) settings.engine = workingEngine() || settings.engine;
+
+// Both engines are always on offer. An engine this browser cannot run used to
+// be a greyed-out line, which says "no" without ever saying why — and the why
+// is the whole of what is useful here. So it can be picked, and picking it
+// explains itself.
 const engineOptions = computed(() =>
-  ENGINES.map((e) => ({ ...e, disabled: !available.value[e.value] }))
+  ENGINES.map((e) => ({ ...e, available: available.value[e.value] }))
+);
+
+// Choosing an engine this browser cannot run. Said twice — over the page,
+// because the choice is made in a fold of settings that is easy to look away
+// from, and inline beside the picker that was just used.
+watch(
+  () => settings.engine,
+  (engine, previous) => {
+    if (available.value[engine]) return;
+    const refusal = `${engineLabel(engine)} is not available in this browser. ${ENGINE_REFUSALS[engine]}`;
+    toast.error(refusal);
+    say(refusal, 'error');
+    // Back to whichever engine does work — the one just left if it still does,
+    // otherwise the other one. If neither runs here the choice stands, since
+    // moving it would only be swapping one refusal for the other.
+    //
+    // Put back on the NEXT tick, not this one: a <select> that is corrected
+    // inside the same turn as the change event keeps the option the pointer
+    // landed on (Vue holds the element while it is assigning), and the picker
+    // would then disagree with the engine actually running. A tick later it
+    // snaps back, which is also the honest picture — the choice was taken and
+    // then refused.
+    const fallback = available.value[previous] ? previous : workingEngine();
+    if (fallback) nextTick(() => { settings.engine = fallback; });
+  }
 );
 
 // The browser's recogniser is present but its service is out of reach — the
@@ -294,7 +341,13 @@ function build() {
       handle(trimmed, readings);
     },
     onError: (text, code) => {
-      if (ENGINE_UNUSABLE.includes(code)) engineUnreachable.value = true;
+      // An engine that cannot reach its service will fail this way every time,
+      // not once, so it is worth saying over the page as well as beside the
+      // picker. Repeats count up on the toast already there.
+      if (ENGINE_UNUSABLE.includes(code)) {
+        engineUnreachable.value = true;
+        toast.error(text);
+      }
       sounds?.failure(text);
       say(text, 'error');
     },
@@ -430,8 +483,8 @@ const bindingText = computed(() =>
         <div>
           <label for="voice-engine">Recognition</label>
           <select id="voice-engine" v-model="settings.engine" data-test="voice-engine">
-            <option v-for="option in engineOptions" :key="option.value" :value="option.value" :disabled="option.disabled">
-              {{ option.label }}{{ option.disabled ? ' — not available here' : '' }}
+            <option v-for="option in engineOptions" :key="option.value" :value="option.value">
+              {{ option.label }}{{ option.available ? '' : ' — not available here' }}
             </option>
           </select>
         </div>

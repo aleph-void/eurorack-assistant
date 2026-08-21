@@ -7,6 +7,7 @@ vi.mock('../src/api.js', () => ({
 }));
 
 import { api } from '../src/api.js';
+import { toast } from '../src/toast.js';
 import VoicePatchPanel from '../src/components/VoicePatchPanel.vue';
 
 // The panel builds its own recogniser out of whatever the browser offers, so
@@ -256,6 +257,55 @@ describe('VoicePatchPanel', () => {
     const wrapper = await open();
     const engines = wrapper.find('[data-test="voice-engine"]').findAll('option');
     expect(engines.map((o) => o.element.value)).toEqual(['webspeech', 'whisper']);
+    // Both are always pickable. jsdom hands over no microphone, so Whisper
+    // says so in its own line rather than being greyed out without a reason.
+    expect(engines.map((o) => o.attributes('disabled'))).toEqual([undefined, undefined]);
+    expect(engines[1].text()).toContain('not available here');
+  });
+
+  // A greyed-out line says "no" without ever saying why, and the why is
+  // different for each engine. So either can be picked, and picking one this
+  // browser cannot run explains itself — over the page as well as beside the
+  // picker, because settings are a fold that is easy to look away from.
+  it('says why an engine this browser cannot run cannot be chosen, and stays on one that works', async () => {
+    const errored = vi.spyOn(toast, 'error').mockImplementation(() => {});
+    const wrapper = mount(VoicePatchPanel, {
+      props: { patchId: '7', fromCandidates, toCandidates },
+      global: testGlobal(),
+    });
+
+    await wrapper.find('[data-test="voice-engine"]').setValue('whisper');
+    await flushPromises();
+
+    expect(errored).toHaveBeenCalledTimes(1);
+    expect(errored.mock.calls[0][0]).toContain('will not hand over a microphone');
+    expect(wrapper.find('[data-test="voice-message"]').text()).toContain('HTTPS or localhost');
+    // The choice does not stick: the picker goes back to the engine that runs.
+    expect(wrapper.find('[data-test="voice-engine"]').element.value).toBe('webspeech');
+    wrapper.unmount();
+  });
+
+  it('says the other half of it in a browser with no recogniser of its own', async () => {
+    const errored = vi.spyOn(toast, 'error').mockImplementation(() => {});
+    delete window.SpeechRecognition;
+    delete window.webkitSpeechRecognition;
+    navigator.mediaDevices = { getUserMedia: vi.fn() };
+
+    const wrapper = mount(VoicePatchPanel, {
+      props: { patchId: '7', fromCandidates, toCandidates },
+      global: testGlobal(),
+    });
+    // Nothing has been asked for yet, so the saved setting is moved quietly.
+    expect(wrapper.find('[data-test="voice-engine"]').element.value).toBe('whisper');
+    expect(errored).not.toHaveBeenCalled();
+
+    await wrapper.find('[data-test="voice-engine"]').setValue('webspeech');
+    await flushPromises();
+
+    expect(errored.mock.calls[0][0]).toContain('Chrome and Edge do; Firefox does not');
+    expect(wrapper.find('[data-test="voice-engine"]').element.value).toBe('whisper');
+    delete navigator.mediaDevices;
+    wrapper.unmount();
   });
 
   // A self-hosted box usually runs a Chromium with no key for Google's speech
@@ -265,11 +315,15 @@ describe('VoicePatchPanel', () => {
     const wrapper = await open();
     expect(wrapper.find('[data-test="voice-use-whisper"]').exists()).toBe(false);
 
+    const errored = vi.spyOn(toast, 'error').mockImplementation(() => {});
     recognisers.at(-1).onerror({ error: 'network' });
     await flushPromises();
     expect(wrapper.find('[data-test="voice-message"]').text()).toContain(
       'could not reach its speech service'
     );
+    // An engine that cannot reach its service fails that way every time, so
+    // it is worth saying over the page too.
+    expect(errored.mock.calls[0][0]).toContain('could not reach its speech service');
 
     // jsdom has no getUserMedia, so Whisper is not on offer here — the button
     // only appears where it could actually be taken.
