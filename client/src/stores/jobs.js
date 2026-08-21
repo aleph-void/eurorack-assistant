@@ -25,6 +25,13 @@ export const useJobsStore = defineStore('jobs', {
     jobs: [],
     feed: [], // recent progress lines, newest first
     feedLimit: 200,
+    // How many jobs have ENDED since the page opened. A page that re-reads
+    // itself when background work changes its data watches this rather than
+    // the feed: a rack import is a running commentary of hundreds of progress
+    // lines, and a list that reloaded on each of them spent a whole import
+    // fetching itself twice a second for news that only arrives when a job
+    // finishes.
+    finished: 0,
     // The queue stops itself when the LLM provider reports the subscription
     // is out of tokens; `until` is when it will start again on its own.
     queue: { paused: false, until: null, reason: '' },
@@ -173,6 +180,7 @@ export const useJobsStore = defineStore('jobs', {
       } else if (event.event === 'failed') {
         toast.error(event.job.error || event.message || 'Failed.', { title: jobHeadline(event.job) });
       }
+      if (event.event === 'completed' || event.event === 'failed') this.finished += 1;
       // A finished rack export downloads itself; the server deletes the zip
       // once it has been served, so the link in the job row goes stale after.
       if (event.event === 'completed' && event.job.type === 'export_rack' && event.job.download) {

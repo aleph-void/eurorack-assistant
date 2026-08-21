@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { testGlobal } from '../setup.js';
+import { testGlobal, openRackRows } from '../setup.js';
 import { clearToasts, toastState } from '../../src/toast.js';
 
 vi.mock('../../src/api.js', () => ({
@@ -75,6 +75,7 @@ describe('RacksView', () => {
     await flushPromises();
     await wrapper.find('[data-test="organize-1"]').trigger('click');
     await flushPromises();
+    await openRackRows(wrapper);
     const row = wrapper.find('[data-test="rack-row-0"]');
     expect(row.find('img').attributes('src')).toBe('/api/panels/arp.svg');
     expect(row.find('.placed-module').attributes('style')).toContain('--module-hp: 2');
@@ -104,6 +105,7 @@ describe('RacksView', () => {
     await flushPromises();
     await wrapper.find('[data-test="organize-1"]').trigger('click');
     await flushPromises();
+    await openRackRows(wrapper);
 
     // A row is as tall as its unit count; a module as wide as its HP. Both
     // come from the same scale, so the panels keep their real proportions.
@@ -126,13 +128,20 @@ describe('RacksView', () => {
   const mouse = (type, clientX = 0, clientY = 0) =>
     window.dispatchEvent(new MouseEvent(type, { clientX, clientY, bubbles: true, cancelable: true }));
 
+  // Aiming is throttled to one frame (the organizer redraws every module in
+  // every row, and measures every slot in the row, each time it happens), so
+  // a gesture that would be several frames of a real drag needs the frames.
+  const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
   async function pickUp(source, clientX = 0, clientY = 0) {
     await source.trigger('mousedown', { button: 0, clientX, clientY });
     mouse('mousemove', clientX + 20, clientY);
+    await frame();
   }
 
   async function dropAt(clientX = 0, clientY = 0) {
     mouse('mousemove', clientX, clientY);
+    await frame();
     mouse('mouseup', clientX, clientY);
     await flushPromises();
   }
@@ -154,6 +163,7 @@ describe('RacksView', () => {
     await flushPromises();
     await wrapper.find('[data-test="organize-1"]').trigger('click');
     await flushPromises();
+    await openRackRows(wrapper);
     over(wrapper.find('[data-test="rack-row-0"] .rack-row-slots').element);
     await pickUp(wrapper.find('[data-test="available-module-4-0"]'));
     await dropAt(40, 10);
@@ -215,7 +225,10 @@ describe('RacksView', () => {
     }
   }
 
-  async function openReorderable(attachTo) {
+  // `rows: false` leaves every row folded, which is how the organizer opens
+  // and what the collapsing tests are about. Everything else works IN a row,
+  // so it opens them the way a person would.
+  async function openReorderable(attachTo, { rows = true } = {}) {
     const detail = reorderableDetail();
     api.get.mockImplementation((path) =>
       Promise.resolve(path === '/api/racks' ? racksResponse : reorderableDetail())
@@ -225,6 +238,7 @@ describe('RacksView', () => {
     await flushPromises();
     await wrapper.find('[data-test="organize-1"]').trigger('click');
     await flushPromises();
+    if (rows) await openRackRows(wrapper);
     return wrapper;
   }
 
@@ -241,6 +255,7 @@ describe('RacksView', () => {
     over(slots.element);
     await pickUp(wrapper.find('[data-test="placed-module-0-2"]'), 200);
     mouse('mousemove', 30, 10);
+    await frame();
     await flushPromises();
     expect(wrapper.find('[data-test="placed-module-0-1"]').classes()).toContain('drop-before');
     // The slot the module came out of stays in the row, dimmed, so the row
@@ -360,6 +375,7 @@ describe('RacksView', () => {
     await flushPromises();
     await wrapper.find('[data-test="organize-1"]').trigger('click');
     await flushPromises();
+    await openRackRows(wrapper);
 
     // Adding a row is enough to try a save, and it is stopped before the wire.
     await wrapper.find('[data-test="add-1u-row"]').trigger('click');
@@ -406,6 +422,7 @@ describe('RacksView', () => {
     await flushPromises();
     await wrapper.find('[data-test="organize-1"]').trigger('click');
     await flushPromises();
+    await openRackRows(wrapper);
 
     over(wrapper.find('[data-test="rack-row-0"] .rack-row-slots').element);
     await pickUp(wrapper.find('[data-test="available-module-5-0"]'));
@@ -532,6 +549,7 @@ describe('RacksView', () => {
     await flushPromises();
     await wrapper.find('[data-test="organize-1"]').trigger('click');
     await flushPromises();
+    await openRackRows(wrapper);
 
     const markers = wrapper.findAll('[data-test="placed-module-0-0"] .panel-marker');
     expect(markers).toHaveLength(3);
@@ -579,6 +597,7 @@ describe('RacksView', () => {
     await flushPromises();
     await wrapper.find('[data-test="organize-1"]').trigger('click');
     await flushPromises();
+    await openRackRows(wrapper);
     return wrapper;
   }
 
@@ -652,22 +671,26 @@ describe('RacksView', () => {
   });
 
   it('opens the organizer with every row collapsed, and expands one on demand', async () => {
-    const wrapper = await openReorderable();
+    const wrapper = await openReorderable(undefined, { rows: false });
     const strip = () => wrapper.find('[data-test="rack-row-0"] .rack-row-slots');
     const toggle = () => wrapper.find('[data-test="row-collapse-0"]');
     const hidden = () => (strip().attributes('style') || '').includes('display: none');
-    // Folded away on load, but still in the DOM (v-show), and nothing was
-    // saved: collapsing is view state, not layout.
-    expect(strip().exists()).toBe(true);
-    expect(hidden()).toBe(true);
+    // A row nobody has opened is not BUILT: hiding it would still have
+    // downloaded every panel picture in it. Nothing was saved either —
+    // collapsing is view state, not layout.
+    expect(strip().exists()).toBe(false);
     expect(toggle().attributes('aria-expanded')).toBe('false');
     expect(api.put).not.toHaveBeenCalled();
 
     await toggle().trigger('click');
+    expect(strip().exists()).toBe(true);
     expect(hidden()).toBe(false);
     expect(toggle().attributes('aria-expanded')).toBe('true');
 
+    // Folded again it STAYS built: closing and reopening is instant, and
+    // nothing in it has to be fetched twice.
     await toggle().trigger('click');
+    expect(strip().exists()).toBe(true);
     expect(hidden()).toBe(true);
     expect(api.put).not.toHaveBeenCalled();
   });
@@ -675,7 +698,7 @@ describe('RacksView', () => {
   // Every save re-creates the rack's rows with new ids, so a collapsed row
   // that was identified by its id sprang open again after each drop.
   it('keeps a row collapsed across a layout save', async () => {
-    const wrapper = await openReorderable();
+    const wrapper = await openReorderable(undefined, { rows: false });
     const collapsed = (index) =>
       wrapper.find(`[data-test="row-collapse-${index}"]`).attributes('aria-expanded') === 'false';
     expect(collapsed(0)).toBe(true);
@@ -691,7 +714,7 @@ describe('RacksView', () => {
 
   // The flags follow the rows they belong to when one above them goes.
   it('moves a collapsed state up when the row above it is removed', async () => {
-    const wrapper = await openReorderable();
+    const wrapper = await openReorderable(undefined, { rows: false });
     const collapsed = (index) =>
       wrapper.find(`[data-test="row-collapse-${index}"]`).attributes('aria-expanded') === 'false';
     await wrapper.find('[data-test="add-1u-row"]').trigger('click');
@@ -708,7 +731,7 @@ describe('RacksView', () => {
 
   // Adding a row to a case that is 84HP wide should not have to be corrected
   // to 84HP every time.
-  async function organizerWithRows(rows) {
+  async function organizerWithRows(rows, { open = true } = {}) {
     api.get.mockImplementation((path) => {
       if (path === '/api/racks') return Promise.resolve(racksResponse);
       return Promise.resolve({ id: 1, name: 'main rack', modules: [], rows });
@@ -718,19 +741,52 @@ describe('RacksView', () => {
     await flushPromises();
     await wrapper.find('[data-test="organize-1"]').trigger('click');
     await flushPromises();
+    if (open) await openRackRows(wrapper);
     return wrapper;
   }
 
   const addedRow = () => api.put.mock.calls[0][1].rows.at(-1);
 
   it('collapses every row of a multi-row rack on load', async () => {
-    const wrapper = await organizerWithRows([
-      { id: 9, unit: 3, hp: 84, modules: [] },
-      { id: 10, unit: 1, hp: 84, modules: [] },
-    ]);
+    const wrapper = await organizerWithRows(
+      [
+        { id: 9, unit: 3, hp: 84, modules: [] },
+        { id: 10, unit: 1, hp: 84, modules: [] },
+      ],
+      { open: false }
+    );
     const toggles = wrapper.findAll('[data-test^="row-collapse-"]');
     expect(toggles).toHaveLength(2);
     for (const toggle of toggles) expect(toggle.attributes('aria-expanded')).toBe('false');
+  });
+
+  // A stored panel is the multi-megabyte file the manufacturer published, and
+  // a rack is two hundred of them: each is asked for at the size it is drawn,
+  // and one in a row nobody has scrolled to is not fetched at all.
+  it('asks for each panel at the size it is drawn, and lazily', async () => {
+    const detail = {
+      id: 1,
+      name: 'main rack',
+      modules: [{ id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, quantity: 2, panel: { url: '/api/panels/arp.png', crop: { x: 0, y: 0, w: 1, h: 1 } } }],
+      rows: [{ id: 9, unit: 3, hp: 84, modules: [{ module_id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, panel: { url: '/api/panels/arp.png', crop: { x: 0, y: 0, w: 1, h: 1 } } }] }],
+    };
+    api.get.mockImplementation((path) => Promise.resolve(path === '/api/racks' ? racksResponse : detail));
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="organize-1"]').trigger('click');
+    await flushPromises();
+    await openRackRows(wrapper);
+
+    const placed = wrapper.find('[data-test="placed-module-0-0"] img');
+    // 2HP drawn at 9px per HP is 18px wide: the smallest rendition, not the
+    // 512px one every panel used to be asked for.
+    expect(placed.attributes('src')).toBe('/api/panels/arp.png?w=128');
+    expect(placed.attributes('loading')).toBe('lazy');
+    expect(placed.attributes('decoding')).toBe('async');
+    // The inventory chip is drawn smaller still, and asks for no more.
+    const chip = wrapper.find('.module-chip img');
+    expect(chip.attributes('src')).toBe('/api/panels/arp.png?w=128');
+    expect(chip.attributes('loading')).toBe('lazy');
   });
 
   it('starts a new row at the width the rack is already built to', async () => {

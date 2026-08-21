@@ -22,7 +22,12 @@ import { api } from '../../src/api.js';
 import { dialog } from '../../src/dialog.js';
 import PatchDetailView from '../../src/views/PatchDetailView.vue';
 import PatchDiagram from '../../src/components/PatchDiagram.vue';
-import { krellPatch, systemPatch as systemPatchFixture } from '../patchFixtures.js';
+import { componentColor } from '../../src/componentTypes.js';
+import {
+  krellPatch,
+  switchPatch,
+  systemPatch as systemPatchFixture,
+} from '../patchFixtures.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -203,5 +208,105 @@ describe('PatchDetailView system patches', () => {
     await flushPromises();
     await openPanels(wrapper);
     expect(wrapper.find('[data-test="snapshot-note"]').text()).toContain("rack 'left case'");
+  });
+});
+
+// A routing switch runs ONE way, and either end of it can be the cable that
+// says which. Reading only the arriving end left a common patched ONWARD —
+// four steps feeding one output, the many-to-one half of what a switch is
+// for — with every jack of the section still drawn as undecided.
+describe('PatchDetailView switch sections', () => {
+  const COLOURS = {
+    input: componentColor('input_jack'),
+    output: componentColor('output_jack'),
+    both: componentColor('bidirectional_jack'),
+  };
+
+  async function draw(cables) {
+    api.get.mockResolvedValue({ ...switchPatch, cables });
+    const wrapper = mount(PatchDetailView, { props: { id: '9' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+    return (pm, component) =>
+      wrapper.find(`[data-test="diagram-jack-${pm}-${component}"]`).attributes('fill');
+  }
+
+  it('leaves an unpatched section bidirectional at both ends', async () => {
+    const fill = await draw([]);
+    expect(fill(40, 80)).toBe(COLOURS.both);
+    expect(fill(40, 81)).toBe(COLOURS.both);
+  });
+
+  it('points the section common → steps when the common is fed', async () => {
+    const fill = await draw([
+      {
+        id: 1,
+        from_patch_module_id: 41,
+        from_component_id: 91,
+        from_component_name: 'Out',
+        to_patch_module_id: 40,
+        to_component_id: 80,
+        to_component_name: 'I/O',
+      },
+    ]);
+    expect(fill(40, 80)).toBe(COLOURS.input);
+    for (const step of [81, 82, 83, 84]) expect(fill(40, step)).toBe(COLOURS.output);
+  });
+
+  it('points the section steps → common when the common is patched onward', async () => {
+    const fill = await draw([
+      {
+        id: 1,
+        from_patch_module_id: 40,
+        from_component_id: 80,
+        from_component_name: 'I/O',
+        to_patch_module_id: 41,
+        to_component_id: 90,
+        to_component_name: 'In',
+      },
+    ]);
+    expect(fill(40, 80)).toBe(COLOURS.output);
+    for (const step of [81, 82, 83, 84]) expect(fill(40, step)).toBe(COLOURS.input);
+  });
+
+  it('points the section the same way when a step is patched onward instead', async () => {
+    const fill = await draw([
+      {
+        id: 1,
+        from_patch_module_id: 40,
+        from_component_id: 82,
+        from_component_name: '2',
+        to_patch_module_id: 41,
+        to_component_id: 90,
+        to_component_name: 'In',
+      },
+    ]);
+    expect(fill(40, 80)).toBe(COLOURS.input);
+    for (const step of [81, 82, 83, 84]) expect(fill(40, step)).toBe(COLOURS.output);
+  });
+
+  it('says nothing when the section is driven at both ends', async () => {
+    const fill = await draw([
+      {
+        id: 1,
+        from_patch_module_id: 41,
+        from_component_id: 91,
+        from_component_name: 'Out',
+        to_patch_module_id: 40,
+        to_component_id: 80,
+        to_component_name: 'I/O',
+      },
+      {
+        id: 2,
+        from_patch_module_id: 41,
+        from_component_id: 91,
+        from_component_name: 'Out',
+        to_patch_module_id: 40,
+        to_component_id: 81,
+        to_component_name: '1',
+      },
+    ]);
+    expect(fill(40, 80)).toBe(COLOURS.both);
+    expect(fill(40, 81)).toBe(COLOURS.both);
   });
 });

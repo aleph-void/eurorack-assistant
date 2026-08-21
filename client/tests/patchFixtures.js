@@ -358,3 +358,64 @@ export const systemPatch = {
     { id: 101, rack_id: 11, rack_name: 'right case', unit: 3, hp: 84, modules: [12] },
   ],
 };
+
+// A routing switch patched at ONE end, so the picture has to decide which way
+// the section runs. A switch selects one of its steps rather than copying to
+// all of them, and either end of it can be the cable that says which way:
+// the cables are added per test.
+export const switchPatch = {
+  id: 9,
+  name: 'Sequential',
+  description: null,
+  rack_id: 1,
+  rack_name: 'main rack',
+  created_at: '2026-08-20T10:00:00Z',
+  modules: [
+    {
+      id: 40,
+      module_id: 9,
+      manufacturer: 'Doepfer',
+      module_name: 'A-151',
+      instance: 1,
+      live: true,
+      components: [
+        { id: 80, type: 'bidirectional_jack', name: 'I/O', group_label: null, values: [] },
+        { id: 81, type: 'bidirectional_jack', name: '1', group_label: null, values: [] },
+        { id: 82, type: 'bidirectional_jack', name: '2', group_label: null, values: [] },
+        { id: 83, type: 'bidirectional_jack', name: '3', group_label: null, values: [] },
+        { id: 84, type: 'bidirectional_jack', name: '4', group_label: null, values: [] },
+      ],
+    },
+    {
+      id: 41,
+      module_id: 10,
+      manufacturer: 'Mutable',
+      module_name: 'Ripples',
+      instance: 1,
+      live: true,
+      components: [
+        { id: 90, type: 'input_jack', name: 'In', values: [] },
+        { id: 91, type: 'output_jack', name: 'Out', values: [] },
+      ],
+    },
+  ],
+  cables: [],
+  switches: [
+    {
+      common_patch_module_id: 40,
+      common_component_id: 80,
+      common_component_name: 'I/O',
+      steps: [81, 82, 83, 84].map((id) => ({
+        patch_module_id: 40,
+        component_id: id,
+        component_name: String(id - 80),
+      })),
+    },
+  ],
+  settings: [],
+  normalizations: [],
+  groups: [],
+  links: [],
+  pairs: [],
+  flow: [],
+};

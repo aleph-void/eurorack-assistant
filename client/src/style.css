@@ -1237,3 +1237,123 @@ button.linklike:hover {
     font-size: 1rem;
   }
 }
+
+/* ---- patching by voice ----------------------------------------------- */
+
+/* The voice listener is mounted once over the whole app and switched on under
+   the account, so what it draws is a bar rather than a panel on a page: it
+   appears the moment a patch diagram is open and goes away with it. It sits
+   at the bottom, where a hand reaching for the case is not over it, and above
+   the page but below the toasts — a refused cable is news, and this is a
+   readout. */
+.voice-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 0.75rem;
+  transform: translateX(-50%);
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  width: min(56rem, calc(100vw - 1.5rem));
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--border-strong);
+  border-left: 5px solid var(--accent);
+  border-radius: 9px;
+  background: var(--panel-2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+/* The whole point of the button is that it can be found without looking, so
+   it keeps its size while everything beside it gives way. */
+.voice-bar .voice-talk {
+  margin: 0;
+  flex: 0 0 auto;
+}
+.voice-said {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+/* Four lines of readout in the height of one control: what it is doing, what
+   it heard, and what came of it. */
+.voice-line {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.voice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  flex: 0 1 auto;
+}
+.voice-actions button {
+  margin: 0;
+}
+.voice-settings-link {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+/* ---- the front plate and the jacks on it ----------------------------- */
+
+/* Putting a marker right means looking at the photograph and dragging the
+   marker onto the socket it names, so the picture and the list of what could
+   be dragged are one block: the plate as wide as it wants to be, the rows
+   beside it on a wide screen and under it on a narrow one. */
+.panel-jacks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.panel-jacks-plate {
+  flex: 1 1 22rem;
+  min-width: 0;
+}
+.panel-jacks-list {
+  flex: 1 1 16rem;
+  min-width: 0;
+  /* A module with sixty jacks must not push the picture off the screen. */
+  max-height: 34rem;
+  overflow-y: auto;
+}
+.jack-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.jack-rows li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.jack-rows li:last-child {
+  border-bottom: 0;
+}
+/* The type's own colour, the same one its marker is drawn in — so a row and
+   the dot on the plate are recognisably the same thing. */
+.jack-swatch {
+  flex: 0 0 auto;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+}
+.jack-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.jack-name em {
+  font-style: normal;
+  font-size: 0.8rem;
+  margin-left: 0.35rem;
+}
+.jack-rows button {
+  margin: 0;
+  flex: 0 0 auto;
+}

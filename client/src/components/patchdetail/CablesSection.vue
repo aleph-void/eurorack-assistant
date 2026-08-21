@@ -135,11 +135,14 @@ const pairable = computed(() => {
 const quickLine = ref('');
 const quickError = ref('');
 
+// Both ends of every cable that could be plugged, built ONCE per payload
+// rather than once per keystroke: on a studio patch that is six thousand
+// jacks, and rebuilding them on every letter typed is what made the line
+// stutter. They are cached until the patch itself changes.
+const quickFrom = computed(() => jackCandidates(FROM_TYPES, false));
+const quickTo = computed(() => jackCandidates(TO_TYPES, true));
 const quickParsed = computed(() =>
-  parseQuickCable(quickLine.value, {
-    from: jackCandidates(FROM_TYPES, false),
-    to: jackCandidates(TO_TYPES, true),
-  })
+  parseQuickCable(quickLine.value, { from: quickFrom.value, to: quickTo.value })
 );
 const quickReady = computed(
   () => Boolean(quickParsed.value.from && quickParsed.value.to && !quickParsed.value.error)

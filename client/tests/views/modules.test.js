@@ -20,6 +20,7 @@ vi.mock('vue-router', async (importOriginal) => {
 import { api } from '../../src/api.js';
 import { dialog } from '../../src/dialog.js';
 import ModulesView from '../../src/views/ModulesView.vue';
+import { useJobsStore } from '../../src/stores/jobs.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -38,6 +39,33 @@ describe('ModulesView', () => {
       Promise.resolve(path === '/api/racks' ? racksResponse : modules)
     );
   }
+
+  // A rack import is hundreds of progress lines, and not one of them changes
+  // what this list shows: re-reading on each of them spent the whole import
+  // fetching the racks and every module twice a second. Only a job ENDING is
+  // news here.
+  it('re-reads itself when a job ends, and not on every line of its progress', async () => {
+    mockLists([]);
+    mount(ModulesView, { global: testGlobal() });
+    await flushPromises();
+    const jobs = useJobsStore();
+    const reads = () => api.get.mock.calls.filter((c) => c[0].startsWith('/api/modules')).length;
+    const before = reads();
+
+    const job = { id: 1, type: 'analyze_manual', status: 'running' };
+    for (let i = 0; i < 20; i += 1) {
+      jobs.applyEvent({ kind: 'job', event: 'progress', job, message: `page ${i}`, at: '' });
+    }
+    await flushPromises();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(reads()).toBe(before);
+
+    jobs.applyEvent({ kind: 'job', event: 'completed', job, message: 'done', at: '' });
+    await flushPromises();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await flushPromises();
+    expect(reads()).toBe(before + 1);
+  });
 
   it('renders the module table with status badges and rack placements', async () => {
     mockLists([

@@ -34,3 +34,14 @@ export async function pick(wrapper, test, text) {
   await input.trigger('keydown', { key: 'Enter' });
   return input;
 }
+
+// A rack row that has never been opened has not been built either
+// (RacksView's `openedRows`: a collapsed row's panels were downloaded for
+// nothing), so a test that reaches into one opens it first — which is what a
+// person does before dragging a module into a row.
+export async function openRackRows(wrapper) {
+  for (const toggle of wrapper.findAll('[data-test^="row-collapse-"]')) {
+    if (toggle.attributes('aria-expanded') === 'true') continue;
+    await toggle.trigger('click');
+  }
+}

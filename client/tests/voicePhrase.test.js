@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mount, flushPromises } from '@vue/test-utils';
+import { enableAutoUnmount, mount, flushPromises } from '@vue/test-utils';
 import { testGlobal } from './setup.js';
 
 vi.mock('../src/api.js', () => ({
@@ -48,6 +48,8 @@ vi.mock('../src/speechInput.js', async (importOriginal) => {
 
 import { api } from '../src/api.js';
 import VoicePatchPanel from '../src/components/VoicePatchPanel.vue';
+import { loadVoiceSettings, resetVoiceSettings } from '../src/voiceSettings.js';
+import { clearVoicePatch, setVoicePatch, voiceTarget } from '../src/voicePatchTarget.js';
 
 const ofEngine = (engine) => built.filter((i) => i.options.engine === engine).at(-1);
 // The room, heard by Whisper; and the cable, heard by the browser.
@@ -73,18 +75,32 @@ async function open(settings = {}) {
     'eurorack-assistant.voice',
     JSON.stringify({ enabled: true, mode: 'phrase', engine: 'webspeech', ...settings })
   );
-  const wrapper = mount(VoicePatchPanel, {
-    props: { patchId: '7', fromCandidates, toCandidates, cableCandidates },
-    global: testGlobal(),
+  loadVoiceSettings(null, { force: true });
+  // The listener is mounted over the whole app and takes its patch from
+  // whichever diagram is on screen (voicePatchTarget.js).
+  setVoicePatch('7', {
+    label: 'Krell',
+    from: () => fromCandidates,
+    to: () => toCandidates,
+    cables: () => cableCandidates,
+    vocabulary: () => [],
   });
+  const wrapper = mount(VoicePatchPanel, { global: testGlobal() });
   await flushPromises();
   return wrapper;
 }
+
+// The settings and the patch on screen are one object for the whole app, so
+// a listener left mounted by a finished test would react to the next test's
+// setup and open a second microphone.
+enableAutoUnmount(afterEach);
 
 beforeEach(() => {
   vi.clearAllMocks();
   built = [];
   localStorage.clear();
+  clearVoicePatch(voiceTarget.claim);
+  resetVoiceSettings();
   window.SpeechRecognition = class {};
   window.AudioContext = undefined;
   window.speechSynthesis = undefined;
@@ -171,20 +187,22 @@ describe('the key phrase mode', () => {
     }
   });
 
+  // The phrase itself is typed on the settings page; what this file is about
+  // is that the listener answers to whatever it has been set to.
   it('takes the phrases the rack owner would rather say', async () => {
     api.post.mockResolvedValue({ id: 46 });
-    const wrapper = await open({ connectPhrase: 'wire up' });
-    await wrapper.find('[data-test="voice-connect-phrase"]').setValue('wire up');
+    await open({ connectPhrase: 'wire up' });
+
+    // Not the default phrase any more: the room says the new one.
+    listener().say('create connection between');
     await flushPromises();
+    expect(commandInput().started).toBe(0);
 
     listener().say('wire up');
     await flushPromises();
     commandInput().say('maths e o r and 2hp div clock');
     await flushPromises();
     expect(api.post).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(localStorage.getItem('eurorack-assistant.voice')).connectPhrase).toBe(
-      'wire up'
-    );
   });
 
   it('gives both microphones back when the page is left', async () => {

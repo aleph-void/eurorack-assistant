@@ -30,9 +30,10 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   emitting `reload`), and every section is a route of its own.
   `/modules/:id` is the front plate and the summary; `/components`,
   `/values`, `/normalizations`, `/switches`, `/routes`, `/pairs`,
-  `/expanders`, `/bridges`, `/documents`, `/videos` and `/notes` are the
-  rest. `/patches/:id` is the picture of the case and the drag that patches a
-  cable on it; `/cables`, `/voice`, `/settings`, `/flow`, `/links`, `/scope`,
+  `/jacks/input`, `/jacks/output`, `/jacks/bidirectional` (three routes over
+  one view), `/expanders`, `/bridges`, `/documents`, `/videos` and `/notes`
+  are the rest. `/patches/:id` is the picture of the case and the drag that patches a
+  cable on it; `/cables`, `/settings`, `/flow`, `/links`, `/scope`,
   `/notes` and `/modules` are the rest (`/patches/:id/config`, the one page
   that used to hold all of those, redirects to `/settings`). Every page reads
   the SAME `GET /api/modules/:id` / `GET /api/patches/:id` and reloads it
@@ -47,9 +48,26 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   still re-reads. Every page draws
   `ModuleDetailHeader` / `PatchDetailHeader`, which is what tells the nav
   drawer (`stores/detail.js`) which record's pages to offer at the top of it.
-  Arranging a marker is the one thing that needs the plate and a component's
-  row together, so the components page draws the plate WHILE ARRANGING and
-  the module page sends a marker click there (`?arrange=<component id>`).
+  Arranging a marker needs the plate and the row together, so the mode itself
+  is `moduledetail/useArranging.js` and every page that draws a plate has it:
+  the module page and the three jack pages draw
+  `moduledetail/PanelJacksSection.vue` (the plate, with the jacks of that page
+  listed beside it, each row a toggle and each marker the same toggle from the
+  other side), and the components page draws the plate WHILE ARRANGING because
+  a knob's row is a long way down a long table. The components page still
+  takes `?arrange=<component id>`.
+- PATCHING BY VOICE is an account setting, not a page of a patch: one
+  microphone, one footswitch, whatever patch is open. The settings live in
+  `voiceSettings.js` (a single reactive, per account, in localStorage and
+  never on the server — a deviceId means nothing on another machine) and are
+  edited at `/account/voice`; `components/VoicePatchPanel.vue` is the LISTENER
+  and is mounted ONCE in App.vue, drawing a bar only while it is switched on
+  AND a patch diagram is registered. The patch it acts on is whichever
+  diagram registered itself (`voicePatchTarget.js`, claim-counted like
+  `stores/detail.js`, with the jack and cable lists handed over as FUNCTIONS
+  so a patch nobody talks to never builds them). Switched on with no diagram
+  on screen — or the talk key pressed there — it says so in a toast rather
+  than looking broken. `/patches/:id/voice` redirects to `/account/voice`.
 - `client/tests/views/` — one test file per view; the payloads they are
   tested against are shared in `client/tests/moduleFixtures.js` and
   `client/tests/patchFixtures.js`.
@@ -126,7 +144,9 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   elsewhere on the page: a collapsed `<details>` is only HIDDEN by the browser,
   so every section that starts closed builds its body the first time it is
   opened (`client/src/lazyPanel.js`; a test that reaches inside one calls
-  `openPanels()` from tests/setup.js first). The patch payload is held in a
+  `openPanels()` from tests/setup.js first). The rack organizer's rows are the
+  same rule by hand (`openedRows` in RacksView.vue — a collapsed row's panel
+  pictures were downloaded for nothing; tests call `openRackRows()`). The patch payload is held in a
   `shallowRef`, never a deep one — nothing on either page writes into it, and
   deep reactivity doubles every render and triples the memory.
 - The patch diagram draws the case, not a poster of it: every panel is as
@@ -181,13 +201,18 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   difference: a mult COPIES its input to all its siblings, a switch SELECTS
   one of its steps. So the patch payload names its switch sections
   (`switches` — the common jack and its steps, resolved onto instances, from
-  `topology.switches`), and the diagram points a section by the SECTION: a
-  cable into any step makes every step an input and the common the output, a
-  cable into the common makes the common the input and every step an output,
-  and an unpatched section stays bidirectional (`multDirections` in
-  PatchDiagram.vue, which excludes switch jacks from the mult rule exactly as
-  `services/patchFlow.js` does). The cable pickers say the same thing in
-  their hints (`switchRoleOf` in usePatchFacts.js).
+  `topology.switches`), and the diagram points a section by the SECTION,
+  reading BOTH ENDS OF EVERY CABLE: signal ARRIVING at the common (or LEAVING
+  a step) runs common → steps, signal LEAVING the common (or arriving at a
+  step) runs steps → common, a section driven at both ends or at neither
+  stays bidirectional (`multDirections` in PatchDiagram.vue, which excludes
+  switch jacks from the mult rule exactly as `services/patchFlow.js` does).
+  Reading only the arriving end is the bug that left a common patched ONWARD
+  — the many-to-one half of what a switch is for — with its steps still drawn
+  as undecided. A plain mult jack a cable LEAVES is an output for the same
+  reason; its siblings stay bidirectional, because a mult takes its input at
+  exactly one of them and nothing yet says which. The cable pickers say the
+  same thing in their hints (`switchRoleOf` in usePatchFacts.js).
 - A patch is made of the connections a person can reach, so a connector that
   is not a patch point never appears in one. `isPatchPoint()` (defined in
   `panelLayout.js`, re-exported by `usePatchFacts.js` so the diagram and the
@@ -228,6 +253,36 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   (panels, captures, manuals) override that with `private, max-age=31536000,
   immutable`. The built client's policy lives in `nginx/cache.conf`, which
   BOTH vhosts include — `nginx/nginx.conf` and `nginx/tls.conf.template`.
+- WHAT THE BROWSER DOES NOT NEED YET, IT DOES NOT FETCH OR BUILD. Four rules,
+  each of them a measured regression that came back:
+  - Every view is its OWN CHUNK (`const X = () => import(...)` in router.js;
+    LoginView is the one static import). Importing them all made one 567 kB
+    file that everybody downloaded to look at their module list; split it is
+    138 kB. The voice listener is lazy for the same reason — App.vue fetches
+    `VoicePatchPanel.vue` only once voice patching is switched on, which is
+    why `voiceSettings.js` imports nothing but `vue`.
+  - A picture is asked for at the size it is DRAWN, never at a fixed one
+    (`panelThumbUrl`/`panelImageUrl` take the drawn width and the screen's
+    density), and every `<img>` that might be off screen carries
+    `loading="lazy" decoding="async"`.
+  - A list the whole session shares is read once and INVALIDATED where it
+    changes, not re-read per page: `refreshRackModules()` in
+    `useModuleRecord.js` is called by Modules, Import and Racks. Both module
+    and patch payloads are `shallowRef`s.
+  - A page that re-reads itself when background work lands watches
+    `jobs.finished` (jobs that ENDED), never `jobs.feed.length`: an import is
+    hundreds of progress lines and none of them changes what a page shows.
+- WORK IS DONE ONCE A FRAME, NOT ONCE AN EVENT. Pointer and scroll events
+  arrive far faster than the screen redraws, and in this app one of them
+  redraws hundreds of panels or filters six thousand markers: the organizer's
+  drag (`aimSoon` in RacksView.vue — leading edge, so a gesture starting has
+  no lag) and the diagram's scroll (`onScroll` in PatchDiagram.vue) are both
+  rAF-throttled. The diagram's viewport is also SNAPPED OUT to a grid
+  (`VIEWPORT_STEP`) and only written when it has really moved, so a scroll of
+  three pixels does not invalidate every culled list. A test that drives
+  either has to let a frame pass (`frame()` in tests/views/racks.test.js).
+  Anything a template calls per item per render is memoized instead
+  (`panelMarkers`' WeakMap).
 - No prettier config on purpose — running prettier rewrites to double quotes
   against the house style. Format by hand. `npm run lint` (ESLint flat config)
   must stay clean in both `server/` and `client/`.

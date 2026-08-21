@@ -5,21 +5,22 @@
 // reached from the nav drawer, so this page stays the one that is looked at
 // rather than worked in.
 import { computed, ref, toRef, watch } from 'vue';
-import { useRouter } from 'vue-router';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
-import ModulePanel from '../components/ModulePanel.vue';
 import ModuleDetailHeader from '../components/moduledetail/ModuleDetailHeader.vue';
+import PanelJacksSection from '../components/moduledetail/PanelJacksSection.vue';
+import { useArranging } from '../components/moduledetail/useArranging.js';
 import { useModuleRecord } from '../components/moduledetail/useModuleRecord.js';
-import { usePanelMarkers } from '../components/moduledetail/usePanelMarkers.js';
 import { fileToBase64 } from '../files.js';
 
 const props = defineProps({ id: { type: String, required: true } });
 
-const router = useRouter();
 const id = toRef(props, 'id');
 const { module, error, rackModules, load } = useModuleRecord(id);
-const { panelError, panelStatus, movePanelMarker } = usePanelMarkers(module, id, load);
+// The plate is on this page, so putting a marker right is on this page too:
+// the jacks are listed beside the picture and each row is a toggle.
+const arranging = useArranging(module, id, load);
+const { panelError, panelStatus } = arranging;
 
 // --- Component re-analysis with fresh retailer product pages ---
 const reanalyzing = ref(false);
@@ -184,13 +185,6 @@ async function removePanel() {
   }
 }
 
-// A click on a marker is a question about that component, and everything
-// there is to do with one — rename it, retype it, put its marker right — is
-// on the components page, so that is where the click goes.
-function openComponent({ component_id: componentId }) {
-  router.push(`/modules/${props.id}/components?arrange=${componentId}`);
-}
-
 watch(id, () => {
   panelHp.value = '';
   panelHpDirty.value = false;
@@ -256,15 +250,8 @@ watch(id, () => {
         </span>
       </summary>
       <div class="panel-body">
-        <ModulePanel
-          v-if="module.panel"
-          :panel="module.panel"
-          editable
-          @move="movePanelMarker"
-          @select="openComponent"
-        />
-        <p v-if="panelStatus" class="muted" data-test="panel-status">{{ panelStatus }}</p>
-        <p v-else class="muted" data-test="no-panel">
+        <PanelJacksSection v-if="module.panel" :module="module" :arranging="arranging" />
+        <p v-if="!module.panel" class="muted" data-test="no-panel">
           No panel picture yet — the app builds one once the manual has been analyzed, or you can
           supply your own below.
         </p>

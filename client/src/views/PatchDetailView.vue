@@ -1,20 +1,67 @@
 <script setup>
 // The picture of the patch: the case as it stood when the patch was made,
 // with every cable drawn on it. Patching by dragging between two jacks
-// happens here; the cable list, the voice panel and everything the patch is
-// set up with are pages of their own, reached from the nav drawer.
-import { ref, toRef } from 'vue';
+// happens here; the cable list and everything the patch is set up with are
+// pages of their own, reached from the nav drawer.
+//
+// This is also the page voice patching talks to. The listener is mounted over
+// the whole app and switched on under the account rather than here, so what
+// this page does is say which patch is on screen and how to name its jacks
+// (`voicePatchTarget.js`); leaving takes the claim back.
+import { onBeforeUnmount, ref, toRef, watch } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import PatchDiagram from '../components/PatchDiagram.vue';
 import PatchDetailHeader from '../components/patchdetail/PatchDetailHeader.vue';
-import { usePatchFacts } from '../components/patchdetail/usePatchFacts.js';
+import {
+  FROM_TYPES,
+  TO_TYPES,
+  usePatchFacts,
+} from '../components/patchdetail/usePatchFacts.js';
 import { usePatchRecord } from '../components/patchdetail/usePatchRecord.js';
+import { clearVoicePatch, setVoicePatch } from '../voicePatchTarget.js';
 
 const props = defineProps({ id: { type: String, required: true } });
 
 const { patch, error, load, setCables } = usePatchRecord(toRef(props, 'id'));
-const { modules, moduleLabel } = usePatchFacts(patch);
+const { modules, modulesById, moduleLabel, cables, jackCandidates } = usePatchFacts(patch);
+
+// What voice patching needs to know about this patch. Every list is a
+// FUNCTION: they are every jack and every cable in the patch — thousands of
+// items on a system — and nothing reads them until somebody speaks.
+let voiceClaim = 0;
+function registerVoice() {
+  voiceClaim = setVoicePatch(props.id, {
+    label: patch.value?.name || '',
+    from: () => jackCandidates(FROM_TYPES, false),
+    to: () => jackCandidates(TO_TYPES, true),
+    cables: () =>
+      cables.value.map((c) => ({
+        cable_id: c.id,
+        module_label: `${moduleLabel(modulesById.value.get(c.from_patch_module_id))} ${c.from_component_name}`,
+        jack_name: `${moduleLabel(modulesById.value.get(c.to_patch_module_id))} ${c.to_component_name}`,
+      })),
+    // A recogniser has never heard of Mimeophon and does better when it is
+    // told the names to expect.
+    vocabulary: () => {
+      const words = new Set();
+      for (const pm of modules.value) {
+        words.add(pm.manufacturer);
+        words.add(pm.module_name);
+        if (pm.label) words.add(pm.label);
+        for (const c of pm.components) words.add(c.name);
+      }
+      return [...words].filter(Boolean);
+    },
+    onChanged: load,
+  });
+}
+// Registered on the way in, and again when the name arrives with the payload
+// — the name is what the settings page says it is listening over. Registering
+// twice is not a leak: each call takes the claim, and only the claim held at
+// the end is the one given up.
+watch(() => [props.id, patch.value?.name], registerVoice, { immediate: true });
+onBeforeUnmount(() => clearVoicePatch(voiceClaim));
 
 // The diagram's drag gesture creates and pulls out a cable exactly as the
 // cable list does. The write lives here because this is the page the gesture

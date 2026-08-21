@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import { api } from '../api.js';
+import { refreshRackModules } from '../components/moduledetail/useModuleRecord.js';
 import { useJobsStore } from '../stores/jobs.js';
 
 const jobs = useJobsStore();
@@ -53,6 +54,10 @@ async function submit() {
         : { type: mode.value, content: content.value, rack: rack.value };
     const res = await api.post('/api/imports', body);
     queuedJobId.value = res.job_id;
+    // The import runs as a job, so the modules arrive over the next minutes
+    // rather than now — but the list the module pages keep for the session is
+    // stale from this moment on either way.
+    refreshRackModules();
   } catch (e) {
     error.value = e.message;
   } finally {

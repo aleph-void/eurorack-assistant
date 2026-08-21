@@ -13,14 +13,13 @@ import ModulePanel from '../components/ModulePanel.vue';
 import ModuleDetailHeader from '../components/moduledetail/ModuleDetailHeader.vue';
 import { useModuleFacts } from '../components/moduledetail/useModuleFacts.js';
 import { useModuleRecord } from '../components/moduledetail/useModuleRecord.js';
-import { outOfFrame, usePanelMarkers } from '../components/moduledetail/usePanelMarkers.js';
+import { useArranging } from '../components/moduledetail/useArranging.js';
 
 const props = defineProps({ id: { type: String, required: true } });
 
 const route = useRoute();
 const id = toRef(props, 'id');
 const { module, error, rackModules, load } = useModuleRecord(id);
-const { panelError, panelStatus, movePanelMarker } = usePanelMarkers(module, id, load);
 const { componentName } = useModuleFacts(module);
 
 // 'Input jacks' → 'input jack'; 'Bidirectional jacks (mults)' loses its
@@ -91,54 +90,33 @@ const componentError = ref('');
 const componentNotice = ref('');
 const addingComponent = ref(false);
 const addingToType = ref(null);
-const arrangedComponentId = ref(null);
-
-const arrangedComponent = computed(() =>
-  (module.value?.components || []).find((c) => c.id === arrangedComponentId.value) || null
-);
+// The same arranging mode the module page and the jack pages are in — one
+// component picked, only its marker on the plate, dragged onto the hardware
+// it names (moduledetail/useArranging.js).
+const {
+  arrangedComponentId,
+  arrangedComponent,
+  arrange,
+  stopArranging,
+  arrangeError,
+  movePanelMarker,
+  panelError,
+  panelStatus,
+} = useArranging(module, id, load);
 
 async function arrangeComponent(c) {
-  if (arrangedComponentId.value === c.id) {
-    arrangedComponentId.value = null;
-    return;
-  }
   componentError.value = '';
   componentTypeDraft.value = c.type;
-  try {
-    const placement = (module.value?.panel?.components || []).find(
-      (row) => row.component_id === c.id
-    );
-    if (module.value?.panel && !placement) {
-      const { panel } = await api.post(`/api/modules/${props.id}/panel/components`, {
-        component_id: c.id,
-      });
-      if (panel && module.value) module.value = { ...module.value, panel };
-    } else if (module.value?.panel && outOfFrame(module.value.panel, placement)) {
-      // Arranging is how a marker is put right, so it has to start somewhere
-      // it can be taken hold of: the middle of the plate, to be dragged onto
-      // the hardware it names from there.
-      const crop = module.value.panel.crop || {};
-      await movePanelMarker({
-        id: placement.id,
-        name: placement.name,
-        x: (crop.x ?? 0) + (crop.w || 1) / 2,
-        y: (crop.y ?? 0) + (crop.h || 1) / 2,
-      });
-    }
-    arrangedComponentId.value = c.id;
-    // Arranging happens at the picture, which is drawn at the top of this
-    // page only while it is going on: bring it into view so the marker can
-    // be dragged without hunting for it.
-    await nextTick();
-    scrollToPanel();
-  } catch (e) {
-    componentError.value = e.message;
-  }
+  // Arranging happens at the picture, which is drawn at the top of this page
+  // only while it is going on: bring it into view so the marker can be
+  // dragged without hunting for it.
+  await arrange(c, { onArranged: scrollToPanel });
+  // A refused arrange is reported where this page reports everything else
+  // about a component: beside the group the row is in.
+  if (arrangeError.value) componentError.value = arrangeError.value;
 }
 
-function showAllPanelComponents() {
-  arrangedComponentId.value = null;
-}
+const showAllPanelComponents = stopArranging;
 
 const panelSection = ref(null);
 

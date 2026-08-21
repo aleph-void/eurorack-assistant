@@ -20,9 +20,13 @@ vi.mock('vue-router', async (importOriginal) => {
 import { api } from '../../src/api.js';
 import { dialog } from '../../src/dialog.js';
 import ModuleDetailView from '../../src/views/ModuleDetailView.vue';
+import { refreshRackModules } from '../../src/components/moduledetail/useModuleRecord.js';
 import { mathsModule } from '../moduleFixtures.js';
 
 beforeEach(() => {
+  // The list of the user's modules is kept for the session by every module
+  // page (useModuleRecord.js), so each test starts without the last one's.
+  refreshRackModules();
   vi.clearAllMocks();
   currentRouteQuery = {};
 });
@@ -168,6 +172,30 @@ describe('ModuleDetailView', () => {
     await button.trigger('click');
     await flushPromises();
     expect(wrapper.find('[data-test="rebuild-error"]').text()).toContain('no manual');
+  });
+
+  // The record and the list are independent reads, and the list only changes
+  // when the set of modules does — an import, a delete, a rack deleted. It
+  // used to be a second round trip behind the record on every module page AND
+  // after every write to one.
+  it('reads the module list once for the session, not again after every write', async () => {
+    const list = [{ id: 1, manufacturer: 'Make Noise', name: 'Maths', racks: [{ id: 1 }] }];
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/modules/1' ? moduleResponse : list)
+    );
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    const listReads = () => api.get.mock.calls.filter((c) => c[0] === '/api/modules').length;
+    expect(listReads()).toBe(1);
+
+    // A second page over the same record asks for the record again and the
+    // list not at all.
+    const second = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    expect(listReads()).toBe(1);
+    expect(api.get.mock.calls.filter((c) => c[0] === '/api/modules/1').length).toBe(2);
+    wrapper.unmount();
+    second.unmount();
   });
 
   it('links to the previous and next modules in the current rack', async () => {
@@ -340,9 +368,10 @@ describe('ModuleDetailView', () => {
     const button = wrapper.find('[data-test="panel-trim"]');
     expect(button.exists()).toBe(true);
     expect(button.element.parentElement).toBe(row);
-    // Arranging a marker is not done here: it belongs beside the component's
-    // own row, which is a page of its own.
-    expect(wrapper.find('[data-test="arrange-component-1"]').exists()).toBe(false);
+    // Arranging IS done here: the plate is on this page, and the jacks are
+    // listed beside it so a marker can be put right where it is drawn.
+    expect(wrapper.find('[data-test="arrange-component-1"]').exists()).toBe(true);
+    // Nothing is being arranged until one is picked.
     expect(wrapper.find('[data-test="panel-disable-arranging"]').exists()).toBe(false);
   });
 
@@ -356,9 +385,9 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('[data-test="group-input_jack"]').exists()).toBe(false);
   });
 
-  // A marker is a question about one component, and everything to do with one
-  // — including putting its marker right — is on the components page.
-  it('sends a click on a marker to that component on the components page', async () => {
+  // The page a marker is wrong on is the page showing the plate, so clicking
+  // one arranges that component here rather than sending the reader away.
+  it('arranges the component behind a marker when it is clicked', async () => {
     const panel = {
       source: 'image',
       url: '/api/panels/abc.png',
@@ -378,7 +407,33 @@ describe('ModuleDetailView', () => {
     });
     await wrapper.find('[data-test="module-panel-svg"]').trigger('pointerup');
     await flushPromises();
-    expect(routerPush).toHaveBeenCalledWith('/modules/1/components?arrange=1');
+    expect(routerPush).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="panel-arrangement-filter"]').text()).toContain('Signal In');
+  });
+
+  // Both halves of the same toggle: the row beside the picture and the marker
+  // on it pick the same component, and picking it again puts the panel back.
+  it('arranges a jack from the list beside the plate, and stops when told', async () => {
+    const panel = {
+      source: 'image',
+      url: '/api/panels/abc.png',
+      width: 400,
+      height: 1200,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      components: [{ id: 5, component_id: 1, name: 'Signal In', shape: 'jack', x: 0.4, y: 0.8 }],
+    };
+    api.get.mockResolvedValue({ ...moduleResponse, panel });
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="arrange-component-1"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="arrange-component-1"]').text()).toBe('Arranging');
+    expect(wrapper.find('[data-test="panel-arrangement-filter"]').text()).toContain('Signal In');
+
+    await wrapper.find('[data-test="panel-disable-arranging"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="panel-arrangement-filter"]').exists()).toBe(false);
   });
 
   it('trims the panel picture and keeps the markers', async () => {

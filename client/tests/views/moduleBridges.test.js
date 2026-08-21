@@ -20,9 +20,13 @@ vi.mock('vue-router', async (importOriginal) => {
 import { api } from '../../src/api.js';
 import { dialog } from '../../src/dialog.js';
 import ModuleBridgesView from '../../src/views/ModuleBridgesView.vue';
+import { refreshRackModules } from '../../src/components/moduledetail/useModuleRecord.js';
 import { conditionalModule, dualModule } from '../moduleFixtures.js';
 
 beforeEach(() => {
+  // The list of the user's modules is kept for the session by every module
+  // page (useModuleRecord.js), so each test starts without the last one's.
+  refreshRackModules();
   vi.clearAllMocks();
   currentRouteQuery = {};
 });

@@ -72,6 +72,9 @@ describe('detail sub-pages', () => {
       'components',
       'documents',
       'expanders',
+      // The three kinds of jack are three pages over one view, so the kind is
+      // in the path rather than in three near-identical route definitions.
+      ':kind(input|output|bidirectional)',
       'normalizations',
       'notes',
       'pairs',
@@ -79,7 +82,7 @@ describe('detail sub-pages', () => {
       'switches',
       'values',
       'videos',
-    ]);
+    ].sort());
     expect(under('/modules/:id/').every((r) => r.props === true)).toBe(true);
   });
 
@@ -93,9 +96,17 @@ describe('detail sub-pages', () => {
       'notes',
       'scope',
       'settings',
-      'voice',
     ]);
     expect(pages.every((r) => r.props === true)).toBe(true);
+  });
+
+  // Patching by voice used to be a page of each patch. It is an account
+  // setting now — one microphone, one footswitch, whatever patch is open.
+  it('sends the old per-patch voice page to the account setting', () => {
+    const voice = routes.find((r) => r.path === '/patches/:id/voice');
+    expect(voice.component).toBeUndefined();
+    expect(voice.redirect).toBe('/account/voice');
+    expect(routes.find((r) => r.name === 'voice-settings').path).toBe('/account/voice');
   });
 
   it('sends the old one-page configuration URL to the control settings', () => {

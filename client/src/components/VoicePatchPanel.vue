@@ -2,204 +2,54 @@
 // Patching by voice. "Connect Make Noise Maths out one to 2hp Div clock in",
 // and the cable is documented before your hand is back on the case.
 //
-// The panel is a lid over five small modules that each do one thing:
-// speechInput turns a microphone into words, voiceActivation decides when the
-// microphone is open, voiceCommand turns words into two jack ids, audioDevices
-// says which microphone and which speaker, and patchSounds says whether it
-// worked — because you are looking at the rack, not at this screen, and the
-// beep is the whole answer.
+// This is the LISTENER, mounted once over the whole app (App.vue). What it is
+// set to is an account setting rather than a page (`voiceSettings.js`, edited
+// at /account/voice), and what it acts on is whatever patch diagram is on
+// screen (`voicePatchTarget.js`). So it is switched on once and works on
+// every patch, instead of being switched on again on each one.
 //
-// Every setting here is kept in this browser and under this account's own key.
-// A deviceId means nothing on another machine, and a shared studio desktop is
-// two people with two headsets — so none of it goes to the server.
+// It is a lid over five small modules that each do one thing: speechInput
+// turns a microphone into words, voiceActivation decides when the microphone
+// is open, voiceCommand turns words into two jack ids, audioDevices says
+// which microphone and which speaker, and patchSounds says whether it worked
+// — because you are looking at the rack, not at this screen, and the beep is
+// the whole answer.
 //
-// Nothing is plugged on a maybe. Below the confidence you set, the panel says
-// what it thinks it heard and waits, and the tone it plays for that is not the
-// tone it plays for a cable going in.
+// Nothing is plugged on a maybe. Below the confidence set in the settings, the
+// bar says what it thinks it heard and waits, and the tone it plays for that
+// is not the tone it plays for a cable going in.
 
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '../api.js';
 import { toast } from '../toast.js';
-import { useAuthStore } from '../stores/auth.js';
 import {
-  createSpeechInput,
-  engineAvailability,
-  ENGINE_UNUSABLE,
-  ENGINES,
-} from '../speechInput.js';
-import { WHISPER_MODELS } from '../whisperInput.js';
-import { ACTIVATION_MODES, createVoiceActivation, isContinuous } from '../voiceActivation.js';
+  voiceSettings as settings,
+  saveVoiceSettings,
+  useWorkingEngine,
+} from '../voiceSettings.js';
 import {
-  listAudioDevices,
-  nameDevices,
-  outputRoutingSupported,
-  watchAudioDevices,
-} from '../audioDevices.js';
+  voiceTarget,
+  voicePatchChanged,
+  voicePatchContext,
+  voicePatchVocabulary,
+} from '../voicePatchTarget.js';
+import { createSpeechInput, engineAvailability, ENGINES, ENGINE_UNUSABLE } from '../speechInput.js';
+import { createVoiceActivation, isContinuous } from '../voiceActivation.js';
 import { createPatchSounds } from '../patchSounds.js';
 import { parseBestAlternative, pickedOption, describeEndpoint } from '../voiceCommand.js';
 
-const props = defineProps({
-  patchId: { type: String, required: true },
-  // Each of these is a list, OR a function that builds one when it is
-  // wanted. They are every jack and every cable in the patch — thousands of
-  // items on a system — and nothing here reads them until somebody speaks, so
-  // the patch page hands over the way to build them rather than the lists
-  // themselves, and a page with the voice panel closed never pays for them.
-  fromCandidates: { type: [Array, Function], default: () => [] },
-  toCandidates: { type: [Array, Function], default: () => [] },
-  cableCandidates: { type: [Array, Function], default: () => [] },
-  vocabulary: { type: [Array, Function], default: () => [] },
-});
-const emit = defineEmits(['changed']);
+// Voice patching plugs cables into a patch, so the one thing it cannot do is
+// run where there is no patch. Said as a toast rather than in the bar,
+// because when this is the answer there is no bar on screen to read it in.
+const OFF_PATCH =
+  'Voice patching only works on the patch diagram view — open a patch to talk to it.';
 
-// ---- settings ----
+// A saved engine this browser cannot run is moved to one it can before
+// anything is built with it.
+useWorkingEngine(engineAvailability(), ENGINES.map((e) => e.value));
 
-const STORAGE_KEY = 'eurorack-assistant.voice';
-const DEFAULTS = {
-  enabled: false,
-  engine: 'webspeech',
-  model: 'Xenova/whisper-tiny.en',
-  mode: 'ptt',
-  key: 'Space',
-  wakeWords: 'patch, hey rack',
-  connectPhrase: 'create connection between',
-  disconnectPhrase: 'disconnect connection between',
-  inputDeviceId: '',
-  outputDeviceId: '',
-  binding: null,
-  confirmBelow: 0.75,
-  volume: 0.7,
-  sounds: true,
-  speakErrors: false,
-};
-const settings = reactive({ ...DEFAULTS });
-
-// One key per account, because a studio machine is logged into by more than
-// one person and a microphone is a personal choice. The old shared key is read
-// as the starting point so that nobody's settings vanish on the way in, and it
-// is never written to again.
-const auth = useAuthStore();
-const storageKey = () => (auth.user?.id ? `${STORAGE_KEY}.${auth.user.id}` : STORAGE_KEY);
-
-function loadSettings() {
-  const read = (key) => {
-    try {
-      return JSON.parse(localStorage.getItem(key) || '{}');
-    } catch {
-      return {};
-    }
-  };
-  Object.assign(settings, DEFAULTS, read(STORAGE_KEY), read(storageKey()));
-}
-function saveSettings() {
-  try {
-    localStorage.setItem(storageKey(), JSON.stringify({ ...settings }));
-  } catch {
-    /* nothing here is worth failing over */
-  }
-}
-
-// Read back before the watchers below exist, so that restoring a saved setting
-// is not mistaken for changing one — otherwise a rack owner who left voice
-// switched on gets two microphones opened on the way in.
-loadSettings();
-const available = ref(engineAvailability());
-
-// Why this browser cannot run each engine, said in terms of what to do about
-// it. The answer is a different one for each: Firefox has no recogniser of its
-// own, and a page served over plain HTTP is never handed a microphone.
-const ENGINE_REFUSALS = {
-  webspeech:
-    'This browser has no speech recognition of its own. Chrome and Edge do; Firefox does not. ' +
-    'Local Whisper runs anywhere a microphone does.',
-  whisper:
-    'This browser will not hand over a microphone here, and Whisper needs one to listen. A page ' +
-    'served over plain HTTP cannot ask for it — reach this app over HTTPS or localhost.',
-};
-
-const engineLabel = (value) => ENGINES.find((e) => e.value === value)?.label || value;
-const workingEngine = () => ENGINES.map((e) => e.value).find((v) => available.value[v]) || null;
-
-// A setting restored from a browser that cannot run it is quietly moved to one
-// that can: nothing has been asked for yet, so there is nothing to report.
-if (!available.value[settings.engine]) settings.engine = workingEngine() || settings.engine;
-
-// Both engines are always on offer. An engine this browser cannot run used to
-// be a greyed-out line, which says "no" without ever saying why — and the why
-// is the whole of what is useful here. So it can be picked, and picking it
-// explains itself.
-const engineOptions = computed(() =>
-  ENGINES.map((e) => ({ ...e, available: available.value[e.value] }))
-);
-
-// Choosing an engine this browser cannot run. Said twice — over the page,
-// because the choice is made in a fold of settings that is easy to look away
-// from, and inline beside the picker that was just used.
-watch(
-  () => settings.engine,
-  (engine, previous) => {
-    if (available.value[engine]) return;
-    const refusal = `${engineLabel(engine)} is not available in this browser. ${ENGINE_REFUSALS[engine]}`;
-    toast.error(refusal);
-    say(refusal, 'error');
-    // Back to whichever engine does work — the one just left if it still does,
-    // otherwise the other one. If neither runs here the choice stands, since
-    // moving it would only be swapping one refusal for the other.
-    //
-    // Put back on the NEXT tick, not this one: a <select> that is corrected
-    // inside the same turn as the change event keeps the option the pointer
-    // landed on (Vue holds the element while it is assigning), and the picker
-    // would then disagree with the engine actually running. A tick later it
-    // snaps back, which is also the honest picture — the choice was taken and
-    // then refused.
-    const fallback = available.value[previous] ? previous : workingEngine();
-    if (fallback) nextTick(() => { settings.engine = fallback; });
-  }
-);
-
-// The browser's recogniser is present but its service is out of reach — the
-// usual answer on a self-hosted box, where Chromium ships without a key for
-// Google's speech servers. Whisper is the way out and it is one click away,
-// but it fetches a model the first time, so it is offered rather than taken.
-const engineUnreachable = ref(false);
-const canFallBackToWhisper = computed(
-  () => engineUnreachable.value && settings.engine === 'webspeech' && available.value.whisper
-);
-
-function useWhisperInstead() {
-  engineUnreachable.value = false;
-  settings.engine = 'whisper';
-  say('Switched to local Whisper — the model is fetched once, then nothing leaves this machine.');
-}
-
-// ---- which microphone, which speaker ----
-
-// Devices are listed rather than assumed, refreshed when one is plugged in,
-// and named only once the microphone has been granted — before that the
-// browser hands back a list of blanks, which is what `deviceNames` is for.
-const inputs = ref([]);
-const outputs = ref([]);
-const deviceNames = ref(false);
-const canRouteOutput = ref(outputRoutingSupported());
-let unwatchDevices = () => {};
-
-async function refreshDevices() {
-  const found = await listAudioDevices();
-  inputs.value = found.inputs;
-  outputs.value = found.outputs;
-  deviceNames.value = found.named;
-  // A device that has been unplugged since it was chosen would otherwise sit
-  // in the picker as a blank line that cannot be selected again.
-  if (settings.inputDeviceId && !found.inputs.some((d) => d.deviceId === settings.inputDeviceId))
-    settings.inputDeviceId = '';
-  if (settings.outputDeviceId && !found.outputs.some((d) => d.deviceId === settings.outputDeviceId))
-    settings.outputDeviceId = '';
-}
-
-async function askForDeviceNames() {
-  if (!(await nameDevices())) return say('The microphone was refused, so its name cannot be read', 'error');
-  return refreshDevices();
-}
+// Whether the listener has a patch to talk about at all.
+const live = computed(() => settings.enabled && Boolean(voiceTarget.patchId));
 
 // ---- what is going on right now ----
 
@@ -219,6 +69,14 @@ const armed = ref(false);
 // of its own — it is downloading a model, or it is listening to the room.
 const phraseState = ref('idle');
 const phraseIntent = ref('');
+// The browser's recogniser is present but its service is out of reach — the
+// usual answer on a self-hosted box, where Chromium ships without a key for
+// Google's speech servers. Whisper is the way out and it is one click away,
+// but it fetches a model the first time, so it is offered rather than taken.
+const engineUnreachable = ref(false);
+const canFallBackToWhisper = computed(
+  () => engineUnreachable.value && settings.engine === 'webspeech'
+);
 
 let input = null;
 let activation = null;
@@ -229,20 +87,21 @@ const say = (text, kind = 'muted') => {
   messageKind.value = kind;
 };
 
+function useWhisperInstead() {
+  engineUnreachable.value = false;
+  settings.engine = 'whisper';
+  saveVoiceSettings();
+  say('Switched to local Whisper — the model is fetched once, then nothing leaves this machine.');
+}
+
 // ---- doing what was said ----
 
-const listOf = (value) => (typeof value === 'function' ? value() : value);
-
-const context = computed(() => ({
-  from: listOf(props.fromCandidates),
-  to: listOf(props.toCandidates),
-  cables: listOf(props.cableCandidates),
-}));
+const cablesPath = () => `/api/patches/${voiceTarget.patchId}/cables`;
 
 async function plug(command) {
   status.value = 'working';
   try {
-    const cable = await api.post(`/api/patches/${props.patchId}/cables`, {
+    const cable = await api.post(cablesPath(), {
       from_patch_module_id: command.from.patch_module_id,
       from_component_id: command.from.component_id,
       to_patch_module_id: command.to.patch_module_id,
@@ -253,7 +112,7 @@ async function plug(command) {
     lastCable.value = cable?.id ?? null;
     sounds?.success();
     say(`${describeEndpoint(command.from)} → ${describeEndpoint(command.to)}`, 'ok');
-    emit('changed');
+    voicePatchChanged();
   } catch (e) {
     // The server knows things the parser cannot — that this input is already
     // fed, that these two jacks are the same mult. Its refusal is the message.
@@ -267,11 +126,11 @@ async function plug(command) {
 async function unplug(cable) {
   status.value = 'working';
   try {
-    await api.delete(`/api/patches/${props.patchId}/cables/${cable.cable_id}`);
+    await api.delete(`${cablesPath()}/${cable.cable_id}`);
     if (lastCable.value === cable.cable_id) lastCable.value = null;
     sounds?.undo();
     say(`Unplugged ${cable.module_label} → ${cable.jack_name}`, 'ok');
-    emit('changed');
+    voicePatchChanged();
   } catch (e) {
     sounds?.failure(e.message);
     say(e.message, 'error');
@@ -315,7 +174,10 @@ async function handle(transcript, alternatives) {
     if (index && options.value[index - 1]) return chooseOption(options.value[index - 1]);
   }
 
-  const command = parseBestAlternative(alternatives?.length ? alternatives : [transcript], context.value);
+  const command = parseBestAlternative(
+    alternatives?.length ? alternatives : [transcript],
+    voicePatchContext()
+  );
 
   if (command.intent === 'cancel') {
     clearPending();
@@ -376,6 +238,7 @@ function teardown() {
   armed.value = false;
   phraseState.value = 'idle';
   phraseIntent.value = '';
+  clearPending();
 }
 
 // The phrases the key-phrase listener is waiting for, and what each of them
@@ -395,15 +258,16 @@ const firstPhrase = computed(() => keyPhrases.value[0]?.phrase || '');
 
 function build() {
   teardown();
-  if (!settings.enabled) return;
+  // No patch on screen is not an error here — it is simply nothing to listen
+  // for. The error is raised where somebody ASKS for it (`askedOffPatch`).
+  if (!live.value) return;
   const continuous = isContinuous(settings.mode);
-
   input = createSpeechInput({
     engine: settings.engine,
     model: settings.model,
     deviceId: settings.inputDeviceId,
     continuous,
-    vocabulary: listOf(props.vocabulary),
+    vocabulary: voicePatchVocabulary(),
     onPartial: (text) => {
       partial.value = text;
     },
@@ -419,8 +283,8 @@ function build() {
     },
     onError: (text, code) => {
       // An engine that cannot reach its service will fail this way every time,
-      // not once, so it is worth saying over the page as well as beside the
-      // picker. Repeats count up on the toast already there.
+      // not once, so it is worth saying over the page as well as in the bar.
+      // Repeats count up on the toast already there.
       if (ENGINE_UNUSABLE.includes(code)) {
         engineUnreachable.value = true;
         toast.error(text);
@@ -484,7 +348,7 @@ function build() {
     },
     onBinding: (binding) => {
       settings.binding = binding;
-      saveSettings();
+      saveVoiceSettings();
       say(`Bound to ${binding.type.toUpperCase()} ${binding.number} on channel ${binding.channel}`);
     },
     onError: (text) => say(text, 'error'),
@@ -495,6 +359,37 @@ function build() {
   activation.attach();
 }
 
+// ---- asked for where it cannot work ----
+// Voice patching switched on and no patch on screen looks exactly like voice
+// patching that is broken. So the moment somebody asks for it — the moment
+// they switch it on, and every time they reach for the key they hold to talk
+// — it says where it does work.
+function askedOffPatch() {
+  toast.error(OFF_PATCH, { title: 'No patch on screen' });
+  return false;
+}
+
+// The key held to talk, listened for only while there is no patch to talk to:
+// with one on screen this is the activation layer's own key and it must not be
+// heard twice.
+function onOffPatchKey(event) {
+  if (event.repeat || event.code !== settings.key) return;
+  const el = event.target;
+  // Not while something is being typed into.
+  if (el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)))
+    return;
+  event.preventDefault();
+  askedOffPatch();
+}
+
+let keyListening = false;
+function watchForOffPatchKey(wanted) {
+  if (wanted === keyListening || typeof window === 'undefined') return;
+  keyListening = wanted;
+  if (wanted) window.addEventListener('keydown', onOffPatchKey);
+  else window.removeEventListener('keydown', onOffPatchKey);
+}
+
 onMounted(() => {
   sounds = createPatchSounds({
     volume: settings.volume,
@@ -502,23 +397,22 @@ onMounted(() => {
     speakErrors: settings.speakErrors,
     outputDeviceId: settings.outputDeviceId,
   });
-  refreshDevices();
-  // An interface switched on halfway through a session is a device that was
-  // not in the list when the page loaded.
-  unwatchDevices = watchAudioDevices(refreshDevices);
-  if (settings.enabled) build();
+  if (live.value) build();
+  watchForOffPatchKey(settings.enabled && !voiceTarget.patchId);
 });
 onBeforeUnmount(() => {
   teardown();
-  unwatchDevices();
+  watchForOffPatchKey(false);
   sounds?.close();
 });
 
-// Anything that changes the shape of the microphone rebuilds it; anything that
-// only changes what it sounds like does not.
+// Anything that changes the shape of the microphone rebuilds it — including
+// the patch going away under it, which is what leaving the diagram is.
 watch(
   () => [
+    live.value,
     settings.enabled,
+    voiceTarget.patchId,
     settings.engine,
     settings.mode,
     settings.model,
@@ -529,20 +423,27 @@ watch(
     settings.key,
   ],
   () => {
-    saveSettings();
     build();
+    watchForOffPatchKey(settings.enabled && !voiceTarget.patchId);
   }
 );
+// Switched on where it cannot run: say so once, there and then, rather than
+// leaving somebody holding a key that does nothing.
+watch(
+  () => settings.enabled,
+  (enabled) => {
+    if (enabled && !voiceTarget.patchId) askedOffPatch();
+  }
+);
+// Anything that only changes what it sounds like does not rebuild anything.
 watch(
   () => [
     settings.volume,
     settings.sounds,
     settings.speakErrors,
-    settings.confirmBelow,
     settings.outputDeviceId,
   ],
   () => {
-    saveSettings();
     sounds?.update({
       volume: settings.volume,
       enabled: settings.sounds,
@@ -594,262 +495,61 @@ function pointerUp() {
   pointerHeld.value = false;
   activation?.release();
 }
-
-const bindingText = computed(() =>
-  settings.binding
-    ? `${settings.binding.type.toUpperCase()} ${settings.binding.number} · channel ${settings.binding.channel}`
-    : 'nothing bound yet'
-);
 </script>
 
 <template>
-  <details open class="panel" data-test="voice">
-    <summary>
-      <h2>Patch by voice</h2>
-      <span class="summary-count">{{ statusText }}</span>
-    </summary>
-    <div class="panel-body">
-      <p class="muted" style="margin-top: 0">
-        Say the cable the way you would say it to someone stood next to the case — "connect make
-        noise maths out one to 2hp div clock in". Both ends are matched against the jacks in this
-        patch, and a tone tells you whether it went in, so you never have to look over here.
-        Enable Voice patching below, allow microphone access when your browser asks, then choose how
-        you want to activate it.
+  <div v-if="live" class="voice-bar" data-test="voice">
+    <button
+      type="button"
+      class="voice-talk"
+      data-test="voice-talk"
+      @pointerdown="pointerDown"
+      @pointerup="pointerUp"
+      @pointerleave="pointerUp"
+    >
+      🎙 {{ holdLabel }}
+    </button>
+    <div class="voice-said">
+      <p class="muted voice-line" data-test="voice-status">{{ statusText }}</p>
+      <p v-if="partial" class="muted voice-line" data-test="voice-partial">“{{ partial }}”</p>
+      <p v-else-if="heard" class="muted voice-line" data-test="voice-heard">Heard: “{{ heard }}”</p>
+      <p v-if="message" class="voice-line" :class="messageKind" data-test="voice-message">
+        {{ message }}
       </p>
-
-      <div class="row">
-        <div class="shrink">
-          <label for="voice-enabled">Voice patching</label>
-          <input id="voice-enabled" v-model="settings.enabled" type="checkbox" data-test="voice-enabled" />
-        </div>
-        <div>
-          <label for="voice-engine">Recognition</label>
-          <select id="voice-engine" v-model="settings.engine" data-test="voice-engine">
-            <option v-for="option in engineOptions" :key="option.value" :value="option.value">
-              {{ option.label }}{{ option.available ? '' : ' — not available here' }}
-            </option>
-          </select>
-        </div>
-        <div v-if="settings.engine === 'whisper' || settings.mode === 'phrase'">
-          <label for="voice-model">Whisper model</label>
-          <select id="voice-model" v-model="settings.model" data-test="voice-model">
-            <option v-for="option in WHISPER_MODELS" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </div>
-        <div>
-          <label for="voice-mode">Activation</label>
-          <select id="voice-mode" v-model="settings.mode" data-test="voice-mode">
-            <option v-for="option in ACTIVATION_MODES" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </div>
-      </div>
-
-      <div v-if="settings.mode === 'wake'" class="row">
-        <div>
-          <label for="voice-wake">Wake words (comma separated)</label>
-          <input id="voice-wake" v-model="settings.wakeWords" data-test="voice-wake" />
-        </div>
-      </div>
-      <template v-if="settings.mode === 'phrase'">
-        <div class="row">
-          <div>
-            <label for="voice-connect-phrase">Phrase to plug a cable in (comma separated)</label>
-            <input
-              id="voice-connect-phrase"
-              v-model="settings.connectPhrase"
-              data-test="voice-connect-phrase"
-            />
-          </div>
-          <div>
-            <label for="voice-disconnect-phrase">Phrase to pull one out (comma separated)</label>
-            <input
-              id="voice-disconnect-phrase"
-              v-model="settings.disconnectPhrase"
-              data-test="voice-disconnect-phrase"
-            />
-          </div>
-        </div>
-        <p class="muted" data-test="voice-phrase-help">
-          Whisper listens to the room on this machine and does nothing until it hears one of these
-          phrases; the cable that follows is transcribed by
-          {{ engineLabel(settings.engine) }}. Say it in one breath — "create connection between
-          maths out one and 2hp div clock" — or say the phrase, wait for the blip, then say the
-          cable. Nothing but the phrase leaves the room either way, and nothing at all leaves it
-          while the recognition setting is Local Whisper.
-        </p>
-      </template>
-      <div v-if="settings.mode === 'midi'" class="row">
-        <div>
-          <label>Footswitch — {{ bindingText }}</label>
-          <button type="button" style="margin: 0" data-test="voice-learn" @click="activation?.learnBinding()">
-            Learn: press the switch now
-          </button>
-        </div>
-      </div>
-
-      <div class="row">
-        <div class="shrink">
-          <button
-            type="button"
-            style="margin: 0"
-            :disabled="!settings.enabled"
-            data-test="voice-talk"
-            @pointerdown="pointerDown"
-            @pointerup="pointerUp"
-            @pointerleave="pointerUp"
-          >
-            🎙 {{ holdLabel }}
-          </button>
-        </div>
-        <div>
-          <p class="muted" style="margin: 0.4rem 0 0" data-test="voice-status">{{ statusText }}</p>
-        </div>
-      </div>
-
-      <p v-if="partial" class="muted" data-test="voice-partial">“{{ partial }}”</p>
-      <p v-if="heard" class="muted" data-test="voice-heard">Heard: “{{ heard }}”</p>
-      <p v-if="message" :class="messageKind" data-test="voice-message">{{ message }}</p>
-      <p v-if="canFallBackToWhisper">
-        <button
-          type="button"
-          style="margin: 0"
-          data-test="voice-use-whisper"
-          @click="useWhisperInstead"
-        >
-          Use local Whisper instead
-        </button>
-      </p>
-
-      <div v-if="pending && !options.length" class="row" data-test="voice-confirm-row">
-        <div class="shrink">
-          <button type="button" style="margin: 0" data-test="voice-confirm" @click="confirmPending">
-            Yes — plug it in
-          </button>
-        </div>
-        <div class="shrink">
-          <button type="button" style="margin: 0" data-test="voice-reject" @click="clearPending">
-            No
-          </button>
-        </div>
-      </div>
-
-      <div v-if="options.length" data-test="voice-options">
-        <p class="muted" style="margin-bottom: 0.3rem">
-          Say the number, or pick one:
-        </p>
-        <button
-          v-for="(option, index) in options"
-          :key="option.component_id ?? option.cable_id"
-          type="button"
-          style="margin: 0 0.4rem 0.4rem 0"
-          :data-test="`voice-option-${index + 1}`"
-          @click="option.cable_id ? unplug(option) : chooseOption(option)"
-        >
-          {{ index + 1 }}. {{ option.module_label }} — {{ option.jack_name }}
-        </button>
-      </div>
-
-      <details class="subpanel">
-        <summary>Microphone and speaker</summary>
-        <div class="row">
-          <div>
-            <label for="voice-input-device">Microphone</label>
-            <select
-              id="voice-input-device"
-              v-model="settings.inputDeviceId"
-              data-test="voice-input-device"
-            >
-              <option value="">System default</option>
-              <option v-for="device in inputs" :key="device.deviceId" :value="device.deviceId">
-                {{ device.label }}
-              </option>
-            </select>
-          </div>
-          <div>
-            <label for="voice-output-device">Cues play through</label>
-            <select
-              id="voice-output-device"
-              v-model="settings.outputDeviceId"
-              data-test="voice-output-device"
-              :disabled="!canRouteOutput"
-            >
-              <option value="">System default</option>
-              <option v-for="device in outputs" :key="device.deviceId" :value="device.deviceId">
-                {{ device.label }}
-              </option>
-            </select>
-          </div>
-          <div class="shrink">
-            <label>&nbsp;</label>
-            <button
-              type="button"
-              style="margin: 0"
-              data-test="voice-devices-refresh"
-              @click="deviceNames ? refreshDevices() : askForDeviceNames()"
-            >
-              {{ deviceNames ? 'Refresh list' : 'Show device names' }}
-            </button>
-          </div>
-        </div>
-        <p class="muted" data-test="voice-device-help">
-          Kept in this browser under your account and never sent to the server — a device id means
-          nothing on another machine. The microphone reaches Local Whisper only: the browser's own
-          recogniser opens the system default itself and offers no way to point it elsewhere, which
-          is another reason the key phrase is listened for by Whisper.
-          <span v-if="!canRouteOutput">
-            This browser cannot choose an output either, so the cues play wherever the system sends
-            them.
-          </span>
-          Errors read out loud always follow the system output.
-        </p>
-      </details>
-
-      <details class="subpanel">
-        <summary>Sound and confidence</summary>
-        <div class="row">
-          <div class="shrink">
-            <label for="voice-sounds">Tones</label>
-            <input id="voice-sounds" v-model="settings.sounds" type="checkbox" data-test="voice-sounds" />
-          </div>
-          <div>
-            <label for="voice-volume">Volume</label>
-            <input
-              id="voice-volume"
-              v-model.number="settings.volume"
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              data-test="voice-volume"
-              @change="sounds?.preview('success')"
-            />
-          </div>
-          <div>
-            <label for="voice-confirm">Ask before plugging below {{ Math.round(settings.confirmBelow * 100) }}% sure</label>
-            <input
-              id="voice-confirm"
-              v-model.number="settings.confirmBelow"
-              type="range"
-              min="0.5"
-              max="0.95"
-              step="0.05"
-              data-test="voice-confirm-threshold"
-            />
-          </div>
-          <div class="shrink">
-            <label for="voice-speak">Read errors out loud</label>
-            <input id="voice-speak" v-model="settings.speakErrors" type="checkbox" data-test="voice-speak" />
-          </div>
-        </div>
-        <p class="muted">
-          Rising fifth: the cable is in. Three level pips: heard you, needs one more word. Low buzz:
-          nothing was plugged. Falling fifth: a cable came back out.
-        </p>
-      </details>
     </div>
-  </details>
+
+    <div v-if="pending && !options.length" class="voice-actions" data-test="voice-confirm-row">
+      <button type="button" data-test="voice-confirm" @click="confirmPending">Yes — plug it in</button>
+      <button type="button" class="secondary" data-test="voice-reject" @click="clearPending">
+        No
+      </button>
+    </div>
+
+    <div v-if="options.length" class="voice-actions" data-test="voice-options">
+      <button
+        v-for="(option, index) in options"
+        :key="option.component_id ?? option.cable_id"
+        type="button"
+        class="secondary"
+        :data-test="`voice-option-${index + 1}`"
+        @click="option.cable_id ? unplug(option) : chooseOption(option)"
+      >
+        {{ index + 1 }}. {{ option.module_label }} — {{ option.jack_name }}
+      </button>
+    </div>
+
+    <button
+      v-if="canFallBackToWhisper"
+      type="button"
+      class="secondary"
+      data-test="voice-use-whisper"
+      @click="useWhisperInstead"
+    >
+      Use local Whisper instead
+    </button>
+
+    <RouterLink class="voice-settings-link" to="/account/voice" data-test="voice-settings-link">
+      Voice settings
+    </RouterLink>
+  </div>
 </template>

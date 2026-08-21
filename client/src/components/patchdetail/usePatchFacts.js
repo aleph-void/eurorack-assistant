@@ -34,14 +34,22 @@ const multiRack = computed(
   () => new Set(modules.value.map((pm) => pm.rack_name).filter(Boolean)).size > 1
 );
 
+// How many instances of the same module the patch holds. Counted ONCE per
+// payload rather than scanned per call: a studio is two hundred instances and
+// naming them all used to be two hundred scans of two hundred, which is most
+// of what made the voice pickers take a tenth of a second to build.
+const twinKey = (pm) => (pm.module_id === null ? `name:${pm.module_name}` : `id:${pm.module_id}`);
+const twinCounts = computed(() => {
+  const counts = new Map();
+  for (const pm of modules.value) counts.set(twinKey(pm), (counts.get(twinKey(pm)) || 0) + 1);
+  return counts;
+});
+
 // "Make Noise Maths", plus "#2" when the rack held several of the module and
 // the role this instance plays in the patch when one has been recorded.
 function moduleLabel(pm) {
   if (!pm) return '(removed module)';
-  const twins =
-    pm.module_id === null
-      ? modules.value.filter((m) => m.module_id === null && m.module_name === pm.module_name).length
-      : modules.value.filter((m) => m.module_id === pm.module_id).length;
+  const twins = twinCounts.value.get(twinKey(pm)) || 0;
   const base = `${pm.manufacturer} ${pm.module_name}`.trim();
   const numbered = twins > 1 ? `${base} #${pm.instance}` : base;
   const named = pm.label ? `${numbered} (${pm.label})` : numbered;
@@ -51,9 +59,16 @@ function moduleLabel(pm) {
 }
 
 const cables = computed(() => patch.value?.cables || []);
+// An input takes exactly one cable, so the cable in a jack is a lookup rather
+// than a search — which matters because the pickers ask it once per jack, and
+// a studio has six thousand of them.
+const cableByDestination = computed(() => {
+  const map = new Map();
+  for (const c of cables.value) map.set(`${c.to_patch_module_id}:${c.to_component_id}`, c);
+  return map;
+});
 const cableInto = (pmId, componentId) =>
-  cables.value.find((c) => c.to_patch_module_id === pmId && c.to_component_id === componentId) ??
-  null;
+  cableByDestination.value.get(`${pmId}:${componentId}`) ?? null;
 const cablesOutOf = (pmId, componentId) =>
   cables.value.filter(
     (c) => c.from_patch_module_id === pmId && c.from_component_id === componentId
@@ -109,24 +124,33 @@ function conditionText(condition) {
 // jack_index is where this jack sits among the module's jacks of the same
 // kind, counting from one. Typing never needs it, but "out one" said out loud
 // on a module whose outputs are unnamed has to land somewhere.
-const jackCandidates = (types, forDestination) =>
-  modules.value.flatMap((pm) => {
-    const wanted = pm.components.filter((c) => types.includes(c.type) && isPatchPoint(c));
+// Built for the quick-cable line and the voice listener, both of which want
+// every jack in the patch at once. Everything it needs per jack is a map
+// lookup or better: the label is named once per instance rather than once per
+// jack, and whether a destination is taken comes out of the index above.
+const jackCandidates = (types, forDestination) => {
+  const taken = forDestination ? cableByDestination.value : null;
+  const out = [];
+  for (const pm of modules.value) {
+    const label = moduleLabel(pm);
     const seen = new Map();
-    return wanted.map((c) => {
+    for (const c of pm.components) {
+      if (!types.includes(c.type) || !isPatchPoint(c)) continue;
       const index = (seen.get(c.type) || 0) + 1;
       seen.set(c.type, index);
-      return {
+      out.push({
         patch_module_id: pm.id,
         component_id: c.id,
-        module_label: moduleLabel(pm),
+        module_label: label,
         jack_name: c.name,
         jack_type: c.type,
         jack_index: index,
-        disabled: forDestination ? Boolean(cableInto(pm.id, c.id)) : false,
-      };
-    });
-  });
+        disabled: taken ? taken.has(`${pm.id}:${c.id}`) : false,
+      });
+    }
+  }
+  return out;
+};
 
   return {
     modules,

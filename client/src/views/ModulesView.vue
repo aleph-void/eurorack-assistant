@@ -5,6 +5,7 @@ import { api } from '../api.js';
 import { COMPONENT_TYPES } from '../componentTypes.js';
 import { dialog } from '../dialog.js';
 import { useJobsStore } from '../stores/jobs.js';
+import { refreshRackModules } from '../components/moduledetail/useModuleRecord.js';
 import ChannelScanPanel from '../components/ChannelScanPanel.vue';
 
 const route = useRoute();
@@ -61,6 +62,10 @@ const rackGroups = computed(() => {
 });
 
 async function load() {
+  // The module pages keep the list of the user's modules for the session, and
+  // this page is where it changes: a delete, a move between racks, a finished
+  // import. Reloading here is the moment to let theirs go.
+  refreshRackModules();
   try {
     racks.value = await api.get('/api/racks');
     const query = selectedRack.value ? `?rack_id=${selectedRack.value}` : '';
@@ -396,10 +401,14 @@ async function reanalyzeAll() {
 
 watch(selectedRack, load);
 
-// Live-refresh when background jobs finish (manual found, analysis complete).
+// Live-refresh when background jobs FINISH (manual found, analysis complete).
+// Not on every line of the feed: an import of a whole rack is hundreds of
+// progress lines and none of them changes anything this list shows, so
+// watching the feed spent the length of an import re-reading the racks and
+// every module twice a second.
 let refreshTimer = null;
 watch(
-  () => jobs.feed.length,
+  () => jobs.finished,
   () => {
     if (refreshTimer) return;
     refreshTimer = setTimeout(() => {

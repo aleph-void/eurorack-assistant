@@ -7,6 +7,7 @@ import ShareButton from '../components/ShareButton.vue';
 import { componentColor } from '../componentTypes.js';
 import { panelCropStyle, panelThumbUrl, placementFraction } from '../panelLayout.js';
 import { toast } from '../toast.js';
+import { refreshRackModules } from '../components/moduledetail/useModuleRecord.js';
 
 const racks = ref([]);
 const systems = ref([]);
@@ -115,6 +116,9 @@ async function remove(rack) {
   try {
     await api.delete(`/api/racks/${rack.id}`);
     racks.value = racks.value.filter((r) => r.id !== rack.id);
+    // A rack takes the modules only it held with it, so the list the module
+    // pages keep for the session is out of date now.
+    refreshRackModules();
   } catch (e) {
     error.value = e.message;
   }
@@ -134,6 +138,7 @@ async function openOrganizer(rack) {
     // Every row starts folded: a full case is several rows of panels tall,
     // and opening the organizer on all of them buries the controls.
     collapsedRows.value = (organizer.value.rows || []).map(() => true);
+    openedRows.value = (organizer.value.rows || []).map(() => false);
     layoutError.value = '';
   } catch (e) {
     error.value = e.message;
@@ -152,10 +157,24 @@ async function openOrganizer(rack) {
 // with the rows when one is removed.
 const collapsedRows = ref([]);
 const rowCollapsed = (rowIndex) => collapsedRows.value[rowIndex] === true;
+// …and whether it has EVER been open. A collapsed row is only hidden by the
+// browser: every panel in it is still built, laid out and — because a hidden
+// <img> is still fetched — downloaded. A rack of two hundred modules opened
+// its organizer by pulling two hundred panel pictures for rows nobody had
+// unfolded. So a row's strip is built the first time it is opened and kept
+// from then on, which is the rule the rest of the app follows for a section
+// that starts closed (`lazyPanel.js`).
+const openedRows = ref([]);
+const rowOpened = (rowIndex) => openedRows.value[rowIndex] === true;
 function toggleRowCollapsed(rowIndex) {
   const next = collapsedRows.value.slice();
   next[rowIndex] = !next[rowIndex];
   collapsedRows.value = next;
+  if (!next[rowIndex] && !openedRows.value[rowIndex]) {
+    const seen = openedRows.value.slice();
+    seen[rowIndex] = true;
+    openedRows.value = seen;
+  }
 }
 
 const placedCounts = computed(() => {
@@ -195,8 +214,33 @@ const overPlaced = computed(() => {
 // never carry them.
 const showMarkers = ref(true);
 
+// How wide a module is DRAWN in the organizer, which is what its picture is
+// asked for at. The two numbers are the ones in this file's stylesheet
+// (`--hp-px`, `--chip-scale`) — a stored panel is the multi-megabyte file the
+// manufacturer published, and a rack of two hundred of them was fetching
+// every one at 512px whether it was drawn at 180 or at 36.
+const HP_PX = 9;
+const CHIP_SCALE = 0.42;
+const density = () => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
+const drawnHp = (module) => Math.max(2, Number(module.hp) || 4);
+const panelUrl = (module, scale = 1) =>
+  panelThumbUrl(module.panel, drawnHp(module) * HP_PX * scale, density());
+
+// Worked out ONCE per panel rather than on every render. A drag redraws this
+// view on every frame, and this is called for every module in every row: a
+// two-hundred-module rack rebuilt six thousand marker objects per frame, and
+// re-diffed that many spans, for a picture that had not changed.
+const markerCache = new WeakMap();
 function panelMarkers(panel) {
   if (!showMarkers.value || !panel) return [];
+  const cached = markerCache.get(panel);
+  if (cached) return cached;
+  const markers = buildMarkers(panel);
+  markerCache.set(panel, markers);
+  return markers;
+}
+
+function buildMarkers(panel) {
   return (panel.components ?? [])
     .map((placement) => {
       const { fx, fy } = placementFraction(panel, placement);
@@ -309,6 +353,9 @@ function nextRowHp() {
 
 async function addRow(unit) {
   organizer.value.rows.push({ unit, hp: nextRowHp(), modules: [] });
+  // A row added was asked for to be filled, so it starts open — and therefore
+  // starts built.
+  openedRows.value = [...openedRows.value, true];
   await saveLayout();
 }
 
@@ -317,6 +364,9 @@ async function removeRow(index) {
   const flags = collapsedRows.value.slice();
   flags.splice(index, 1);
   collapsedRows.value = flags;
+  const seen = openedRows.value.slice();
+  seen.splice(index, 1);
+  openedRows.value = seen;
   await saveLayout();
 }
 
@@ -365,6 +415,7 @@ function startDrag(press) {
 }
 
 function endDrag() {
+  cancelAim();
   pressed = null;
   dragged.value = null;
   dropHint.value = null;
@@ -383,6 +434,41 @@ function onDragKey(event) {
   endDrag();
 }
 
+// Pointer moves arrive far faster than the screen redraws, and each one of
+// them moved the ghost (redrawing the whole organizer, every module in every
+// row) and measured every slot in the row under the cursor (a layout flush).
+// Once a frame is as often as either can matter.
+//
+// The FIRST move of a frame is acted on at once, and only the ones crowding in
+// behind it wait: a gesture that has just begun must not have a frame of lag,
+// and a cursor that has come to rest must still leave the drop bar where it
+// stopped.
+let aimFrame = 0;
+let pendingAim = null;
+let aimedAt = null;
+
+function aimSoon(clientX, clientY) {
+  if (aimFrame) {
+    pendingAim = { x: clientX, y: clientY };
+    return;
+  }
+  aimedAt = { x: clientX, y: clientY };
+  aimAt(clientX, clientY);
+  aimFrame = requestAnimationFrame(() => {
+    aimFrame = 0;
+    const next = pendingAim;
+    pendingAim = null;
+    if (next && (next.x !== aimedAt.x || next.y !== aimedAt.y)) aimSoon(next.x, next.y);
+  });
+}
+
+function cancelAim() {
+  if (aimFrame) cancelAnimationFrame(aimFrame);
+  aimFrame = 0;
+  pendingAim = null;
+  aimedAt = null;
+}
+
 function onDragMove(event) {
   if (pressed && !dragged.value) {
     const travelled =
@@ -393,7 +479,7 @@ function onDragMove(event) {
   }
   if (!dragged.value) return;
   event.preventDefault();
-  aimAt(event.clientX, event.clientY);
+  aimSoon(event.clientX, event.clientY);
 }
 
 async function onDragUp(event) {
@@ -750,9 +836,11 @@ async function nudge(rowIndex, index, delta) {
             <span class="module-panel-thumb" :class="{ 'thumb-fallback': !module.panel }">
               <img
                 v-if="module.panel"
-                :src="panelThumbUrl(module.panel, 512)"
+                :src="panelUrl(module, CHIP_SCALE)"
                 :style="panelCropStyle(module.panel)"
                 :alt="`${module.manufacturer} ${module.name}`"
+                loading="lazy"
+                decoding="async"
               />
             </span>
             <span>{{ module.manufacturer }} {{ module.name }} <em>{{ module.hp ? `${module.hp}HP` : 'HP unknown' }}</em></span>
@@ -815,6 +903,7 @@ async function nudge(rowIndex, index, delta) {
           </button>
         </div>
         <div
+          v-if="rowOpened(rowIndex)"
           v-show="!rowCollapsed(rowIndex)"
           class="rack-row-slots"
           :class="`unit-${row.unit}`"
@@ -843,9 +932,11 @@ async function nudge(rowIndex, index, delta) {
           >
             <img
               v-if="module.panel"
-              :src="panelThumbUrl(module.panel, 512)"
+              :src="panelUrl(module)"
               :style="panelCropStyle(module.panel)"
               :alt="`${module.manufacturer} ${module.name}`"
+              loading="lazy"
+              decoding="async"
             />
             <span v-else class="panel-fallback">{{ module.manufacturer }}<br />{{ module.name }}<br />{{ module.hp }}HP</span>
             <!-- Each marker sits at its fraction of the FRONT PLATE, which is
@@ -913,9 +1004,10 @@ async function nudge(rowIndex, index, delta) {
       >
         <img
           v-if="dragged.module.panel"
-          :src="panelThumbUrl(dragged.module.panel, 512)"
+          :src="panelUrl(dragged.module)"
           :style="panelCropStyle(dragged.module.panel)"
           alt=""
+          decoding="async"
         />
         <span v-else class="panel-fallback">
           {{ dragged.module.manufacturer }}<br />{{ dragged.module.name }}<br />{{ dragged.module.hp }}HP

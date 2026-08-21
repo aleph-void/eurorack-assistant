@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth.js';
 import { useJobsStore } from './stores/jobs.js';
@@ -8,6 +8,13 @@ import { useDetailStore } from './stores/detail.js';
 import { createProgressSocket } from './progressSocket.js';
 import ConfirmDialog from './components/ConfirmDialog.vue';
 import ToastStack from './components/ToastStack.vue';
+import { loadVoiceSettings, resetVoiceSettings, voiceSettings } from './voiceSettings.js';
+
+// The listener is the speech engines, the activation layer, the parser and
+// the tones — the largest thing in the app that most sessions never use. It
+// is fetched the moment voice patching is switched on and not before, which
+// is why `voiceSettings.js` itself imports nothing.
+const VoicePatchPanel = defineAsyncComponent(() => import('./components/VoicePatchPanel.vue'));
 
 const auth = useAuthStore();
 const jobs = useJobsStore();
@@ -37,6 +44,16 @@ watch(() => auth.isLoggedIn, ensureSocket);
 onMounted(ensureSocket);
 onUnmounted(() => socket?.close());
 
+// Voice patching is set up per account and kept in this browser, so which
+// settings are in force follows who is signed in. Signing out puts them back
+// to the defaults: a studio machine is logged into by more than one person,
+// and the next one must not inherit a microphone — or an 'on'.
+function loadVoiceFor(user) {
+  if (user?.id) loadVoiceSettings(user.id);
+  else resetVoiceSettings();
+}
+watch(() => auth.user?.id, () => loadVoiceFor(auth.user), { immediate: true });
+
 // ---- the menu ----
 // The whole nav lives in a drawer, so what it would have shown as a badge
 // (running jobs, connected scopes) rides on the closed button instead.
@@ -58,6 +75,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 // record's own pages, at the top, above the rest of the app.
 const MODULE_PAGES = [
   { path: '', label: 'Front panel & summary', exact: true },
+  { path: '/jacks/input', label: 'Input jacks' },
+  { path: '/jacks/output', label: 'Output jacks' },
+  { path: '/jacks/bidirectional', label: 'Bidirectional jacks' },
   { path: '/components', label: 'Components' },
   { path: '/values', label: 'Component values' },
   { path: '/normalizations', label: 'Normalled connections' },
@@ -74,7 +94,6 @@ const MODULE_PAGES = [
 const PATCH_PAGES = [
   { path: '', label: 'Diagram', exact: true },
   { path: '/cables', label: 'Cables' },
-  { path: '/voice', label: 'Patch by voice' },
   { path: '/settings', label: 'Control settings' },
   { path: '/flow', label: 'Signal flow' },
   { path: '/links', label: 'Links, buses & gear' },
@@ -166,6 +185,7 @@ async function logout() {
     <RouterLink to="/questions">Questions</RouterLink>
     <RouterLink to="/notes">Notes</RouterLink>
     <RouterLink to="/account/llm" data-test="nav-llm">LLM account</RouterLink>
+    <RouterLink to="/account/voice" data-test="nav-voice">Patch by voice</RouterLink>
 
     <p class="nav-heading">Bench</p>
     <RouterLink to="/devices" data-test="nav-devices">
@@ -196,6 +216,11 @@ async function logout() {
   <main class="container">
     <RouterView />
   </main>
+
+  <!-- Patching by voice is switched on under the account rather than on a
+       page, so the listener is mounted once here and works over whichever
+       patch diagram is open. It draws nothing until both are true. -->
+  <VoicePatchPanel v-if="auth.isLoggedIn && voiceSettings.enabled" />
 
   <!-- Every confirmation in the app is drawn here, whoever asked for it. -->
   <ConfirmDialog />

@@ -21,9 +21,13 @@ import { api } from '../../src/api.js';
 import { dialog } from '../../src/dialog.js';
 import ModuleDocumentsView from '../../src/views/ModuleDocumentsView.vue';
 import DocumentsSection from '../../src/components/moduledetail/DocumentsSection.vue';
+import { refreshRackModules } from '../../src/components/moduledetail/useModuleRecord.js';
 import { mathsModule } from '../moduleFixtures.js';
 
 beforeEach(() => {
+  // The list of the user's modules is kept for the session by every module
+  // page (useModuleRecord.js), so each test starts without the last one's.
+  refreshRackModules();
   vi.clearAllMocks();
   currentRouteQuery = {};
 });

@@ -251,6 +251,13 @@ const MARKER_SELECTED = '#f4f4f5';
 // The margin is a band of diagram either side of the box, so a scroll finds
 // the panels already there rather than arriving before them.
 const VIEWPORT_MARGIN = 500;
+// What is on screen is re-measured once a frame while scrolling, and every
+// answer that DIFFERS invalidates the panels, the markers, the cables and
+// their ends — a filter and a rebuild over six thousand anchors. A scroll of
+// three pixels changes nothing about what is worth drawing, so the box is
+// snapped out to a grid and only a box that has actually moved a grid step is
+// written. The margin already covers the slack this adds.
+const VIEWPORT_STEP = 250;
 // Before there is anything to measure, the first screenful is GUESSED from
 // the window: the box has not been laid out yet, and rendering the whole
 // studio for one frame — every panel built, every image fetched — an instant
@@ -271,6 +278,11 @@ const viewport = ref(
 );
 let viewportFrame = 0;
 
+// Snapped OUTWARD, so the box is always a superset of what is really on
+// screen: nothing is culled that should have been drawn.
+const down = (value) => Math.floor(value / VIEWPORT_STEP) * VIEWPORT_STEP;
+const up = (value) => Math.ceil(value / VIEWPORT_STEP) * VIEWPORT_STEP;
+
 function measureViewport() {
   const el = wrap.value;
   if (!el || !el.clientWidth || !el.clientHeight) {
@@ -278,12 +290,17 @@ function measureViewport() {
     return;
   }
   const scale = zoom.value || 1;
-  viewport.value = {
-    x0: el.scrollLeft / scale - VIEWPORT_MARGIN,
-    y0: el.scrollTop / scale - VIEWPORT_MARGIN,
-    x1: (el.scrollLeft + el.clientWidth) / scale + VIEWPORT_MARGIN,
-    y1: (el.scrollTop + el.clientHeight) / scale + VIEWPORT_MARGIN,
+  const next = {
+    x0: down(el.scrollLeft / scale - VIEWPORT_MARGIN),
+    y0: down(el.scrollTop / scale - VIEWPORT_MARGIN),
+    x1: up((el.scrollLeft + el.clientWidth) / scale + VIEWPORT_MARGIN),
+    y1: up((el.scrollTop + el.clientHeight) / scale + VIEWPORT_MARGIN),
   };
+  const now = viewport.value;
+  if (now && now.x0 === next.x0 && now.y0 === next.y0 && now.x1 === next.x1 && now.y1 === next.y1) {
+    return;
+  }
+  viewport.value = next;
 }
 
 // Scrolling fires far faster than the screen redraws; measuring once per
@@ -444,10 +461,16 @@ const multSection = (patchModuleId, component) =>
   `${patchModuleId}:${(component.group_label || '').trim().toLowerCase()}`;
 const jackKey = (patchModuleId, componentId) => `${patchModuleId}:${componentId}`;
 
-// The jacks a cable is plugged INTO: that is what points a bidirectional jack
-// one way rather than the other.
+// The jacks a cable is plugged into, and the jacks a cable LEAVES FROM. Both
+// point a bidirectional jack: signal arriving at one makes it an input, and
+// signal leaving one makes it an output. Reading only the arriving end left a
+// switch whose common is patched onward — the many-to-one direction, four
+// steps feeding one output — with every jack of it still drawn as undecided.
 const fedJacks = computed(
   () => new Set(props.cables.map((c) => jackKey(c.to_patch_module_id, c.to_component_id)))
+);
+const sourcedJacks = computed(
+  () => new Set(props.cables.map((c) => jackKey(c.from_patch_module_id, c.from_component_id)))
 );
 
 // A ROUTING SWITCH is not a mult, and the difference is the whole of this
@@ -481,6 +504,7 @@ const switchJackKeys = computed(() => {
 const multDirections = computed(() => {
   const directions = new Map();
   const fed = fedJacks.value;
+  const sourced = sourcedJacks.value;
   // Only a jack the hardware leaves open is given a direction; one the panel
   // already calls an input or an output is what it says it is.
   const points = (key, type) => {
@@ -489,14 +513,22 @@ const multDirections = computed(() => {
     directions.set(key, type);
   };
 
+  // A switch section runs ONE way, and either end of it can be the cable that
+  // says which: signal arriving at the common (or leaving a step) runs
+  // common → steps, and signal leaving the common (or arriving at a step)
+  // runs steps → common. So a common patched into somebody's input is the
+  // section's output and its four steps become inputs, which is the
+  // many-to-one half of what a routing switch is for.
   for (const section of switchSections.value) {
-    const commonFed = fed.has(section.common);
-    const stepFed = section.steps.some((step) => fed.has(step));
+    const commonIsInput =
+      fed.has(section.common) || section.steps.some((step) => sourced.has(step));
+    const commonIsOutput =
+      sourced.has(section.common) || section.steps.some((step) => fed.has(step));
     // Nothing patched yet, or driven at both ends: the section says nothing
     // about which way it runs, so its jacks stay bidirectional.
-    if (commonFed === stepFed) continue;
-    points(section.common, commonFed ? 'input_jack' : 'output_jack');
-    for (const step of section.steps) points(step, commonFed ? 'output_jack' : 'input_jack');
+    if (commonIsInput === commonIsOutput) continue;
+    points(section.common, commonIsInput ? 'input_jack' : 'output_jack');
+    for (const step of section.steps) points(step, commonIsInput ? 'output_jack' : 'input_jack');
   }
 
   const multFed = new Map();
@@ -506,6 +538,15 @@ const multDirections = computed(() => {
     const component = componentAt(cable.to_patch_module_id, cable.to_component_id);
     if (component?.type !== BIDIRECTIONAL) continue;
     multFed.set(multSection(cable.to_patch_module_id, component), component.id);
+  }
+  // A mult jack a cable LEAVES is carrying a copy out, so it is an output
+  // whether or not the patch has said yet which of its siblings the copy is
+  // of. The siblings stay bidirectional: a mult takes its input at exactly
+  // one of them and nothing here knows which, and a second copy may still be
+  // dragged out of any of the others.
+  for (const key of sourced) {
+    if (switchJackKeys.value.has(key)) continue;
+    points(key, 'output_jack');
   }
   if (multFed.size === 0) return directions;
   for (const pm of props.modules) {
@@ -550,6 +591,10 @@ const directed = (a) => {
     // A mult jack that the patch has pointed one way is drawn as what it
     // now is, so the picture and the cable rules never disagree.
     multed: Boolean(component) && type !== component.type,
+    // …and a switch jack says so in its own words: a switch SELECTS one of
+    // its steps where a mult COPIES to all of them, so 'a copy of what is
+    // patched in' is the one thing a step is not.
+    switched: switchJackKeys.value.has(a.key),
     // Every marker is drawn in the colour of its component type, the same
     // colours the module page marks the same panel in (componentTypes.js).
     color: component ? componentColor(type) : MARKER_NEUTRAL,
@@ -854,9 +899,13 @@ const draftCable = computed(() =>
                 {{ a.name
                 }}{{
                   a.multed
-                    ? a.type === 'input_jack'
-                      ? ' (this mult\'s input)'
-                      : ' (mult output — a copy of what is patched into it)'
+                    ? a.switched
+                      ? a.type === 'input_jack'
+                        ? ' (switch input — it comes out at the other side of the section)'
+                        : ' (switch output — whichever step the switch has selected)'
+                      : a.type === 'input_jack'
+                        ? ' (this mult\'s input)'
+                        : ' (mult output — a copy of what is patched into it)'
                     : a.component
                       ? ` (${a.component.type})`
                       : ''
