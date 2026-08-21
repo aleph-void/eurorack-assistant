@@ -42,7 +42,12 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   so which jacks are copies of each other is a fact about the whole set and is
   edited over the whole set — every label a draft until one Save, with the
   sections they would make shown as they are typed. A switch section's jacks
-  are listed there as what they are and left out of the mult sections. `/patches/:id` is the picture of the case and the drag that patches a
+  are listed there as what they are and left out of the mult sections, and the
+  module's switch sections are shown beside the mult ones (read-only, pointing
+  at `/switches`) because a switch module's jacks send you to that page and
+  'not a mult' is only half an answer. The same difference is what the cable
+  pickers say: `jackLabel()` takes the role from `switchRoleOf` and names a
+  section's jacks '(switch common)' / '(switch step)' rather than '(mult)'. `/patches/:id` is the picture of the case and the drag that patches a
   cable on it; `/cables`, `/settings`, `/flow`, `/links`, `/scope`,
   `/notes` and `/modules` are the rest (`/patches/:id/config`, the one page
   that used to hold all of those, redirects to `/settings`). Every page reads

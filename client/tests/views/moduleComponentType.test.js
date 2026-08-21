@@ -199,6 +199,26 @@ describe('ModuleComponentTypeView', () => {
     expect(wrapper.find('[data-test="mult-sections"]').text()).not.toContain('SW COM');
   });
 
+  // A switch module's jacks are bidirectional and are NOT a mult, so the page
+  // they land on has to show the grouping they DO have and where it is built.
+  it('shows the module\'s switch sections beside the mult ones', async () => {
+    const wrapper = await openWith(multModule, 'bidirectional_jack');
+    const switches = wrapper.find('[data-test="switch-section-3"]');
+    expect(switches.text()).toContain('Router');
+    expect(switches.text()).toContain('SW COM');
+    expect(switches.text()).toContain('SW 1');
+    expect(wrapper.find('[data-test="mult-groups"]').text()).toContain('Switches');
+  });
+
+  // Nothing recorded is the case a switch module actually arrives in: the
+  // page has to say that a router is a section rather than a group.
+  it('says a router is a switch section rather than a group when none is recorded', async () => {
+    const wrapper = await openWith({ ...multModule, switches: [] }, 'bidirectional_jack');
+    expect(wrapper.find('[data-test="switch-sections-empty"]').text()).toContain('SELECTS');
+    // With no section recorded, every jack is grouped as a mult again.
+    expect(wrapper.find('[data-test="mult-sections"]').text()).toContain('SW COM');
+  });
+
   it('offers the groups on the bidirectional page only', async () => {
     const knobs = await openWith(multModule, 'knob');
     expect(knobs.find('[data-test="mult-groups"]').exists()).toBe(false);

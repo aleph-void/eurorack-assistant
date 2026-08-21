@@ -14,14 +14,17 @@
 // Every label is a draft until Save: setting a 2x2 mult right is four writes,
 // and doing them a row at a time would re-read the module after each one.
 
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, toRef, watch } from 'vue';
 import { api } from '../../api.js';
+import { useModuleFacts } from './useModuleFacts.js';
 
 const props = defineProps({
   module: { type: Object, required: true },
   moduleId: { type: String, required: true },
 });
 const emit = defineEmits(['reload']);
+
+const { componentName } = useModuleFacts(toRef(props, 'module'));
 
 // Named, not numbered, so listed by name — the order an analysis happened to
 // find them in is no order at all.
@@ -46,6 +49,19 @@ const switchSections = computed(() => {
   return byComponent;
 });
 const switchSectionOf = (jack) => switchSections.value.get(jack.id) || null;
+
+// The sections themselves, said in the terms the switch is in: the common
+// jack and the steps it reaches one at a time. Read-only here — a section is
+// built on the Switches page — but shown here because this is the page a
+// switch module's jacks send you to, and 'not a mult' is only half an answer.
+const switchList = computed(() =>
+  (props.module?.switches || []).map((s) => ({
+    id: s.id,
+    name: s.name || `Switch ${s.id}`,
+    common: componentName(s.common_component_id),
+    steps: (s.step_component_ids || []).map(componentName),
+  }))
+);
 
 // The labels as they are being edited, keyed by component id. Re-seeded from
 // the record every time it is (re)loaded, so a save that lands is reflected
@@ -208,8 +224,8 @@ function revert() {
         <p v-if="error" class="error" data-test="mult-groups-error">{{ error }}</p>
         <p v-if="notice" class="muted" data-test="mult-groups-notice">{{ notice }}</p>
 
-        <h3>Sections</h3>
-        <ul class="mult-sections" data-test="mult-sections">
+        <h3>Mult sections</h3>
+        <ul v-if="sections.length" class="mult-sections" data-test="mult-sections">
           <li v-for="section in sections" :key="section.key" :data-test="`mult-section-${section.key || 'ungrouped'}`">
             <strong>{{ section.label || 'Ungrouped' }}</strong>
             <span class="muted"> — {{ section.jacks.map((j) => j.name).join(', ') }}</span>
@@ -218,6 +234,28 @@ function revert() {
             </em>
           </li>
         </ul>
+        <p v-else class="muted" data-test="mult-sections-empty">
+          None — every bidirectional jack on this module belongs to a switch section.
+        </p>
+
+        <h3>Switch sections</h3>
+        <ul v-if="switchList.length" class="mult-sections" data-test="switch-sections">
+          <li v-for="section in switchList" :key="section.id" :data-test="`switch-section-${section.id}`">
+            <strong>{{ section.name }}</strong>
+            <span class="muted">
+              — {{ section.common }} ↔ {{ section.steps.join(', ') }}, one step at a time
+            </span>
+          </li>
+        </ul>
+        <p v-else class="muted" data-test="switch-sections-empty">
+          None recorded. If these jacks are a router rather than a mult — one common jack reaching
+          several others one at a time — they are a switch section, not a group: a switch SELECTS
+          where a mult COPIES, and a group label on them would be read by nothing.
+        </p>
+        <p class="muted">
+          Building or changing one is on the
+          <RouterLink :to="`/modules/${moduleId}/switches`">Switches</RouterLink> page.
+        </p>
       </template>
     </div>
   </details>

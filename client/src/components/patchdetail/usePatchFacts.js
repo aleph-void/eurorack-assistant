@@ -13,9 +13,19 @@ export const portKindLabel = (kind) => (kind ? kind.replace(/_/g, ' ') : null);
 // picture agree on what is patchable.
 export { isPatchPoint };
 
-export function jackLabel(c) {
+// A routing switch's jacks are bidirectional too, and calling them mults is
+// the one thing a picker must not do: a mult COPIES to its siblings, a switch
+// SELECTS the other side of its section. Which a jack is belongs to the patch
+// rather than to the component (a switch section is resolved onto instances),
+// so the caller passes the role it got from switchRoleOf.
+export function jackLabel(c, switchRole = null) {
   const port = portKindLabel(c.port_kind);
-  const suffix = c.type === 'bidirectional_jack' ? ` (mult${c.group_label ? ` ${c.group_label}` : ''})` : '';
+  let suffix = '';
+  if (c.type === 'bidirectional_jack') {
+    if (switchRole === 'common') suffix = ' (switch common)';
+    else if (switchRole === 'step') suffix = ' (switch step)';
+    else suffix = ` (mult${c.group_label ? ` ${c.group_label}` : ''})`;
+  }
   return `${c.name}${suffix}${port ? ` [${port}]` : ''}`;
 }
 
