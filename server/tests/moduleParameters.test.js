@@ -228,6 +228,70 @@ describe('the module parameter routes', () => {
     expect(await ctx.db.models.ModuleParameter.count({ where: { id } })).toBe(0);
   });
 
+  it('refuses an edit that makes the duplicate a create is refused for', async () => {
+    const ctx = await withMenuModule();
+    const base = `/api/modules/${ctx.module.id}/parameters`;
+    const division = (
+      await post(ctx, base, { name: 'Clock division', component_id: ctx.out1.id })
+    ).body;
+    const wave = (await post(ctx, base, { name: 'Waveform', component_id: ctx.out1.id })).body;
+    // The same name on the OTHER output is the ordinary case, and stays one.
+    const onOut2 = (await post(ctx, base, { name: 'Waveform', component_id: ctx.out2.id })).body;
+
+    // Renaming one menu entry onto its neighbour is the mis-typed second copy
+    // the create route refuses, and so is walking it onto the jack that
+    // already has one of that name.
+    expect((await put(ctx, `${base}/${wave.id}`, { name: 'clock division' })).status).toBe(409);
+    expect((await put(ctx, `${base}/${onOut2.id}`, { component_id: ctx.out1.id })).status).toBe(409);
+    // Its own name is not a clash with itself: an edit that only corrects the
+    // description still saves.
+    const kept = await put(ctx, `${base}/${wave.id}`, {
+      name: 'Waveform',
+      group_label: 'Output settings',
+    });
+    expect(kept.status).toBe(200);
+    expect(kept.body).toMatchObject({ name: 'Waveform', group_label: 'Output settings' });
+    expect((await get(ctx, base)).body.parameters).toHaveLength(3);
+    expect(division.id).toBeTruthy();
+  });
+
+  it('corrects a setting in place, keeping its place in the menu', async () => {
+    const ctx = await withMenuModule();
+    const base = `/api/modules/${ctx.module.id}/parameters`;
+    const parameter = (await post(ctx, base, { name: 'Clock division', component_id: ctx.out1.id }))
+      .body;
+    const slow = (await post(ctx, `${base}/${parameter.id}/options`, { value: '/4' })).body;
+    const fast = (await post(ctx, `${base}/${parameter.id}/options`, { value: 'x2' })).body;
+
+    const fixed = await put(ctx, `${base}/${parameter.id}/options/${slow.id}`, {
+      value: '/16',
+      description: 'Sixteen times slower than the clock',
+    });
+    expect(fixed.status).toBe(200);
+    expect(fixed.body).toMatchObject({
+      id: slow.id,
+      value: '/16',
+      description: 'Sixteen times slower than the clock',
+    });
+    // Corrected in place: still the FIRST setting of the menu, which is what
+    // deleting and re-adding it would have lost.
+    const options = (await get(ctx, base)).body.parameters[0].options;
+    expect(options.map((o) => o.value)).toEqual(['/16', 'x2']);
+
+    // Typing one setting onto another is the duplicate the add refuses.
+    expect(
+      (await put(ctx, `${base}/${parameter.id}/options/${fast.id}`, { value: '/16' })).status
+    ).toBe(409);
+    expect(
+      (await put(ctx, `${base}/${parameter.id}/options/${fast.id}`, { value: '  ' })).status
+    ).toBe(400);
+    expect((await put(ctx, `${base}/${parameter.id}/options/${fast.id}`, {})).status).toBe(400);
+    // Its own value is not a clash with itself.
+    expect(
+      (await put(ctx, `${base}/${parameter.id}/options/${fast.id}`, { value: 'X2' })).status
+    ).toBe(200);
+  });
+
   it('serves the menu on the module payload, grouped under the jack it configures', async () => {
     const ctx = await withMenuModule();
     const { body } = await post(ctx, `/api/modules/${ctx.module.id}/parameters`, {

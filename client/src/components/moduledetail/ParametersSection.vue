@@ -103,6 +103,19 @@ const draft = reactive({
 });
 const canCreate = computed(() => draft.name.trim() !== '');
 
+// Everything but the component and the value type, which stay where they were
+// put: a menu is entered a page at a time, and the next parameter of "Output
+// settings" on OUT 1 is almost always an enum on OUT 1 as well.
+function clearDraft() {
+  draft.name = '';
+  draft.group_label = '';
+  draft.unit = '';
+  draft.value_min = '';
+  draft.value_max = '';
+  draft.default_value = '';
+  draft.description = '';
+}
+
 async function createParameter() {
   error.value = '';
   try {
@@ -117,13 +130,7 @@ async function createParameter() {
       default_value: draft.default_value.trim(),
       description: draft.description.trim(),
     });
-    draft.name = '';
-    draft.group_label = '';
-    draft.unit = '';
-    draft.value_min = '';
-    draft.value_max = '';
-    draft.default_value = '';
-    draft.description = '';
+    clearDraft();
     emit('reload');
   } catch (e) {
     error.value = e.message;
@@ -133,12 +140,23 @@ async function createParameter() {
 // ---- correcting one ----
 
 const editingId = ref(null);
-const edit = reactive({ name: '', component_id: '', value_type: 'enum', unit: '', value_min: '', value_max: '', default_value: '', description: '' });
+const edit = reactive({
+  name: '',
+  component_id: '',
+  group_label: '',
+  value_type: 'enum',
+  unit: '',
+  value_min: '',
+  value_max: '',
+  default_value: '',
+  description: '',
+});
 
 function startEdit(parameter) {
   editingId.value = parameter.id;
   edit.name = parameter.name;
   edit.component_id = parameter.component_id == null ? '' : String(parameter.component_id);
+  edit.group_label = parameter.group_label || '';
   edit.value_type = parameter.value_type;
   edit.unit = parameter.unit || '';
   edit.value_min = parameter.value_min || '';
@@ -154,6 +172,7 @@ async function saveEdit(parameter) {
     await api.put(`/api/modules/${props.moduleId}/parameters/${parameter.id}`, {
       name: edit.name.trim(),
       component_id: edit.component_id === '' ? null : Number(edit.component_id),
+      group_label: edit.group_label.trim(),
       value_type: edit.value_type,
       unit: edit.unit.trim(),
       value_min: edit.value_min.trim(),
@@ -213,12 +232,48 @@ async function addOption(parameter) {
   }
 }
 
+// A setting is corrected in place rather than deleted and retyped: an option
+// carries its position in the menu, and re-adding it puts a '/16' the manual
+// prints third at the bottom of the list.
+const editingOptionId = ref(null);
+const editOption = reactive({ value: '', description: '' });
+
+function startEditOption(option) {
+  editingOptionId.value = option.id;
+  editOption.value = option.value;
+  editOption.description = option.description || '';
+  error.value = '';
+}
+
+async function saveOption(parameter, option) {
+  if (!editOption.value.trim()) return;
+  error.value = '';
+  try {
+    await api.put(
+      `/api/modules/${props.moduleId}/parameters/${parameter.id}/options/${option.id}`,
+      { value: editOption.value.trim(), description: editOption.description.trim() }
+    );
+    editingOptionId.value = null;
+    emit('reload');
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
 async function removeOption(parameter, option) {
+  const ok = await dialog.confirm({
+    title: 'Remove setting',
+    message: `Remove '${option.value}' from the settings ${parameter.name} offers? A patch that recorded it keeps the value and stops being able to pick it again.`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
   error.value = '';
   try {
     await api.delete(
       `/api/modules/${props.moduleId}/parameters/${parameter.id}/options/${option.id}`
     );
+    if (editingOptionId.value === option.id) editingOptionId.value = null;
     emit('reload');
   } catch (e) {
     error.value = e.message;
@@ -302,6 +357,11 @@ async function removeOption(parameter, option) {
                       </option>
                     </select>
                     <input
+                      v-model="edit.group_label"
+                      placeholder="Menu page (optional)"
+                      :data-test="`edit-parameter-group-${parameter.id}`"
+                    />
+                    <input
                       v-model="edit.description"
                       placeholder="What this parameter does"
                       :data-test="`edit-parameter-description-${parameter.id}`"
@@ -343,16 +403,47 @@ async function removeOption(parameter, option) {
                       :key="option.id"
                       :data-test="`parameter-option-${option.id}`"
                     >
-                      <strong>{{ option.value }}</strong>
-                      <span v-if="option.description" class="muted"> — {{ option.description }}</span>
-                      <button
-                        type="button"
-                        class="danger"
-                        :data-test="`delete-option-${option.id}`"
-                        @click="removeOption(parameter, option)"
-                      >
-                        ×
-                      </button>
+                      <template v-if="editingOptionId === option.id">
+                        <input
+                          v-model="editOption.value"
+                          :data-test="`edit-option-value-${option.id}`"
+                        />
+                        <input
+                          v-model="editOption.description"
+                          placeholder="What it does (optional)"
+                          :data-test="`edit-option-description-${option.id}`"
+                        />
+                        <button
+                          type="button"
+                          :data-test="`save-option-${option.id}`"
+                          @click="saveOption(parameter, option)"
+                        >
+                          Save
+                        </button>
+                        <button type="button" class="secondary" @click="editingOptionId = null">
+                          Cancel
+                        </button>
+                      </template>
+                      <template v-else>
+                        <strong>{{ option.value }}</strong>
+                        <span v-if="option.description" class="muted"> — {{ option.description }}</span>
+                        <button
+                          type="button"
+                          class="secondary"
+                          :data-test="`edit-option-${option.id}`"
+                          @click="startEditOption(option)"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          class="danger"
+                          :data-test="`delete-option-${option.id}`"
+                          @click="removeOption(parameter, option)"
+                        >
+                          ×
+                        </button>
+                      </template>
                     </li>
                   </ul>
                   <p v-else class="muted">
@@ -434,6 +525,30 @@ async function removeOption(parameter, option) {
             <label for="parameter-unit">Unit</label>
             <input id="parameter-unit" v-model="draft.unit" data-test="parameter-unit" />
           </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="parameter-group">Menu page</label>
+            <input
+              id="parameter-group"
+              v-model="draft.group_label"
+              data-test="parameter-group"
+              placeholder="e.g. Output settings"
+            />
+          </div>
+          <div class="shrink">
+            <label for="parameter-default">Default</label>
+            <input id="parameter-default" v-model="draft.default_value" data-test="parameter-default" />
+          </div>
+          <div>
+            <label for="parameter-description">What it does</label>
+            <input
+              id="parameter-description"
+              v-model="draft.description"
+              data-test="parameter-description"
+              placeholder="One sentence, for the questions asked about a patch"
+            />
+          </div>
           <div class="shrink">
             <button type="submit" style="margin: 0" :disabled="!canCreate" data-test="parameter-create">
               Add
@@ -463,6 +578,10 @@ async function removeOption(parameter, option) {
   display: flex;
   align-items: baseline;
   gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.option-list input {
+  margin: 0;
 }
 .option-list button {
   margin: 0;

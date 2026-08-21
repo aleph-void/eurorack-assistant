@@ -54,6 +54,30 @@ export function moduleParameterRoutes(db) {
     return value ? value.slice(0, max) : null;
   };
 
+  const parametersOf = (module) => ModuleParameter.findAll({ where: { module_id: module.id } });
+
+  // One name per component: a parameter list is a menu, and two 'Division'
+  // entries on OUT 1 is a mis-typed second copy, not a second setting. The
+  // rule has to hold on an EDIT as much as on a create — renaming a parameter
+  // onto its neighbour, or moving it to the component that already has one of
+  // that name, makes exactly the duplicate the create route refuses.
+  const nameTaken = (rows, componentId, name, exceptId = null) =>
+    rows.some(
+      (p) =>
+        p.id !== exceptId &&
+        (p.component_id ?? null) === (componentId ?? null) &&
+        String(p.name).toLowerCase() === name.toLowerCase()
+    );
+
+  const optionsOf = (parameter) =>
+    ModuleParameterOption.findAll({
+      where: { parameter_id: parameter.id },
+      order: [
+        ['position', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
+
   router.get('/:id/parameters', requireOwnedModule(db), asyncHandler(async (req, res) => {
     const byModule = await parametersByModule(db, [req.module.id]);
     res.json({ parameters: byModule.get(req.module.id) ?? [] });
@@ -69,15 +93,8 @@ export function moduleParameterRoutes(db) {
     if (component.error) return res.status(400).json({ error: component.error });
     const valueType = readValueType(req.body?.value_type);
     if (valueType.error) return res.status(400).json({ error: valueType.error });
-    // One name per component: a parameter list is a menu, and two "Division"
-    // entries on OUT 1 is a mis-typed second copy, not a second setting.
-    const existing = await ModuleParameter.findAll({ where: { module_id: module.id } });
-    const clash = existing.some(
-      (p) =>
-        (p.component_id ?? null) === component.id &&
-        String(p.name).toLowerCase() === name.toLowerCase()
-    );
-    if (clash) {
+    const existing = await parametersOf(module);
+    if (nameTaken(existing, component.id, name)) {
       return res.status(409).json({ error: `this module already has a '${name}' parameter here` });
     }
     const row = await ModuleParameter.create({
@@ -131,14 +148,18 @@ export function moduleParameterRoutes(db) {
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: 'nothing to update' });
     }
+    if (updates.name !== undefined || updates.component_id !== undefined) {
+      const name = updates.name ?? row.name;
+      const componentId =
+        updates.component_id !== undefined ? updates.component_id : row.component_id;
+      if (nameTaken(await parametersOf(module), componentId, name, row.id)) {
+        return res
+          .status(409)
+          .json({ error: `this module already has a '${name}' parameter here` });
+      }
+    }
     await row.update(updates);
-    const options = await ModuleParameterOption.findAll({
-      where: { parameter_id: row.id },
-      order: [
-        ['position', 'ASC'],
-        ['id', 'ASC'],
-      ],
-    });
+    const options = await optionsOf(row);
     res.json(parameterJson(row, { options: options.map(parameterOptionJson) }));
   }));
 
@@ -190,6 +211,17 @@ export function moduleParameterRoutes(db) {
     }
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: 'value or description is required' });
+    }
+    // Re-typing one setting onto another is the same duplicate the create
+    // route refuses: a menu offers each of its settings once.
+    if (updates.value !== undefined) {
+      const siblings = await optionsOf(parameter);
+      const clash = siblings.some(
+        (o) => o.id !== row.id && o.value.toLowerCase() === updates.value.toLowerCase()
+      );
+      if (clash) {
+        return res.status(409).json({ error: `this parameter already offers '${updates.value}'` });
+      }
     }
     await row.update(updates);
     res.json(parameterOptionJson(row));
