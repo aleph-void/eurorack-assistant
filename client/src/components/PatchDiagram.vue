@@ -356,8 +356,21 @@ const anchorFor = (patchModuleId, componentId) =>
     ? null
     : diagram.value.anchors.get(`${patchModuleId}:${componentId}`) ?? null;
 
+// A studio is two hundred instances and six thousand components, and both of
+// these are asked once per marker: scanning the arrays for each one is a
+// million comparisons every time a cable changes what a mult jack is.
+// Indexed once per payload instead.
+const moduleById = computed(() => new Map(props.modules.map((pm) => [pm.id, pm])));
+const componentByJack = computed(() => {
+  const map = new Map();
+  for (const pm of props.modules) {
+    for (const component of pm.components ?? []) map.set(`${pm.id}:${component.id}`, component);
+  }
+  return map;
+});
+
 const moduleName = (patchModuleId) => {
-  const pm = props.modules.find((m) => m.id === patchModuleId);
+  const pm = moduleById.value.get(patchModuleId);
   return pm ? label(pm) : 'unknown module';
 };
 
@@ -411,7 +424,7 @@ const undrawn = computed(() => props.cables.length - drawn.value.length);
 const unplaced = computed(() => organized.value.unplaced ?? []);
 
 const componentAt = (patchModuleId, componentId) =>
-  props.modules.find((pm) => pm.id === patchModuleId)?.components.find((c) => c.id === componentId) ?? null;
+  componentByJack.value.get(`${patchModuleId}:${componentId}`) ?? null;
 
 // ---- which way a mult runs, once something is plugged into it ----
 // The jacks of a mult section are interchangeable HARDWARE: any of them can
@@ -507,47 +520,63 @@ const multDirections = computed(() => {
   return directions;
 });
 
-const allAnchors = computed(() =>
+// Every marker on the whole picture, as the HARDWARE has it: what a panel
+// places, which component is behind it, and nothing the cables can change.
+// A studio's worth of these is six thousand objects, so building them is kept
+// off the path a cable takes — plugging one only re-points the handful of
+// mult jacks the patch has decided the direction of (`directed` below).
+const anchorBase = computed(() =>
   [...diagram.value.anchors.entries()].map(([key, anchor]) => {
     const [patchModuleId, componentId] = key.split(':').map(Number);
-    const component = componentAt(patchModuleId, componentId);
-    // What this connector is IN THIS PATCH: its own type, unless it is a mult
-    // jack the patch has given a direction.
-    const type = multDirections.value.get(key) ?? component?.type ?? null;
     return {
       key,
       patchModuleId,
       componentId,
-      component,
-      type,
-      // A mult jack that the patch has pointed one way is drawn as what it
-      // now is, so the picture and the cable rules never disagree.
-      multed: Boolean(component) && type !== component.type,
-      // Every marker is drawn in the colour of its component type, the same
-      // colours the module page marks the same panel in (componentTypes.js).
-      color: component ? componentColor(type) : MARKER_NEUTRAL,
+      component: componentAt(patchModuleId, componentId),
       ...anchor,
     };
   })
 );
+
+// What one connector is IN THIS PATCH: its own type, unless it is a mult jack
+// the patch has given a direction.
+const directedType = (a) => multDirections.value.get(a.key) ?? a.component?.type ?? null;
+const directed = (a) => {
+  const component = a.component;
+  const type = directedType(a);
+  return {
+    ...a,
+    type,
+    // A mult jack that the patch has pointed one way is drawn as what it
+    // now is, so the picture and the cable rules never disagree.
+    multed: Boolean(component) && type !== component.type,
+    // Every marker is drawn in the colour of its component type, the same
+    // colours the module page marks the same panel in (componentTypes.js).
+    color: component ? componentColor(type) : MARKER_NEUTRAL,
+  };
+};
 // The markers built into the picture: the ones on a panel that is on screen.
 // Everything else about a marker — the legend below, what a cable may be
 // dragged to — is a fact about the whole diagram and keeps counting them all,
 // so scrolling never changes what the picture SAYS, only what it draws.
+// A direction only ever re-points a jack (a mult jack to an input or an
+// output), so the cheap test on the component's own type is the same test.
 const visibleAnchors = computed(() => {
   if (!showMarkers.value) return [];
-  return allAnchors.value.filter(
-    (a) =>
-      visibleModuleIds.value.has(a.patchModuleId) &&
-      (showControls.value || Boolean(a.type?.endsWith('_jack')))
-  );
+  return anchorBase.value
+    .filter(
+      (a) =>
+        visibleModuleIds.value.has(a.patchModuleId) &&
+        (showControls.value || Boolean(a.component?.type?.endsWith('_jack')))
+    )
+    .map(directed);
 });
 
 // The key under the picture: what is actually on this diagram, not the whole
 // catalogue of types — and a mult the patch has pointed one way counts as
 // what it is now, so the key never names a colour the picture is not using.
 const shownComponents = computed(() =>
-  allAnchors.value.filter((a) => a.component).map((a) => ({ type: a.type }))
+  anchorBase.value.filter((a) => a.component).map((a) => ({ type: directedType(a) }))
 );
 // What a cable may be dragged TO, and what it may be dragged FROM. A
 // bidirectional jack is both: which way it runs is decided by the patch, so
@@ -555,7 +584,10 @@ const shownComponents = computed(() =>
 // whether that particular cable is legal.
 const CABLE_IN = ['input_jack', 'bidirectional_jack'];
 const CABLE_OUT = ['output_jack', 'bidirectional_jack'];
-const inputs = computed(() => allAnchors.value.filter((a) => CABLE_IN.includes(a.type)));
+// Read only when a drag is dropped, over the whole diagram: a cable may be
+// dropped on a jack that is off screen the moment the picture scrolls under
+// the pointer.
+const inputs = computed(() => anchorBase.value.filter((a) => CABLE_IN.includes(directedType(a))));
 
 // ---- correcting a jack's direction ----
 // The analysis reads a mult's jacks as plain inputs or outputs often enough
@@ -571,8 +603,8 @@ const selected = ref(null);
 const retypeTo = ref('');
 const selectedJack = computed(() => {
   if (!selected.value) return null;
-  const pm = props.modules.find((m) => m.id === selected.value.patchModuleId);
-  const component = pm?.components?.find((c) => c.id === selected.value.componentId);
+  const pm = moduleById.value.get(selected.value.patchModuleId);
+  const component = componentAt(selected.value.patchModuleId, selected.value.componentId);
   if (!pm || !component || !String(component.type).endsWith('_jack')) return null;
   return { pm, component };
 });

@@ -36,7 +36,15 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   `/notes` and `/modules` are the rest (`/patches/:id/config`, the one page
   that used to hold all of those, redirects to `/settings`). Every page reads
   the SAME `GET /api/modules/:id` / `GET /api/patches/:id` and reloads it
-  after every write — `useModuleRecord.js` / `usePatchRecord.js` — and draws
+  after every write — `useModuleRecord.js` / `usePatchRecord.js` — with ONE
+  exception: plugging and unplugging a cable ON THE PICTURE puts the row the
+  server just made straight into the payload (`setCables`) instead of reading
+  the patch back, because a whole-studio patch is a second of server work and
+  two megabytes on the wire and a cable is one row of it. It is safe only
+  there — the picture is made of the modules, the cables and the switch
+  sections, none of which the server re-derives from a cable, while the cable
+  LIST also shows the normalled connections a new cable cancels, so that page
+  still re-reads. Every page draws
   `ModuleDetailHeader` / `PatchDetailHeader`, which is what tells the nav
   drawer (`stores/detail.js`) which record's pages to offer at the top of it.
   Arranging a marker is the one thing that needs the plate and a component's

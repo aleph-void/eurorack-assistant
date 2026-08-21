@@ -67,9 +67,12 @@ describe('PatchDetailView', () => {
     expect(api.get).toHaveBeenCalledWith('/api/patches/7');
   });
 
-  it('creates a cable emitted by the diagram drag gesture', async () => {
+  // The cable the SERVER made is put straight into the picture: re-reading a
+  // whole studio's patch is a second of work and two megabytes for one row,
+  // and it is what made a patched cable slow to appear.
+  it('draws the cable it was given back without re-reading the patch', async () => {
     api.get.mockResolvedValue(patchResponse);
-    api.post.mockResolvedValue({ id: 22 });
+    api.post.mockResolvedValue({ id: 22, from_patch_module_id: 11, from_component_id: 2, to_patch_module_id: 11, to_component_id: 1, paired_cable: null });
     const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
     await openPanels(wrapper);
@@ -86,6 +89,26 @@ describe('PatchDetailView', () => {
       to_patch_module_id: 11,
       to_component_id: 1,
     });
+    const cables = wrapper.findComponent(PatchDiagram).props('cables');
+    expect(cables.map((c) => c.id)).toContain(22);
+    // The one field the payload does not carry is not smuggled into it.
+    expect(cables.find((c) => c.id === 22)).not.toHaveProperty('paired_cable');
+    expect(api.get).toHaveBeenCalledTimes(1);
+  });
+
+  // Both halves of a stereo pair are one decision, and the server plugs the
+  // second cable itself — so both come back and both are drawn.
+  it('draws the other half of a pair the server plugged with it', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.post.mockResolvedValue({ id: 22, paired_cable: { id: 23 } });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+    wrapper.findComponent(PatchDiagram).vm.$emit('connect', { from_patch_module_id: 11, from_component_id: 2, to_patch_module_id: 11, to_component_id: 1, pair: true });
+    await flushPromises();
+    expect(wrapper.findComponent(PatchDiagram).props('cables').map((c) => c.id)).toEqual(
+      expect.arrayContaining([22, 23])
+    );
   });
 
   it('deletes a cable the diagram asks to unplug', async () => {
@@ -97,6 +120,9 @@ describe('PatchDetailView', () => {
     wrapper.findComponent(PatchDiagram).vm.$emit('disconnect', { id: 21 });
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/patches/7/cables/21');
+    // Pulled out of the picture on the spot, again with no second read.
+    expect(wrapper.findComponent(PatchDiagram).props('cables').map((c) => c.id)).not.toContain(21);
+    expect(api.get).toHaveBeenCalledTimes(1);
   });
 
   // Which way a jack runs is a fact about the MODULE, so correcting it from

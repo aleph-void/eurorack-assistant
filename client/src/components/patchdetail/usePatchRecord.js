@@ -30,8 +30,20 @@ export function usePatchRecord(id) {
     }
   }
 
+  // One write folded into the payload rather than read back. Re-reading the
+  // record is the rule — it is what keeps every page showing what the server
+  // really holds — but a whole-studio patch is a second of server work and
+  // two megabytes on the wire, and paying that for a cable is what made a
+  // patched cable take that long to appear. Cables are their own list in the
+  // payload and nothing else the picture draws is made of them, so the page
+  // that plugs one takes the row the server just made and puts it in place.
+  function setCables(cables) {
+    if (!patch.value) return;
+    patch.value = { ...patch.value, cables };
+  }
+
   onMounted(load);
   watch(id, load);
 
-  return { patch, error, load };
+  return { patch, error, load, setCables };
 }

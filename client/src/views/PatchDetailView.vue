@@ -13,20 +13,27 @@ import { usePatchRecord } from '../components/patchdetail/usePatchRecord.js';
 
 const props = defineProps({ id: { type: String, required: true } });
 
-const { patch, error, load } = usePatchRecord(toRef(props, 'id'));
+const { patch, error, load, setCables } = usePatchRecord(toRef(props, 'id'));
 const { modules, moduleLabel } = usePatchFacts(patch);
 
 // The diagram's drag gesture creates and pulls out a cable exactly as the
 // cable list does. The write lives here because this is the page the gesture
-// happens on, and the diagram refreshes from the server's canonical state
-// rather than from what the pointer did.
+// happens on, and the diagram draws the cable the SERVER made rather than the
+// one the pointer described — the rules that refuse a cable, and the second
+// cable a stereo pair plugs, are the server's to decide. It is put straight
+// into the payload instead of re-reading the patch: a studio's patch is a
+// second of server work and two megabytes to read back, and a cable is one
+// row of it.
 const cableError = ref('');
 
 async function connectDiagramCable(ends) {
   cableError.value = '';
   try {
-    await api.post(`/api/patches/${props.id}/cables`, ends);
-    await load();
+    const { paired_cable: paired, ...cable } = await api.post(
+      `/api/patches/${props.id}/cables`,
+      ends
+    );
+    setCables([...patch.value.cables, cable, ...(paired ? [paired] : [])]);
   } catch (e) {
     cableError.value = e.message;
   }
@@ -39,7 +46,7 @@ async function disconnectDiagramCable(cable) {
   cableError.value = '';
   try {
     await api.delete(`/api/patches/${props.id}/cables/${cable.id}`);
-    await load();
+    setCables(patch.value.cables.filter((c) => c.id !== cable.id));
   } catch (e) {
     cableError.value = e.message;
   }
