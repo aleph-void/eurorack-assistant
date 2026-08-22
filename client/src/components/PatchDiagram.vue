@@ -138,12 +138,24 @@ const {
   MARKER_SELECTED,
   onScroll,
   inView,
-  showControls,
   showMarkers,
   imageUrl,
   svgStyle,
 } = useDiagramView({ wrap, container, diagram });
 
+// WHAT KINDS OF THING THE PICTURE DRAWS — pressed in the key under it.
+// A studio is six thousand markers and all but the jacks are furniture no
+// cable can go in: drawing every knob, LED and button turns the case into a
+// bead curtain and buries the holes the patch is made of. So the picture
+// opens on the three jack types and nothing else, and every other type on it
+// is one press of the key away. Unlike the key under a module panel, this
+// selection IS what is drawn rather than a filter over everything: a jack
+// type presses off as readily as a knob presses on, and with none of them on
+// the picture is the bare case.
+const DEFAULT_MARKER_TYPES = ['input_jack', 'output_jack', 'bidirectional_jack'];
+const shownTypes = ref([...DEFAULT_MARKER_TYPES]);
+
+// The panels inside the scroll box, and the instances they belong to. Markers
 // are culled with their panel: a marker is only ever ON one.
 const visiblePanels = computed(() =>
   diagram.value.panels.filter((placed) =>
@@ -232,7 +244,6 @@ const componentAt = (patchModuleId, componentId) =>
 // pointed it: switch sections first, then the mult groups that are left.
 const { switchJackKeys, multDirections } = useMultDirections(props, componentAt);
 
-
 // Every marker on the whole picture, as the HARDWARE has it: what a panel
 // places, which component is behind it, and nothing the cables can change.
 // A studio's worth of these is six thousand objects, so building them is kept
@@ -272,20 +283,18 @@ const directed = (a) => {
     color: component ? componentColor(type) : MARKER_NEUTRAL,
   };
 };
-// The markers built into the picture: the ones on a panel that is on screen.
-// Everything else about a marker — the legend below, what a cable may be
-// dragged to — is a fact about the whole diagram and keeps counting them all,
-// so scrolling never changes what the picture SAYS, only what it draws.
-// A direction only ever re-points a jack (a mult jack to an input or an
-// output), so the cheap test on the component's own type is the same test.
+// The markers built into the picture: the ones of a type the key has on, on
+// a panel that is on screen. Everything else about a marker — the legend
+// below, what a cable may be dragged to — is a fact about the whole diagram
+// and keeps counting them all, so scrolling never changes what the picture
+// SAYS, only what it draws. A marker is matched on what it is IN THIS PATCH,
+// the same reading the key is listed from, so a mult the patch has pointed
+// one way follows the entry it is now drawn under.
 const visibleAnchors = computed(() => {
   if (!showMarkers.value) return [];
+  const shown = new Set(shownTypes.value);
   return anchorBase.value
-    .filter(
-      (a) =>
-        visibleModuleIds.value.has(a.patchModuleId) &&
-        (showControls.value || Boolean(a.component?.type?.endsWith('_jack')))
-    )
+    .filter((a) => visibleModuleIds.value.has(a.patchModuleId) && shown.has(directedType(a)))
     .map(directed);
 });
 
@@ -305,6 +314,32 @@ const CABLE_OUT = ['output_jack', 'bidirectional_jack'];
 // dropped on a jack that is off screen the moment the picture scrolls under
 // the pointer.
 const inputs = computed(() => anchorBase.value.filter((a) => CABLE_IN.includes(directedType(a))));
+
+const anchorAt = (patchModuleId, componentId) =>
+  anchorBase.value.find(
+    (a) => a.patchModuleId === patchModuleId && a.componentId === componentId
+  ) ?? null;
+
+// ---- patching with a tap ----
+// A drag cannot be the gesture on a phone. The picture scrolls under a finger
+// — that is the gesture the diagram deliberately leaves to the browser (see
+// `startPan`) — so a drag from a marker is cancelled the moment it moves, and
+// a studio's two jacks are usually not on screen together anyway: the cable
+// from the sequencer at one end of the case to the filter at the other is
+// patched with a scroll in the middle of it. So a cable is also patched in
+// TWO TAPS: tap the output, press 'Patch from here', tap the input. It is the
+// same on a mouse, for anyone who finds a drag across a studio fiddly.
+const patchFrom = ref(null);
+const patchSource = computed(() => {
+  if (!patchFrom.value) return null;
+  const anchor = anchorAt(patchFrom.value.patchModuleId, patchFrom.value.componentId);
+  return anchor ? directed(anchor) : null;
+});
+// Where the armed cable may land: any jack this patch reads as an input,
+// except the one the cable is coming out of. The server's cable rules decide
+// whether that particular cable is legal, exactly as they do for a drag.
+const isPatchTarget = (a) =>
+  Boolean(patchFrom.value) && a.key !== patchFrom.value.key && CABLE_IN.includes(a.type);
 
 // ---- correcting a jack's direction ----
 // The analysis reads a mult's jacks as plain inputs or outputs often enough
@@ -327,6 +362,27 @@ const selectedJack = computed(() => {
 });
 function selectJack(anchor) {
   if (!props.interactive) return;
+  // A tap means 'this end of the cable' while one is armed, and 'tell me
+  // about this jack' the rest of the time. Tapping the jack the cable comes
+  // out of puts it back; a jack the cable cannot reach is dimmed and does
+  // nothing, so a mis-tap never quietly loses the half-made cable.
+  if (patchFrom.value) {
+    if (anchor.key === patchFrom.value.key) {
+      patchFrom.value = null;
+      return;
+    }
+    if (!isPatchTarget(anchor)) return;
+    const source = patchFrom.value;
+    patchFrom.value = null;
+    emit('connect', {
+      from_patch_module_id: source.patchModuleId,
+      from_component_id: source.componentId,
+      to_patch_module_id: anchor.patchModuleId,
+      to_component_id: anchor.componentId,
+    });
+    return;
+  }
+  selectedCableId.value = null;
   selected.value =
     selected.value?.componentId === anchor.componentId &&
     selected.value?.patchModuleId === anchor.patchModuleId
@@ -347,8 +403,36 @@ function applyRetype() {
   selected.value = null;
 }
 
-// The two gestures on the picture: patching a cable, and moving the picture
-// the way a map is moved.
+// The selected jack as the PATCH has it: a mult jack the patch has pointed
+// one way is an output here even though the hardware calls it neither, which
+// is what decides whether a cable can be started from it.
+const selectedAnchor = computed(() => {
+  if (!selected.value) return null;
+  const anchor = anchorAt(selected.value.patchModuleId, selected.value.componentId);
+  return anchor ? directed(anchor) : null;
+});
+const canPatchFrom = computed(() => CABLE_OUT.includes(selectedAnchor.value?.type));
+
+function armPatch() {
+  const anchor = selectedAnchor.value;
+  if (!props.interactive || !anchor || !CABLE_OUT.includes(anchor.type)) return;
+  patchFrom.value = {
+    key: anchor.key,
+    patchModuleId: anchor.patchModuleId,
+    componentId: anchor.componentId,
+    name: anchor.name,
+  };
+  selected.value = null;
+  selectedCableId.value = null;
+}
+
+function cancelPatch() {
+  patchFrom.value = null;
+}
+
+// The two MOUSE gestures on the picture: dragging a cable between two jacks,
+// and dragging the picture itself. Both are left to the browser under a
+// finger — patching and unplugging by TAP are below.
 const svg = ref(null);
 const {
   dragging,
@@ -359,7 +443,6 @@ const {
   startPan,
   movePan,
   endPan,
-  unplugCable,
   draftCable,
 } = useCableDrag({
   props,
@@ -370,6 +453,44 @@ const {
   inputs,
   drawnCount: computed(() => drawn.value.length),
 });
+
+// Unplugging from the picture: the same alt-click / right-click gesture the
+// rack organizer uses to pull a module out of a row. The parent does the
+// write, so a read-only diagram keeps the browser's own context menu.
+function unplugCable(cable, event) {
+  if (!props.interactive) return;
+  event?.preventDefault();
+  selectedCableId.value = null;
+  emit('disconnect', cable);
+}
+
+// A touch screen has no alt key and no right button, so a PLAIN tap on a
+// cable picks it out and offers to unplug it below the picture — a cable is
+// forty other cables' worth of curve on a whole studio, so the bar names the
+// two jacks before anything is pulled. The keyboard gesture stays the fast
+// path for anyone who has a keyboard.
+const selectedCableId = ref(null);
+// The visible stroke is deaf (see the stylesheet: it lies OVER the markers,
+// and a tap on a patched output has to reach the marker), so the thickening
+// under the pointer cannot be a `:hover` rule on it. The handle underneath
+// says which cable is under the pointer instead.
+const hoveredCableId = ref(null);
+const pickedCable = computed(() =>
+  drawn.value.find((c) => c.cable.id === selectedCableId.value) ?? null
+);
+function pickCable(entry, event) {
+  if (!props.interactive) return;
+  if (event.altKey) {
+    unplugCable(entry.cable, event);
+    return;
+  }
+  // Half a cable is already being patched: the picture is asking which input,
+  // and the cables are dimmed out of the way of that answer.
+  if (patchFrom.value) return;
+  event.preventDefault();
+  selected.value = null;
+  selectedCableId.value = selectedCableId.value === entry.cable.id ? null : entry.cable.id;
+}
 
 </script>
 
@@ -515,6 +636,28 @@ const {
               />
             </g>
 
+            <!-- The handle a finger unplugs by. A cable is drawn seven pixels
+                 wide and a fingertip is nearer forty, so every cable also has
+                 an invisible stroke several times its width to be tapped at.
+                 It sits UNDER the markers, so the marker at a cable's end is
+                 still the thing a tap on that end finds, and it is built from
+                 the cables on screen like everything else here. -->
+            <template v-if="interactive">
+              <path
+                v-for="c in visibleCables"
+                :key="`hit-${c.cable.id}`"
+                :d="c.d"
+                class="cable-hit"
+                :class="{ dimmed: Boolean(patchFrom) }"
+                stroke="transparent"
+                :data-test="`diagram-cable-hit-${c.cable.id}`"
+                @click="pickCable(c, $event)"
+                @contextmenu="unplugCable(c.cable, $event)"
+                @pointerenter="hoveredCableId = c.cable.id"
+                @pointerleave="hoveredCableId = null"
+              />
+            </template>
+
             <!-- Every jack we know the position of, so an empty one still
                  reads as somewhere a cable could go. -->
             <circle
@@ -526,8 +669,9 @@ const {
               class="jack-marker"
               :fill="a.color"
               :stroke="
-                selected?.patchModuleId === a.patchModuleId &&
-                selected?.componentId === a.componentId
+                (selected?.patchModuleId === a.patchModuleId &&
+                  selected?.componentId === a.componentId) ||
+                patchFrom?.key === a.key
                   ? MARKER_SELECTED
                   : MARKER_HALO
               "
@@ -536,8 +680,10 @@ const {
                 patchable: CABLE_OUT.includes(a.type),
                 jack: Boolean(a.type?.endsWith('_jack')),
                 selected:
-                  selected?.patchModuleId === a.patchModuleId &&
-                  selected?.componentId === a.componentId,
+                  (selected?.patchModuleId === a.patchModuleId &&
+                    selected?.componentId === a.componentId) ||
+                  patchFrom?.key === a.key,
+                dimmed: Boolean(patchFrom) && patchFrom.key !== a.key && !isPatchTarget(a),
               }"
               :data-test="`diagram-jack-${a.patchModuleId}-${a.componentId}`"
               @pointerdown="CABLE_OUT.includes(a.type) && startCable(a, $event)"
@@ -568,13 +714,22 @@ const {
               :key="c.cable.id"
               :d="c.d"
               class="cable"
-              :class="{ optional: c.cable.optional, unpluggable: interactive }"
+              :class="{
+                optional: c.cable.optional,
+                unpluggable: interactive,
+                dimmed: interactive && Boolean(patchFrom),
+                picked: c.cable.id === selectedCableId,
+                hovered: c.cable.id === hoveredCableId,
+              }"
               :stroke="c.color"
               :data-test="`diagram-cable-${c.cable.id}`"
-              @click.alt="unplugCable(c.cable, $event)"
+              @click="pickCable(c, $event)"
               @contextmenu="unplugCable(c.cable, $event)"
             >
-              <title>{{ c.title }}{{ interactive ? ' — alt- or right-click to unplug' : '' }}</title>
+              <title>
+                {{ c.title
+                }}{{ interactive ? ' — tap it, or alt- or right-click, to unplug' : '' }}
+              </title>
             </path>
             <circle
               v-for="end in ends"
@@ -599,11 +754,40 @@ const {
             </template>
           </svg>
         </div>
-        <div v-if="interactive && selectedJack" class="jack-editor" data-test="diagram-jack-editor">
+        <div v-if="interactive && patchFrom" class="picture-bar" data-test="diagram-patch-bar">
+          <span>
+            Patching from <strong>{{ patchFrom.name }}</strong>
+            <template v-if="patchSource"> on {{ moduleName(patchSource.patchModuleId) }}</template>
+            — now tap the input jack it goes to.
+          </span>
+          <button
+            type="button"
+            class="secondary"
+            style="margin: 0 0 0 auto"
+            data-test="diagram-patch-cancel"
+            @click="cancelPatch"
+          >
+            Cancel
+          </button>
+        </div>
+        <div
+          v-if="interactive && selectedJack"
+          class="picture-bar jack-editor"
+          data-test="diagram-jack-editor"
+        >
           <span>
             <strong>{{ selectedJack.component.name }}</strong>
             on {{ label(selectedJack.pm) }}
           </span>
+          <button
+            v-if="canPatchFrom"
+            type="button"
+            style="margin: 0"
+            data-test="diagram-jack-patch"
+            @click="armPatch"
+          >
+            Patch from here
+          </button>
           <template v-if="selectedJack.pm.module_id">
             <select v-model="retypeTo" data-test="diagram-jack-type">
               <option v-for="t in JACK_TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
@@ -635,6 +819,27 @@ const {
             Close
           </button>
         </div>
+        <div v-if="interactive && pickedCable" class="picture-bar" data-test="diagram-cable-bar">
+          <span>{{ pickedCable.title }}</span>
+          <button
+            type="button"
+            class="danger"
+            style="margin: 0"
+            data-test="diagram-cable-unplug"
+            @click="unplugCable(pickedCable.cable)"
+          >
+            Unplug
+          </button>
+          <button
+            type="button"
+            class="secondary"
+            style="margin: 0 0 0 auto"
+            data-test="diagram-cable-close"
+            @click="selectedCableId = null"
+          >
+            Close
+          </button>
+        </div>
 
         <p v-if="unplaced.length" class="muted" data-test="diagram-unplaced">
           {{ unplaced.length }} {{ unplaced.length === 1 ? 'module stands' : 'modules stand' }}
@@ -649,17 +854,28 @@ const {
           {{ undrawn }} {{ undrawn === 1 ? 'cable is' : 'cables are' }} not drawn — an end of
           {{ undrawn === 1 ? 'it' : 'them' }} is a connection point with no place on a panel.
         </p>
-        <ComponentLegend :items="shownComponents" />
+        <ComponentLegend
+          :items="shownComponents"
+          selectable
+          :empty-shows-all="false"
+          :selected="shownTypes"
+          @update:selected="shownTypes = $event"
+        />
         <p class="muted" style="font-size: 0.85rem">
           <template v-if="interactive">
             Drag an output marker (or a bidirectional one) onto an input marker to patch it — the
-            key above says which colour is which; click any jack marker to correct which direction
-            it runs. Ctrl- or ⌘-scroll zooms the picture. Controls and other component types
-            cannot be wired here.
+            key above says which colour is which. On a touch screen a finger scrolls the picture
+            instead, so tap the output marker and press 'Patch from here', then tap the input:
+            the picture dims everything the cable cannot reach while you scroll to it. Tapping a
+            jack marker is also how its direction is corrected, and tapping a cable is how it is
+            unplugged — alt- or right-clicking one does that in a single gesture. Ctrl- or
+            ⌘-scroll zooms the picture. Controls and other component types cannot be wired here.
             <br />
           </template>
-          Panels are the front plates found for each module, or a drawing made from its manual
-          where no picture was found. A jack the picture does not place is out of frame and is
+          The key above is also what the picture draws: it opens on the jacks alone — press an
+          entry to take that kind of marker off, or to put the knobs, switches and the rest of
+          the front panel on. Panels are the front plates found for each module, or a drawing
+          made from its manual where no picture was found. A jack the picture does not place is out of frame and is
           not drawn — patch it from the cable list below, and correct where it sits on the
           module's own page.
         </p>
@@ -773,7 +989,13 @@ const {
 .jack-marker.selected {
   fill-opacity: 1;
 }
-.jack-editor {
+/* While one end of a cable is held, the picture says where it may go: the
+   jacks that cannot take it fade back so the ones that can are what is left
+   to aim at across a scroll. Only how solid a marker is, never its colour. */
+.jack-marker.dimmed {
+  fill-opacity: 0.12;
+}
+.picture-bar {
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -803,16 +1025,44 @@ const {
   stroke-linecap: round;
   opacity: 0.85;
 }
-.cable:hover {
+.cable:hover,
+.cable.hovered,
+.cable.picked {
   stroke-width: calc(var(--cable-width, 7px) * 1.5);
   opacity: 1;
 }
+/* A cable is drawn OVER the markers, and its two ends lie exactly on the two
+   jacks it joins: left hittable, it is what a tap on a patched output finds,
+   and a mult's second cable could never be started. So on a diagram that can
+   be patched the stroke is deaf and the handle underneath — which sits below
+   the markers — does all the hearing: the middle of a cable is the cable, its
+   ends are the jacks. */
 .cable.unpluggable {
+  pointer-events: none;
+}
+/* Invisible, and hit-tested all the same — `stroke` responds to the stroke
+   area whether or not anything is painted there. */
+.cable-hit {
+  fill: none;
+  stroke-width: calc(var(--cable-width, 7px) * 3);
+  stroke-linecap: round;
+  pointer-events: stroke;
   cursor: pointer;
 }
 .cable.optional {
   stroke-dasharray: 14 10;
   opacity: 0.6;
+}
+/* Last, so a cable a normalled connection only MIGHT make fades back with all
+   the rest of them: while one end of a cable is held, everything the picture
+   is not asking about gets out of the way of the answer — including, for the
+   cables, out of the way of the markers they are drawn over. */
+.cable.dimmed,
+.cable-hit.dimmed {
+  pointer-events: none;
+}
+.cable.dimmed {
+  opacity: 0.2;
 }
 .draft-cable {
   stroke: var(--accent-2);
@@ -820,8 +1070,11 @@ const {
   opacity: 0.9;
   pointer-events: none;
 }
+/* Decoration, drawn last and therefore over everything: it marks a patched
+   jack, it is not a thing to press. */
 .cable-end {
   stroke: var(--bg);
   stroke-width: 1.5;
+  pointer-events: none;
 }
 </style>

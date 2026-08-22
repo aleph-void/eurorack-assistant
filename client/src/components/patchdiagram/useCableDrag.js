@@ -1,8 +1,14 @@
-// The two gestures on the picture: patching a cable, and moving the picture.
+// The two MOUSE gestures on the picture: dragging a cable between two jacks,
+// and dragging the picture itself the way a map is moved.
 //
 // A cable drag has already claimed the gesture by the time the pan sees it —
 // pointerdown reaches the jack marker first and sets `dragging` — so patching
 // wins, and alt/right-click is left to unplugging.
+//
+// Neither is a TOUCH gesture: a finger scrolls the picture, which is the
+// gesture the diagram deliberately leaves to the browser, so a drag started
+// under one would be cancelled the moment it moved. Patching and unplugging
+// by tap live in PatchDiagram.vue, beside the bars that do the asking.
 //
 // Split out of PatchDiagram.vue, which is otherwise the picture itself.
 
@@ -27,6 +33,12 @@ export function useCableDrag({ props, emit, svg, wrap, diagram, inputs, drawnCou
 
   function startCable(anchor, event) {
     if (!props.interactive) return;
+    // A finger scrolls the picture instead — the same reason `startPan` leaves
+    // touch to the browser — so a drag started here would be cancelled the
+    // moment it moved, and the preventDefault below can swallow the tap that
+    // follows it. Touch patches in two taps (`patchFrom` above); this is the
+    // mouse's gesture and says so.
+    if (event.pointerType === 'touch') return;
     const point = pointAt(event);
     if (!point) return;
     event.preventDefault();
@@ -69,6 +81,13 @@ export function useCableDrag({ props, emit, svg, wrap, diagram, inputs, drawnCou
   // The elements with a gesture of their own: a jack marker, the jack editor's
   // controls, anything clickable.
   const OWN_GESTURE = 'circle, .jack-editor, input, select, button, a, textarea';
+  // A cable joins them the moment it can be unplugged: pressing one means THIS
+  // CABLE, and a pan takes a pointer capture, which retargets the click that
+  // would have said so. A read-only diagram's cables answer to nothing, so
+  // there they stay part of the background you take hold of.
+  const panGesture = computed(() =>
+    props.interactive ? `${OWN_GESTURE}, .cable, .cable-hit` : OWN_GESTURE
+  );
 
   function startPan(event) {
     if (dragging.value || panning.value) return;
@@ -79,7 +98,7 @@ export function useCableDrag({ props, emit, svg, wrap, diagram, inputs, drawnCou
     // to scroll PAST a diagram that is most of the screen.
     if (event.pointerType === 'touch') return;
     if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey) return;
-    if (event.target?.closest?.(OWN_GESTURE)) return;
+    if (event.target?.closest?.(panGesture.value)) return;
     const el = wrap.value;
     if (!el) return;
     event.preventDefault();
@@ -108,15 +127,6 @@ export function useCableDrag({ props, emit, svg, wrap, diagram, inputs, drawnCou
     panning.value = null;
   }
 
-  // Unplugging from the picture: the same alt-click / right-click gesture the
-  // rack organizer uses to pull a module out of a row. The parent does the
-  // write, so a read-only diagram keeps the browser's own context menu.
-  function unplugCable(cable, event) {
-    if (!props.interactive) return;
-    event.preventDefault();
-    emit('disconnect', cable);
-  }
-
   const draftCable = computed(() =>
     dragging.value ? cablePath(dragging.value.source, dragging.value.point, drawnCount.value) : null
   );
@@ -130,7 +140,6 @@ export function useCableDrag({ props, emit, svg, wrap, diagram, inputs, drawnCou
     startPan,
     movePan,
     endPan,
-    unplugCable,
     draftCable,
   };
 }

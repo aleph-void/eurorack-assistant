@@ -127,7 +127,10 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   (how big the picture is drawn and which part of it is on screen — the zoom
   and the culled viewport are one composable because each invalidates the
   other), `useMultDirections.js` (what each bidirectional jack IS in this
-  patch) and `useCableDrag.js` (patching a cable, and moving the picture);
+  patch) and `useCableDrag.js` (the two MOUSE gestures — dragging a cable
+  between two jacks, and dragging the picture the way a map is moved; the tap
+  gestures a finger patches and unplugs with stay in the view, beside the bars
+  that do the asking);
   `components/racks/` holds `usePanelChips.js`, `useRackDrag.js` and
   `useRowMenu.js` for the rack organizer.
 - `client/tests/views/` — one test file per view; the payloads they are
@@ -244,6 +247,26 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   A cable is also what you alt-click to unplug, so its stroke is widened by
   the zoom below 1:1 (`--cable-width`) rather than thinning to a hairline
   nothing can hit.
+- A FINGER HAS NO ALT KEY, NO RIGHT BUTTON AND NO DRAG. The picture scrolls
+  under a touch — that is the gesture `startPan` and `startCable` both hand
+  straight back to the browser — so every gesture the diagram is patched with
+  has a TAP that does the same thing, and a phone is where that is the only
+  one there is. A cable is patched in two taps: tap the output marker, press
+  'Patch from here' in the jack bar, then tap the input (`patchFrom` in
+  PatchDiagram.vue) — with as much scrolling in between as it takes, because
+  a studio's two jacks are rarely on screen together, which is the same
+  reason the drag was never enough. While one is held, every marker and every
+  cable the picture is not asking about is DIMMED, so what is left lit is
+  where the cable may land. A cable is unplugged by tapping it: that picks it
+  out and names both its ends in a bar under the picture, and alt- or
+  right-click still does it in one. A drawn cable is seven pixels wide and a
+  fingertip is nearer forty, so each one also has an invisible stroke three
+  times its width to be tapped at (`.cable-hit`) — and that handle sits UNDER
+  the markers while the cable itself goes deaf (`pointer-events: none` on
+  `.cable.unpluggable`), because a cable's two ends lie exactly on the two
+  jacks it joins and a mult's second cable has to be startable from the
+  output the first one is already in: the middle of a cable is the cable, its
+  ends are the jacks.
 - ONLY WHAT IS ON SCREEN IS BUILT. A studio is two hundred panels and six
   thousand markers, and the picture is far wider than any screen: the diagram
   renders the panels whose box intersects the scroll viewport (plus a margin),
@@ -273,8 +296,11 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   (the SVG's CSS width; the coordinate space never changes, so every hit test
   follows), and can take the whole display ('Full screen', which refits). A
   marker keeps its size ON SCREEN at every zoom (the radius is divided by the
-  zoom), and below `CONTROL_ZOOM` only jacks are drawn — a knob at 20% is a
-  bead in a curtain of them, and the jacks are what a cable goes in. Panel
+  zoom), and WHICH KINDS of thing are drawn is the key's business rather than
+  the zoom's: the picture opens on the three jack types (`shownTypes` in
+  PatchDiagram.vue) because a knob is a bead in a curtain of them and the
+  jacks are what a cable goes in, and every other type on it is one press of
+  the key away. Panel
   pictures are re-fetched at a new size only once a zoom gesture SETTLES.
   Every module in the rack is drawn by default: the picture is of the case.
   The picture OPENS no smaller than `FIT_MIN_ZOOM` (a whole studio fitted to
@@ -293,10 +319,16 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   holds the list (mirroring `services/manualAnalyzer.js`, which is what the
   server validates against), the labels and the colours; `ComponentLegend.vue`
   draws the key under each picture, listing only the types on it — and under a
-  PANEL each entry is also the filter: press one and the picture shows that
-  type alone, press several for several, press again to take it off
-  (`shownTypes` in ModulePanel.vue), because a panel of a hundred markers is a
-  curtain of them. The colour goes on the marker itself (a `fill`/`stroke` attribute, because it is data),
+  PANEL or a PATCH DIAGRAM each entry is also the filter, because a panel of a
+  hundred markers is a curtain of them and a studio is six thousand. What an
+  EMPTY selection means is the one thing that differs, and it is the legend's
+  `emptyShowsAll`: under a panel nothing pressed shows the WHOLE panel, so an
+  entry shows that type ALONE (`shownTypes` in ModulePanel.vue); under the
+  diagram the pressed entries ARE the picture, so an entry adds its own type
+  or takes it away and none pressed is the bare case. Either way several may
+  be on at once and pressing one again takes only that one off. The key always
+  lists every type on the picture, filtered off or not, or there would be no
+  way to ask for one back. The colour goes on the marker itself (a `fill`/`stroke` attribute, because it is data),
   so no stylesheet may set either or it would win over the type. Each panel
   placement carries the `type` of the component behind it (`panelJson()` in
   services/panelImage.js), so a renderer colours a marker without loading the

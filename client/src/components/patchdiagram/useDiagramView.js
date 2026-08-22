@@ -5,6 +5,9 @@
 // — and what is on screen is the scroll box divided by it. Changing either
 // invalidates the other, which is why they are one composable rather than two.
 //
+// Which KINDS of marker are drawn is a separate question, pressed in the key
+// under the picture, and stays in PatchDiagram.vue beside the legend.
+//
 // Split out of PatchDiagram.vue, which is otherwise the picture itself.
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -225,13 +228,6 @@ export function useDiagramView({ wrap, container, diagram }) {
     return !v || (box.x1 >= v.x0 && box.x0 <= v.x1 && box.y1 >= v.y0 && box.y0 <= v.y1);
   };
 
-  // Zoomed out far enough, a marker is at its smallest and a panel is a couple
-  // of hundred pixels wide: drawing every knob, LED and button on it turns the
-  // case into a bead curtain and buries the jacks, which are the only things a
-  // cable can go in. So the furniture appears as you zoom in to where you could
-  // read it anyway. A jack is always drawn, at every zoom.
-  const CONTROL_ZOOM = 0.55;
-  const showControls = computed(() => zoom.value >= CONTROL_ZOOM);
   // Zoomed out past this — a whole studio taken in at once — a marker is two
   // pixels of a panel the size of a stamp, and six thousand of them are drawn
   // for nothing. The picture is then the case itself; the cables are still on
@@ -284,7 +280,6 @@ export function useDiagramView({ wrap, container, diagram }) {
     measureViewport,
     onScroll,
     inView,
-    showControls,
     showMarkers,
     imageUrl,
     svgStyle,
