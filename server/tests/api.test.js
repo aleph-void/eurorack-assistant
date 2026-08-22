@@ -1647,6 +1647,67 @@ describe('questions API', () => {
 });
 
 describe('jobs API', () => {
+  it('pages the list by id, newest first, and says how many there are', async () => {
+    const { app, db, aliceCookie } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const module = await insertModule(db, rows[0].id);
+    for (let i = 0; i < 5; i += 1) {
+      await db.query(
+        `INSERT INTO jobs (type, user_id, module_id, status)
+         VALUES ('find_manual', $1, $2, 'complete')`,
+        [rows[0].id, module.id]
+      );
+    }
+
+    const first = await request(app).get('/api/jobs?limit=2').set('Cookie', aliceCookie);
+    expect(first.status).toBe(200);
+    expect(first.body.jobs).toHaveLength(2);
+    // The count is of the whole list; the page is the newest end of it.
+    expect(first.body.total).toBe(5);
+    expect(first.body.limit).toBe(2);
+    expect(first.body.has_more).toBe(true);
+    expect(first.body.jobs[0].id).toBeGreaterThan(first.body.jobs[1].id);
+    expect(first.body.next_before).toBe(first.body.jobs[1].id);
+
+    // The next page starts where the last one ended, and holds none of it.
+    const second = await request(app)
+      .get(`/api/jobs?limit=2&before=${first.body.next_before}`)
+      .set('Cookie', aliceCookie);
+    expect(second.body.jobs.map((j) => j.id)).toEqual(
+      expect.not.arrayContaining(first.body.jobs.map((j) => j.id))
+    );
+    expect(second.body.jobs[0].id).toBeLessThan(first.body.next_before);
+    expect(second.body.has_more).toBe(true);
+
+    // A job queued while the reader pages does not shift the page under them:
+    // it is newer than everything held, so it belongs above the first page.
+    await db.query(
+      `INSERT INTO jobs (type, user_id, module_id, status)
+       VALUES ('find_manual', $1, $2, 'pending')`,
+      [rows[0].id, module.id]
+    );
+    const third = await request(app)
+      .get(`/api/jobs?limit=2&before=${second.body.next_before}`)
+      .set('Cookie', aliceCookie);
+    expect(third.body.jobs).toHaveLength(1);
+    expect(third.body.has_more).toBe(false);
+    expect(third.body.next_before).toBeNull();
+    expect(third.body.total).toBe(6);
+
+    // A whole-list read is still a whole-list read; the page is only a cap.
+    const all = await request(app).get('/api/jobs').set('Cookie', aliceCookie);
+    expect(all.body.jobs).toHaveLength(6);
+    expect(all.body.has_more).toBe(false);
+
+    // Nonsense paging arguments fall back to the default page rather than
+    // returning nothing or everything.
+    const junk = await request(app).get('/api/jobs?limit=0&before=abc').set('Cookie', aliceCookie);
+    expect(junk.body.limit).toBe(100);
+    expect(junk.body.jobs).toHaveLength(6);
+    const capped = await request(app).get('/api/jobs?limit=9999').set('Cookie', aliceCookie);
+    expect(capped.body.limit).toBe(500);
+  });
+
   it('shows a user their own jobs and lets them retry failed ones', async () => {
     const { app, db, aliceCookie } = await createTestApp();
     const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
@@ -1659,8 +1720,10 @@ describe('jobs API', () => {
 
     const list = await request(app).get('/api/jobs').set('Cookie', aliceCookie);
     expect(list.status).toBe(200);
-    expect(list.body).toHaveLength(1);
-    expect(list.body[0].module_name).toBe('Maths');
+    expect(list.body.jobs).toHaveLength(1);
+    expect(list.body.total).toBe(1);
+    expect(list.body.has_more).toBe(false);
+    expect(list.body.jobs[0].module_name).toBe('Maths');
 
     const retry = await request(app)
       .post(`/api/jobs/${jobs[0].id}/retry`)
@@ -1680,7 +1743,7 @@ describe('jobs API', () => {
     );
 
     const list = await request(app).get('/api/jobs').set('Cookie', aliceCookie);
-    expect(list.body[0].stalled).toBe(true);
+    expect(list.body.jobs[0].stalled).toBe(true);
 
     const retry = await request(app)
       .post(`/api/jobs/${jobs[0].id}/retry`)
@@ -1700,7 +1763,7 @@ describe('jobs API', () => {
     );
 
     const list = await request(app).get('/api/jobs').set('Cookie', aliceCookie);
-    expect(list.body[0].stalled).toBe(false);
+    expect(list.body.jobs[0].stalled).toBe(false);
     const retry = await request(app)
       .post(`/api/jobs/${jobs[0].id}/retry`)
       .set('Cookie', aliceCookie);
@@ -1718,7 +1781,7 @@ describe('jobs API', () => {
     );
 
     const adminList = await request(app).get('/api/jobs').set('Cookie', adminCookie);
-    expect(adminList.body).toHaveLength(1);
+    expect(adminList.body.jobs).toHaveLength(1);
 
     // bob even has the same shared module — still can't see alice's job.
     await request(app)
@@ -1733,7 +1796,7 @@ describe('jobs API', () => {
     await mapModule(db, bob[0].id, module.id);
 
     const bobList = await request(app).get('/api/jobs').set('Cookie', bobCookie);
-    expect(bobList.body).toHaveLength(0);
+    expect(bobList.body.jobs).toHaveLength(0);
     expect(
       (await request(app).post(`/api/jobs/${jobs[0].id}/retry`).set('Cookie', bobCookie)).status
     ).toBe(404);
@@ -1845,8 +1908,8 @@ describe('jobs API', () => {
 
     // The admin can see it and could retry it, but it is not theirs to bin.
     const list = await request(app).get('/api/jobs').set('Cookie', adminCookie);
-    expect(list.body).toHaveLength(1);
-    expect(list.body[0].own).toBe(false);
+    expect(list.body.jobs).toHaveLength(1);
+    expect(list.body.jobs[0].own).toBe(false);
     expect(
       (await request(app).post(`/api/jobs/${jobs[0].id}/stop`).set('Cookie', adminCookie)).status
     ).toBe(404);
@@ -1857,7 +1920,7 @@ describe('jobs API', () => {
 
     // Its owner sees it as theirs and can.
     const own = await request(app).get('/api/jobs').set('Cookie', aliceCookie);
-    expect(own.body[0].own).toBe(true);
+    expect(own.body.jobs[0].own).toBe(true);
     expect(
       (await request(app).delete(`/api/jobs/${jobs[0].id}`).set('Cookie', aliceCookie)).status
     ).toBe(200);

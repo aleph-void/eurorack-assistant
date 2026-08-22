@@ -1,0 +1,24 @@
+-- Which statements the app really spends its time in.
+--
+-- Table-level counters (pg_stat_user_tables) say a table was scanned a
+-- million times; they never say by which query. pg_stat_statements does, and
+-- it is the difference between auditing performance by measurement and
+-- auditing it by inference over the schema.
+--
+-- The library itself is loaded by the `shared_preload_libraries` argument in
+-- docker-compose.yml — it takes shared memory, so it can only be arranged at
+-- startup, and this CREATE fails without it. This file runs only when the
+-- data volume is created; an EXISTING database gets the extension with
+--
+--   docker compose exec -T db psql -U eurorack -d eurorack \
+--     -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements'
+--
+-- once it has been restarted with the argument in place.
+--
+-- Not a migration on purpose: it is instrumentation of the server rather than
+-- part of the app's schema, it cannot run at all on a database whose postgres
+-- was started without the library (which would make `npm run migrate` fail
+-- for a reason that has nothing to do with the schema), and pg-mem — which
+-- stands in for postgres in the server tests, and runs every migration —
+-- cannot create extensions.
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;

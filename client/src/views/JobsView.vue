@@ -50,6 +50,17 @@ async function retry(job) {
   }
 }
 
+// The page below the one showing. Failing to fetch it leaves what is already
+// on screen alone — the list is still true, just shorter than the queue.
+async function loadMore() {
+  error.value = '';
+  try {
+    await jobs.loadMore();
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
 async function retryAll() {
   error.value = '';
   retryingAll.value = true;
@@ -401,10 +412,39 @@ onMounted(async () => {
       </table>
     </div>
     <p v-if="jobs.jobs.length === 0" class="muted">No jobs yet.</p>
+    <!-- The list is the newest page of the queue's history, not all of it: a
+         job row outlives the work it describes, so an account that has been
+         running imports for a year has tens of thousands of them. The line
+         says which part of the list is on screen; the button fetches the
+         page below it. -->
+    <div v-else-if="jobs.hasMore || jobs.jobs.length < jobs.total" class="paging">
+      <span class="muted" data-test="job-count">
+        Showing {{ jobs.jobs.length }} of {{ jobs.total }}
+      </span>
+      <button
+        v-if="jobs.hasMore"
+        class="secondary"
+        :disabled="jobs.loadingMore"
+        data-test="load-more"
+        @click="loadMore"
+      >
+        {{ jobs.loadingMore ? 'Loading…' : 'Load more' }}
+      </button>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* The count and the button that fetches the next page sit on one line under
+   the table, the way the toolbar sits over it. */
+.paging {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
 /* A paused queue is not an error, but it explains everything else on the
    page, so it reads as the first thing rather than as another panel. */
 .paused {

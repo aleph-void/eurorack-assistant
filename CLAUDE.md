@@ -373,6 +373,17 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   - A page that re-reads itself when background work lands watches
     `jobs.finished` (jobs that ENDED), never `jobs.feed.length`: an import is
     hundreds of progress lines and none of them changes what a page shows.
+  - The JOB LIST is one page of the queue's history, not all of it. Nothing
+    deletes a job row on its own — every import, analysis, panel fetch and
+    video leaves one — so `GET /api/jobs` takes `limit` (100 by default, 500
+    at most) and `before`, and answers `{ jobs, total, has_more, next_before }`.
+    Paged BY ID rather than by offset because the queue is being added to
+    while it is read: a job queued between two pages would push an offset
+    window down and repeat a row, and OFFSET 10000 counts past everything
+    newer where `id < before` walks straight there on `(user_id, id)`. The
+    store holds the newest page and appends with `loadMore()`; a bulk stop or
+    delete re-reads it rather than filtering the rows on screen, because the
+    rows that went may have been keeping older ones off the page.
 - WORK IS DONE ONCE A FRAME, NOT ONCE AN EVENT. Pointer and scroll events
   arrive far faster than the screen redraws, and in this app one of them
   redraws hundreds of panels or filters six thousand markers: the organizer's

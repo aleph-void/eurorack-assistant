@@ -59,13 +59,26 @@ describe('auth store', () => {
   });
 });
 
+// One page of the job list as the API serves it: the rows, plus how many
+// there are in all and where the page after this one starts.
+const jobsPage = (jobs, extra = {}) => ({
+  jobs,
+  total: jobs.length,
+  limit: 100,
+  has_more: false,
+  next_before: null,
+  ...extra,
+});
+
 describe('jobs store', () => {
   it('fetches jobs and counts active ones', async () => {
-    api.get.mockResolvedValue([
-      { id: 1, status: 'pending' },
-      { id: 2, status: 'complete' },
-      { id: 3, status: 'running' },
-    ]);
+    api.get.mockResolvedValue(
+      jobsPage([
+        { id: 1, status: 'pending' },
+        { id: 2, status: 'complete' },
+        { id: 3, status: 'running' },
+      ])
+    );
     const jobs = useJobsStore();
     await jobs.fetchJobs();
     expect(jobs.activeCount).toBe(2);
@@ -238,7 +251,7 @@ describe('jobs store', () => {
 
   it('stopAll is one request, then refetches the settled list', async () => {
     api.post.mockResolvedValue({ stopped: 2 });
-    api.get.mockResolvedValue([{ id: 1, status: 'cancelled' }, { id: 2, status: 'cancelled' }]);
+    api.get.mockResolvedValue(jobsPage([{ id: 1, status: 'cancelled' }, { id: 2, status: 'cancelled' }]));
     const jobs = useJobsStore();
     jobs.jobs = [
       { id: 1, status: 'pending' },
@@ -273,9 +286,15 @@ describe('jobs store', () => {
     expect(jobs.ownJobs.map((j) => j.id)).toEqual([1, 2]);
     // An admin cannot stop someone else's job, so it is not offered either.
     expect(jobs.stoppableJobs).toHaveLength(0);
+    // The server decides what is left — deleting rows can also let a page's
+    // worth of older jobs up into the list — so the settled list is read back
+    // rather than filtered in place.
+    api.get.mockResolvedValue(jobsPage([{ id: 3, status: 'running', own: false }]));
     expect(await jobs.deleteAll()).toEqual({ deleted: 2 });
     expect(api.delete).toHaveBeenCalledWith('/api/jobs');
+    expect(api.get).toHaveBeenCalledWith('/api/jobs?limit=100');
     expect(jobs.jobs.map((j) => j.id)).toEqual([3]);
+    expect(jobs.total).toBe(1);
   });
 
   it('removeCancelled clears the caller\'s stopped jobs and nothing else', async () => {
@@ -288,6 +307,12 @@ describe('jobs store', () => {
       { id: 4, status: 'cancelled', own: false }, // another user's, admin view
     ];
     expect(jobs.cancelledJobs.map((j) => j.id)).toEqual([1, 2]);
+    api.get.mockResolvedValue(
+      jobsPage([
+        { id: 3, status: 'failed', own: true },
+        { id: 4, status: 'cancelled', own: false },
+      ])
+    );
     expect(await jobs.removeCancelled()).toEqual({ deleted: 2 });
     expect(api.delete).toHaveBeenCalledWith('/api/jobs/cancelled');
     expect(jobs.jobs.map((j) => j.id)).toEqual([3, 4]);

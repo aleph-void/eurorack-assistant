@@ -145,10 +145,10 @@ describe('rack export', () => {
     expect(completed.job.rack_name).toBe('main rack');
 
     // The jobs API exposes the same link to the owner…
-    const jobs = (await request(app).get('/api/jobs').set('Cookie', aliceCookie)).body;
+    const jobs = (await request(app).get('/api/jobs').set('Cookie', aliceCookie)).body.jobs;
     expect(jobs.find((j) => j.id === jobId).download).toBe(`/api/exports/${jobId}`);
     // …but not to the admin (owner-only download).
-    const adminJobs = (await request(app).get('/api/jobs').set('Cookie', adminCookie)).body;
+    const adminJobs = (await request(app).get('/api/jobs').set('Cookie', adminCookie)).body.jobs;
     expect(adminJobs.find((j) => j.id === jobId).download).toBeNull();
 
     // Only the owner can fetch it.
@@ -213,7 +213,7 @@ describe('rack export', () => {
     expect(
       (await request(app).get(`/api/exports/${jobId}`).set('Cookie', aliceCookie)).status
     ).toBe(404);
-    const after = (await request(app).get('/api/jobs').set('Cookie', aliceCookie)).body;
+    const after = (await request(app).get('/api/jobs').set('Cookie', aliceCookie)).body.jobs;
     expect(after.find((j) => j.id === jobId).download).toBeNull();
     // Longer than the 5s default: this builds a rack's worth of PDFs, zips
     // them, downloads the zip and waits for the one-shot cleanup — with a

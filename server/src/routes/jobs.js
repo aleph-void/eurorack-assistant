@@ -1,3 +1,4 @@
+import { Op } from 'sequelize';
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { isStalled, resetJobTarget } from '../jobs/worker.js';
@@ -7,6 +8,14 @@ import { asyncHandler } from './asyncHandler.js';
 // Statuses a job can be stopped or deleted out of while the queue still has
 // designs on it. Anything else is already finished.
 const ACTIVE = ['pending', 'running'];
+
+// One page of the list. A job row is never deleted by the app on its own —
+// every import, analysis, panel fetch and video is one — so an account that
+// has been used for a year holds tens of thousands of them, and the page was
+// reading every one of them (with its module and question joined) on each
+// visit and after every job that ended.
+const DEFAULT_PAGE = 100;
+const MAX_PAGE = 500;
 
 export function jobRoutes(db, { bus = null } = {}) {
   const { Job, Module, Question } = db.models;
@@ -41,17 +50,42 @@ export function jobRoutes(db, { bus = null } = {}) {
 
   // Jobs are strictly private: every job is stamped with the user who caused
   // it, and only that user (or an admin) can see or retry it.
+  //
+  // Paged BY ID rather than by offset. The list is newest-first and the queue
+  // is being added to while it is read: with OFFSET, a job queued between two
+  // pages pushes the whole window down and the next page repeats a row it
+  // already showed. `before` is the id the last page ended at, so a page is
+  // the same page whatever arrives above it — and it costs the same at the
+  // ten-thousandth row as at the first, because (user_id, id) walks straight
+  // to it instead of counting past everything newer.
   router.get('/', asyncHandler(async (req, res) => {
-    const jobs = await Job.findAll({
-      where: visible(req),
+    const limit = Math.min(MAX_PAGE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE));
+    const before = Math.max(0, Number(req.query.before) || 0);
+    const where = visible(req, before ? { id: { [Op.lt]: before } } : {});
+    // The count is of the whole list, not of the page: the footer says which
+    // part of what the reader is looking at.
+    const total = await Job.count({ where: visible(req) });
+    // One more row than the page needs, which is what says whether there is
+    // another page — a count of its own would be a second answer to the same
+    // question, and the two can disagree while jobs are being queued.
+    const rows = await Job.findAll({
+      where,
       include: [
         { model: Module, attributes: ['manufacturer', 'name'], required: false },
         { model: Question, attributes: ['prompt'], required: false },
       ],
       order: [['id', 'DESC']],
+      limit: limit + 1,
     });
-    res.json(
-      jobs.map((job) => {
+    const has_more = rows.length > limit;
+    const jobs = has_more ? rows.slice(0, limit) : rows;
+    res.json({
+      total,
+      limit,
+      has_more,
+      // Where the next page starts; null when this was the last of them.
+      next_before: has_more ? jobs[jobs.length - 1].id : null,
+      jobs: jobs.map((job) => {
         const { id, type, status, attempts, error, created_at, updated_at, module_id, question_id } =
           job;
         // export_rack jobs carry their target rack and, while the zip is
@@ -95,8 +129,8 @@ export function jobRoutes(db, { bus = null } = {}) {
           own: job.user_id === req.user.id,
           download: job.user_id === req.user.id ? download : null,
         };
-      })
-    );
+      }),
+    });
   }));
 
   // Is the queue running? It stops itself when the LLM provider reports the

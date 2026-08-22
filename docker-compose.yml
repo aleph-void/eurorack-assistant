@@ -1,12 +1,28 @@
 services:
   db:
     image: postgres:16-alpine
+    # pg_stat_statements has to be loaded at startup (it takes shared memory),
+    # so it is a server argument rather than a setting the extension turns on
+    # for itself. It is what tells a performance audit which statements the
+    # app really spends its time in, instead of inferring it from the schema
+    # and the table-level scan counters. The extension itself is created by
+    # deploy/db-init, which runs when the data volume is first made; an
+    # existing database needs one CREATE EXTENSION by hand after the restart
+    # that puts this argument in place (the file says how).
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
     environment:
       POSTGRES_USER: eurorack
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?missing POSTGRES_PASSWORD - run ./setup.sh first}
       POSTGRES_DB: eurorack
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Runs once, when the volume above is created.
+      - ./deploy/db-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U eurorack -d eurorack"]
       interval: 3s

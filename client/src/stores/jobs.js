@@ -23,6 +23,17 @@ const asLlmPause = (event) => ({
 export const useJobsStore = defineStore('jobs', {
   state: () => ({
     jobs: [],
+    // The list is one PAGE of the queue's history, newest first. Nothing
+    // deletes a job row on its own — every import, analysis, panel fetch and
+    // video leaves one — so a year-old account holds tens of thousands, and
+    // the page used to read all of them on every visit. `total` is how many
+    // there are; `hasMore` and `nextBefore` are the server's answer to
+    // whether there is another page and where it starts.
+    total: 0,
+    pageSize: 100,
+    hasMore: false,
+    nextBefore: null,
+    loadingMore: false,
     feed: [], // recent progress lines, newest first
     feedLimit: 200,
     // How many jobs have ENDED since the page opened. A page that re-reads
@@ -58,9 +69,44 @@ export const useJobsStore = defineStore('jobs', {
     cancelledJobs: (state) => state.jobs.filter((j) => j.own !== false && j.status === 'cancelled'),
   },
   actions: {
+    // The newest page, replacing whatever was held. Everything that changes
+    // the list on the server (a bulk stop, a bulk delete) comes back through
+    // here rather than editing the array in place, so the count in the footer
+    // is the server's count and not an arithmetic guess about it.
     async fetchJobs() {
-      this.jobs = await api.get('/api/jobs');
+      const page = await api.get(`/api/jobs?limit=${this.pageSize}`);
+      this.applyPage(page, { append: false });
       return this.jobs;
+    },
+    // The page after the one showing. Jobs queued in the meantime land ABOVE
+    // this page and do not disturb it — that is what paging by id buys — but
+    // a job that arrived over the socket can already be in the list, so ids
+    // are folded rather than concatenated.
+    async loadMore() {
+      if (!this.hasMore || this.loadingMore) return this.jobs;
+      this.loadingMore = true;
+      try {
+        const page = await api.get(
+          `/api/jobs?limit=${this.pageSize}&before=${this.nextBefore}`
+        );
+        this.applyPage(page, { append: true });
+      } finally {
+        this.loadingMore = false;
+      }
+      return this.jobs;
+    },
+    // One page of the list as the server sends it.
+    applyPage(page, { append = false } = {}) {
+      const rows = page?.jobs ?? [];
+      if (append) {
+        const held = new Set(this.jobs.map((j) => j.id));
+        this.jobs = this.jobs.concat(rows.filter((j) => !held.has(j.id)));
+      } else {
+        this.jobs = rows;
+      }
+      this.total = page?.total ?? this.jobs.length;
+      this.hasMore = Boolean(page?.has_more);
+      this.nextBefore = page?.next_before ?? null;
     },
     // Whether the queue is running. Live updates arrive over the socket; this
     // is for a page that was opened after it stopped.
@@ -133,13 +179,17 @@ export const useJobsStore = defineStore('jobs', {
     },
     async remove(jobId) {
       await api.delete(`/api/jobs/${jobId}`);
+      const before = this.jobs.length;
       this.jobs = this.jobs.filter((j) => j.id !== jobId);
+      if (this.jobs.length < before) this.total = Math.max(0, this.total - 1);
     },
     // Only the caller's own jobs are deleted, so an admin's view of everyone
-    // else's survives — refetch rather than assuming an empty list.
+    // else's survives — refetch rather than assuming an empty list. It also
+    // brings back a page's worth of the jobs that were below this one, which
+    // filtering the held rows could not.
     async deleteAll() {
       const result = await api.delete('/api/jobs');
-      this.jobs = this.jobs.filter((j) => j.own === false);
+      await this.fetchJobs();
       return result;
     },
     // Throw away the jobs the user stopped. Cancelled jobs of other users
@@ -147,7 +197,7 @@ export const useJobsStore = defineStore('jobs', {
     // local list is filtered the same way the request is scoped.
     async removeCancelled() {
       const result = await api.delete('/api/jobs/cancelled');
-      this.jobs = this.jobs.filter((j) => j.own === false || j.status !== 'cancelled');
+      await this.fetchJobs();
       return result;
     },
     applyEvent(event) {
@@ -168,7 +218,10 @@ export const useJobsStore = defineStore('jobs', {
       if (idx !== -1) {
         this.jobs[idx] = { ...this.jobs[idx], ...event.job };
       } else if (event.event === 'started') {
+        // A job the list has never seen: it is newer than everything held,
+        // so it belongs on top of the page rather than at the end of it.
         this.jobs.unshift({ ...event.job });
+        this.total += 1;
       }
       // A job ending is the news the user queued it for, minutes or hours
       // ago and almost certainly from another page — the Jobs page is where

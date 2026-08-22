@@ -18,6 +18,18 @@ vi.mock('vue-router', async (importOriginal) => {
 });
 
 import { api } from '../../src/api.js';
+
+// The job list is served as one PAGE of the queue's history — the rows plus
+// how many there are in all and where the next page starts. The tests
+// describe the rows; this wraps them the way the API does.
+const page = (jobs, extra = {}) => ({
+  jobs,
+  total: jobs.length,
+  limit: 100,
+  has_more: false,
+  next_before: null,
+  ...extra,
+});
 import { dialog } from '../../src/dialog.js';
 import JobsView from '../../src/views/JobsView.vue';
 import { useJobsStore } from '../../src/stores/jobs.js';
@@ -29,7 +41,7 @@ beforeEach(() => {
 
 describe('JobsView', () => {
   it('lists jobs and retries failed ones', async () => {
-    api.get.mockResolvedValue([
+    api.get.mockResolvedValue(page([
       {
         id: 1,
         type: 'find_manual',
@@ -39,7 +51,7 @@ describe('JobsView', () => {
         module_manufacturer: 'Make Noise',
         module_name: 'Maths',
       },
-    ]);
+    ]));
     api.post.mockResolvedValue({ id: 1, status: 'pending', error: null });
     const wrapper = mount(JobsView, { global: testGlobal() });
     await flushPromises();
@@ -52,7 +64,7 @@ describe('JobsView', () => {
   });
 
   it('keeps the newest live progress line fully visible', async () => {
-    api.get.mockResolvedValue([]);
+    api.get.mockResolvedValue(page([]));
     const wrapper = mount(JobsView, { global: testGlobal() });
     await flushPromises();
     const feed = wrapper.find('[data-test="feed"]').element;
@@ -72,7 +84,7 @@ describe('JobsView', () => {
   });
 
   it('clears the live log on request, and only locally', async () => {
-    api.get.mockResolvedValue([]);
+    api.get.mockResolvedValue(page([]));
     const wrapper = mount(JobsView, { global: testGlobal() });
     await flushPromises();
     expect(wrapper.find('[data-test="clear-feed"]').attributes('disabled')).toBeDefined();
@@ -99,9 +111,9 @@ describe('JobsView', () => {
   });
 
   it('keeps a job row\'s buttons on one line', async () => {
-    api.get.mockResolvedValue([
+    api.get.mockResolvedValue(page([
       { id: 1, type: 'find_manual', status: 'failed', attempts: 3, error: 'No manual PDF found' },
-    ]);
+    ]));
     const wrapper = mount(JobsView, { global: testGlobal() });
     await flushPromises();
     const cell = wrapper.find('[data-test="retry-1"]').element.parentElement;
@@ -110,12 +122,12 @@ describe('JobsView', () => {
   });
 
   it('retries all failed jobs, but not stalled jobs', async () => {
-    api.get.mockResolvedValue([
+    api.get.mockResolvedValue(page([
       { id: 1, type: 'find_manual', status: 'failed', attempts: 3, error: 'No manual PDF found' },
       { id: 2, type: 'export_rack', status: 'complete', attempts: 1, rack_name: 'main rack' },
       { id: 4, type: 'analyze_manual', status: 'running', stalled: true, attempts: 1 },
       { id: 3, type: 'ask_question', status: 'failed', attempts: 2, error: 'timeout' },
-    ]);
+    ]));
     api.post.mockImplementation(async (url) => ({
       id: Number(url.split('/')[3]),
       status: 'pending',
@@ -135,7 +147,7 @@ describe('JobsView', () => {
   });
 
   it('flags a stalled job and offers to retry it', async () => {
-    api.get.mockResolvedValue([
+    api.get.mockResolvedValue(page([
       {
         id: 1,
         type: 'analyze_manual',
@@ -146,7 +158,7 @@ describe('JobsView', () => {
         module_name: 'MISO',
       },
       { id: 2, type: 'analyze_manual', status: 'running', stalled: false, attempts: 1 },
-    ]);
+    ]));
     api.post.mockResolvedValue({ id: 1, status: 'pending', stalled: false, error: null });
     const wrapper = mount(JobsView, { global: testGlobal() });
     await flushPromises();
@@ -161,7 +173,7 @@ describe('JobsView', () => {
   });
 
   it('labels rack exports and links the not-yet-taken download', async () => {
-    api.get.mockResolvedValue([
+    api.get.mockResolvedValue(page([
       {
         id: 2,
         type: 'export_rack',
@@ -171,7 +183,7 @@ describe('JobsView', () => {
         download: '/api/exports/2',
       },
       { id: 3, type: 'export_rack', status: 'complete', attempts: 1, rack_name: 'travel case', download: null },
-    ]);
+    ]));
     const wrapper = mount(JobsView, { global: testGlobal() });
     await flushPromises();
     expect(wrapper.find('[data-test="job-table"]').text()).toContain('main rack');
@@ -182,10 +194,10 @@ describe('JobsView', () => {
   });
 
   it('stops a live job and deletes a finished one', async () => {
-    api.get.mockResolvedValue([
+    api.get.mockResolvedValue(page([
       { id: 1, type: 'analyze_manual', status: 'running', attempts: 1, own: true },
       { id: 2, type: 'find_manual', status: 'complete', attempts: 1, own: true },
-    ]);
+    ]));
     api.post.mockResolvedValue({ id: 1, status: 'cancelled', error: 'stopped by user' });
     api.delete.mockResolvedValue({ ok: true });
     vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
@@ -208,10 +220,10 @@ describe('JobsView', () => {
   });
 
   it('offers Stop All and Delete All over the whole list', async () => {
-    api.get.mockResolvedValue([
+    api.get.mockResolvedValue(page([
       { id: 1, type: 'find_manual', status: 'pending', attempts: 0, own: true },
       { id: 2, type: 'export_rack', status: 'complete', attempts: 1, own: true },
-    ]);
+    ]));
     api.post.mockResolvedValue({ stopped: 1 });
     api.delete.mockResolvedValue({ deleted: 2 });
     vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
@@ -220,16 +232,19 @@ describe('JobsView', () => {
 
     expect(wrapper.find('[data-test="stop-all"]').text()).toContain('(1)');
     // The refetch after a bulk stop reports what actually settled.
-    api.get.mockResolvedValue([
+    api.get.mockResolvedValue(page([
       { id: 1, type: 'find_manual', status: 'cancelled', attempts: 0, own: true },
       { id: 2, type: 'export_rack', status: 'complete', attempts: 1, own: true },
-    ]);
+    ]));
     await wrapper.find('[data-test="stop-all"]').trigger('click');
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith('/api/jobs/stop-all');
     // Nothing left to stop, so the button goes away.
     expect(wrapper.find('[data-test="stop-all"]').exists()).toBe(false);
 
+    // Same again for the delete: what is left is the server's answer, not a
+    // guess made by filtering the rows that happen to be on screen.
+    api.get.mockResolvedValue(page([]));
     await wrapper.find('[data-test="delete-all"]').trigger('click');
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/jobs');
@@ -239,9 +254,9 @@ describe('JobsView', () => {
   });
 
   it('declines to delete when the confirmation is dismissed', async () => {
-    api.get.mockResolvedValue([
+    api.get.mockResolvedValue(page([
       { id: 1, type: 'find_manual', status: 'failed', attempts: 3, own: true },
-    ]);
+    ]));
     vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
     const wrapper = mount(JobsView, { global: testGlobal() });
     await flushPromises();
@@ -253,10 +268,10 @@ describe('JobsView', () => {
   });
 
   it("offers an admin no way to stop or delete another user's job", async () => {
-    api.get.mockResolvedValue([
+    api.get.mockResolvedValue(page([
       { id: 1, type: 'analyze_manual', status: 'running', attempts: 1, own: false },
       { id: 2, type: 'find_manual', status: 'failed', attempts: 3, own: false },
-    ]);
+    ]));
     const wrapper = mount(JobsView, { global: testGlobal() });
     await flushPromises();
     expect(wrapper.find('[data-test="stop-1"]').exists()).toBe(false);
@@ -271,13 +286,13 @@ describe('JobsView', () => {
     api.get.mockImplementation(async (url) =>
       url === '/api/jobs/queue'
         ? { paused: false, until: null, reason: '' }
-        : [
+        : page([
             { id: 1, type: 'find_manual', status: 'cancelled', attempts: 0, own: true },
             { id: 2, type: 'analyze_manual', status: 'cancelled', attempts: 1, own: true },
             { id: 3, type: 'export_rack', status: 'complete', attempts: 1, own: true },
             // Another user's, from an admin's view of the list.
             { id: 4, type: 'find_manual', status: 'cancelled', attempts: 0, own: false },
-          ]
+          ])
     );
     api.delete.mockResolvedValue({ deleted: 2 });
     vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
@@ -286,6 +301,16 @@ describe('JobsView', () => {
 
     // Counted over the caller's own cancelled jobs only.
     expect(wrapper.find('[data-test="remove-cancelled"]').text()).toContain('(2)');
+    // What the list holds afterwards is read back from the server: the two
+    // rows that went may have been keeping older jobs off the page.
+    api.get.mockImplementation(async (url) =>
+      url === '/api/jobs/queue'
+        ? { paused: false, until: null, reason: '' }
+        : page([
+            { id: 3, type: 'export_rack', status: 'complete', attempts: 1, own: true },
+            { id: 4, type: 'find_manual', status: 'cancelled', attempts: 0, own: false },
+          ])
+    );
     await wrapper.find('[data-test="remove-cancelled"]').trigger('click');
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/jobs/cancelled');
@@ -297,12 +322,44 @@ describe('JobsView', () => {
     vi.restoreAllMocks();
   });
 
+  it('shows one page of the list and fetches the next on request', async () => {
+    // A year of imports is tens of thousands of job rows; the page holds the
+    // newest of them and says so.
+    api.get.mockImplementation(async (url) => {
+      if (url === '/api/jobs/queue') return { paused: false, until: null, reason: '' };
+      if (url === '/api/jobs?limit=100') {
+        return page(
+          [{ id: 9, type: 'find_manual', status: 'complete', attempts: 1, own: true }],
+          { total: 2, has_more: true, next_before: 9 }
+        );
+      }
+      return page([{ id: 4, type: 'analyze_manual', status: 'failed', attempts: 1, own: true }], {
+        total: 2,
+      });
+    });
+    const wrapper = mount(JobsView, { global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="job-count"]').text()).toContain('Showing 1 of 2');
+    expect(wrapper.find('[data-test="job-table"]').text()).not.toContain('analyze_manual');
+
+    await wrapper.find('[data-test="load-more"]').trigger('click');
+    await flushPromises();
+
+    // The page after the one showing, asked for by the id it ended at.
+    expect(api.get).toHaveBeenCalledWith('/api/jobs?limit=100&before=9');
+    expect(wrapper.find('[data-test="job-table"]').text()).toContain('analyze_manual');
+    // Nothing below it, so the button goes and the count is the whole list.
+    expect(wrapper.find('[data-test="load-more"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="job-count"]').exists()).toBe(false);
+  });
+
   it('says when the queue is paused for want of tokens, and starts it again', async () => {
     const until = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     api.get.mockImplementation(async (url) =>
       url === '/api/jobs/queue'
         ? { paused: true, until, reason: 'Claude AI usage limit reached' }
-        : [{ id: 1, type: 'find_manual', status: 'pending', attempts: 0, own: true }]
+        : page([{ id: 1, type: 'find_manual', status: 'pending', attempts: 0, own: true }])
     );
     api.post.mockResolvedValue({ paused: false, until: null, reason: '' });
     const wrapper = mount(JobsView, { global: testGlobal() });
@@ -320,7 +377,7 @@ describe('JobsView', () => {
 
   it('says nothing about the queue while it is running', async () => {
     api.get.mockImplementation(async (url) =>
-      url === '/api/jobs/queue' ? { paused: false, until: null, reason: '' } : []
+      url === '/api/jobs/queue' ? { paused: false, until: null, reason: '' } : page([])
     );
     const wrapper = mount(JobsView, { global: testGlobal() });
     await flushPromises();
@@ -331,7 +388,7 @@ describe('JobsView', () => {
 
 describe('JobsView budget banner', () => {
   const jobsAnd = (usage) => (path) =>
-    Promise.resolve(path === '/api/usage/me' ? usage : path === '/api/jobs/queue' ? {} : []);
+    Promise.resolve(path === '/api/usage/me' ? usage : path === '/api/jobs/queue' ? {} : page([]));
 
   it('says nothing when no budget applies', async () => {
     api.get.mockImplementation(jobsAnd({ unlimited: true, limit: 0, used: 0 }));
