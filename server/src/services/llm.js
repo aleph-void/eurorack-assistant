@@ -206,7 +206,7 @@ export function stageDocuments(paths = [], { tmpdir = os.tmpdir } = {}) {
         fs.copyFileSync(source, target);
       } catch (e) {
         fs.rmSync(dir, { recursive: true, force: true });
-        throw new Error(`could not give the model ${source}: ${e.message}`);
+        throw new Error(`could not give the model ${source}: ${e.message}`, { cause: e });
       }
     }
     prepareFileForSandbox(target, sandbox);

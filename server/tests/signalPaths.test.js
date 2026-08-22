@@ -610,7 +610,7 @@ describe('signal that leaves the rack', () => {
       ],
     });
     const patch = await createPatch(f);
-    let body = await detail(f, patch.id);
+    await detail(f, patch.id);
 
     const gear = await request(f.app)
       .post(`/api/patches/${patch.id}/modules`)
@@ -625,7 +625,7 @@ describe('signal that leaves the rack', () => {
       .send({ name: 'MIDI OUT', type: 'output_jack', port_kind: 'midi_din' });
     expect(port.status).toBe(201);
 
-    body = await detail(f, patch.id);
+    let body = await detail(f, patch.id);
     const seq = instanceOf(body, 'Drum Sequencer');
     const cable = await request(f.app)
       .post(`/api/patches/${patch.id}/cables`)

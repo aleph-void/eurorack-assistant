@@ -482,7 +482,9 @@ export async function extractManualDocument(db, manual, module, filePath, deps =
     } catch (e) {
       // Both roads are closed; the deterministic failure is the one that
       // explains the document, so it leads.
-      throw new Error(`${failure.message}. Reading it with the model failed too: ${e.message}`);
+      throw new Error(`${failure.message}. Reading it with the model failed too: ${e.message}`, {
+        cause: e,
+      });
     }
   }
 

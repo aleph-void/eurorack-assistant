@@ -233,7 +233,7 @@ export function createHandlers(
       `analyzing ${analysisManuals.length} ${documentLabel}: ` +
         analysisManuals.map((m) => m.original_name || `${m.hash}.pdf`).join(', ')
     );
-    let analyzed = 0;
+    let analyzed;
     try {
       const { components } = await analyzeManualForModule(
         db,
