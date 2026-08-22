@@ -395,6 +395,16 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   either has to let a frame pass (`frame()` in tests/views/racks.test.js).
   Anything a template calls per item per render is memoized instead
   (`panelMarkers`' WeakMap).
+- THE HOUSE FACES ARE SERVED, NOT HOPED FOR. Inter, JetBrains Mono and EB
+  Garamond are shipped as latin/latin-ext variable woff2 from
+  `client/src/assets/fonts/`, declared in the `@font-face` block at the top of
+  `style.css`. Naming a font the reader has not installed does not fall back
+  to a sensible sans: it falls back to whatever fontconfig answers for the
+  generic, and a machine told to prefer colour emoji there answers with Noto
+  Color Emoji — which carries the DIGITS 0-9 (the keycap bases) and no
+  letters. Letters then come from one face and numbers from another, drawn
+  wide and grey: "248T" laid out as "2 4 8 T". Every family in
+  `--font-sans` / `--font-mono` / `--font-serif` must be one we serve.
 - No prettier config on purpose — running prettier rewrites to double quotes
   against the house style. Format by hand. `npm run lint` (ESLint flat config)
   must stay clean in both `server/` and `client/`.
