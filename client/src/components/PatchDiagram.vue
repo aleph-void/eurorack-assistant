@@ -38,6 +38,13 @@ const props = defineProps({
   // between). Which way a switch's bidirectional jacks run is a fact about
   // the SECTION, not about each jack, so the picture needs the sections.
   switches: { type: Array, default: () => [] },
+  // The patch's mult sections, resolved onto instances by the server: which
+  // bidirectional jacks are copies of each other. Usually that is the group
+  // label on the jack, but a SWITCHED multiple (A-182-1) decides it with a
+  // toggle per jack, so the picture cannot read it off the component either.
+  // A jack whose toggle the patch has not recorded stands in every section it
+  // might be on, which is why a jack can appear in more than one.
+  mults: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['connect', 'disconnect', 'retype']);
 
@@ -461,13 +468,35 @@ const componentAt = (patchModuleId, componentId) =>
 // own colour, offered for dragging the way an output is, and refused as a
 // destination the way an output is.
 //
-// A section is: same instance, same group label, with the unlabelled
-// bidirectional jacks of a module counting as one section — again as the
-// server has it.
+// A section is: same instance, same group — the server resolves which jacks
+// those are (services/patchTopology.js), because on a switched multiple the
+// answer depends on the control positions the patch records.
 const BIDIRECTIONAL = 'bidirectional_jack';
-const multSection = (patchModuleId, component) =>
-  `${patchModuleId}:${(component.group_label || '').trim().toLowerCase()}`;
 const jackKey = (patchModuleId, componentId) => `${patchModuleId}:${componentId}`;
+// jack → the sections it stands in, and section → its jacks. A jack is in
+// exactly one on ordinary hardware, and in each bus it might be on while a
+// switched multiple's toggle goes unrecorded.
+const multSectionsByJack = computed(() => {
+  const map = new Map();
+  for (const section of props.mults) {
+    for (const j of section.jacks ?? []) {
+      const key = jackKey(j.patch_module_id, j.component_id);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(section.key);
+    }
+  }
+  return map;
+});
+const multJacksBySection = computed(() => {
+  const map = new Map();
+  for (const section of props.mults) {
+    map.set(
+      section.key,
+      (section.jacks ?? []).map((j) => jackKey(j.patch_module_id, j.component_id))
+    );
+  }
+  return map;
+});
 
 // The jacks a cable is plugged into, and the jacks a cable LEAVES FROM. Both
 // point a bidirectional jack: signal arriving at one makes it an input, and
@@ -545,7 +574,9 @@ const multDirections = computed(() => {
     if (switchJackKeys.value.has(key)) continue;
     const component = componentAt(cable.to_patch_module_id, cable.to_component_id);
     if (component?.type !== BIDIRECTIONAL) continue;
-    multFed.set(multSection(cable.to_patch_module_id, component), component.id);
+    for (const sectionKey of multSectionsByJack.value.get(key) ?? []) {
+      multFed.set(sectionKey, key);
+    }
   }
   // A mult jack a cable LEAVES is carrying a copy out, so it is an output
   // whether or not the patch has said yet which of its siblings the copy is
@@ -557,13 +588,10 @@ const multDirections = computed(() => {
     points(key, 'output_jack');
   }
   if (multFed.size === 0) return directions;
-  for (const pm of props.modules) {
-    for (const component of pm.components ?? []) {
-      if (component.type !== BIDIRECTIONAL) continue;
-      if (switchJackKeys.value.has(jackKey(pm.id, component.id))) continue;
-      const input = multFed.get(multSection(pm.id, component));
-      if (input === undefined) continue;
-      points(jackKey(pm.id, component.id), input === component.id ? 'input_jack' : 'output_jack');
+  for (const [sectionKey, inputKey] of multFed) {
+    for (const key of multJacksBySection.value.get(sectionKey) ?? []) {
+      if (switchJackKeys.value.has(key)) continue;
+      points(key, key === inputKey ? 'input_jack' : 'output_jack');
     }
   }
   return directions;

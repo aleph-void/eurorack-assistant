@@ -160,6 +160,7 @@ const patchLabel = (pm) =>
           :modules="item.modules || []"
           :cables="item.cables || []"
           :switches="item.switches || []"
+          :mults="item.mults || []"
           :label-for="patchLabel"
         />
       </div>

@@ -37,6 +37,53 @@ export async function switchMemberIds(db, moduleId) {
   return ids;
 }
 
+// Which mult section each bidirectional jack of one instance is DEFINITELY
+// in, as a lookup over that instance's components.
+//
+// Usually that is simply the label on the jack. On a SWITCHED multiple
+// (component_mult_groups — an A-182-1's per-jack bus toggles) the section
+// depends on a control, so it is only definite while the patch records that
+// control at a position that puts the jack on a bus. Anything else — the
+// toggle not recorded, or recorded at a position that takes the jack off the
+// buses — answers null, and null never refuses a cable: these rules bite on
+// what is certainly illegal, not on what cannot yet be known.
+export async function multGroupResolver(db, patch, pm) {
+  const { ComponentMultGroup, PatchSetting } = db.models;
+  const rowsByComponent = new Map();
+  if (pm.module_id) {
+    const rows = await ComponentMultGroup.findAll({ where: { module_id: pm.module_id } });
+    for (const row of rows) {
+      if (!rowsByComponent.has(row.component_id)) rowsByComponent.set(row.component_id, []);
+      rowsByComponent.get(row.component_id).push(row);
+    }
+  }
+  const settingOf = new Map();
+  if (rowsByComponent.size > 0) {
+    const settings = await PatchSetting.findAll({
+      where: { patch_id: patch.id, patch_module_id: pm.id },
+    });
+    // A menu parameter's value is not the position of a control.
+    for (const s of settings) {
+      if (!s.parameter_id) settingOf.set(s.component_id, s.value);
+    }
+  }
+  const same = (a, b) =>
+    String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+  return (component) => {
+    const rows = rowsByComponent.get(component.id);
+    if (!rows || rows.length === 0) return (component.group_label || '').trim().toLowerCase();
+    for (const row of rows) {
+      const recorded = settingOf.get(row.condition_component_id);
+      if (recorded === undefined || !same(recorded, row.condition_value)) continue;
+      const label = String(row.group_label ?? '').trim();
+      // The control is at this position: either it names a bus, or it takes
+      // the jack off them all.
+      return label ? label.toLowerCase() : null;
+    }
+    return null;
+  };
+}
+
 // Every bridged jack of a patch, mapped to the jack at the OTHER end of its
 // wire. A bridge — the two panels of a dual module, joined by a link cable
 // rather than by patch cables — pairs jacks one to one, so this is both the
@@ -150,9 +197,13 @@ export async function cableProblem(db, patch, from, to, existing) {
       error: `'${from.component.name}' is a ${portKind(from.component).replace(/_/g, ' ')} connection and '${to.component.name}' is a ${portKind(to.component).replace(/_/g, ' ')} one — a cable cannot join them`,
     };
   }
-  // The interchangeable jacks of one mult section: same module, same group
-  // label (ungrouped bidirectional jacks count as one group).
-  const groupKey = (c) => (c.group_label || '').trim().toLowerCase();
+  // The interchangeable jacks of one mult section: same instance, same
+  // section (ungrouped bidirectional jacks count as one). On a switched
+  // multiple the section is whichever the recorded control positions put the
+  // jack on, and null where they do not say.
+  const fromGroupKey = await multGroupResolver(db, patch, from.pm);
+  const toGroupKey =
+    from.pm.id === to.pm.id ? fromGroupKey : await multGroupResolver(db, patch, to.pm);
   // A dual module's two panels: which jack each end of a cable is wired to on
   // the other panel, when it is wired to one at all.
   const partners = await bridgePartners(db, patch);
@@ -167,12 +218,13 @@ export async function cableProblem(db, patch, from, to, existing) {
   };
   const fromSwitchJacks = await exemptJacks(from);
   const toSwitchJacks = await exemptJacks(to);
-  const sameMultGroup = (a, b) =>
-    a.type === BIDIRECTIONAL &&
-    b.type === BIDIRECTIONAL &&
-    !fromSwitchJacks.has(a.id) &&
-    !toSwitchJacks.has(b.id) &&
-    groupKey(a) === groupKey(b);
+  const sameMultGroup = (a, b) => {
+    if (a.type !== BIDIRECTIONAL || b.type !== BIDIRECTIONAL) return false;
+    if (fromSwitchJacks.has(a.id) || toSwitchJacks.has(b.id)) return false;
+    const ka = fromGroupKey(a);
+    const kb = toGroupKey(b);
+    return ka !== null && kb !== null && ka === kb;
+  };
   if (from.pm.id === to.pm.id && sameMultGroup(from.component, to.component)) {
     return {
       status: 400,
@@ -251,21 +303,24 @@ export async function cableProblem(db, patch, from, to, existing) {
         error: `'${to.component.name}' is already carrying a copy out of the mult`,
       };
     }
-    const groupJacks = (await componentsOfPatchModule(db, to.pm)).filter(
-      (j) =>
-        j.type === BIDIRECTIONAL &&
-        !toSwitchJacks.has(j.id) &&
-        groupKey(j) === groupKey(to.component)
-    );
-    const groupIds = new Set(groupJacks.map((j) => j.id));
-    const groupInput = existing.find(
-      (c) => c.to_patch_module_id === to.pm.id && groupIds.has(c.to_component_id)
-    );
-    if (groupInput) {
-      return {
-        status: 409,
-        error: `this mult group already takes its input at '${groupInput.to_component_name}'`,
-      };
+    // Which section this jack is on can be a fact the patch has not recorded
+    // (a switched multiple whose bus toggle is not dialed in). Then there is
+    // no group to be the second input of, and the cable stands.
+    const key = toGroupKey(to.component);
+    if (key !== null) {
+      const groupJacks = (await componentsOfPatchModule(db, to.pm)).filter(
+        (j) => j.type === BIDIRECTIONAL && !toSwitchJacks.has(j.id) && toGroupKey(j) === key
+      );
+      const groupIds = new Set(groupJacks.map((j) => j.id));
+      const groupInput = existing.find(
+        (c) => c.to_patch_module_id === to.pm.id && groupIds.has(c.to_component_id)
+      );
+      if (groupInput) {
+        return {
+          status: 409,
+          error: `this mult group already takes its input at '${groupInput.to_component_name}'`,
+        };
+      }
     }
   }
   // ... and cabling OUT of one only works while the jack is not already

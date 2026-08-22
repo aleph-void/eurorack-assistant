@@ -117,6 +117,7 @@ const {
   ComponentRoute,
   ComponentSwitch,
   ComponentSwitchStep,
+  ComponentMultGroup,
   ComponentPair,
   ModuleExpander,
   PatchModule,
@@ -262,6 +263,11 @@ const {
   const routesByModule = groupByModule(await load(ComponentRoute));
   const pairsByModule = groupByModule(await load(ComponentPair));
 
+  // A switched multiple's per-jack bus toggles: which section each jack joins
+  // in each position of its control. Resolved against the patch's recorded
+  // settings in buildPatchTopology.
+  const multGroupsByModule = groupByModule(await load(ComponentMultGroup));
+
   const switchRows = await load(ComponentSwitch);
   const switchStepRows =
     switchRows.length === 0
@@ -298,6 +304,7 @@ const {
     routesByModule,
     normalizationsByModule,
     switchesByModule,
+    multGroupsByModule,
     pairsByModule,
     links,
     settings: settings.map((s) => s.get({ plain: true })),
@@ -401,6 +408,13 @@ const {
       // picture cannot tell which way a bidirectional switch jack runs
       // without knowing the section it belongs to.
       switches: topology.switches,
+      // The mult sections of this patch: which bidirectional jacks are copies
+      // of each other, with a switched multiple's memberships already decided
+      // by the control positions the patch records. The picture and the cable
+      // rules read these rather than grouping by label themselves, so a jack
+      // whose bus toggle is unrecorded is a possibility everywhere at once
+      // rather than a copy nobody asked for.
+      mults: topology.mults,
       // Normalled connections, resolved against THIS patch: each one is
       // active until the cable that cancels it is patched, and its signal
       // is traced through the chain to where it really comes from.

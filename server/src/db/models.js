@@ -431,6 +431,24 @@ export function defineModels(sequelize) {
     { tableName: 'component_switch_steps', timestamps: false }
   );
 
+  // A switched mult group: which section a bidirectional jack joins while a
+  // control sits at one position (Doepfer A-182-1's per-jack bus toggles).
+  // A jack with no rows here takes its unconditional group_label instead.
+  const ComponentMultGroup = define(
+    'ComponentMultGroup',
+    {
+      id,
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      component_id: { type: DataTypes.INTEGER, allowNull: false },
+      // NULL is a real answer: in this position the jack is on no bus.
+      group_label: { type: DataTypes.TEXT },
+      condition_component_id: { type: DataTypes.INTEGER },
+      condition_value: { type: DataTypes.TEXT },
+      description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'component_mult_groups', createdAt: 'created_at', updatedAt: false }
+  );
+
   // An internal signal path: the input jack's signal (possibly processed)
   // appears at the output jack. Output jacks no route feeds are signal
   // generators. Extracted from the manual; users may add/remove rows.
@@ -1048,6 +1066,14 @@ export function defineModels(sequelize) {
     as: 'Source',
   });
 
+  Module.hasMany(ComponentMultGroup, { foreignKey: 'module_id' });
+  ComponentMultGroup.belongsTo(Module, { foreignKey: 'module_id' });
+  ComponentMultGroup.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
+  ComponentMultGroup.belongsTo(ModuleComponent, {
+    foreignKey: 'condition_component_id',
+    as: 'MultCondition',
+  });
+
   Module.hasMany(ComponentSwitch, { foreignKey: 'module_id' });
   ComponentSwitch.belongsTo(Module, { foreignKey: 'module_id' });
   ComponentSwitch.belongsTo(ModuleComponent, { foreignKey: 'common_component_id', as: 'Common' });
@@ -1207,6 +1233,7 @@ export function defineModels(sequelize) {
     ComponentRoute,
     ComponentSwitch,
     ComponentSwitchStep,
+    ComponentMultGroup,
     ComponentValue,
     ComponentPair,
     ModuleParameter,

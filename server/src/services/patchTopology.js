@@ -63,6 +63,7 @@ export function buildPatchTopology({
   routesByModule = new Map(),
   normalizationsByModule = new Map(),
   switchesByModule = new Map(),
+  multGroupsByModule = new Map(),
   pairsByModule = new Map(),
   links = [],
   settings = [],
@@ -257,6 +258,82 @@ export function buildPatchTopology({
     }
   }
 
+  // ---- mult sections ----
+  // Which bidirectional jacks are copies of each other, resolved onto
+  // instances. On most hardware that is a fact about the module — the jacks
+  // sharing a group_label — but a SWITCHED multiple decides it with a control
+  // per jack (component_mult_groups, migration 038): the section a jack joins
+  // is then the row whose position the patch records, a position that takes
+  // it off the buses puts it in none, and a control the patch has not
+  // recorded leaves every position possible, which is exclusive in exactly
+  // the sense an unset conditional route is.
+  //
+  // Switch-section and bridged jacks are left out: a switch SELECTS one of
+  // its connections and a bridge PAIRS two panels, neither copies to all.
+  const switchJackKeys = new Set();
+  for (const section of switches) {
+    switchJackKeys.add(`${section.common_patch_module_id}:${section.common_component_id}`);
+    for (const step of section.steps) {
+      switchJackKeys.add(`${step.patch_module_id}:${step.component_id}`);
+    }
+  }
+  const bridgedKeys = new Set();
+  for (const b of bridges) {
+    bridgedKeys.add(`${b.a_patch_module_id}:${b.a_component_id}`);
+    bridgedKeys.add(`${b.b_patch_module_id}:${b.b_component_id}`);
+  }
+  const mults = [];
+  for (const pm of patchModules) {
+    const rowsByComponent = new Map();
+    for (const row of (pm.module_id ? multGroupsByModule.get(pm.module_id) : null) || []) {
+      if (!rowsByComponent.has(row.component_id)) rowsByComponent.set(row.component_id, []);
+      rowsByComponent.get(row.component_id).push(row);
+    }
+    const sections = new Map();
+    const join = (label, jack, condition) => {
+      const name = String(label ?? '').trim();
+      const key = `${pm.id}:${name.toLowerCase()}`;
+      if (!sections.has(key)) {
+        sections.set(key, {
+          key,
+          patch_module_id: pm.id,
+          label: name || null,
+          jacks: [],
+        });
+      }
+      sections.get(key).jacks.push({
+        patch_module_id: pm.id,
+        component_id: jack.id,
+        component_name: jack.name,
+        condition: condition ?? null,
+        // 'the jack is on this bus' vs 'the jack may be on this bus': a
+        // membership nothing has pinned down is one of several possibilities.
+        exclusive: Boolean(condition) && condition.state !== 'selected',
+      });
+    };
+    for (const jack of jacksByPatchModule.get(pm.id) || []) {
+      if (jack.type !== 'bidirectional_jack') continue;
+      const key = `${pm.id}:${jack.id}`;
+      if (switchJackKeys.has(key) || bridgedKeys.has(key)) continue;
+      const rows = rowsByComponent.get(jack.id) || [];
+      if (rows.length === 0) {
+        // Unswitched: the label on the jack, with the unlabelled jacks of an
+        // instance counting as one section.
+        join(jack.group_label, jack, null);
+        continue;
+      }
+      for (const row of rows) {
+        const condition = conditionOf(pm.id, row);
+        // A position the patch rules out is not part of this patch, and a
+        // position with no bus behind it puts the jack in no section.
+        if (condition?.state === 'unselected') continue;
+        if (!String(row.group_label ?? '').trim()) continue;
+        join(row.group_label, jack, condition);
+      }
+    }
+    for (const section of sections.values()) mults.push(section);
+  }
+
   // Which cable, if any, cancels each normalled connection — computed once
   // here so every consumer agrees on what is active.
   const cableInto = new Map();
@@ -278,6 +355,7 @@ export function buildPatchTopology({
     routes,
     normalizations,
     switches,
+    mults,
     bridges,
     pairs,
     links,

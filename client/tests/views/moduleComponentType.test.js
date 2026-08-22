@@ -16,6 +16,7 @@ vi.mock('vue-router', async (importOriginal) => {
 });
 
 import { api } from '../../src/api.js';
+import { dialog } from '../../src/dialog.js';
 import ModuleComponentTypeView from '../../src/views/ModuleComponentTypeView.vue';
 import { refreshRackModules } from '../../src/components/moduledetail/useModuleRecord.js';
 import { mathsModule } from '../moduleFixtures.js';
@@ -55,6 +56,34 @@ const multModule = {
   ],
   switches: [
     { id: 3, name: 'Router', common_component_id: 8, step_component_ids: [9] },
+  ],
+};
+
+// A Doepfer A-182-1: two jacks, each with its own three-position toggle
+// deciding which internal bus it sits on. No label on the jack could say
+// that, so the section is recorded a position at a time.
+const switchedMultModule = {
+  ...mathsModule,
+  panel,
+  components: [
+    ...mathsModule.components,
+    { id: 4, type: 'bidirectional_jack', name: 'OUT 1', group_label: null },
+    { id: 5, type: 'bidirectional_jack', name: 'OUT 2', group_label: null },
+    {
+      id: 6,
+      type: 'switch',
+      name: 'SW 1',
+      values: [
+        { id: 20, type: 'enum', value: 'bus 1' },
+        { id: 21, type: 'enum', value: 'bus 2' },
+        { id: 22, type: 'enum', value: 'off' },
+      ],
+    },
+  ],
+  switches: [],
+  mult_groups: [
+    { id: 30, component_id: 4, group_label: '1', condition_component_id: 6, condition_value: 'bus 1' },
+    { id: 31, component_id: 4, group_label: '2', condition_component_id: 6, condition_value: 'bus 2' },
   ],
 };
 
@@ -217,6 +246,51 @@ describe('ModuleComponentTypeView', () => {
     expect(wrapper.find('[data-test="switch-sections-empty"]').text()).toContain('SELECTS');
     // With no section recorded, every jack is grouped as a mult again.
     expect(wrapper.find('[data-test="mult-sections"]').text()).toContain('SW COM');
+  });
+
+  // The switched half: a jack whose bus is decided by a toggle takes a row
+  // per position, and the label it would otherwise carry is not read at all.
+  it('records a switched jack one toggle position at a time', async () => {
+    api.post.mockResolvedValue({ id: 32 });
+    const wrapper = await openWith(switchedMultModule, 'bidirectional_jack');
+
+    // What is recorded reads as the panel does, and the plain label is off.
+    expect(wrapper.find('[data-test="mult-switched-4"]').text()).toContain('SW 1 = bus 1 → 1');
+    expect(wrapper.find('[data-test="mult-switched-4"]').text()).toContain('SW 1 = bus 2 → 2');
+    expect(wrapper.find('[data-test="mult-group-input-4"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('[data-test="mult-group-input-5"]').attributes('disabled')).toBeUndefined();
+
+    // Both buses OUT 1 could be on are shown, each with the position that
+    // would put it there.
+    expect(wrapper.find('[data-test="mult-section-1"]').text()).toContain('OUT 1 (with SW 1 = bus 1)');
+    expect(wrapper.find('[data-test="mult-section-2"]').text()).toContain('OUT 1 (with SW 1 = bus 2)');
+    // OUT 2 has no rows, so it is where its (empty) label puts it.
+    expect(wrapper.find('[data-test="mult-section-ungrouped"]').text()).toContain('OUT 2');
+
+    await wrapper.find('[data-test="mult-position-add-5"]').trigger('click');
+    await wrapper.find('[data-test="mult-position-control-5"]').setValue('6');
+    await wrapper.find('[data-test="mult-position-value-5"]').setValue('bus 2');
+    await wrapper.find('[data-test="mult-position-label-5"]').setValue('2');
+    await wrapper.find('[data-test="mult-position-form-5"]').trigger('submit');
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith('/api/modules/1/mult-groups', {
+      component_id: 5,
+      condition_component_id: 6,
+      condition_value: 'bus 2',
+      group_label: '2',
+    });
+  });
+
+  it('takes a switched position away again', async () => {
+    api.delete.mockResolvedValue({ ok: true });
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    const wrapper = await openWith(switchedMultModule, 'bidirectional_jack');
+    await wrapper.find('[data-test="mult-position-remove-30"]').trigger('click');
+    await flushPromises();
+    expect(confirm).toHaveBeenCalled();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/mult-groups/30');
+    confirm.mockRestore();
   });
 
   it('offers the groups on the bidirectional page only', async () => {

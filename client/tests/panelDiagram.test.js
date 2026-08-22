@@ -288,6 +288,27 @@ describe('panel layout geometry', () => {
 });
 
 describe('PatchDiagram', () => {
+  // The mult sections as the server resolves them onto instances: which
+  // bidirectional jacks are copies of each other. On ordinary hardware that
+  // is one section per group label, which is what this builds; a switched
+  // multiple's sections are passed by hand where a test is about them.
+  const multSections = (pm) => {
+    const sections = new Map();
+    for (const c of pm.components.filter((j) => j.type === 'bidirectional_jack')) {
+      const label = (c.group_label || '').trim();
+      const key = `${pm.id}:${label.toLowerCase()}`;
+      if (!sections.has(key)) {
+        sections.set(key, { key, patch_module_id: pm.id, label: label || null, jacks: [] });
+      }
+      sections.get(key).jacks.push({
+        patch_module_id: pm.id,
+        component_id: c.id,
+        component_name: c.name,
+      });
+    }
+    return [...sections.values()];
+  };
+
   const mountDiagram = (props = {}, options = {}) =>
     mount(PatchDiagram, {
       props: { modules: modules(), cables: [cable()], ...props },
@@ -432,7 +453,12 @@ describe('PatchDiagram', () => {
       ]),
     };
     const into = cable({ id: 22, to_patch_module_id: 13, to_component_id: 5, to_component_name: 'M1' });
-    const wrapper = mountDiagram({ modules: [...modules(), mult], cables: [into], interactive: true });
+    const wrapper = mountDiagram({
+      modules: [...modules(), mult],
+      cables: [into],
+      mults: multSections(mult),
+      interactive: true,
+    });
     const fillOf = (id) => wrapper.find(`[data-test="diagram-jack-13-${id}"]`).attributes('fill');
 
     expect(fillOf(5)).toBe(componentColor('input_jack'));
@@ -450,6 +476,47 @@ describe('PatchDiagram', () => {
     await wrapper.setProps({ cables: [] });
     expect(fillOf(5)).toBe(componentColor('bidirectional_jack'));
     expect(fillOf(6)).toBe(componentColor('bidirectional_jack'));
+  });
+
+  // A Doepfer A-182-1 puts each jack on one of two buses with a toggle beside
+  // it, and until the patch records that toggle a jack MIGHT be on either.
+  // The server resolves that into sections a jack can appear in twice, and
+  // the picture points each section on its own: feeding bus A says nothing
+  // about the jacks that are only on bus B.
+  it('points each bus of a switched multiple by itself', () => {
+    const mult = {
+      id: 14,
+      module_id: 4,
+      manufacturer: 'Doepfer',
+      module_name: 'A-182-1',
+      instance: 1,
+      live: true,
+      components: [
+        { id: 5, type: 'bidirectional_jack', name: 'OUT 1', group_label: null },
+        { id: 6, type: 'bidirectional_jack', name: 'OUT 2', group_label: null },
+        { id: 7, type: 'bidirectional_jack', name: 'OUT 3', group_label: null },
+      ],
+      panel: panelFor([
+        { component_id: 5, name: 'OUT 1', shape: 'jack', x: 0.2, y: 0.2, w: 0.06, h: 0.06 },
+        { component_id: 6, name: 'OUT 2', shape: 'jack', x: 0.2, y: 0.4, w: 0.06, h: 0.06 },
+        { component_id: 7, name: 'OUT 3', shape: 'jack', x: 0.2, y: 0.6, w: 0.06, h: 0.06 },
+      ]),
+    };
+    const jackRow = (id, name) => ({ patch_module_id: 14, component_id: id, component_name: name });
+    // OUT 1 and OUT 2 on bus 1; OUT 2 is also on bus 2 with OUT 3, because
+    // its toggle is not recorded and it may yet be on either.
+    const mults = [
+      { key: '14:1', patch_module_id: 14, label: '1', jacks: [jackRow(5, 'OUT 1'), jackRow(6, 'OUT 2')] },
+      { key: '14:2', patch_module_id: 14, label: '2', jacks: [jackRow(6, 'OUT 2'), jackRow(7, 'OUT 3')] },
+    ];
+    const into = cable({ id: 23, to_patch_module_id: 14, to_component_id: 5, to_component_name: 'OUT 1' });
+    const wrapper = mountDiagram({ modules: [...modules(), mult], cables: [into], mults });
+    const fillOf = (id) => wrapper.find(`[data-test="diagram-jack-14-${id}"]`).attributes('fill');
+
+    expect(fillOf(5)).toBe(componentColor('input_jack'));
+    expect(fillOf(6)).toBe(componentColor('output_jack'));
+    // Bus 2 has no input, so OUT 3 is still whatever the patch makes of it.
+    expect(fillOf(7)).toBe(componentColor('bidirectional_jack'));
   });
 
   // A routing switch is NOT a mult: it selects one of its steps rather than

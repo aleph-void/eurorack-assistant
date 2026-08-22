@@ -1798,3 +1798,227 @@ describe('dual modules (declared on the hardware)', () => {
     expect(fresh.links).toHaveLength(0);
   });
 });
+
+// Doepfer A-182-1 Switched Multiples: eight jacks on two internal buses, with
+// a three-position toggle beside each one — up puts that jack on bus 1, down
+// on bus 2, the middle takes it off both. Which jacks are copies of each
+// other is therefore a fact about the PATCH, not about the module, and no
+// single group_label could hold it.
+describe('switched multiples (A-182-1)', () => {
+  // Four jacks and their toggles, wired the way the panel is: OUT n is
+  // decided by SW n, which reads 'bus 1', 'bus 2' or 'off'.
+  async function switchedMult(f) {
+    const names = ['1', '2', '3', '4'];
+    const { module, components } = await withComponents(f, {
+      manufacturer: 'Doepfer',
+      name: 'A-182-1',
+      components: [
+        ...names.map((n) => ({ type: 'bidirectional_jack', name: `OUT ${n}` })),
+        ...names.map((n) => ({ type: 'switch', name: `SW ${n}` })),
+      ],
+    });
+    for (const n of names) {
+      await f.db.query(
+        `INSERT INTO component_values (component_id, type, value)
+         VALUES ($1, 'enum', 'bus 1'), ($1, 'enum', 'bus 2'), ($1, 'enum', 'off')`,
+        [components[`SW ${n}`].id]
+      );
+      for (const [value, group] of [
+        ['bus 1', '1'],
+        ['bus 2', '2'],
+        ['off', ''],
+      ]) {
+        const res = await request(f.app)
+          .post(`/api/modules/${module.id}/mult-groups`)
+          .set('Cookie', f.aliceCookie)
+          .send({
+            component_id: components[`OUT ${n}`].id,
+            condition_component_id: components[`SW ${n}`].id,
+            condition_value: value,
+            group_label: group,
+          });
+        expect(res.status).toBe(201);
+      }
+    }
+    return { module, components };
+  }
+
+  // The toggle positions the patch records, so a test reads like the panel:
+  // "OUT 1 and OUT 2 up, OUT 3 down".
+  async function setSwitches(f, patchId, pm, positions) {
+    for (const [name, value] of Object.entries(positions)) {
+      const res = await request(f.app)
+        .put(`/api/patches/${patchId}/settings`)
+        .set('Cookie', f.aliceCookie)
+        .send({ patch_module_id: pm.id, component_id: jack(pm, name).id, value });
+      expect([200, 201]).toContain(res.status);
+    }
+  }
+
+  const cable = (f, patchId, from, to) =>
+    request(f.app)
+      .post(`/api/patches/${patchId}/cables`)
+      .set('Cookie', f.aliceCookie)
+      .send({
+        from_patch_module_id: from.pm.id,
+        from_component_id: jack(from.pm, from.name).id,
+        to_patch_module_id: to.pm.id,
+        to_component_id: jack(to.pm, to.name).id,
+      });
+
+  async function studio(f) {
+    await switchedMult(f);
+    await withComponents(f, {
+      manufacturer: 'Doepfer',
+      name: 'A-110',
+      components: [{ type: 'output_jack', name: 'SAW' }],
+    });
+    await withComponents(f, {
+      manufacturer: 'Mutable',
+      name: 'Ripples',
+      components: [
+        { type: 'input_jack', name: 'IN A' },
+        { type: 'input_jack', name: 'IN B' },
+      ],
+    });
+    const patch = await createPatch(f);
+    const body = await detail(f, patch.id);
+    return {
+      patch,
+      mult: instanceOf(body, 'A-182-1'),
+      osc: instanceOf(body, 'A-110'),
+      filter: instanceOf(body, 'Ripples'),
+    };
+  }
+
+  it('copies only to the jacks the recorded toggle positions put on the same bus', async () => {
+    const f = await fixture();
+    const { patch, mult, osc, filter } = await studio(f);
+    // OUT 1 and OUT 2 on bus 1, OUT 3 on bus 2, OUT 4 off the buses — the
+    // whole panel dialed in, so every membership here is a fact.
+    await setSwitches(f, patch.id, mult, {
+      'SW 1': 'bus 1',
+      'SW 2': 'bus 1',
+      'SW 3': 'bus 2',
+      'SW 4': 'off',
+    });
+
+    expect((await cable(f, patch.id, { pm: osc, name: 'SAW' }, { pm: mult, name: 'OUT 1' })).status).toBe(201);
+    expect((await cable(f, patch.id, { pm: mult, name: 'OUT 2' }, { pm: filter, name: 'IN A' })).status).toBe(201);
+    // OUT 3 is on the other bus, so it carries nothing from OUT 1.
+    expect((await cable(f, patch.id, { pm: mult, name: 'OUT 3' }, { pm: filter, name: 'IN B' })).status).toBe(201);
+
+    const body = await detail(f, patch.id);
+    const copies = flatFlow(body).filter((n) => n.via === 'mult');
+    expect(copies.map((n) => n.name)).toEqual(['OUT 2']);
+
+    // And the patch says which jacks stand together, resolved onto instances.
+    const bus1 = body.mults.find((s) => s.label === '1' && s.patch_module_id === mult.id);
+    expect(bus1.jacks.map((j) => j.component_name).sort()).toEqual(['OUT 1', 'OUT 2']);
+    expect(bus1.jacks.every((j) => j.exclusive === false)).toBe(true);
+  });
+
+  it('takes a jack off the buses entirely in the position that says so', async () => {
+    const f = await fixture();
+    const { patch, mult, osc, filter } = await studio(f);
+    await setSwitches(f, patch.id, mult, { 'SW 1': 'bus 1', 'SW 2': 'off' });
+
+    await cable(f, patch.id, { pm: osc, name: 'SAW' }, { pm: mult, name: 'OUT 1' });
+    await cable(f, patch.id, { pm: mult, name: 'OUT 2' }, { pm: filter, name: 'IN A' });
+
+    const body = await detail(f, patch.id);
+    expect(flatFlow(body).filter((n) => n.via === 'mult')).toHaveLength(0);
+    const sections = body.mults.filter((s) => s.patch_module_id === mult.id);
+    expect(sections.flatMap((s) => s.jacks.map((j) => j.component_name))).not.toContain('OUT 2');
+  });
+
+  // A toggle nobody has dialed in is not a copy and not a refusal: it is a
+  // possibility, which is what the tracer marks exclusive elsewhere.
+  it('treats an unrecorded toggle as a possibility rather than a copy', async () => {
+    const f = await fixture();
+    const { patch, mult, osc, filter } = await studio(f);
+    await cable(f, patch.id, { pm: osc, name: 'SAW' }, { pm: mult, name: 'OUT 1' });
+    await cable(f, patch.id, { pm: mult, name: 'OUT 2' }, { pm: filter, name: 'IN A' });
+
+    const body = await detail(f, patch.id);
+    const copies = flatFlow(body).filter((n) => n.via === 'mult');
+    expect(copies.map((n) => n.name)).toEqual(['OUT 2']);
+    expect(copies[0].switched).toBe(true);
+    expect(copies[0].condition).toMatchObject({ component_name: 'SW 2', state: 'unset' });
+
+    // Nothing is refused while nothing is known: both jacks may still take a
+    // cable, because they may well be on different buses.
+    expect((await cable(f, patch.id, { pm: osc, name: 'SAW' }, { pm: mult, name: 'OUT 3' })).status).toBe(201);
+  });
+
+  // The mult rules still bite once the patch says where the jacks are.
+  it('refuses a second input to a bus the toggles put jacks on', async () => {
+    const f = await fixture();
+    const { patch, mult, osc } = await studio(f);
+    await setSwitches(f, patch.id, mult, { 'SW 1': 'bus 1', 'SW 2': 'bus 1', 'SW 3': 'bus 2' });
+
+    expect((await cable(f, patch.id, { pm: osc, name: 'SAW' }, { pm: mult, name: 'OUT 1' })).status).toBe(201);
+    const second = await cable(f, patch.id, { pm: osc, name: 'SAW' }, { pm: mult, name: 'OUT 2' });
+    expect(second.status).toBe(409);
+    expect(second.body.error).toContain('already takes its input');
+    // The other bus is a different mult and takes its own input.
+    expect((await cable(f, patch.id, { pm: osc, name: 'SAW' }, { pm: mult, name: 'OUT 3' })).status).toBe(201);
+    // A cable between two jacks of one bus still does nothing.
+    const pointless = await cable(f, patch.id, { pm: mult, name: 'OUT 2' }, { pm: mult, name: 'OUT 1' });
+    expect(pointless.status).toBe(400);
+    expect(pointless.body.error).toContain('same mult group');
+  });
+
+  it('records the positions on the module and refuses a second group for one of them', async () => {
+    const f = await fixture();
+    const { module, components } = await switchedMult(f);
+    const body = await request(f.app)
+      .get(`/api/modules/${module.id}`)
+      .set('Cookie', f.aliceCookie);
+    expect(body.body.mult_groups).toHaveLength(12);
+    expect(body.body.mult_groups[0]).toMatchObject({
+      component_id: components['OUT 1'].id,
+      condition_component_id: components['SW 1'].id,
+      condition_value: 'bus 1',
+      group_label: '1',
+    });
+    // The 'off' position is recorded as being on no bus at all.
+    expect(body.body.mult_groups[2]).toMatchObject({ condition_value: 'off', group_label: null });
+
+    const dupe = await request(f.app)
+      .post(`/api/modules/${module.id}/mult-groups`)
+      .set('Cookie', f.aliceCookie)
+      .send({
+        component_id: components['OUT 1'].id,
+        condition_component_id: components['SW 1'].id,
+        condition_value: 'bus 1',
+        group_label: '2',
+      });
+    expect(dupe.status).toBe(409);
+
+    // A group has to hang off a bidirectional jack and name a control.
+    const notAJack = await request(f.app)
+      .post(`/api/modules/${module.id}/mult-groups`)
+      .set('Cookie', f.aliceCookie)
+      .send({
+        component_id: components['SW 1'].id,
+        condition_component_id: components['SW 2'].id,
+        condition_value: 'bus 1',
+      });
+    expect(notAJack.status).toBe(400);
+    const noControl = await request(f.app)
+      .post(`/api/modules/${module.id}/mult-groups`)
+      .set('Cookie', f.aliceCookie)
+      .send({ component_id: components['OUT 1'].id, group_label: '1' });
+    expect(noControl.status).toBe(400);
+
+    const removed = await request(f.app)
+      .delete(`/api/modules/${module.id}/mult-groups/${body.body.mult_groups[0].id}`)
+      .set('Cookie', f.aliceCookie);
+    expect(removed.status).toBe(200);
+    const after = await request(f.app)
+      .get(`/api/modules/${module.id}`)
+      .set('Cookie', f.aliceCookie);
+    expect(after.body.mult_groups).toHaveLength(11);
+  });
+});
