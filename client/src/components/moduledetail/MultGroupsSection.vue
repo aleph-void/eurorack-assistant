@@ -270,7 +270,7 @@ function revert() {
             </thead>
             <tbody>
               <tr v-for="jack in jacks" :key="jack.id" :data-test="`mult-group-row-${jack.id}`">
-                <td>
+                <td data-label="Jack">
                   {{ jack.name }}
                   <em
                     v-if="switchSectionOf(jack)"
@@ -280,8 +280,8 @@ function revert() {
                     · step of {{ switchSectionOf(jack) }} — selected, not copied
                   </em>
                 </td>
-                <td>{{ jack.group_label || '—' }}</td>
-                <td>
+                <td data-label="Saved group">{{ jack.group_label || '—' }}</td>
+                <td data-label="Group">
                   <input
                     v-model="drafts[jack.id]"
                     :list="`mult-group-labels-${moduleId}`"
@@ -295,7 +295,7 @@ function revert() {
                     :data-test="`mult-group-input-${jack.id}`"
                   />
                 </td>
-                <td :data-test="`mult-switched-${jack.id}`">
+                <td data-label="Switched by" :data-test="`mult-switched-${jack.id}`">
                   <ul v-if="rowsOf(jack).length" class="mult-positions">
                     <li v-for="row in rowsOf(jack)" :key="row.id">
                       <span>
