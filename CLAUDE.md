@@ -156,7 +156,15 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   export/import by name. `services/moduleParameters.js` holds the loader and
   the `find_parameters` job's model pass, which is a PURE FILL like
   `componentDescriber.js`: it adds parameters that are not recorded and fills
-  an EMPTY option list, and rewrites nothing.
+  an EMPTY option list, and rewrites nothing. Every menu is therefore also
+  managed BY HAND on `/modules/:id/parameters` — a parameter and each of the
+  settings it offers are added, corrected in place and removed there, options
+  included, because an option carries its POSITION in the menu and deleting
+  and re-typing one puts a setting the manual prints third at the bottom of
+  the list. A menu names each of its entries once: one parameter name per
+  component and one value per parameter (409 either way), enforced on an EDIT
+  as much as on a create — a rename onto a neighbour makes the same duplicate
+  a second create would.
 - A DUAL module is two panels of one product joined by a link cable rather
   than by patch cables (Omnitone 7Path's ethernet pair). Neither side is a
   host — that is what makes it not an expander — and BOTH SIDES MAY BE THE

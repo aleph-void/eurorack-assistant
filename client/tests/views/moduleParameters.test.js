@@ -97,12 +97,26 @@ describe('ModuleParametersView', () => {
 
     await wrapper.find('[data-test="parameter-name"]').setValue('Wave');
     await wrapper.find('[data-test="parameter-component"]').setValue('1');
+    await wrapper.find('[data-test="parameter-group"]').setValue('Output settings');
+    await wrapper.find('[data-test="parameter-default"]').setValue('Square');
+    await wrapper.find('[data-test="parameter-description"]').setValue('The shape OUT 1 sends.');
     await wrapper.find('[data-test="parameter-create-form"]').trigger('submit');
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith(
       '/api/modules/1/parameters',
-      expect.objectContaining({ name: 'Wave', component_id: 1, value_type: 'enum' })
+      expect.objectContaining({
+        name: 'Wave',
+        component_id: 1,
+        value_type: 'enum',
+        group_label: 'Output settings',
+        default_value: 'Square',
+        description: 'The shape OUT 1 sends.',
+      })
     );
+    // The name clears for the next one; the component and the menu page stay,
+    // because a menu is entered a page at a time.
+    expect(wrapper.find('[data-test="parameter-name"]').element.value).toBe('');
+    expect(wrapper.find('[data-test="parameter-component"]').element.value).toBe('1');
 
     await wrapper.find('[data-test="option-value-101"]').setValue('x2');
     await wrapper.find('[data-test="option-value-101"]').trigger('submit');
@@ -117,6 +131,57 @@ describe('ModuleParametersView', () => {
     await wrapper.find('[data-test="delete-parameter-101"]').trigger('click');
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/modules/1/parameters/101');
+  });
+
+  it('corrects a parameter, its menu page and the setting it offers, in place', async () => {
+    const wrapper = await open();
+    api.put.mockResolvedValue({ id: 101 });
+
+    await wrapper.find('[data-test="edit-parameter-101"]').trigger('click');
+    // Every field the parameter has is reachable — the menu page it is listed
+    // under most of all, which nothing else can set.
+    expect(wrapper.find('[data-test="edit-parameter-group-101"]').element.value).toBe(
+      'Output settings'
+    );
+    await wrapper.find('[data-test="edit-parameter-name-101"]').setValue('Clock division / mult');
+    await wrapper.find('[data-test="edit-parameter-group-101"]').setValue('Outputs');
+    await wrapper.find('[data-test="save-parameter-101"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith(
+      '/api/modules/1/parameters/101',
+      expect.objectContaining({
+        name: 'Clock division / mult',
+        group_label: 'Outputs',
+        component_id: 1,
+      })
+    );
+
+    // A setting is corrected rather than deleted and retyped: re-adding it
+    // would put it at the bottom of a menu it belongs at the top of.
+    await wrapper.find('[data-test="edit-option-1"]').trigger('click');
+    await wrapper.find('[data-test="edit-option-value-1"]').setValue('/16');
+    await wrapper.find('[data-test="edit-option-description-1"]').setValue('Sixteen times slower');
+    await wrapper.find('[data-test="save-option-1"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/modules/1/parameters/101/options/1', {
+      value: '/16',
+      description: 'Sixteen times slower',
+    });
+  });
+
+  it('asks before dropping a setting from the menu', async () => {
+    const wrapper = await open();
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    await wrapper.find('[data-test="delete-option-1"]').trigger('click');
+    await flushPromises();
+    expect(confirm).toHaveBeenCalled();
+    expect(api.delete).not.toHaveBeenCalled();
+
+    confirm.mockResolvedValue(true);
+    api.delete.mockResolvedValue({ ok: true });
+    await wrapper.find('[data-test="delete-option-1"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/modules/1/parameters/101/options/1');
   });
 
   it('asks the app to read the menu out of the documents', async () => {
