@@ -151,6 +151,68 @@ describe('claude authorization', () => {
     });
   });
 
+  // The refresh token is SINGLE USE — Anthropic rotates it on every exchange.
+  // The queue runs several jobs at once, each holding its own copy of the
+  // account row, and an expired token used to mean all of them posting the
+  // same refresh token together: one fresh pair, the rest 'invalid_grant'.
+  it('refreshes a stale token ONCE for jobs running at the same time', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u', llmAccount: false });
+    const fetchImpl = tokenEndpoint([
+      { json: { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 } },
+      { json: { access_token: 'at-2', refresh_token: 'rt-2', expires_in: 3600 } },
+      // A third exchange would be the bug: it spends the token 'rt-1' that
+      // the second one already rotated away.
+      { status: 400, json: { error: 'invalid_grant' } },
+    ]);
+    await finishClaudeOauth(db, user.id, 'code#v', 'v', { fetchImpl });
+    await db.models.UserLlmAccount.update(
+      { expires_at: new Date(Date.now() - 1000) },
+      { where: { user_id: user.id } }
+    );
+
+    // Four jobs, four separate reads of the row — as the worker does.
+    const copies = await Promise.all([1, 2, 3, 4].map(() => getAccount(db, user.id, 'claude')));
+    const tokens = await Promise.all(
+      copies.map((account) => freshClaudeAccessToken(db, account, { fetchImpl }))
+    );
+    expect(tokens).toEqual(['at-2', 'at-2', 'at-2', 'at-2']);
+    // The authorization exchange plus exactly one refresh.
+    expect(fetchImpl.calls).toHaveLength(2);
+
+    // A job that read the row BEFORE the refresh and asks afterwards finds
+    // the fresh token on the row rather than spending the dead one.
+    const late = copies[0];
+    await late.update({ expires_at: new Date(Date.now() - 1000) });
+    await db.models.UserLlmAccount.update(
+      { expires_at: new Date(Date.now() + 3600_000) },
+      { where: { user_id: user.id } }
+    );
+    expect(await freshClaudeAccessToken(db, late, { fetchImpl })).toBe('at-2');
+    expect(fetchImpl.calls).toHaveLength(2);
+  });
+
+  it('fails for good, with what fixes it, when the grant is refused', async () => {
+    const db = await createTestDb();
+    const user = await createUser(db, { username: 'u', llmAccount: false });
+    const fetchImpl = tokenEndpoint([
+      { json: { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 } },
+      { status: 400, json: { error: 'invalid_grant' } },
+    ]);
+    const account = await finishClaudeOauth(db, user.id, 'code#v', 'v', { fetchImpl });
+    await account.update({ expires_at: new Date(Date.now() - 1000) });
+    await expect(freshClaudeAccessToken(db, account, { fetchImpl })).rejects.toMatchObject({
+      message: expect.stringMatching(/no longer valid.*Account → LLM provider/s),
+      permanent: true,
+    });
+    // The stored credential is left as it was: nothing was rotated.
+    const stored = await getAccount(db, user.id, 'claude');
+    expect(decryptSecrets(stored.credentials)).toEqual({
+      access_token: 'at-1',
+      refresh_token: 'rt-1',
+    });
+  });
+
   it('accepts only sk-ant-… setup tokens on the paste path', async () => {
     const db = await createTestDb();
     const user = await createUser(db, { username: 'u', llmAccount: false });

@@ -286,29 +286,96 @@ export async function finishClaudeOauth(db, userId, pastedCode, verifier, opts =
 // token alive for the whole run.
 const REFRESH_SKEW_MS = 10 * 60 * 1000;
 
+const isStale = (expiresAt, now) => {
+  const at = expiresAt ? new Date(expiresAt).getTime() : null;
+  return at !== null && at - REFRESH_SKEW_MS <= now;
+};
+
+// A REFRESH TOKEN IS SINGLE USE. Anthropic rotates it on every exchange: the
+// moment one refresh succeeds, the token it was sent with is dead. The queue
+// runs several jobs at once and each of them loads its OWN copy of the
+// account row, so an expired token meant every running job posting the SAME
+// refresh token within a second of each other — one got a fresh pair and all
+// the rest got `invalid_grant`, then failed, retried, and raced again.
+//
+// So every refresh for an account goes through ONE promise (this map, for
+// the jobs sharing this process) and the row is LOCKED while it happens (for
+// a second worker process): whoever arrives second waits, re-reads the row
+// and finds the token already fresh rather than spending the dead one.
+const refreshing = new Map();
+
 // The access token for a claude oauth account, refreshed first if it is
 // about to expire. Returns the token; updates the row when it refreshed.
 export async function freshClaudeAccessToken(db, account, opts = {}) {
   const secrets = decryptSecrets(account.credentials, opts);
   const now = opts.now ?? Date.now();
-  const expiresAt = account.expires_at ? new Date(account.expires_at).getTime() : null;
-  const stale = expiresAt !== null && expiresAt - REFRESH_SKEW_MS <= now;
-  if (!stale || !secrets.refresh_token) return secrets.access_token;
+  if (!isStale(account.expires_at, now) || !secrets.refresh_token) return secrets.access_token;
 
-  const json = await exchangeClaudeToken(
-    { grant_type: 'refresh_token', refresh_token: secrets.refresh_token },
-    opts
+  const inFlight = refreshing.get(account.id);
+  if (inFlight) return inFlight;
+  const run = refreshClaudeAccount(db, account, opts).finally(() =>
+    refreshing.delete(account.id)
   );
-  const refreshed = {
-    access_token: json.access_token,
-    // Anthropic rotates the refresh token on use; keep whichever is newest.
-    refresh_token: json.refresh_token || secrets.refresh_token,
-  };
-  await account.update({
-    credentials: encryptSecrets(refreshed, opts),
-    expires_at: json.expires_in ? new Date(now + Number(json.expires_in) * 1000) : null,
+  refreshing.set(account.id, run);
+  return run;
+}
+
+// The exchange itself, under a row lock. The lock is held across the call to
+// Anthropic — that is the point of it: a refresh is one HTTP round trip, and
+// a second worker waiting it out is what stops the token being spent twice.
+async function refreshClaudeAccount(db, account, opts = {}) {
+  const { UserLlmAccount } = db.models;
+  return db.sequelize.transaction(async (transaction) => {
+    const row =
+      (await UserLlmAccount.findByPk(account.id, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      })) || account;
+    const secrets = decryptSecrets(row.credentials, opts);
+    const now = opts.now ?? Date.now();
+    // Somebody else refreshed while this call waited for the lock: their
+    // token is the live one, and the one this caller read is already dead.
+    if (!isStale(row.expires_at, now) || !secrets.refresh_token) {
+      account.set('credentials', row.credentials);
+      account.set('expires_at', row.expires_at);
+      return secrets.access_token;
+    }
+    let json;
+    try {
+      json = await exchangeClaudeToken(
+        { grant_type: 'refresh_token', refresh_token: secrets.refresh_token },
+        opts
+      );
+    } catch (e) {
+      // A refused grant is not a transient failure: no number of retries
+      // brings a revoked (or superseded) refresh token back, and every other
+      // queued job of this user's would fail the same way three times over.
+      // Say what actually fixes it and let the job fail once.
+      if (/invalid_grant/.test(e.message)) {
+        const dead = new Error(
+          'your Claude authorization is no longer valid (the refresh token was rejected) — ' +
+            'reconnect the account under Account → LLM provider'
+        );
+        dead.permanent = true;
+        throw dead;
+      }
+      throw e;
+    }
+    const refreshed = {
+      access_token: json.access_token,
+      // Anthropic rotates the refresh token on use; keep whichever is newest.
+      refresh_token: json.refresh_token || secrets.refresh_token,
+    };
+    const fields = {
+      credentials: encryptSecrets(refreshed, opts),
+      expires_at: json.expires_in ? new Date(now + Number(json.expires_in) * 1000) : null,
+    };
+    await row.update(fields, { transaction });
+    // The caller holds its own copy of the row; keep it in step so a later
+    // read of it does not hand back the token that was just replaced.
+    if (row !== account) account.set(fields);
+    return refreshed.access_token;
   });
-  return refreshed.access_token;
 }
 
 // A long-lived token from `claude setup-token`, pasted in.
