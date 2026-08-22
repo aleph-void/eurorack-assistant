@@ -154,8 +154,15 @@ async function learnFootswitch() {
       stopLearning();
     },
   });
-  await learner.attach();
-  await learner.learnBinding();
+  // Held locally as well as on `learner`: attaching a browser with no Web
+  // MIDI (or one that refuses it) calls onError, which stops the learning and
+  // puts `learner` back to null — and reading learnBinding off it then is a
+  // TypeError thrown out of a click handler, on top of the message the user
+  // has already been given. A second press while this one is still attaching
+  // replaces `learner` too, and that one is not ours to drive either.
+  const mine = learner;
+  await mine.attach();
+  if (learner === mine) await mine.learnBinding();
 }
 
 const bindingText = computed(() =>

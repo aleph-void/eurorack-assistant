@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { Op } from 'sequelize';
 import { moduleJson, portJson } from '../../services/patchDetail.js';
 import { materializeBridges } from '../../services/moduleBridges.js';
-import { PORT_KINDS } from '../../services/manualAnalyzer.js';
+import { PORT_KINDS } from '../../services/manualVocabulary.js';
 import { ownPatchModule, requireOwnedPatch } from './helpers.js';
 import { asyncHandler } from '../asyncHandler.js';
 

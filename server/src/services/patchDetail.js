@@ -8,7 +8,7 @@ import { Op } from 'sequelize';
 import { buildPatchTopology } from './patchTopology.js';
 import { resolveNormalledSignals } from './patchSignals.js';
 import { buildSignalFlow } from './patchFlow.js';
-import { loadPanels } from './panelImage.js';
+import { loadPanels } from './panelJson.js';
 import { loadPatchRackLayout } from './patchLayout.js';
 import { parametersByModule as loadParametersByModule } from './moduleParameters.js';
 

@@ -1452,6 +1452,94 @@ describe('worker', () => {
   });
   // One exhausted subscription would otherwise take the whole queue down with
   // it three attempts at a time, and leave every module it touched 'failed'.
+  // A pause is a limit on work, not a prerequisite for it: if the queue
+  // cannot read WHY it should stop, it keeps going. The alternative is a
+  // transient database blip taking the whole queue down with it, which is
+  // the failure these three guards exist to prevent.
+  describe('when it cannot read the reasons to stop', () => {
+    async function readyJob(db) {
+      const user = await createUser(db, { username: 'u' });
+      const module = await insertModule(db, user.id);
+      await db.query(
+        `INSERT INTO manuals (module_id, hash, source, original_name, analysis_scope)
+         VALUES ($1, $2, 'found', 'm.pdf', TRUE)`,
+        [module.id, PDF_HASH]
+      );
+      fs.writeFileSync(path.join(manualsDir, `${PDF_HASH}.pdf`), PDF_BYTES);
+      return enqueueJob(db, 'analyze_manual', { moduleId: module.id, userId: user.id });
+    }
+    const okBackend = () => fakeBackend({ analyzeDocument: '{"summary": "S", "components": []}' });
+
+    it('runs the job anyway when the token budgets cannot be read', async () => {
+      const db = await createTestDb();
+      const job = await readyJob(db);
+      const logged = [];
+      // exhaustedUserIds reads every user's limit first.
+      const findAll = db.models.User.findAll.bind(db.models.User);
+      db.models.User.findAll = async (options) => {
+        if (options?.attributes?.includes('token_budget')) throw new Error('budget table gone');
+        return findAll(options);
+      };
+      try {
+        const worker = makeWorker(db, okBackend(), null, null, {
+          budgetCacheMs: 0,
+          log: (...args) => logged.push(args.join(' ')),
+        });
+        const done = await worker.tick();
+        expect(done.id).toBe(job.id);
+        expect(done.status).toBe('complete');
+      } finally {
+        db.models.User.findAll = findAll;
+      }
+      expect(logged.join('\n')).toMatch(/could not read token budgets: budget table gone/);
+    });
+
+    // These two break the very tables the job's own run reads (its LLM
+    // account, the app config), so the assertion is the one thing the guard
+    // promises: the job is still CLAIMED rather than passed over as held.
+    it('still claims the job when the account pauses cannot be read', async () => {
+      const db = await createTestDb();
+      const job = await readyJob(db);
+      const logged = [];
+      const findAll = db.models.UserLlmAccount.findAll.bind(db.models.UserLlmAccount);
+      db.models.UserLlmAccount.findAll = async () => {
+        throw new Error('accounts table gone');
+      };
+      try {
+        const worker = makeWorker(db, okBackend(), null, null, {
+          budgetCacheMs: 0,
+          log: (...args) => logged.push(args.join(' ')),
+        });
+        const done = await worker.tick();
+        expect(done?.id).toBe(job.id);
+      } finally {
+        db.models.UserLlmAccount.findAll = findAll;
+      }
+      expect(logged.join('\n')).toMatch(/could not read LLM account pauses: accounts table gone/);
+    });
+
+    it('still claims the job when the queue pause itself cannot be read', async () => {
+      const db = await createTestDb();
+      const job = await readyJob(db);
+      const logged = [];
+      const findAll = db.models.AppConfig.findAll.bind(db.models.AppConfig);
+      db.models.AppConfig.findAll = async () => {
+        throw new Error('config table gone');
+      };
+      try {
+        const worker = makeWorker(db, okBackend(), null, null, {
+          budgetCacheMs: 0,
+          log: (...args) => logged.push(args.join(' ')),
+        });
+        const done = await worker.tick();
+        expect(done?.id).toBe(job.id);
+      } finally {
+        db.models.AppConfig.findAll = findAll;
+      }
+      expect(logged.join('\n')).toMatch(/could not read the queue pause state: config table gone/);
+    });
+  });
+
   describe('the provider running out of tokens', () => {
     // Enough of a module, manual and job for an analyze_manual run.
     async function analyzeJob(db, { username = 'u' } = {}) {

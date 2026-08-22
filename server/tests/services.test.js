@@ -18,13 +18,13 @@ import {
 // A second content hash, for the module whose manual has not been extracted.
 const OTHER_HASH = crypto.createHash('sha256').update('another manual').digest('hex');
 import { findManualForModule, researchModule } from '../src/services/manualFinder.js';
+import { analyzeManualForModule } from '../src/services/manualAnalyzer.js';
 import {
-  analyzeManualForModule,
   normalizeComponents,
   normalizeNormalizations,
   resolveNormalizations,
-  ANALYSIS_TEMPLATE,
-} from '../src/services/manualAnalyzer.js';
+} from '../src/services/manualNormalize.js';
+import { ANALYSIS_TEMPLATE } from '../src/services/manualPrompt.js';
 import {
   determineScope,
   determineComponentScope,

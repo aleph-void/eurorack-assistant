@@ -18,6 +18,7 @@ import {
   discScore,
   findDisc,
   growBox,
+  cropImage,
   loadSharp,
   panelCrop,
   pointInBox,
@@ -430,6 +431,48 @@ describe('reading and cropping an image file', () => {
     // Backdrop-free: the whole of it is plate now.
     expect(backgroundLevel(cropped)).toBeGreaterThan(PLATE - 20);
     expect(backgroundLevel(cropped)).toBeLessThan(PLATE + 20);
+  });
+
+  it('cuts the plate out of the file and hands the bytes back in their own format', async () => {
+    const box = panelCrop(FIXTURE, { hp: 2 });
+    const cut = await cropImage(file, box, { ext: 'png' });
+    expect(cut.ext).toBe('png');
+    expect(cut.height).toBe(PLATE_H);
+    expect(cut.width).toBe(PLATE_W);
+    // Real bytes, not a promise of them: a PNG signature.
+    expect([...cut.buffer.subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+  });
+
+  it('falls back to PNG for a format it cannot write back', async () => {
+    // A source libvips can read but whose saver this build may not have, or
+    // an animated format: the cut still happens, it just lands as PNG.
+    const cut = await cropImage(file, { x: 0, y: 0, w: 1, h: 1 }, { ext: 'tiff-ish' });
+    expect(cut.ext).toBe('png');
+    expect([...cut.buffer.subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+  });
+
+  it('clamps a crop box that runs off the edge of the image', async () => {
+    // A box wider than the picture, and one starting past its right edge:
+    // neither may ask sharp for pixels that are not there.
+    const over = await cropImage(file, { x: -0.5, y: -0.5, w: 4, h: 4 });
+    expect(over.width).toBe(IMAGE_W);
+    expect(over.height).toBe(IMAGE_H);
+    const past = await cropImage(file, { x: 1, y: 1, w: 1, h: 1 });
+    expect(past.width).toBeGreaterThanOrEqual(1);
+    expect(past.height).toBeGreaterThanOrEqual(1);
+  });
+
+  it('returns nothing for a file that cannot be decoded', async () => {
+    const bogus = path.join(dir, 'not-an-image-2.png');
+    fs.writeFileSync(bogus, 'still not a png');
+    expect(await cropImage(bogus, { x: 0, y: 0, w: 1, h: 1 })).toBeNull();
+    expect(await cropImage(path.join(dir, 'missing.png'), { x: 0, y: 0, w: 1, h: 1 })).toBeNull();
+  });
+
+  it('loads sharp once and answers from then on', async () => {
+    // Loaded on first use rather than imported: a native module that will not
+    // build must not stop the server booting.
+    expect(await loadSharp()).toBe(await loadSharp());
   });
 
   it('returns nothing when there is no file to crop', async () => {

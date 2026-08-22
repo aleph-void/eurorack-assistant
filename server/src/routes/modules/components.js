@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import { COMPONENT_TYPES, VALUE_TYPES, PORT_KINDS } from '../../services/manualAnalyzer.js';
-import { fillMissingPlacements } from '../../services/panelImage.js';
+import { VALUE_TYPES } from '../../services/manualNormalize.js';
+import { COMPONENT_TYPES, PORT_KINDS } from '../../services/manualVocabulary.js';
+import { fillMissingPlacements } from '../../services/panelPlacements.js';
 import { requireOwnedModule } from './helpers.js';
 import { componentJson, valueJson } from '../../services/moduleJson.js';
 import { asyncHandler } from '../asyncHandler.js';

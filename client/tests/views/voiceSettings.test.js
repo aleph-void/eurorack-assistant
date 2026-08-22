@@ -215,3 +215,95 @@ describe('the microphone and the speaker', () => {
     expect(wrapper.find('[data-test="voice-mode"]').element.value).toBe('toggle');
   });
 });
+
+// A footswitch on the desk is bound HERE, once, and the listener uses it over
+// whatever patch is open — so the learning is a setting, not a mode of a patch.
+describe('learning a footswitch', () => {
+  function fakeMidi() {
+    const port = { onmidimessage: null };
+    const access = { inputs: new Map([['a', port]]), onstatechange: null };
+    navigator.requestMIDIAccess = vi.fn(async () => access);
+    return { port, access };
+  }
+  afterEach(() => {
+    delete navigator.requestMIDIAccess;
+  });
+
+  const openMidiMode = async () => {
+    const wrapper = await open();
+    await wrapper.find('[data-test="voice-mode"]').setValue('midi');
+    await flushPromises();
+    return wrapper;
+  };
+
+  it('offers the learn button only in footswitch mode', async () => {
+    const wrapper = await open();
+    expect(wrapper.find('[data-test="voice-learn"]').exists()).toBe(false);
+    await wrapper.find('[data-test="voice-mode"]').setValue('midi');
+    await flushPromises();
+    expect(wrapper.find('[data-test="voice-learn"]').text()).toContain('press the switch now');
+    wrapper.unmount();
+  });
+
+  it('keeps the switch that was pressed, and says which one it was', async () => {
+    const { port } = fakeMidi();
+    const wrapper = await openMidiMode();
+
+    await wrapper.find('[data-test="voice-learn"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="voice-learn"]').text()).toContain('Press the switch now');
+
+    // A sustain pedal on channel 1: continuous controller 64.
+    port.onmidimessage({ data: [0xb0, 64, 127] });
+    await flushPromises();
+    expect(voiceSettings.binding).toEqual({ type: 'cc', number: 64, channel: 1 });
+    expect(JSON.parse(localStorage.getItem('eurorack-assistant.voice')).binding).toEqual({
+      type: 'cc',
+      number: 64,
+      channel: 1,
+    });
+    expect(wrapper.find('[data-test="voice-message"]').text()).toContain('Bound to CC 64');
+    // Learning is over: the button says what it does again.
+    expect(wrapper.find('[data-test="voice-learn"]').text()).toContain('press the switch now');
+    // …and the binding is named beside the button.
+    expect(wrapper.text()).toContain('CC 64 · channel 1');
+    wrapper.unmount();
+  });
+
+  it('says so when this browser has no MIDI at all', async () => {
+    delete navigator.requestMIDIAccess;
+    const wrapper = await openMidiMode();
+    await wrapper.find('[data-test="voice-learn"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="voice-message"]').text()).toContain('no Web MIDI');
+    // …and it is not left saying it is listening for a press that can never come.
+    expect(wrapper.find('[data-test="voice-learn"]').text()).toContain('press the switch now');
+    wrapper.unmount();
+  });
+
+  it('says so when MIDI access is refused', async () => {
+    navigator.requestMIDIAccess = vi.fn(async () => {
+      throw new Error('denied');
+    });
+    const wrapper = await openMidiMode();
+    await wrapper.find('[data-test="voice-learn"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="voice-message"]').text()).toContain('refused');
+    wrapper.unmount();
+  });
+
+  it('starts over when the learn button is pressed twice', async () => {
+    const { port } = fakeMidi();
+    const wrapper = await openMidiMode();
+    await wrapper.find('[data-test="voice-learn"]').trigger('click');
+    await flushPromises();
+    // Pressed again before anything arrived: the first listener is detached,
+    // so one press does not bind twice.
+    await wrapper.find('[data-test="voice-learn"]').trigger('click');
+    await flushPromises();
+    port.onmidimessage({ data: [0x90, 48, 100] });
+    await flushPromises();
+    expect(voiceSettings.binding).toEqual({ type: 'note', number: 48, channel: 1 });
+    wrapper.unmount();
+  });
+});

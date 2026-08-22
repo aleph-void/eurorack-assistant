@@ -18,3 +18,7 @@ export const DEFAULT_HP = 8;
 // is PANEL_MM_HEIGHT tall whatever the picture's resolution, so its shape
 // alone says how many HP across it is.
 export const hpFromAspect = (aspect) => (aspect * PANEL_MM_HEIGHT) / HP_MM;
+
+// Fractions of an image are the unit both halves work in — a crop box, a
+// marker's position — and none of them may leave the picture.
+export const clamp01 = (value) => Math.min(1, Math.max(0, value));

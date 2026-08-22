@@ -7,21 +7,57 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
 
 ## Layout
 
-- `server/src/routes/` — one file per API area. The two big areas are split
-  into sub-routers composed by an `index.js`:
+- `server/src/routes/` — one file per API area. The big areas are split into
+  sub-routers composed by an `index.js`:
   - `routes/modules/` — core, detail, components, signals (normalizations /
     routes / switches / pairs), expanders, panel, manuals + shared `helpers.js`
   - `routes/patches/` — core, io (import/export), instances, groups, links,
     cables, settings + shared `helpers.js` (incl. the cable-legality rules)
+  - `routes/questions/` — core (the list, one question, asking, deleting) and
+    review (what may be attached to a scoped question, and confirming it) +
+    shared `helpers.js`
+  - `routes/racks/` — core, layout, videos (channel scan + import), modules
+    (moving between racks, quantities) + shared `helpers.js`
 - `routes/systems.js` — systems: collections of racks patched together as
   one instrument. A rack joins/leaves via `PUT /api/racks/:id/system`; the
   system's own routes arrange the racks on a floor plan.
 - `server/src/services/` — domain logic, one concern per file. Serializer
   shapes for module hardware facts live in `services/moduleJson.js`; patch
-  ones in `services/patchDetail.js`; rack ones in `services/rackJson.js`.
+  ones in `services/patchDetail.js`; rack ones in `services/rackJson.js`;
+  panel ones in `services/panelJson.js`. Four concerns are big enough to be a
+  small family of files rather than one, each with the named entry point the
+  rest of the app imports:
+  - the PANEL — `panelShapes.js` (how a component is drawn, and the HP
+    guesses), `panelPrompts.js` (what the model is asked), `panelPlacements.js`
+    (markers as fractions of the image, and matching them to components),
+    `panelSvg.js` (drawing the logical panel), `panelStore.js` (writing the
+    rows, and deleting orphaned bytes), `panelTrim.js` (cutting a stored file
+    down to the plate) and `panelImage.js` (finding a picture at all, which is
+    what the panel job runs). The PIXELS are the same family from the other
+    side: `panelBitmap.js` (sharp, loaded on first use), `panelPlate.js`
+    (where the plate is in the frame) and `panelSnap.js` (moving a marker onto
+    the hardware it names), all re-exported from `panelPixels.js`.
+  - the MANUAL ANALYSIS — `manualVocabulary.js` (the types, port kinds and
+    break modes every answer is validated against), `manualPrompt.js`,
+    `manualNormalize.js` (the pure functions that turn an answer into rows)
+    and `manualAnalyzer.js` (the one part that needs a backend and a database).
+  - the LLM — `llmModels.js` (providers and models), `llmQuota.js`
+    (recognising an exhausted subscription), `llmDocuments.js` (the per-call
+    document jail), `llmUsage.js` (what a run cost) and `llmProcess.js` (the
+    child process and its allowlisted environment), all re-exported from
+    `llm.js`, which holds the two backends themselves.
+  - a PATCH AS A FILE — `patchDocumentLimits.js`, `patchExport.js`,
+    `patchDocumentParse.js` (bytes to a document, treating every field as
+    hostile) and `patchImport.js` (resolving its names against a user's own
+    modules), all re-exported from `patchIO.js`.
 - `server/src/jobs/` — `worker.js` is the queue ENGINE (claiming, leases,
-  retries, quota/budget pauses); `handlers.js` holds the per-job-type logic;
-  `enqueue.js` the queueing helpers. All are re-exported from `worker.js`.
+  retries), with `jobEvents.js` (who hears about a job, and in what shape) and
+  `jobPauses.js` (the three reasons work stops: the whole queue, one account,
+  one user's budget) beside it; `handlers/` holds the per-job-type logic, one
+  file per stage of the pipeline (manuals, panels, videos, questions, exports)
+  composed by `handlers.js`; `enqueue.js` the queueing helpers. `worker.js`
+  re-exports the handlers and the queueing helpers, so callers have one import
+  point.
 - `client/src/views/` — one view per route. A MODULE and a PATCH are each a
   PAGE PER THING there is to know about them, not one scrolling page: the
   sections live in `client/src/components/moduledetail/` and
@@ -86,11 +122,25 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   so a patch nobody talks to never builds them). Switched on with no diagram
   on screen — or the talk key pressed there — it says so in a toast rather
   than looking broken. `/patches/:id/voice` redirects to `/account/voice`.
+- The two biggest pictures each keep their template and hand the reasoning to
+  composables beside them: `components/patchdiagram/` holds `useDiagramView.js`
+  (how big the picture is drawn and which part of it is on screen — the zoom
+  and the culled viewport are one composable because each invalidates the
+  other), `useMultDirections.js` (what each bidirectional jack IS in this
+  patch) and `useCableDrag.js` (the two MOUSE gestures — dragging a cable
+  between two jacks, and dragging the picture the way a map is moved; the tap
+  gestures a finger patches and unplugs with stay in the view, beside the bars
+  that do the asking);
+  `components/racks/` holds `usePanelChips.js`, `useRackDrag.js` and
+  `useRowMenu.js` for the rack organizer.
 - `client/tests/views/` — one test file per view; the payloads they are
   tested against are shared in `client/tests/moduleFixtures.js` and
   `client/tests/patchFixtures.js`.
 - Schema: the migrations in `server/migrations/` are the source of truth
-  (never `sequelize.sync()`); models in `server/src/db/models.js`. Each
+  (never `sequelize.sync()`); models in `server/src/db/models.js`, which is
+  only the composer — the tables live one domain per file under `db/models/`
+  (accounts, modules, racks, patches, notes, scope, jobs) and the association
+  graph, which has to be read whole, is `db/models/associations.js`. Each
   migration is a module exporting `up`/`down` against the helpers in
   `src/db/migrationContext.js`; `src/db/migrate.js` applies, reverts and
   reports on them. `server/migrations/README.md` is the format, and the rules

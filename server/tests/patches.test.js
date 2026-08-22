@@ -1,12 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { createTestApp, insertModule, mapModule, fakeBackend } from './helpers.js';
-import {
-  analyzeManualForModule,
-  normalizeComponentValues,
-} from '../src/services/manualAnalyzer.js';
+import { analyzeManualForModule } from '../src/services/manualAnalyzer.js';
+import { normalizeComponentValues } from '../src/services/manualNormalize.js';
 import { resolveNormalledSignals } from '../src/services/patchSignals.js';
 import { buildPatchTopology } from '../src/services/patchTopology.js';
+import { freePatchName, isNameConflict } from '../src/services/patchNames.js';
 
 // Fixture: alice has a rack with an analyzed module (jacks + a knob + a
 // switch, with valid values recorded) and a second plain module.
@@ -1443,6 +1442,44 @@ describe('patch names', () => {
       .send({ name: 'Krell (copy)' });
     expect(named.status).toBe(409);
     expect(named.body.error).toContain("you already have a patch called 'Krell (copy)'");
+  });
+  // The check above and the unique index are the same rule applied twice:
+  // two requests can both find a name free and both go on to take it, and the
+  // index catches the loser. isNameConflict is what tells that apart from
+  // every other write failure, so the loser gets the same 409 rather than a
+  // 500. pg-mem cannot race, so the recognizer is asserted directly.
+  it('recognizes the unique index catching a name race, and nothing else', () => {
+    const conflict = (extra) =>
+      isNameConflict({ name: 'SequelizeUniqueConstraintError', ...extra });
+
+    // Postgres names the constraint on the error's `parent` (or `original`).
+    expect(conflict({ parent: { constraint: 'patches_user_name_uniq' } })).toBe(true);
+    expect(conflict({ original: { constraint: 'patches_user_name_uniq' } })).toBe(true);
+    // A DIFFERENT unique index is a different bug and must not be swallowed
+    // as a name clash.
+    expect(conflict({ parent: { constraint: 'rack_rows_rack_position_uniq' } })).toBe(false);
+    // Some drivers report only the offending paths.
+    expect(conflict({ errors: [{ path: 'name' }] })).toBe(true);
+    expect(conflict({ errors: [{ path: 'patches_user_name_uniq' }] })).toBe(true);
+    expect(conflict({ errors: [{ path: 'hp' }] })).toBe(false);
+    expect(conflict({})).toBe(false);
+    // Anything that is not a uniqueness failure at all.
+    expect(isNameConflict(new Error('connection reset'))).toBe(false);
+    expect(isNameConflict(null)).toBe(false);
+  });
+
+  it('hands out the next free number for a name the app made up', async () => {
+    const fixture = await withPatchFixture();
+    const { db, alice } = fixture;
+    // Nothing taken: the name asked for is the name given.
+    expect(await freePatchName(db, alice.id, 'Krell')).toBe('Krell');
+    await createPatch(fixture);
+    expect(await freePatchName(db, alice.id, 'Krell')).toBe('Krell 2');
+    await createPatch(fixture, { name: 'Krell 2' });
+    await createPatch(fixture, { name: 'Krell 3' });
+    expect(await freePatchName(db, alice.id, 'Krell')).toBe('Krell 4');
+    // Another user's 'Krell' is not in the way of this one's.
+    expect(await freePatchName(db, fixture.admin.id, 'Krell')).toBe('Krell');
   });
 });
 

@@ -12,6 +12,7 @@ import {
   downloadVideoForModule,
   fetchVideoMetadata,
   ytDlpNetworkArgs,
+  runCommand,
   MAX_VIDEO_SECONDS,
   FRAME_COUNT,
 } from '../src/services/videos.js';
@@ -156,6 +157,60 @@ describe('downloadVideoForModule', () => {
     await expect(downloadVideoForModule(video, videosDir, { run })).rejects.toThrow(
       /neither frames nor a transcript/
     );
+  });
+});
+
+describe('runCommand', () => {
+  it('resolves with what the command printed', async () => {
+    const out = await runCommand(process.execPath, ['-e', "process.stdout.write('done')"]);
+    expect(out).toBe('done');
+  });
+
+  it('puts stderr LAST in the error, because that is where the real line is', async () => {
+    // yt-dlp and ffmpeg write pages of progress ticks to stdout and the one
+    // ERROR line to stderr. The detail is TAIL-truncated, so stderr-first
+    // buried the error beyond the cut.
+    const script =
+      "process.stdout.write('progress '.repeat(200));" +
+      "process.stderr.write('ERROR: unable to download video');" +
+      'process.exit(3)';
+    const error = await runCommand(process.execPath, ['-e', script]).catch((e) => e);
+    expect(error.message).toContain('failed (exit 3)');
+    expect(error.message).toContain('ERROR: unable to download video');
+    // Truncated from the front, so the tail — where stderr is — survives.
+    expect(error.message).toMatch(/…/);
+  });
+
+  it('reports a command that could not be started at all', async () => {
+    const error = await runCommand('definitely-not-a-real-binary-xyz', []).catch((e) => e);
+    expect(error.message).toMatch(/^failed to run definitely-not-a-real-binary-xyz: /);
+  });
+
+  it('kills a command that runs past its timeout', async () => {
+    const error = await runCommand(
+      process.execPath,
+      ['-e', 'setTimeout(() => {}, 60000)'],
+      { timeoutMs: 50 }
+    ).catch((e) => e);
+    expect(error.message).toMatch(/timed out after 50ms/);
+  });
+
+  it('carries the allowlisted environment only — no database URL, no token key', async () => {
+    const before = { DATABASE_URL: process.env.DATABASE_URL, LLM_TOKEN_KEY: process.env.LLM_TOKEN_KEY };
+    process.env.DATABASE_URL = 'postgres://secret';
+    process.env.LLM_TOKEN_KEY = 'a-key';
+    try {
+      const out = await runCommand(process.execPath, [
+        '-e',
+        "process.stdout.write(JSON.stringify({ db: process.env.DATABASE_URL ?? null, key: process.env.LLM_TOKEN_KEY ?? null, path: Boolean(process.env.PATH) }))",
+      ]);
+      expect(JSON.parse(out)).toEqual({ db: null, key: null, path: true });
+    } finally {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 });
 

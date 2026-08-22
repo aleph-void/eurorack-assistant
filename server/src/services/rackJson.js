@@ -2,7 +2,7 @@
 // layout. Both the /api/racks routes and the /api/systems routes hand racks
 // back, and a rack must look the same on either.
 
-import { loadPanels } from './panelImage.js';
+import { loadPanels } from './panelJson.js';
 import { rackFootprint } from './racks.js';
 
 export const rackJson = (rack, moduleCount) => ({

@@ -1,27 +1,21 @@
-// Questions go through a review step: POST / queues a scope_question job
-// that determines which modules (and specific components) the question
-// applies to; once the question is 'scoped' the user reviews the module and
-// component selection and picks attachments (manual documents, previous
-// answers, notes, oscilloscope captures) via GET /:id/options, and POST
-// /:id/answer saves the selection and queues the answer_question job.
+// The review step: what a user may attach to a scoped question, and
+// confirming the selection.
+//
+// GET /:id/options offers their whole rack and its components (flagging what
+// the scoping model picked) plus manual documents, previously answered
+// questions, notes, patches and oscilloscope captures. POST /:id/answer
+// saves what came back — checking every id against what was on offer — and
+// queues the answer_question job.
 
 import { Router } from 'express';
 import { Op } from 'sequelize';
-import { requireAuth } from '../auth.js';
-import { engagedPatchModuleIds } from '../services/patchTopology.js';
-import { userModuleIds } from '../services/racks.js';
-import { requireBudget } from '../services/budgets.js';
-import { requireLlmAccount } from '../services/llmAccounts.js';
-import { readableResource, removeShares } from '../services/sharing.js';
-import { asyncHandler } from './asyncHandler.js';
+import { userModuleIds } from '../../services/racks.js';
+import { requireBudget } from '../../services/budgets.js';
+import { requireLlmAccount } from '../../services/llmAccounts.js';
+import { asyncHandler } from '../asyncHandler.js';
+import { captureLinks, patchModulesByPatch, uniqueIds } from './helpers.js';
 
-// Positive integer ids from a client-supplied array, deduped.
-function uniqueIds(value) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
-}
-
-export function questionRoutes(db) {
+export function questionReviewRoutes(db) {
   const {
     Question,
     QuestionModule,
@@ -39,239 +33,9 @@ export function questionRoutes(db) {
     NoteModule,
     NoteComponent,
     Capture,
-    CaptureChannel,
-    PatchModule,
-    PatchCable,
-    PatchSetting,
-    PatchModuleLink,
-    User,
     Job,
   } = db.models;
   const router = Router();
-  router.use(requireAuth(db));
-
-  // Which modules and components a set of captures is about: the jacks its
-  // channels were watching, and the modules of the patch it was taken on.
-  // Used both to offer captures in the review step and to check that the ones
-  // submitted belong to the question's scope.
-  async function captureLinks(captures) {
-    const ids = captures.map((c) => c.id);
-    const channels =
-      ids.length === 0 ? [] : await CaptureChannel.findAll({ where: { capture_id: ids } });
-    const componentIds = [
-      ...new Set(channels.map((c) => c.component_id).filter((id) => Number.isInteger(id))),
-    ];
-    const componentRows =
-      componentIds.length === 0
-        ? []
-        : await ModuleComponent.findAll({ where: { id: componentIds } });
-    const moduleOfComponent = new Map(componentRows.map((c) => [c.id, c.module_id]));
-
-    const patchIds = [...new Set(captures.map((c) => c.patch_id).filter(Boolean))];
-    const patchModules =
-      patchIds.length === 0 ? [] : await PatchModule.findAll({ where: { patch_id: patchIds } });
-    const modulesOfPatch = new Map();
-    for (const pm of patchModules) {
-      if (!pm.module_id) continue;
-      if (!modulesOfPatch.has(pm.patch_id)) modulesOfPatch.set(pm.patch_id, new Set());
-      modulesOfPatch.get(pm.patch_id).add(pm.module_id);
-    }
-
-    const byCapture = new Map();
-    for (const capture of captures) {
-      const own = channels.filter((c) => c.capture_id === capture.id);
-      const components = [
-        ...new Set(own.map((c) => c.component_id).filter((id) => Number.isInteger(id))),
-      ];
-      const modules = new Set(
-        components.map((id) => moduleOfComponent.get(id)).filter((id) => Number.isInteger(id))
-      );
-      for (const id of modulesOfPatch.get(capture.patch_id) ?? []) modules.add(id);
-      byCapture.set(capture.id, {
-        module_ids: [...modules],
-        component_ids: components,
-        channels: own,
-      });
-    }
-    return byCapture;
-  }
-
-  // The modules each patch uses, keyed by patch id — the same "actually in
-  // play" rule the signal flow and the patch document use.
-  async function patchModulesByPatch(patchIds) {
-    const byPatch = new Map();
-    if (patchIds.length === 0) return byPatch;
-    const where = { patch_id: patchIds };
-    const [rows, cables, settings, links] = await Promise.all([
-      PatchModule.findAll({ where }),
-      PatchCable.findAll({ where }),
-      PatchSetting.findAll({ where }),
-      PatchModuleLink.findAll({ where }),
-    ]);
-    for (const id of patchIds) {
-      const engaged = engagedPatchModuleIds({
-        cables: cables.filter((c) => c.patch_id === id),
-        settings: settings.filter((s) => s.patch_id === id),
-        links: links.filter((l) => l.patch_id === id),
-      });
-      byPatch.set(
-        id,
-        [
-          ...new Set(
-            rows
-              .filter((pm) => pm.patch_id === id && engaged.has(pm.id) && pm.module_id)
-              .map((pm) => pm.module_id)
-          ),
-        ]
-      );
-    }
-    return byPatch;
-  }
-
-  // Your questions, newest first — and the same list narrowed to one module
-  // or one patch, which is what the questions page OF a module (or of a
-  // patch) reads: a question belongs to a module when that module is in its
-  // scope, and to a patch when that patch is attached to it. The link rows
-  // are read first and the ids handed to the question query, rather than
-  // joined: pg-mem drops rows from an OR ANDed with anything else, and a
-  // flat page filtered in JS is the house workaround.
-  router.get('/', asyncHandler(async (req, res) => {
-    const where = { user_id: req.user.id };
-    const narrow = (ids) => {
-      where.id = Array.isArray(where.id) ? where.id.filter((id) => ids.includes(id)) : ids;
-    };
-    const moduleId = Number(req.query.module_id);
-    if (Number.isInteger(moduleId) && moduleId > 0) {
-      const links = await QuestionModule.findAll({ where: { module_id: moduleId } });
-      narrow([...new Set(links.map((l) => l.question_id))]);
-    }
-    const patchId = Number(req.query.patch_id);
-    if (Number.isInteger(patchId) && patchId > 0) {
-      const links = await QuestionPatch.findAll({ where: { patch_id: patchId } });
-      narrow([...new Set(links.map((l) => l.question_id))]);
-    }
-    if (Array.isArray(where.id) && where.id.length === 0) return res.json([]);
-
-    const questions = await Question.findAll({
-      where,
-      attributes: ['id', 'prompt', 'status', 'error', 'created_at', 'answered_at'],
-      order: [
-        ['created_at', 'DESC'],
-        ['id', 'DESC'],
-      ],
-    });
-    res.json(questions);
-  }));
-
-  // Yours, or one somebody shared with you. A shared question is the question
-  // and its answer, read-only: the review step and the delete below find it
-  // under its owner alone, so a reader can neither re-answer nor remove it.
-  router.get('/:id', asyncHandler(async (req, res) => {
-    const found = await readableResource(db, req.user.id, 'question', req.params.id);
-    if (!found) return res.status(404).json({ error: 'Question not found' });
-    const question = found.row;
-    const owner = found.shared ? await User.findByPk(question.user_id) : null;
-    // A shared question is served to someone who is not its owner. Its
-    // answer and the global hardware it names (modules, components) travel
-    // with the share; the owner's private cross-references — the notes,
-    // captures, patches and prior questions they attached as context, and
-    // the manuals (whose hash fingerprints a possibly-private upload) — do
-    // not. Skip those queries entirely for a share recipient.
-    const includePrivate = !found.shared;
-    const links = await QuestionModule.findAll({
-      where: { question_id: question.id },
-      include: Module,
-      order: [
-        [Module, 'manufacturer', 'ASC'],
-        [Module, 'name', 'ASC'],
-      ],
-    });
-    const componentLinks = await QuestionComponent.findAll({
-      where: { question_id: question.id },
-      include: [{ model: ModuleComponent, include: [Module] }],
-      order: [[ModuleComponent, 'id', 'ASC']],
-    });
-    const manualLinks = includePrivate
-      ? await QuestionManual.findAll({
-          where: { question_id: question.id },
-          include: [{ model: Manual, include: [Module] }],
-          order: [['manual_id', 'ASC']],
-        })
-      : [];
-    const answerLinks = includePrivate
-      ? await QuestionAnswer.findAll({
-          where: { question_id: question.id },
-          include: [{ model: Question, as: 'SourceQuestion' }],
-          order: [['source_question_id', 'ASC']],
-        })
-      : [];
-    const noteLinks = includePrivate
-      ? await QuestionNote.findAll({
-          where: { question_id: question.id },
-          include: Note,
-          order: [['note_id', 'ASC']],
-        })
-      : [];
-    const captureLinkRows = includePrivate
-      ? await QuestionCapture.findAll({
-          where: { question_id: question.id },
-          include: Capture,
-          order: [['capture_id', 'ASC']],
-        })
-      : [];
-    const patchLinkRows = includePrivate
-      ? await QuestionPatch.findAll({
-          where: { question_id: question.id },
-          include: Patch,
-          order: [['patch_id', 'ASC']],
-        })
-      : [];
-    res.json({
-      ...question.get({ plain: true }),
-      shared: found.shared,
-      owner_username: owner?.username ?? req.user.username,
-      modules: links.map(({ Module: m }) => ({
-        id: m.id,
-        manufacturer: m.manufacturer,
-        name: m.name,
-      })),
-      components: componentLinks.map(({ ModuleComponent: mc }) => ({
-        id: mc.id,
-        name: mc.name,
-        type: mc.type,
-        module_id: mc.module_id,
-        module_manufacturer: mc.Module.manufacturer,
-        module_name: mc.Module.name,
-      })),
-      manuals: manualLinks.map(({ Manual: m }) => ({
-        id: m.id,
-        module_id: m.module_id,
-        name: m.name,
-        original_name: m.original_name,
-        hash: m.hash,
-        module_manufacturer: m.Module.manufacturer,
-        module_name: m.Module.name,
-      })),
-      answers: answerLinks.map(({ SourceQuestion: q }) => ({
-        id: q.id,
-        prompt: q.prompt,
-        answered_at: q.answered_at,
-      })),
-      notes: noteLinks.map(({ Note: n }) => ({ id: n.id, title: n.title })),
-      captures: captureLinkRows
-        .filter((l) => l.Capture)
-        .map(({ Capture: c }) => ({
-          id: c.id,
-          title: c.title,
-          patch_id: c.patch_id,
-          captured_at: c.captured_at,
-          image_hash: c.image_hash,
-        })),
-      patches: patchLinkRows
-        .filter((l) => l.Patch)
-        .map(({ Patch: p }) => ({ id: p.id, name: p.name, rack_name: p.rack_name })),
-    });
-  }));
 
   // Everything the user can select in the review step: their whole rack and
   // its components (flagging what the LLM scoped in), plus manual documents,
@@ -405,7 +169,7 @@ export function questionRoutes(db) {
       where: { user_id: req.user.id },
       order: [['id', 'DESC']],
     });
-    const captureLinkMap = await captureLinks(captureRows);
+    const captureLinkMap = await captureLinks(db, captureRows);
     const captures = captureRows
       .map((c) => {
         const links = captureLinkMap.get(c.id) ?? { module_ids: [], component_ids: [], channels: [] };
@@ -437,7 +201,7 @@ export function questionRoutes(db) {
     });
     const attachedPatches = await QuestionPatch.findAll({ where: { question_id: question.id } });
     const attachedPatchIds = new Set(attachedPatches.map((l) => l.patch_id));
-    const patchModuleIds = await patchModulesByPatch(patchRows.map((p) => p.id));
+    const patchModuleIds = await patchModulesByPatch(db, patchRows.map((p) => p.id));
     const patches = patchRows.map((p) => ({
       id: p.id,
       name: p.name,
@@ -473,77 +237,6 @@ export function questionRoutes(db) {
       notes,
       captures,
     });
-  }));
-
-  // Questions are scoped asynchronously by the job worker; the client polls
-  // and then presents the review step.
-  router.post('/', requireBudget(db), requireLlmAccount(db), asyncHandler(async (req, res) => {
-    const prompt = String(req.body?.prompt || '').trim();
-    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
-
-    const ownedIds = await userModuleIds(db, req.user.id);
-    if (ownedIds.length === 0) {
-      return res.status(400).json({ error: 'Import some modules before asking questions' });
-    }
-
-    // Asking about a patch: the patch is attached before scoping, so the
-    // modules it uses are in scope from the start of the review step.
-    const patchIds = uniqueIds(
-      req.body?.patch_ids ?? (req.body?.patch_id ? [req.body.patch_id] : [])
-    );
-    if (patchIds.length > 0) {
-      const owned = await Patch.count({ where: { id: patchIds, user_id: req.user.id } });
-      if (owned !== patchIds.length) {
-        return res.status(400).json({ error: 'patch_ids must be your patches' });
-      }
-    }
-
-    // Asking about a MODULE: the module is in scope from the start, whatever
-    // the scoping model makes of the wording — a question asked from a
-    // module's page is about that module even when its name never appears in
-    // the sentence ("why is this so quiet?"). scopeQuestion keeps the links
-    // it finds already written; the user can still take one out in review.
-    const moduleIds = uniqueIds(
-      req.body?.module_ids ?? (req.body?.module_id ? [req.body.module_id] : [])
-    );
-    if (moduleIds.length > 0) {
-      const owned = new Set(ownedIds);
-      if (!moduleIds.every((id) => owned.has(id))) {
-        return res.status(400).json({ error: 'module_ids must be modules in your racks' });
-      }
-    }
-
-    // The question and the job that scopes it are created together — a
-    // question without its job would sit unscoped forever.
-    const question = await db.sequelize.transaction(async (transaction) => {
-      const created = await Question.create(
-        { user_id: req.user.id, prompt, status: 'scoping' },
-        { transaction }
-      );
-      if (patchIds.length > 0) {
-        await QuestionPatch.bulkCreate(
-          patchIds.map((id) => ({ question_id: created.id, patch_id: id })),
-          { transaction }
-        );
-      }
-      if (moduleIds.length > 0) {
-        await QuestionModule.bulkCreate(
-          moduleIds.map((id) => ({ question_id: created.id, module_id: id })),
-          { transaction }
-        );
-      }
-      await Job.create(
-        {
-          type: 'scope_question',
-          user_id: req.user.id,
-          question_id: created.id,
-          status: 'pending',
-        },
-        { transaction }
-      );
-      return created;
-    });
-    res.status(201).json(question);
   }));
 
   // Confirm the review step: save the reviewed module/component scope and
@@ -658,7 +351,7 @@ export function questionRoutes(db) {
       if (rows.length !== captureIds.length) {
         return res.status(400).json({ error: 'capture_ids must be your captures' });
       }
-      const links = await captureLinks(rows);
+      const links = await captureLinks(db, rows);
       const selectedModules = new Set(moduleIds);
       const selectedComponents = new Set(componentIds);
       const unrelated = rows.find((c) => {
@@ -761,20 +454,6 @@ export function questionRoutes(db) {
 
     const updated = await Question.findByPk(question.id);
     res.json(updated.get({ plain: true }));
-  }));
-
-  // Deleting a question takes all of its records with it via the schema's
-  // ON DELETE CASCADE rules: scope links, attachment selections, its own
-  // jobs, and any question_answers rows citing it as a source (the citing
-  // questions themselves are untouched).
-  router.delete('/:id', asyncHandler(async (req, res) => {
-    const question = await Question.findOne({
-      where: { id: Number(req.params.id), user_id: req.user.id },
-    });
-    if (!question) return res.status(404).json({ error: 'Question not found' });
-    await question.destroy();
-    await removeShares(db, 'question', question.id);
-    res.json({ ok: true });
   }));
 
   return router;

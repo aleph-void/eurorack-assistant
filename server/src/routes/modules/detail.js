@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { Op } from 'sequelize';
-import { loadPanels } from '../../services/panelImage.js';
+import { loadPanels } from '../../services/panelJson.js';
 import { unlinkedExpanderHints } from '../../services/moduleLinks.js';
 import { readableIds } from '../../services/sharing.js';
 import { videoJson } from '../../services/videos.js';

@@ -1,11 +1,13 @@
 <script setup>
-import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import ComponentLegend from '../components/ComponentLegend.vue';
 import ShareButton from '../components/ShareButton.vue';
-import { componentColor } from '../componentTypes.js';
-import { panelCropStyle, panelThumbUrl, placementFraction } from '../panelLayout.js';
+import { panelCropStyle } from '../panelLayout.js';
+import { usePanelChips } from '../components/racks/usePanelChips.js';
+import { useRackDrag } from '../components/racks/useRackDrag.js';
+import { useRowMenu } from '../components/racks/useRowMenu.js';
 import { toast } from '../toast.js';
 import { refreshRackModules } from '../components/moduledetail/useModuleRecord.js';
 
@@ -206,59 +208,11 @@ const overPlaced = computed(() => {
     });
 });
 
+
 // The jacks and controls marked on each panel in the rows, in the colours
 // every other picture of a panel uses (componentTypes.js) — so a rack being
 // built can be read as hardware and not just as blocks of the right width.
-// Off by a tick for anyone who wants the plain pictures back; the inventory
-// chips above are drawn too small for a marker to mean anything, so they
-// never carry them.
-const showMarkers = ref(true);
-
-// How wide a module is DRAWN in the organizer, which is what its picture is
-// asked for at. The two numbers are the ones in this file's stylesheet
-// (`--hp-px`, `--chip-scale`) — a stored panel is the multi-megabyte file the
-// manufacturer published, and a rack of two hundred of them was fetching
-// every one at 512px whether it was drawn at 180 or at 36.
-const HP_PX = 9;
-const CHIP_SCALE = 0.42;
-const density = () => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
-const drawnHp = (module) => Math.max(2, Number(module.hp) || 4);
-const panelUrl = (module, scale = 1) =>
-  panelThumbUrl(module.panel, drawnHp(module) * HP_PX * scale, density());
-
-// Worked out ONCE per panel rather than on every render. A drag redraws this
-// view on every frame, and this is called for every module in every row: a
-// two-hundred-module rack rebuilt six thousand marker objects per frame, and
-// re-diffed that many spans, for a picture that had not changed.
-const markerCache = new WeakMap();
-function panelMarkers(panel) {
-  if (!showMarkers.value || !panel) return [];
-  const cached = markerCache.get(panel);
-  if (cached) return cached;
-  const markers = buildMarkers(panel);
-  markerCache.set(panel, markers);
-  return markers;
-}
-
-function buildMarkers(panel) {
-  return (panel.components ?? [])
-    .map((placement) => {
-      const { fx, fy } = placementFraction(panel, placement);
-      // A component the picture places outside the front plate is out of
-      // frame, exactly as in the patch diagram: not drawn rather than pinned
-      // to an edge it does not sit on.
-      if (!Number.isFinite(fx) || !Number.isFinite(fy)) return null;
-      if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
-      return {
-        key: placement.id ?? `${placement.name}-${fx}-${fy}`,
-        fx,
-        fy,
-        name: placement.name,
-        color: componentColor(placement.type),
-      };
-    })
-    .filter(Boolean);
-}
+const { showMarkers, CHIP_SCALE, panelUrl, panelMarkers } = usePanelChips();
 
 // The key under the rows: every type placed on a panel of this rack.
 const placedComponents = computed(() =>
@@ -376,276 +330,23 @@ async function removeRow(index) {
 // drag is running, so no amount of listening gets a row further down into
 // reach without dropping the module first. Following the mouse ourselves
 // keeps the wheel an ordinary event for the length of the gesture.
-const DRAG_THRESHOLD = 4;
-// Where the module in hand is drawn, in client coordinates.
-const dragPoint = ref({ x: 0, y: 0 });
-// The press, before the cursor has travelled far enough to mean a drag: a
-// press that never moves is a click — focus, or the alt-click that pulls a
-// module off its row — so nothing is picked up until it does.
-let pressed = null;
 
-function onModuleMouseDown(module, rowIndex, index, unit, event) {
-  // Left button only, and never the alt/ctrl press that removes a placement.
-  if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey) return;
-  // Stops the text selection (and the browser's own image drag) a press on a
-  // panel would start. That also costs the button the focus a click gives it,
-  // which is put back by hand: the arrow keys step whatever is focused.
-  event.preventDefault();
-  if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
-  pressed = { module, rowIndex, index, unit, x: event.clientX, y: event.clientY };
-  window.addEventListener('mousemove', onDragMove, true);
-  window.addEventListener('mouseup', onDragUp, true);
-}
+// Dragging a module into, along and out of a row.
+const { dragPoint, onModuleMouseDown, dropIntoRow } = useRackDrag({
+  organizer,
+  dragged,
+  dropHint,
+  rowUsed,
+  refuse,
+  saveLayout,
+});
 
-function startDrag(press) {
-  // Inventory entries use `id`; persisted row placements use `module_id`.
-  // Normalize once at the gesture boundary so a first drop saves the actual
-  // module id rather than an undefined placement. A placement also carries
-  // WHICH copy is in hand — a row may hold two of the same module, and the
-  // one dragged is the one that has to move.
-  dragged.value = {
-    module: { ...press.module, module_id: press.module.module_id ?? press.module.id },
-    rowIndex: press.rowIndex,
-    index: press.index,
-    unit: press.unit,
-  };
-  window.addEventListener('wheel', onDragWheel, wheelOptions);
-  window.addEventListener('keydown', onDragKey, true);
-  window.addEventListener('blur', endDrag);
-}
+// …and placing one without dragging it, for the row that is scrolled off the
+// screen the chip is on.
+const { rowMenu, rowMenuEl, fitsInRow, rowMenuHint, openRowMenu, closeRowMenu } = useRowMenu({
+  rowUsed,
+});
 
-function endDrag() {
-  cancelAim();
-  pressed = null;
-  dragged.value = null;
-  dropHint.value = null;
-  window.removeEventListener('mousemove', onDragMove, true);
-  window.removeEventListener('mouseup', onDragUp, true);
-  window.removeEventListener('wheel', onDragWheel, wheelOptions);
-  window.removeEventListener('keydown', onDragKey, true);
-  window.removeEventListener('blur', endDrag);
-}
-
-// Escape puts the module back down where it was, the one thing a native drag
-// gave for free.
-function onDragKey(event) {
-  if (event.key !== 'Escape' || !dragged.value) return;
-  event.preventDefault();
-  endDrag();
-}
-
-// Pointer moves arrive far faster than the screen redraws, and each one of
-// them moved the ghost (redrawing the whole organizer, every module in every
-// row) and measured every slot in the row under the cursor (a layout flush).
-// Once a frame is as often as either can matter.
-//
-// The FIRST move of a frame is acted on at once, and only the ones crowding in
-// behind it wait: a gesture that has just begun must not have a frame of lag,
-// and a cursor that has come to rest must still leave the drop bar where it
-// stopped.
-let aimFrame = 0;
-let pendingAim = null;
-let aimedAt = null;
-
-function aimSoon(clientX, clientY) {
-  if (aimFrame) {
-    pendingAim = { x: clientX, y: clientY };
-    return;
-  }
-  aimedAt = { x: clientX, y: clientY };
-  aimAt(clientX, clientY);
-  aimFrame = requestAnimationFrame(() => {
-    aimFrame = 0;
-    const next = pendingAim;
-    pendingAim = null;
-    if (next && (next.x !== aimedAt.x || next.y !== aimedAt.y)) aimSoon(next.x, next.y);
-  });
-}
-
-function cancelAim() {
-  if (aimFrame) cancelAnimationFrame(aimFrame);
-  aimFrame = 0;
-  pendingAim = null;
-  aimedAt = null;
-}
-
-function onDragMove(event) {
-  if (pressed && !dragged.value) {
-    const travelled =
-      Math.abs(event.clientX - pressed.x) >= DRAG_THRESHOLD ||
-      Math.abs(event.clientY - pressed.y) >= DRAG_THRESHOLD;
-    if (!travelled) return;
-    startDrag(pressed);
-  }
-  if (!dragged.value) return;
-  event.preventDefault();
-  aimSoon(event.clientX, event.clientY);
-}
-
-async function onDragUp(event) {
-  if (!dragged.value) {
-    // A press that never became a drag: leave the click alone.
-    endDrag();
-    return;
-  }
-  event.preventDefault();
-  await finishDrag(hintAt(event.clientX, event.clientY));
-}
-
-// Where the cursor is: the module in hand is drawn there and the drop bar is
-// worked out for whatever is under it.
-function aimAt(clientX, clientY) {
-  dragPoint.value = { x: clientX, y: clientY };
-  dropHint.value = hintAt(clientX, clientY);
-}
-
-// What a drop right here would do: a slot in a row, back to Available, or
-// nothing at all. The module in hand never answers elementFromPoint (the
-// ghost is pointer-events: none), so what is under the cursor is the box the
-// drop lands in.
-function hintAt(clientX, clientY) {
-  const under = document.elementFromPoint?.(clientX, clientY);
-  const slots = under?.closest?.('.rack-row-slots');
-  if (slots) return { rowIndex: Number(slots.dataset.rowIndex), index: slotIndex(slots, clientX) };
-  if (under?.closest?.('.available-modules')) return { available: true };
-  return null;
-}
-
-// For as long as a drag is running the wheel is ours, and it does what it
-// would do over the same boxes empty-handed — plain scrolls the page, shift
-// slides the row under the cursor sideways. The cursor has not moved, but
-// what is under it has, so the drop bar is aimed again afterwards.
-const wheelOptions = { passive: false, capture: true };
-
-function onDragWheel(event) {
-  if (!dragged.value) return;
-  const delta = event.deltaY || event.deltaX;
-  if (!delta) return;
-  const { x, y } = dragPoint.value;
-  const under = document.elementFromPoint?.(x, y);
-  const row = event.shiftKey ? under?.closest?.('.rack-row-slots') : null;
-  event.preventDefault();
-  if (row) row.scrollLeft += delta;
-  else window.scrollBy(0, delta);
-  aimAt(x, y);
-}
-
-// A drag left running when the view goes away (a drop that navigates, a
-// route change mid-gesture) would otherwise leave the wheel handler behind.
-onBeforeUnmount(endDrag);
-
-// Which slot the cursor is aiming at: the first module whose left half it is
-// over, else the end of the row. Measured against the DOM, which still holds
-// the pre-drop order, so the answer is an index into the row as it stands.
-function slotIndex(container, clientX) {
-  const slots = [...container.querySelectorAll('.placed-module')];
-  for (const [index, slot] of slots.entries()) {
-    const box = slot.getBoundingClientRect();
-    if (clientX < box.left + box.width / 2) return index;
-  }
-  return slots.length;
-}
-
-// Putting the module down. The gesture ends either way: a drop that lands on
-// nothing simply leaves the layout as it was.
-async function finishDrag(hint) {
-  const held = dragged.value;
-  endDrag();
-  if (!held || !organizer.value) return;
-  if (hint?.available) await dropIntoAvailable(held);
-  else if (Number.isInteger(hint?.rowIndex)) await dropIntoRow(held, hint.rowIndex, hint.index);
-}
-
-async function dropIntoRow(held, rowIndex, index) {
-  const row = organizer.value.rows[rowIndex];
-  if (!row) return;
-  let target = index;
-  if (held.rowIndex !== null) {
-    // Pulling the module out shifts everything to its right one slot left, so
-    // a target beyond it means one less by the time it is put back down.
-    if (held.rowIndex === rowIndex && held.index < target) target -= 1;
-    if (held.rowIndex === rowIndex && held.index === target) return;
-    organizer.value.rows[held.rowIndex].modules.splice(held.index, 1);
-  }
-  if (rowUsed(row) + (Number(held.module.hp) || 0) > Number(row.hp)) {
-    if (held.rowIndex !== null) organizer.value.rows[held.rowIndex].modules.splice(held.index, 0, held.module);
-    refuse(
-      `${held.module.manufacturer} ${held.module.name} (${held.module.hp}HP) does not fit in this ${row.hp}HP row — ` +
-        `${rowUsed(row)}HP of it is used.`
-    );
-    return;
-  }
-  row.modules.splice(target, 0, held.module);
-  await saveLayout();
-}
-
-async function dropIntoAvailable(held) {
-  if (held.rowIndex === null) return;
-  organizer.value.rows[held.rowIndex].modules.splice(held.index, 1);
-  await saveLayout();
-}
-
-// Alt-click (or right-click) on an available module opens a menu of the
-// rack's rows, so a module can be placed without dragging it: on a tall case
-// the row it belongs in is usually scrolled off the screen the chip is on,
-// and a drag cannot be aimed at a box that is not in view. Held at the
-// cursor in client coordinates, like the drag ghost. The module goes on the
-// END of the row it is sent to — that is what the list can say; where in the
-// row it sits is still a drag or an arrow key.
-const rowMenu = ref(null);
-const rowMenuEl = ref(null);
-const MENU_MARGIN = 8;
-
-const fitsInRow = (row, module) =>
-  rowUsed(row) + (Number(module?.hp) || 0) <= Number(row.hp);
-
-function rowMenuHint(row, module) {
-  if (fitsInRow(row, module)) return `Add to row ${row.unit}U, ${Number(row.hp) - rowUsed(row)}HP free`;
-  return `No room — ${module.hp || 0}HP needed, ${Math.max(0, Number(row.hp) - rowUsed(row))}HP free`;
-}
-
-async function openRowMenu(module, event) {
-  rowMenu.value = { module, x: event.clientX, y: event.clientY };
-  window.addEventListener('mousedown', onRowMenuOutside, true);
-  window.addEventListener('keydown', onRowMenuKey, true);
-  window.addEventListener('scroll', closeRowMenu, true);
-  await nextTick();
-  const menu = rowMenuEl.value;
-  if (!(menu instanceof HTMLElement) || !rowMenu.value) return;
-  // A chip near the right or bottom edge would otherwise open a menu half
-  // off the screen. jsdom measures everything as zero, which clamps to the
-  // margin and changes nothing about which rows are listed.
-  const box = menu.getBoundingClientRect();
-  rowMenu.value = {
-    ...rowMenu.value,
-    x: Math.max(MENU_MARGIN, Math.min(rowMenu.value.x, window.innerWidth - box.width - MENU_MARGIN)),
-    y: Math.max(MENU_MARGIN, Math.min(rowMenu.value.y, window.innerHeight - box.height - MENU_MARGIN)),
-  };
-  const first = menu.querySelector('button:not([disabled])');
-  if (first instanceof HTMLElement) first.focus();
-}
-
-function closeRowMenu() {
-  rowMenu.value = null;
-  window.removeEventListener('mousedown', onRowMenuOutside, true);
-  window.removeEventListener('keydown', onRowMenuKey, true);
-  window.removeEventListener('scroll', closeRowMenu, true);
-}
-
-// A press anywhere else — including the chip that opened it, or another one —
-// puts the menu away before that press does whatever it does.
-function onRowMenuOutside(event) {
-  if (event.target instanceof Node && rowMenuEl.value?.contains(event.target)) return;
-  closeRowMenu();
-}
-
-function onRowMenuKey(event) {
-  if (event.key !== 'Escape') return;
-  event.preventDefault();
-  closeRowMenu();
-}
-
-onBeforeUnmount(closeRowMenu);
 
 // Sending the module to the end of the chosen row is the same move as a drop
 // there, so it goes through the same code: the HP check, the refusal and the

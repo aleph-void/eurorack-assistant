@@ -8,7 +8,7 @@
 // where one was found, otherwise the logical panel the server drew from the
 // manual.
 
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import ComponentLegend from './ComponentLegend.vue';
 import { componentColor } from '../componentTypes.js';
 import {
@@ -16,11 +16,12 @@ import {
   cableBounds,
   cableColor,
   cablePath,
-  imageWidthFor,
   layoutDiagram,
-  panelImageUrl,
   usedModules,
 } from '../panelLayout.js';
+import { useDiagramView } from './patchdiagram/useDiagramView.js';
+import { useMultDirections } from './patchdiagram/useMultDirections.js';
+import { useCableDrag } from './patchdiagram/useCableDrag.js';
 
 const props = defineProps({
   modules: { type: Array, default: () => [] },
@@ -118,219 +119,29 @@ const diagram = computed(() =>
   })
 );
 
-// ---- the whole screen ----
-// Patching is close work on a picture that is far wider than the column this
-// page is laid out in, so the diagram can take the whole display: the panel
-// itself goes fullscreen, controls and all, and the picture refits to what it
-// is given.
+
+// How big the picture is drawn and which part of it is on screen — the zoom,
+// the fullscreen panel, the culled viewport and every size derived from them.
 const container = ref(null);
-const fullscreen = ref(false);
-
-function toggleFullscreen() {
-  if (typeof document === 'undefined') return;
-  if (document.fullscreenElement) {
-    document.exitFullscreen?.();
-    return;
-  }
-  container.value?.requestFullscreen?.();
-}
-
-function onFullscreenChange() {
-  fullscreen.value = Boolean(document.fullscreenElement);
-  // The box is a different size now: refit unless the user has taken the
-  // zoom into their own hands, and re-measure what is on screen either way.
-  nextTick(() => {
-    if (!userZoomed.value) fitZoom();
-    measureViewport();
-  });
-}
-
-// ---- zoom ----
-// The diagram is one coordinate space rendered at whatever CSS width we ask
-// for, so zooming is just that width: every jack marker, cable and hit test
-// goes through getBoundingClientRect and follows along. Patching is close
-// work — a rack row is wider than any screen — so the picture opens fitted to
-// the page and zooms from there, and stays where the user put it.
-const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-
-const MIN_ZOOM = 0.15;
-const MAX_ZOOM = 6;
-// A whole studio fitted to the page lands around 15%, where a panel is a
-// thumbnail and a jack is two pixels across — nothing on it can be read or
-// patched. So the picture OPENS no smaller than this and scrolls instead;
-// zooming out further is still there for taking in the whole room at once.
-const FIT_MIN_ZOOM = 0.35;
 const wrap = ref(null);
-const zoom = ref(1);
-const userZoomed = ref(false);
-const clampZoom = (value) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
-
-function fitZoom() {
-  const available = (wrap.value?.clientWidth ?? 0) - 18; // the wrap's padding
-  const width = diagram.value.width;
-  // jsdom (and a wrap that has not been laid out yet) measures nothing;
-  // 1:1 is the honest answer then.
-  if (available <= 0 || !width) return;
-  const fitted = Math.min(1, available / width);
-  // 'Fit' means fit — it is asked for. Opening the page is not.
-  zoom.value = clampZoom(userFitted ? fitted : Math.max(fitted, FIT_MIN_ZOOM));
-}
-function zoomBy(factor) {
-  userZoomed.value = true;
-  zoom.value = clampZoom(zoom.value * factor);
-}
-let userFitted = false;
-function resetZoom() {
-  userZoomed.value = false;
-  userFitted = true;
-  zoom.value = 1;
-  fitZoom();
-  userFitted = false;
-}
-// Ctrl/⌘ + wheel is the zoom gesture everywhere else that draws on a canvas,
-// and it is what a trackpad pinch sends. A bare wheel still scrolls the
-// diagram, which is what a bare wheel is for.
-function wheelZoom(event) {
-  if (!event.ctrlKey && !event.metaKey) return;
-  event.preventDefault();
-  zoomBy(event.deltaY < 0 ? 1.12 : 1 / 1.12);
-}
-onMounted(() => {
-  document.addEventListener('fullscreenchange', onFullscreenChange);
-  fitZoom();
-  // The picture opens fitted to the page, so that is the size its panels are
-  // wanted at — no need to wait out the settle timer for the first ones.
-  imageZoom.value = zoom.value;
-  // Measured now, not on the next tick: the box is in the document by the
-  // time this runs, and waiting a tick would leave one frame with an empty
-  // picture in it.
-  measureViewport();
-  window.addEventListener('resize', onScroll);
-});
-onBeforeUnmount(() => {
-  document.removeEventListener('fullscreenchange', onFullscreenChange);
-  clearTimeout(imageZoomTimer);
-  window.removeEventListener('resize', onScroll);
-  if (viewportFrame) cancelAnimationFrame(viewportFrame);
-});
-// Zooming changes what a scroll position means, and so does redrawing the
-// picture with different modules on it.
-watch(zoom, () => nextTick(measureViewport));
-// A diagram that changes shape (modules shown, names on, a row added) is
-// refitted unless the user has taken the zoom into their own hands.
-watch(
-  () => diagram.value,
-  () => {
-    if (!userZoomed.value) fitZoom();
-    nextTick(measureViewport);
-  }
-);
-const zoomPercent = computed(() => Math.round(zoom.value * 100));
-
-// A marker has to be the same size ON SCREEN however far the picture is
-// zoomed out, or a whole studio draws its jacks as invisible specks: the
-// radius is given in diagram units, so it is divided by the zoom. The clamp
-// keeps it from swallowing the panel at the extremes — at 15% a panel is only
-// a couple of hundred units wide.
-const MARKER_SCREEN_R = 6;
-const markerRadius = computed(() => clamp(MARKER_SCREEN_R / zoom.value, 2, 18));
-const markerStroke = computed(() => clamp(1.5 / zoom.value, 0.5, 4.5));
-// A cable is also the thing you alt-click to unplug, so it is never thinner
-// on screen than a pointer can comfortably hit: the drawn width holds from
-// 1:1 up, and below that the stroke is widened by the zoom, the same trick
-// the markers use. Handed to the stylesheet as a custom property so the
-// hover rule can thicken it further without a second binding per cable.
-const CABLE_WIDTH = 7;
-const cableStroke = computed(() => clamp(CABLE_WIDTH / zoom.value, CABLE_WIDTH, 26));
-// The dark ring behind every marker, so a bright dot has an edge to be seen
-// against on a photograph of a panel. Kept here rather than in the stylesheet
-// because a marker's colours travel on the element itself — a rule in CSS
-// would win over the component type's own colour.
-const MARKER_HALO = 'rgba(9, 9, 11, 0.75)';
-// A placement with no component behind it has no type and no colour of its
-// own, and falls back to the module page's neutral marker.
-const MARKER_NEUTRAL = '#e4e4e7';
-// The ring around the marker being corrected, in place of its dark halo.
-const MARKER_SELECTED = '#f4f4f5';
-
-// ---- what is on screen ----
-// A studio is two hundred panels and six thousand markers, and a picture of
-// one is far wider than any screen: at any moment nearly all of it is scrolled
-// out of sight. Building that part costs exactly what building the part you
-// are looking at costs — the same nodes, the same panel images decoded — and
-// shows nothing, so only the part inside the scroll box is drawn. Everything
-// keeps its place in the coordinate space, so the scrollbars, the hit tests
-// and the drag gesture are untouched by this.
-//
-// The margin is a band of diagram either side of the box, so a scroll finds
-// the panels already there rather than arriving before them.
-const VIEWPORT_MARGIN = 500;
-// What is on screen is re-measured once a frame while scrolling, and every
-// answer that DIFFERS invalidates the panels, the markers, the cables and
-// their ends — a filter and a rebuild over six thousand anchors. A scroll of
-// three pixels changes nothing about what is worth drawing, so the box is
-// snapped out to a grid and only a box that has actually moved a grid step is
-// written. The margin already covers the slack this adds.
-const VIEWPORT_STEP = 250;
-// Before there is anything to measure, the first screenful is GUESSED from
-// the window: the box has not been laid out yet, and rendering the whole
-// studio for one frame — every panel built, every image fetched — an instant
-// before all but a screenful is thrown away is the most expensive moment on
-// the page. The real measurement replaces this as soon as the box exists.
-// null means 'measured, and the box has no size at all' — a test renderer
-// with no layout — and then everything is drawn, because the honest answer
-// to 'what is on screen' is 'no idea'.
-const viewport = ref(
-  typeof window === 'undefined'
-    ? null
-    : {
-        x0: -VIEWPORT_MARGIN,
-        y0: -VIEWPORT_MARGIN,
-        x1: window.innerWidth + VIEWPORT_MARGIN,
-        y1: window.innerHeight + VIEWPORT_MARGIN,
-      }
-);
-let viewportFrame = 0;
-
-// Snapped OUTWARD, so the box is always a superset of what is really on
-// screen: nothing is culled that should have been drawn.
-const down = (value) => Math.floor(value / VIEWPORT_STEP) * VIEWPORT_STEP;
-const up = (value) => Math.ceil(value / VIEWPORT_STEP) * VIEWPORT_STEP;
-
-function measureViewport() {
-  const el = wrap.value;
-  if (!el || !el.clientWidth || !el.clientHeight) {
-    viewport.value = null;
-    return;
-  }
-  const scale = zoom.value || 1;
-  const next = {
-    x0: down(el.scrollLeft / scale - VIEWPORT_MARGIN),
-    y0: down(el.scrollTop / scale - VIEWPORT_MARGIN),
-    x1: up((el.scrollLeft + el.clientWidth) / scale + VIEWPORT_MARGIN),
-    y1: up((el.scrollTop + el.clientHeight) / scale + VIEWPORT_MARGIN),
-  };
-  const now = viewport.value;
-  if (now && now.x0 === next.x0 && now.y0 === next.y0 && now.x1 === next.x1 && now.y1 === next.y1) {
-    return;
-  }
-  viewport.value = next;
-}
-
-// Scrolling fires far faster than the screen redraws; measuring once per
-// frame is as often as it can matter.
-function onScroll() {
-  if (viewportFrame) return;
-  viewportFrame = requestAnimationFrame(() => {
-    viewportFrame = 0;
-    measureViewport();
-  });
-}
-
-const inView = (box) => {
-  const v = viewport.value;
-  return !v || (box.x1 >= v.x0 && box.x0 <= v.x1 && box.y1 >= v.y0 && box.y0 <= v.y1);
-};
+const {
+  fullscreen,
+  toggleFullscreen,
+  zoomBy,
+  resetZoom,
+  wheelZoom,
+  zoomPercent,
+  markerRadius,
+  markerStroke,
+  MARKER_HALO,
+  MARKER_NEUTRAL,
+  MARKER_SELECTED,
+  onScroll,
+  inView,
+  showMarkers,
+  imageUrl,
+  svgStyle,
+} = useDiagramView({ wrap, container, diagram });
 
 // WHAT KINDS OF THING THE PICTURE DRAWS — pressed in the key under it.
 // A studio is six thousand markers and all but the jacks are furniture no
@@ -343,40 +154,6 @@ const inView = (box) => {
 // the picture is the bare case.
 const DEFAULT_MARKER_TYPES = ['input_jack', 'output_jack', 'bidirectional_jack'];
 const shownTypes = ref([...DEFAULT_MARKER_TYPES]);
-// Zoomed out past this — a whole studio taken in at once — a marker is two
-// pixels of a panel the size of a stamp, and six thousand of them are drawn
-// for nothing. The picture is then the case itself; the cables are still on
-// it, and the jacks come back as soon as anything can be read.
-const MARKER_ZOOM = 0.25;
-const showMarkers = computed(() => zoom.value >= MARKER_ZOOM);
-
-// Each panel is fetched at the size it is actually painted — its drawn width,
-// at the current zoom, at the screen's own pixel density. Widths come in a
-// few fixed steps (panelLayout.js), so zooming re-requests a picture at most
-// a couple of times and every step is cached from then on.
-const density = () => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
-// The zoom the panel pictures were last FETCHED at. A wheel gesture crosses
-// several zoom steps in a second, and each one that changes the size bucket
-// asks the server for another forty panels — pictures replaced before they
-// arrive. So the request follows the zoom only once it has stopped moving.
-const imageZoom = ref(1);
-let imageZoomTimer = 0;
-watch(zoom, (value) => {
-  clearTimeout(imageZoomTimer);
-  imageZoomTimer = setTimeout(() => {
-    imageZoom.value = value;
-  }, 250);
-});
-const imageUrl = (placed) =>
-  panelImageUrl(
-    placed.pm.panel,
-    imageWidthFor(placed.pm.panel, placed.width) * imageZoom.value * density()
-  );
-const svgStyle = computed(() => ({
-  width: `${Math.max(1, Math.round(diagram.value.width * zoom.value))}px`,
-  maxWidth: 'none',
-  '--cable-width': `${cableStroke.value}px`,
-}));
 
 // The panels inside the scroll box, and the instances they belong to. Markers
 // are culled with their panel: a marker is only ever ON one.
@@ -462,144 +239,10 @@ const unplaced = computed(() => organized.value.unplaced ?? []);
 const componentAt = (patchModuleId, componentId) =>
   componentByJack.value.get(`${patchModuleId}:${componentId}`) ?? null;
 
-// ---- which way a mult runs, once something is plugged into it ----
-// The jacks of a mult section are interchangeable HARDWARE: any of them can
-// be the input. A patch decides which — the one a cable is plugged into is
-// the input, and every other jack in the section carries a copy out — and
-// that is the same rule the server patches by (routes/patches/helpers.js).
-// So once a mult is fed, the picture stops calling its jacks bidirectional
-// and draws the fed one as an input and the rest as outputs: in the type's
-// own colour, offered for dragging the way an output is, and refused as a
-// destination the way an output is.
-//
-// A section is: same instance, same group — the server resolves which jacks
-// those are (services/patchTopology.js), because on a switched multiple the
-// answer depends on the control positions the patch records.
-const BIDIRECTIONAL = 'bidirectional_jack';
-const jackKey = (patchModuleId, componentId) => `${patchModuleId}:${componentId}`;
-// jack → the sections it stands in, and section → its jacks. A jack is in
-// exactly one on ordinary hardware, and in each bus it might be on while a
-// switched multiple's toggle goes unrecorded.
-const multSectionsByJack = computed(() => {
-  const map = new Map();
-  for (const section of props.mults) {
-    for (const j of section.jacks ?? []) {
-      const key = jackKey(j.patch_module_id, j.component_id);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(section.key);
-    }
-  }
-  return map;
-});
-const multJacksBySection = computed(() => {
-  const map = new Map();
-  for (const section of props.mults) {
-    map.set(
-      section.key,
-      (section.jacks ?? []).map((j) => jackKey(j.patch_module_id, j.component_id))
-    );
-  }
-  return map;
-});
 
-// The jacks a cable is plugged into, and the jacks a cable LEAVES FROM. Both
-// point a bidirectional jack: signal arriving at one makes it an input, and
-// signal leaving one makes it an output. Reading only the arriving end left a
-// switch whose common is patched onward — the many-to-one direction, four
-// steps feeding one output — with every jack of it still drawn as undecided.
-const fedJacks = computed(
-  () => new Set(props.cables.map((c) => jackKey(c.to_patch_module_id, c.to_component_id)))
-);
-const sourcedJacks = computed(
-  () => new Set(props.cables.map((c) => jackKey(c.from_patch_module_id, c.from_component_id)))
-);
-
-// A ROUTING SWITCH is not a mult, and the difference is the whole of this
-// section: a switch SELECTS one of its steps, where a mult COPIES to all of
-// them. So a Doepfer A-151's four step jacks are four alternative ends of ONE
-// connection to the common jack, and cabling one of them says which way the
-// whole section runs: a cable into a step makes every step an input and the
-// common the output (many-to-one, one live at a time), a cable into the
-// common makes the common the input and every step an output (one-to-many).
-// It never makes the OTHER steps outputs — the signal does not come back out
-// of them, and the mult rule below would say it did.
-const switchSections = computed(() =>
-  props.switches.map((section) => ({
-    common: jackKey(section.common_patch_module_id, section.common_component_id),
-    steps: (section.steps ?? []).map((step) => jackKey(step.patch_module_id, step.component_id)),
-  }))
-);
-// Every jack that belongs to one, so the mult rule leaves them alone — the
-// same exclusion the server's tracer makes (services/patchFlow.js).
-const switchJackKeys = computed(() => {
-  const keys = new Set();
-  for (const section of switchSections.value) {
-    keys.add(section.common);
-    for (const step of section.steps) keys.add(step);
-  }
-  return keys;
-});
-
-// What each bidirectional jack IS in this patch, once the cables have pointed
-// it one way: switch sections first, then the mult groups that are left.
-const multDirections = computed(() => {
-  const directions = new Map();
-  const fed = fedJacks.value;
-  const sourced = sourcedJacks.value;
-  // Only a jack the hardware leaves open is given a direction; one the panel
-  // already calls an input or an output is what it says it is.
-  const points = (key, type) => {
-    const [patchModuleId, componentId] = key.split(':').map(Number);
-    if (componentAt(patchModuleId, componentId)?.type !== BIDIRECTIONAL) return;
-    directions.set(key, type);
-  };
-
-  // A switch section runs ONE way, and either end of it can be the cable that
-  // says which: signal arriving at the common (or leaving a step) runs
-  // common → steps, and signal leaving the common (or arriving at a step)
-  // runs steps → common. So a common patched into somebody's input is the
-  // section's output and its four steps become inputs, which is the
-  // many-to-one half of what a routing switch is for.
-  for (const section of switchSections.value) {
-    const commonIsInput =
-      fed.has(section.common) || section.steps.some((step) => sourced.has(step));
-    const commonIsOutput =
-      sourced.has(section.common) || section.steps.some((step) => fed.has(step));
-    // Nothing patched yet, or driven at both ends: the section says nothing
-    // about which way it runs, so its jacks stay bidirectional.
-    if (commonIsInput === commonIsOutput) continue;
-    points(section.common, commonIsInput ? 'input_jack' : 'output_jack');
-    for (const step of section.steps) points(step, commonIsInput ? 'output_jack' : 'input_jack');
-  }
-
-  const multFed = new Map();
-  for (const cable of props.cables) {
-    const key = jackKey(cable.to_patch_module_id, cable.to_component_id);
-    if (switchJackKeys.value.has(key)) continue;
-    const component = componentAt(cable.to_patch_module_id, cable.to_component_id);
-    if (component?.type !== BIDIRECTIONAL) continue;
-    for (const sectionKey of multSectionsByJack.value.get(key) ?? []) {
-      multFed.set(sectionKey, key);
-    }
-  }
-  // A mult jack a cable LEAVES is carrying a copy out, so it is an output
-  // whether or not the patch has said yet which of its siblings the copy is
-  // of. The siblings stay bidirectional: a mult takes its input at exactly
-  // one of them and nothing here knows which, and a second copy may still be
-  // dragged out of any of the others.
-  for (const key of sourced) {
-    if (switchJackKeys.value.has(key)) continue;
-    points(key, 'output_jack');
-  }
-  if (multFed.size === 0) return directions;
-  for (const [sectionKey, inputKey] of multFed) {
-    for (const key of multJacksBySection.value.get(sectionKey) ?? []) {
-      if (switchJackKeys.value.has(key)) continue;
-      points(key, key === inputKey ? 'input_jack' : 'output_jack');
-    }
-  }
-  return directions;
-});
+// Which way each bidirectional jack runs in THIS patch, once the cables have
+// pointed it: switch sections first, then the mult groups that are left.
+const { switchJackKeys, multDirections } = useMultDirections(props, componentAt);
 
 // Every marker on the whole picture, as the HARDWARE has it: what a panel
 // places, which component is behind it, and nothing the cables can change.
@@ -787,113 +430,29 @@ function cancelPatch() {
   patchFrom.value = null;
 }
 
+// The two MOUSE gestures on the picture: dragging a cable between two jacks,
+// and dragging the picture itself. Both are left to the browser under a
+// finger — patching and unplugging by TAP are below.
 const svg = ref(null);
-const dragging = ref(null);
-
-function pointAt(event) {
-  const box = svg.value?.getBoundingClientRect();
-  if (!box?.width || !box?.height) return null;
-  return {
-    x: ((event.clientX - box.left) / box.width) * diagram.value.width,
-    y: ((event.clientY - box.top) / box.height) * diagram.value.height,
-  };
-}
-
-function startCable(anchor, event) {
-  if (!props.interactive) return;
-  // A finger scrolls the picture instead — the same reason `startPan` leaves
-  // touch to the browser — so a drag started here would be cancelled the
-  // moment it moved, and the preventDefault below can swallow the tap that
-  // follows it. Touch patches in two taps (`patchFrom` above); this is the
-  // mouse's gesture and says so.
-  if (event.pointerType === 'touch') return;
-  const point = pointAt(event);
-  if (!point) return;
-  event.preventDefault();
-  event.currentTarget.setPointerCapture?.(event.pointerId);
-  dragging.value = { source: anchor, point };
-}
-
-function moveCable(event) {
-  if (!dragging.value) return;
-  const point = pointAt(event);
-  if (point) dragging.value = { ...dragging.value, point };
-}
-
-function finishCable(event) {
-  if (!dragging.value) return;
-  const point = pointAt(event);
-  const source = dragging.value.source;
-  dragging.value = null;
-  if (!point) return;
-  // The SVG has a fixed coordinate system but a responsive display size. A
-  // 14px target feels the same at every zoom level.
-  const radius = (14 / (svg.value?.getBoundingClientRect().width || 1)) * diagram.value.width;
-  const target = inputs.value.find((input) => Math.hypot(input.x - point.x, input.y - point.y) <= radius);
-  if (!target) return;
-  emit('connect', {
-    from_patch_module_id: source.patchModuleId,
-    from_component_id: source.componentId,
-    to_patch_module_id: target.patchModuleId,
-    to_component_id: target.componentId,
-  });
-}
-
-// Dragging the picture moves it, the way a map is moved. A studio is far
-// wider than any screen and the scroll bar is a long way from the panel being
-// patched, so pressing on anything that is NOT a jack and dragging scrolls the
-// box under the pointer. A cable drag has already claimed the gesture by the
-// time this sees it — pointerdown reaches the jack first and sets `dragging` —
-// so patching still wins, and alt/right-click is left to unplugging.
-const panning = ref(null);
-// The elements with a gesture of their own: a jack marker, the jack editor's
-// controls, anything clickable.
-const OWN_GESTURE = 'circle, .jack-editor, input, select, button, a, textarea';
-// A cable joins them the moment it can be unplugged: pressing one means THIS
-// CABLE, and a pan takes a pointer capture, which retargets the click that
-// would have said so. A read-only diagram's cables answer to nothing, so
-// there they stay part of the background you take hold of.
-const panGesture = computed(() =>
-  props.interactive ? `${OWN_GESTURE}, .cable, .cable-hit` : OWN_GESTURE
-);
-
-function startPan(event) {
-  if (dragging.value || panning.value) return;
-  // A finger already moves the picture: the box scrolls, and taking the
-  // gesture over would replace the browser's own two-axis drag (with its
-  // momentum, and its handover to the page at the edges) with a worse copy —
-  // and, since claiming it means preventDefault, would leave a phone unable
-  // to scroll PAST a diagram that is most of the screen.
-  if (event.pointerType === 'touch') return;
-  if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey) return;
-  if (event.target?.closest?.(panGesture.value)) return;
-  const el = wrap.value;
-  if (!el) return;
-  event.preventDefault();
-  panning.value = {
-    id: event.pointerId,
-    x: event.clientX,
-    y: event.clientY,
-    left: el.scrollLeft,
-    top: el.scrollTop,
-  };
-  el.setPointerCapture?.(event.pointerId);
-}
-
-function movePan(event) {
-  const pan = panning.value;
-  const el = wrap.value;
-  if (!pan || !el || event.pointerId !== pan.id) return;
-  el.scrollLeft = pan.left - (event.clientX - pan.x);
-  el.scrollTop = pan.top - (event.clientY - pan.y);
-}
-
-function endPan(event) {
-  const pan = panning.value;
-  if (!pan || event.pointerId !== pan.id) return;
-  wrap.value?.releasePointerCapture?.(event.pointerId);
-  panning.value = null;
-}
+const {
+  dragging,
+  startCable,
+  moveCable,
+  finishCable,
+  panning,
+  startPan,
+  movePan,
+  endPan,
+  draftCable,
+} = useCableDrag({
+  props,
+  emit,
+  svg,
+  wrap,
+  diagram,
+  inputs,
+  drawnCount: computed(() => drawn.value.length),
+});
 
 // Unplugging from the picture: the same alt-click / right-click gesture the
 // rack organizer uses to pull a module out of a row. The parent does the
@@ -933,9 +492,6 @@ function pickCable(entry, event) {
   selectedCableId.value = selectedCableId.value === entry.cable.id ? null : entry.cable.id;
 }
 
-const draftCable = computed(() =>
-  dragging.value ? cablePath(dragging.value.source, dragging.value.point, drawn.value.length) : null
-);
 </script>
 
 <template>

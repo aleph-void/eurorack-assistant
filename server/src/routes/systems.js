@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { findSystemByName, rackFootprints, racksOverlap } from '../services/racks.js';
 import { rackDetailJson } from '../services/rackJson.js';
-import { loadPanels } from '../services/panelImage.js';
+import { loadPanels } from '../services/panelJson.js';
 import { enqueueJob } from '../jobs/enqueue.js';
 import { asyncHandler } from './asyncHandler.js';
 

@@ -9,7 +9,7 @@
 // or HP that already exists is never touched, whatever the model answers.
 
 import { extractJsonObject } from './json.js';
-import { normalizeHp } from './panelImage.js';
+import { normalizeHp } from './panelPlacements.js';
 
 export const DESCRIBE_TEMPLATE = (
   manufacturer,
