@@ -46,7 +46,7 @@ describe('PatchDetailView', () => {
     // The cables are written out on a page of their own.
     expect(wrapper.find('[data-test="cable-21"]').exists()).toBe(false);
     // The patch can be taken straight to the assistant.
-    expect(wrapper.find('[data-test="ask-about-patch"]').attributes('to')).toBe('/ask?patch=7');
+    expect(wrapper.find('[data-test="ask-about-patch"]').attributes('to')).toBe('/patches/7/questions');
   });
 
   it('asks before matching the patch to the rack as it is organised now', async () => {

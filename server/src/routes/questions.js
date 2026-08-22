@@ -128,9 +128,32 @@ export function questionRoutes(db) {
     return byPatch;
   }
 
+  // Your questions, newest first — and the same list narrowed to one module
+  // or one patch, which is what the questions page OF a module (or of a
+  // patch) reads: a question belongs to a module when that module is in its
+  // scope, and to a patch when that patch is attached to it. The link rows
+  // are read first and the ids handed to the question query, rather than
+  // joined: pg-mem drops rows from an OR ANDed with anything else, and a
+  // flat page filtered in JS is the house workaround.
   router.get('/', asyncHandler(async (req, res) => {
+    const where = { user_id: req.user.id };
+    const narrow = (ids) => {
+      where.id = Array.isArray(where.id) ? where.id.filter((id) => ids.includes(id)) : ids;
+    };
+    const moduleId = Number(req.query.module_id);
+    if (Number.isInteger(moduleId) && moduleId > 0) {
+      const links = await QuestionModule.findAll({ where: { module_id: moduleId } });
+      narrow([...new Set(links.map((l) => l.question_id))]);
+    }
+    const patchId = Number(req.query.patch_id);
+    if (Number.isInteger(patchId) && patchId > 0) {
+      const links = await QuestionPatch.findAll({ where: { patch_id: patchId } });
+      narrow([...new Set(links.map((l) => l.question_id))]);
+    }
+    if (Array.isArray(where.id) && where.id.length === 0) return res.json([]);
+
     const questions = await Question.findAll({
-      where: { user_id: req.user.id },
+      where,
       attributes: ['id', 'prompt', 'status', 'error', 'created_at', 'answered_at'],
       order: [
         ['created_at', 'DESC'],
@@ -475,6 +498,21 @@ export function questionRoutes(db) {
       }
     }
 
+    // Asking about a MODULE: the module is in scope from the start, whatever
+    // the scoping model makes of the wording — a question asked from a
+    // module's page is about that module even when its name never appears in
+    // the sentence ("why is this so quiet?"). scopeQuestion keeps the links
+    // it finds already written; the user can still take one out in review.
+    const moduleIds = uniqueIds(
+      req.body?.module_ids ?? (req.body?.module_id ? [req.body.module_id] : [])
+    );
+    if (moduleIds.length > 0) {
+      const owned = new Set(ownedIds);
+      if (!moduleIds.every((id) => owned.has(id))) {
+        return res.status(400).json({ error: 'module_ids must be modules in your racks' });
+      }
+    }
+
     // The question and the job that scopes it are created together — a
     // question without its job would sit unscoped forever.
     const question = await db.sequelize.transaction(async (transaction) => {
@@ -485,6 +523,12 @@ export function questionRoutes(db) {
       if (patchIds.length > 0) {
         await QuestionPatch.bulkCreate(
           patchIds.map((id) => ({ question_id: created.id, patch_id: id })),
+          { transaction }
+        );
+      }
+      if (moduleIds.length > 0) {
+        await QuestionModule.bulkCreate(
+          moduleIds.map((id) => ({ question_id: created.id, module_id: id })),
           { transaction }
         );
       }

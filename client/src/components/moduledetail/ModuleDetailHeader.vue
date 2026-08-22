@@ -214,6 +214,13 @@ const nextModuleHref = computed(() =>
       >
         Edit
       </button>
+      <RouterLink
+        :to="`/modules/${moduleId}/questions`"
+        style="font-size: 0.8rem"
+        data-test="ask-about-module"
+      >
+        Ask about this module
+      </RouterLink>
     </h1>
     <p v-if="namingError" class="error" data-test="naming-error">{{ namingError }}</p>
     <p>

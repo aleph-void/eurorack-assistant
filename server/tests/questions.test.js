@@ -95,6 +95,83 @@ describe('asking about patches', () => {
   });
 });
 
+describe('asking about a module', () => {
+  it('puts the module in scope at question time and refuses one that is not yours', async () => {
+    const fixture = await withModules();
+    const { app, db, aliceCookie } = fixture;
+
+    const foreign = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({ prompt: 'Why so quiet?', module_ids: [fixture.module.id, 999999] });
+    expect(foreign.status).toBe(400);
+    expect(foreign.body.error).toMatch(/module_ids must be modules in your racks/);
+
+    const res = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({ prompt: 'Why so quiet?', module_id: fixture.module.id });
+    expect(res.status).toBe(201);
+    const { rows: links } = await db.query(
+      'SELECT module_id FROM question_modules WHERE question_id = $1',
+      [res.body.id]
+    );
+    expect(links.map((l) => l.module_id)).toEqual([fixture.module.id]);
+  });
+});
+
+describe('the questions of one record', () => {
+  it('narrows the list to the module in scope, or to the attached patch', async () => {
+    const fixture = await withScopedQuestion();
+    const { app, db, alice, aliceCookie } = fixture;
+    const patch = await createPatch(fixture);
+
+    // A second question about neither, and a third attached to the patch.
+    const { rows: other } = await db.query(
+      `INSERT INTO questions (user_id, prompt, status) VALUES ($1, 'Unrelated?', 'scoped')
+       RETURNING id`,
+      [alice.id]
+    );
+    const { rows: onPatch } = await db.query(
+      `INSERT INTO questions (user_id, prompt, status) VALUES ($1, 'Why silent?', 'scoped')
+       RETURNING id`,
+      [alice.id]
+    );
+    await db.query('INSERT INTO question_patches (question_id, patch_id) VALUES ($1, $2)', [
+      onPatch[0].id,
+      patch.id,
+    ]);
+
+    const all = await request(app).get('/api/questions').set('Cookie', aliceCookie);
+    expect(all.body.map((q) => q.id).sort()).toEqual(
+      [fixture.question.id, other[0].id, onPatch[0].id].sort()
+    );
+
+    const byModule = await request(app)
+      .get(`/api/questions?module_id=${fixture.module.id}`)
+      .set('Cookie', aliceCookie);
+    expect(byModule.status).toBe(200);
+    expect(byModule.body.map((q) => q.id)).toEqual([fixture.question.id]);
+
+    const byPatch = await request(app)
+      .get(`/api/questions?patch_id=${patch.id}`)
+      .set('Cookie', aliceCookie);
+    expect(byPatch.body.map((q) => q.id)).toEqual([onPatch[0].id]);
+
+    // A record nothing has been asked about has an empty list, not everything.
+    const none = await request(app)
+      .get('/api/questions?module_id=999999')
+      .set('Cookie', aliceCookie);
+    expect(none.body).toEqual([]);
+
+    // Somebody else's questions are not in either list.
+    const admin = await request(app)
+      .get(`/api/questions?module_id=${fixture.module.id}`)
+      .set('Cookie', fixture.adminCookie);
+    expect(admin.body).toEqual([]);
+  });
+});
+
 describe('review options', () => {
   it('is only offered to the question owner', async () => {
     const fixture = await withScopedQuestion();

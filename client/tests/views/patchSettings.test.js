@@ -62,7 +62,7 @@ describe('PatchSettingsView', () => {
     expect(wrapper.find('[data-test="setting-31"]').text()).toContain('Rise');
     // Every patch page carries the patch's own header.
     expect(wrapper.find('h1').text()).toContain('Krell');
-    expect(wrapper.find('[data-test="ask-about-patch"]').attributes('to')).toBe('/ask?patch=7');
+    expect(wrapper.find('[data-test="ask-about-patch"]').attributes('to')).toBe('/patches/7/questions');
   });
 
   it('offers enum options as a dropdown and ranges as numbers when dialing in a module', async () => {

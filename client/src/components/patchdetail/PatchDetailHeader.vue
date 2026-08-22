@@ -108,7 +108,7 @@ async function duplicatePatch() {
         Export JSON
       </a>
       <RouterLink
-        :to="`/ask?patch=${patchId}`"
+        :to="`/patches/${patchId}/questions`"
         style="font-size: 0.8rem"
         data-test="ask-about-patch"
       >
