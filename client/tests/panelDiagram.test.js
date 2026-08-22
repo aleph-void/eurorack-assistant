@@ -800,13 +800,15 @@ describe('PatchDiagram', () => {
   // half-made cable away; tapping the jack it came out of is what puts it back.
   it('holds an aimed cable until it lands or is cancelled', async () => {
     const source = modules();
-    source[0].components.push({ id: 9, type: 'knob', name: 'Rise' });
+    // A second output: a jack, so the picture draws it whatever the key is
+    // pressed for, and nowhere a cable can END.
+    source[0].components.push({ id: 8, type: 'output_jack', name: 'EOF' });
     source[0].panel.components.push({
-      component_id: 9,
-      name: 'Rise',
-      shape: 'knob',
+      component_id: 8,
+      name: 'EOF',
+      shape: 'jack',
       x: 0.5,
-      y: 0.5,
+      y: 0.7,
       w: 0.06,
       h: 0.06,
     });
@@ -814,9 +816,9 @@ describe('PatchDiagram', () => {
     await wrapper.find('[data-test="diagram-jack-11-1"]').trigger('click');
     await wrapper.find('[data-test="diagram-jack-patch"]').trigger('click');
 
-    const knob = wrapper.find('[data-test="diagram-jack-11-9"]');
-    expect(knob.classes()).toContain('dimmed');
-    await knob.trigger('click');
+    const output = wrapper.find('[data-test="diagram-jack-11-8"]');
+    expect(output.classes()).toContain('dimmed');
+    await output.trigger('click');
     expect(wrapper.emitted('connect')).toBeUndefined();
     expect(wrapper.find('[data-test="diagram-patch-bar"]').exists()).toBe(true);
 
