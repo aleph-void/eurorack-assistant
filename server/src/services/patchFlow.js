@@ -47,11 +47,13 @@ export const MAX_FLOW_NODES = 200;
 
 export function buildSignalFlow(topology) {
   const {
-    patchModules = [],
+    // The instances themselves are not walked here: every edge comes from a
+    // cable or from a section the topology already resolved onto instances.
     jacksByPatchModule = new Map(),
     routes = [],
     normalizations = [],
     switches = [],
+    mults = [],
     bridges = [],
     links = [],
     settings = [],
@@ -144,11 +146,8 @@ export function buildSignalFlow(topology) {
   // A cable into the common → the common feeds every step that cables
   // onward (1-to-many distribution, one step live at a time). Cables into
   // steps → those steps feed the common (many-to-one selection).
-  const switchJackKeys = new Set();
   for (const section of switches) {
     const commonKey = jackKey(section.common_patch_module_id, section.common_component_id);
-    switchJackKeys.add(commonKey);
-    for (const step of section.steps) switchJackKeys.add(jackKey(step.patch_module_id, step.component_id));
     const commonFed = cabledInto.has(commonKey);
     for (const step of section.steps) {
       const stepKey = jackKey(step.patch_module_id, step.component_id);
@@ -194,38 +193,40 @@ export function buildSignalFlow(topology) {
     });
   }
 
-  // Mult copies: the group jack a cable lands in feeds every sibling that
-  // sends a cable onward. Switch-section jacks are excluded — a switch
-  // selects one connection, it does not copy to all of them — and so are
-  // bridged jacks, which are paired one to one with the other panel rather
-  // than being copies of each other.
-  const bridgedKeys = new Set();
-  for (const b of bridges) {
-    bridgedKeys.add(jackKey(b.a_patch_module_id, b.a_component_id));
-    bridgedKeys.add(jackKey(b.b_patch_module_id, b.b_component_id));
-  }
-  for (const pm of patchModules) {
-    const groups = new Map();
-    for (const j of (jacksByPatchModule.get(pm.id) || []).filter(
-      (c) =>
-        c.type === 'bidirectional_jack' &&
-        !switchJackKeys.has(jackKey(pm.id, c.id)) &&
-        !bridgedKeys.has(jackKey(pm.id, c.id))
-    )) {
-      const key = (j.group_label || '').trim().toLowerCase();
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(j);
-    }
-    for (const jacks of groups.values()) {
-      const input = jacks.find((j) => cabledInto.has(jackKey(pm.id, j.id)));
-      if (!input) continue;
-      for (const j of jacks) {
-        if (j.id === input.id) continue;
-        const from = jackKey(pm.id, j.id);
-        if (cablesOutOf.has(from)) {
-          edges.push({ from: jackKey(pm.id, input.id), to: from, kind: 'mult' });
-        }
+  // Mult copies: the section jack a cable lands in feeds every sibling that
+  // sends a cable onward. The sections come resolved from the topology, which
+  // is where a SWITCHED multiple's memberships are worked out from the
+  // control positions the patch records — and where switch-section and
+  // bridged jacks were left out, since a switch selects and a bridge pairs.
+  // A membership the patch has not pinned down (an A-182-1 whose bus toggle
+  // is unrecorded) makes the copy EXCLUSIVE: one of the possibilities, not
+  // something happening alongside the others.
+  // One pair of jacks is one copy, however many sections could be carrying
+  // it: a jack whose toggle is unrecorded stands in every bus it might be on,
+  // and drawing the same copy once per possibility would say the signal
+  // arrives twice.
+  const multEdges = new Set();
+  for (const section of mults) {
+    const input = section.jacks.find((j) =>
+      cabledInto.has(jackKey(j.patch_module_id, j.component_id))
+    );
+    if (!input) continue;
+    for (const j of section.jacks) {
+      if (j.component_id === input.component_id && j.patch_module_id === input.patch_module_id) {
+        continue;
       }
+      const from = jackKey(j.patch_module_id, j.component_id);
+      if (!cablesOutOf.has(from)) continue;
+      const pair = `${jackKey(input.patch_module_id, input.component_id)}->${from}`;
+      if (multEdges.has(pair)) continue;
+      multEdges.add(pair);
+      edges.push({
+        from: jackKey(input.patch_module_id, input.component_id),
+        to: from,
+        kind: 'mult',
+        exclusive: Boolean(input.exclusive || j.exclusive),
+        condition: j.condition ?? input.condition ?? null,
+      });
     }
   }
 

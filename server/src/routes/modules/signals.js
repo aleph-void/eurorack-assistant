@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { normalizationKind, BREAK_MODES } from '../../services/manualAnalyzer.js';
 import { linkedComponent, readCondition, requireOwnedModule } from './helpers.js';
 import {
+  multGroupJson,
   normalizationJson,
   pairJson,
   routeJson,
@@ -19,6 +20,7 @@ export function moduleSignalRoutes(db) {
     ComponentRoute,
     ComponentSwitch,
     ComponentSwitchStep,
+    ComponentMultGroup,
     ComponentPair,
   } = db.models;
   const router = Router();
@@ -269,6 +271,71 @@ export function moduleSignalRoutes(db) {
       await ComponentSwitchStep.destroy({ where: { switch_id: row.id }, transaction });
       await row.destroy({ transaction });
     });
+    res.json({ ok: true });
+  }));
+
+  // ---- switched mult groups ----
+  // Which mult section a bidirectional jack joins while a control sits at one
+  // position (Doepfer A-182-1: a three-position toggle per jack, putting it
+  // on bus 1, bus 2 or neither). A jack with no rows here keeps its
+  // unconditional group_label, so an ordinary mult needs none of this.
+  // Body: { component_id, condition_component_id, condition_value,
+  //         group_label?, description? } — no group_label means the jack is
+  // on no bus in that position, which is a real position to record.
+  router.post('/:id/mult-groups', requireOwnedModule(db), asyncHandler(async (req, res) => {
+    const module = req.module;
+    const jack = await ModuleComponent.findOne({
+      where: { id: Number(req.body?.component_id) || 0, module_id: module.id },
+    });
+    if (!jack || jack.type !== 'bidirectional_jack') {
+      return res
+        .status(400)
+        .json({ error: 'component_id must be a bidirectional jack of this module' });
+    }
+    const condition = await readCondition(db, module, req.body);
+    if (condition.error) return res.status(400).json({ error: condition.error });
+    if (!condition.fields.condition_component_id) {
+      return res.status(400).json({
+        error:
+          'a switched group names the control that decides it — a jack whose section never changes takes a group_label instead',
+      });
+    }
+    const label = String(req.body?.group_label || '').trim() || null;
+    // One position of one control decides one thing, so the same jack cannot
+    // be told twice what to do in it.
+    const clash = await ComponentMultGroup.findAll({
+      where: { module_id: module.id, component_id: jack.id },
+    });
+    const same = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+    if (
+      clash.some(
+        (row) =>
+          row.condition_component_id === condition.fields.condition_component_id &&
+          same(row.condition_value, condition.fields.condition_value)
+      )
+    ) {
+      return res.status(409).json({
+        error: `'${jack.name}' already has a group recorded for that position`,
+      });
+    }
+    const row = await ComponentMultGroup.create({
+      module_id: module.id,
+      component_id: jack.id,
+      group_label: label,
+      condition_component_id: condition.fields.condition_component_id,
+      condition_value: condition.fields.condition_value,
+      description: String(req.body?.description || '').trim() || null,
+    });
+    res.status(201).json(multGroupJson(row));
+  }));
+
+  router.delete('/:id/mult-groups/:groupId', requireOwnedModule(db), asyncHandler(async (req, res) => {
+    const module = req.module;
+    const row = await ComponentMultGroup.findOne({
+      where: { id: Number(req.params.groupId) || 0, module_id: module.id },
+    });
+    if (!row) return res.status(404).json({ error: 'Switched group not found' });
+    await row.destroy();
     res.json({ ok: true });
   }));
 

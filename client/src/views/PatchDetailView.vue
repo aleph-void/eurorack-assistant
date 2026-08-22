@@ -163,6 +163,7 @@ async function resyncLayout() {
       :modules="modules"
       :cables="patch.cables"
       :switches="patch.switches || []"
+      :mults="patch.mults || []"
       :label-for="moduleLabel"
       :rack-rows="patch.rack_layout"
       interactive

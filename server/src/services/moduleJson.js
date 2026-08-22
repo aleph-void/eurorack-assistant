@@ -83,6 +83,18 @@ export const switchJson = (s, stepComponentIds) => ({
   description: s.description,
 });
 
+// One position of a switched mult: the section this jack joins while the
+// control sits there. A null group_label means it is on no bus in that
+// position (an A-182-1 toggle's middle).
+export const multGroupJson = (g) => ({
+  id: g.id,
+  component_id: g.component_id,
+  group_label: g.group_label,
+  condition_component_id: g.condition_component_id,
+  condition_value: g.condition_value,
+  description: g.description,
+});
+
 export const pairJson = (p) => ({
   id: p.id,
   a_component_id: p.a_component_id,

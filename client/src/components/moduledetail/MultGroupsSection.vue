@@ -13,9 +13,18 @@
 //
 // Every label is a draft until Save: setting a 2x2 mult right is four writes,
 // and doing them a row at a time would re-read the module after each one.
+//
+// Some hardware does not have one answer to give. A Doepfer A-182-1 puts each
+// of its eight jacks on one of two internal buses with a three-position
+// toggle beside it, so which jacks are copies of each other is a fact about
+// the PATCH — the toggle positions it records — and no label on the jack
+// could hold it. Those jacks take a row per position instead
+// (component_mult_groups, migration 038), edited here beside the labels:
+// the control, the position, and the bus that position puts the jack on.
 
 import { computed, reactive, ref, toRef, watch } from 'vue';
 import { api } from '../../api.js';
+import { dialog } from '../../dialog.js';
 import { useModuleFacts } from './useModuleFacts.js';
 
 const props = defineProps({
@@ -24,7 +33,69 @@ const props = defineProps({
 });
 const emit = defineEmits(['reload']);
 
-const { componentName } = useModuleFacts(toRef(props, 'module'));
+const { componentName, controls, controlValues } = useModuleFacts(toRef(props, 'module'));
+
+// ---- switched jacks ----
+// The positions recorded for each jack: while this control sits here, the
+// jack is on that bus (or, with no label, on none of them).
+const switchedRows = computed(() => props.module?.mult_groups || []);
+const rowsOf = (jack) => switchedRows.value.filter((r) => r.component_id === jack.id);
+const positionText = (row) =>
+  `${componentName(row.condition_component_id)} = ${row.condition_value}`;
+
+// A control can only decide a jack's bus if the module says what positions it
+// has: an enum'd toggle or switch. One with no recorded positions is offered
+// anyway, since a value can be typed, but the picker is what makes this
+// bearable on a panel of eight toggles.
+const conditionControls = computed(() => controls.value);
+
+const addingFor = ref(null);
+const addControl = ref('');
+const addValue = ref('');
+const addLabel = ref('');
+const addError = ref('');
+const addValues = computed(() => controlValues(addControl.value));
+
+function startAdding(jack) {
+  addingFor.value = jack.id;
+  addControl.value = String(rowsOf(jack)[0]?.condition_component_id || '');
+  addValue.value = '';
+  addLabel.value = '';
+  addError.value = '';
+}
+
+async function addPosition(jack) {
+  addError.value = '';
+  try {
+    await api.post(`/api/modules/${props.moduleId}/mult-groups`, {
+      component_id: jack.id,
+      condition_component_id: Number(addControl.value),
+      condition_value: addValue.value.trim(),
+      group_label: addLabel.value.trim(),
+    });
+    addingFor.value = null;
+    emit('reload');
+  } catch (e) {
+    addError.value = e.message;
+  }
+}
+
+async function removePosition(jack, row) {
+  const ok = await dialog.confirm({
+    title: 'Remove switched position',
+    message: `Stop deciding ${jack.name}'s section by ${positionText(row)}?`,
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
+  addError.value = '';
+  try {
+    await api.delete(`/api/modules/${props.moduleId}/mult-groups/${row.id}`);
+    emit('reload');
+  } catch (e) {
+    addError.value = e.message;
+  }
+}
 
 // Named, not numbered, so listed by name — the order an analysis happened to
 // find them in is no order at all.
@@ -83,12 +154,24 @@ const changed = computed(() => jacks.value.filter((j) => draftOf(j) !== (j.group
 // which is the thing being edited even though the form is a list of jacks.
 const sections = computed(() => {
   const groups = new Map();
-  for (const jack of jacks.value) {
-    if (switchSectionOf(jack)) continue;
-    const label = draftOf(jack);
+  const join = (label, jack, when) => {
     const key = label.toLowerCase();
     if (!groups.has(key)) groups.set(key, { key, label, jacks: [] });
-    groups.get(key).jacks.push(jack);
+    groups.get(key).jacks.push({ name: jack.name, when });
+  };
+  for (const jack of jacks.value) {
+    if (switchSectionOf(jack)) continue;
+    const rows = rowsOf(jack);
+    if (rows.length === 0) {
+      join(draftOf(jack), jack, null);
+      continue;
+    }
+    // A switched jack stands in every bus it can be switched to; which one it
+    // is on is a fact of the patch, not of the module.
+    for (const row of rows) {
+      if (!String(row.group_label ?? '').trim()) continue;
+      join(String(row.group_label).trim(), jack, positionText(row));
+    }
   }
   return [...groups.values()].sort((a, b) => a.key.localeCompare(b.key));
 });
@@ -159,6 +242,15 @@ function revert() {
         belong to a routing switch section or to a dual module's link cable are paired rather than
         copied and take no group.
       </p>
+      <p class="muted" data-test="mult-groups-switched-blurb">
+        On a switched multiple — a Doepfer A-182-1, where a toggle beside each jack picks which of
+        two internal buses it sits on — no label on the jack could be right, because the answer
+        changes with the toggle. Give such a jack one row per position instead: the control, the
+        position, and the group that position puts it on (leave the group blank for a position that
+        takes it off the buses). A patch then reads the toggle positions it has recorded; while one
+        is not recorded the jack counts as a possibility on every bus it could be on, and nothing is
+        copied or refused on the strength of it.
+      </p>
 
       <p v-if="jacks.length === 0" class="muted" data-test="mult-groups-empty">
         No bidirectional jacks on this module yet. Turning a jack into one is on the
@@ -173,6 +265,7 @@ function revert() {
                 <th>Jack</th>
                 <th>Saved group</th>
                 <th>Group</th>
+                <th>Switched by</th>
               </tr>
             </thead>
             <tbody>
@@ -192,14 +285,83 @@ function revert() {
                   <input
                     v-model="drafts[jack.id]"
                     :list="`mult-group-labels-${moduleId}`"
-                    placeholder="Ungrouped"
+                    :disabled="rowsOf(jack).length > 0"
+                    :placeholder="rowsOf(jack).length ? 'decided by the switch' : 'Ungrouped'"
+                    :title="
+                      rowsOf(jack).length
+                        ? 'The positions beside this jack decide its section — the label is not read'
+                        : ''
+                    "
                     :data-test="`mult-group-input-${jack.id}`"
                   />
+                </td>
+                <td :data-test="`mult-switched-${jack.id}`">
+                  <ul v-if="rowsOf(jack).length" class="mult-positions">
+                    <li v-for="row in rowsOf(jack)" :key="row.id">
+                      <span>
+                        {{ positionText(row) }} →
+                        <strong>{{ row.group_label || 'no bus' }}</strong>
+                      </span>
+                      <button
+                        type="button"
+                        class="danger"
+                        :data-test="`mult-position-remove-${row.id}`"
+                        @click="removePosition(jack, row)"
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  </ul>
+                  <form
+                    v-if="addingFor === jack.id"
+                    class="mult-position-form"
+                    :data-test="`mult-position-form-${jack.id}`"
+                    @submit.prevent="addPosition(jack)"
+                  >
+                    <select v-model="addControl" :data-test="`mult-position-control-${jack.id}`">
+                      <option value="" disabled>Which control…</option>
+                      <option v-for="c in conditionControls" :key="c.id" :value="String(c.id)">
+                        {{ c.name }}
+                      </option>
+                    </select>
+                    <input
+                      v-model="addValue"
+                      :list="`mult-position-values-${jack.id}`"
+                      placeholder="Position (e.g. up)"
+                      :data-test="`mult-position-value-${jack.id}`"
+                    />
+                    <datalist :id="`mult-position-values-${jack.id}`">
+                      <option v-for="v in addValues" :key="v.id" :value="v.value"></option>
+                    </datalist>
+                    <input
+                      v-model="addLabel"
+                      :list="`mult-group-labels-${moduleId}`"
+                      placeholder="Group (blank = no bus)"
+                      :data-test="`mult-position-label-${jack.id}`"
+                    />
+                    <button
+                      :disabled="!addControl || !addValue.trim()"
+                      :data-test="`mult-position-save-${jack.id}`"
+                    >
+                      Add
+                    </button>
+                    <button type="button" class="secondary" @click="addingFor = null">Cancel</button>
+                  </form>
+                  <button
+                    v-else
+                    type="button"
+                    class="secondary"
+                    :data-test="`mult-position-add-${jack.id}`"
+                    @click="startAdding(jack)"
+                  >
+                    {{ rowsOf(jack).length ? 'Add position' : 'Switched…' }}
+                  </button>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
+        <p v-if="addError" class="error" data-test="mult-position-error">{{ addError }}</p>
         <datalist :id="`mult-group-labels-${moduleId}`">
           <option v-for="label in knownLabels" :key="label" :value="label"></option>
         </datalist>
@@ -228,7 +390,13 @@ function revert() {
         <ul v-if="sections.length" class="mult-sections" data-test="mult-sections">
           <li v-for="section in sections" :key="section.key" :data-test="`mult-section-${section.key || 'ungrouped'}`">
             <strong>{{ section.label || 'Ungrouped' }}</strong>
-            <span class="muted"> — {{ section.jacks.map((j) => j.name).join(', ') }}</span>
+            <span class="muted">
+              —
+              <template v-for="(j, i) in section.jacks" :key="j.name + (j.when || '')">
+                {{ i ? ', ' : '' }}{{ j.name
+                }}<template v-if="j.when"> (with {{ j.when }})</template>
+              </template>
+            </span>
             <em v-if="section.jacks.length < 2" class="muted">
               · one jack on its own copies nothing
             </em>
@@ -262,6 +430,36 @@ function revert() {
 </template>
 
 <style scoped>
+.mult-positions {
+  list-style: none;
+  margin: 0 0 0.4rem;
+  padding: 0;
+}
+.mult-positions li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.15rem 0;
+}
+.mult-positions button {
+  margin: 0;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.75rem;
+}
+.mult-position-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.mult-position-form select,
+.mult-position-form input {
+  width: auto;
+  margin: 0;
+}
+.mult-position-form button {
+  margin: 0;
+}
 .mult-sections {
   margin: 0;
   padding-left: 1.1rem;

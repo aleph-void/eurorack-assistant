@@ -8,6 +8,7 @@ import { parametersByModule } from '../../services/moduleParameters.js';
 import { requireOwnedModule } from './helpers.js';
 import {
   componentJson,
+  multGroupJson,
   normalizationJson,
   pairJson,
   routeJson,
@@ -25,6 +26,7 @@ export function moduleDetailRoutes(db) {
     ComponentRoute,
     ComponentSwitch,
     ComponentSwitchStep,
+    ComponentMultGroup,
     ComponentValue,
     ComponentPair,
     ModuleExpander,
@@ -112,6 +114,21 @@ export function moduleDetailRoutes(db) {
         'condition_component_id',
         'condition_value',
         'alt_group',
+        'description',
+      ],
+      order: [['id', 'ASC']],
+    });
+    // Which mult section a bidirectional jack joins in one position of a
+    // control — a switched multiple's per-jack bus toggles. A jack with none
+    // of these takes its unconditional group_label instead.
+    const multGroups = await ComponentMultGroup.findAll({
+      where: { module_id: module.id },
+      attributes: [
+        'id',
+        'component_id',
+        'group_label',
+        'condition_component_id',
+        'condition_value',
         'description',
       ],
       order: [['id', 'ASC']],
@@ -322,6 +339,7 @@ export function moduleDetailRoutes(db) {
       normalizations: normalizations.map(normalizationJson),
       routes: routes.map(routeJson),
       switches,
+      mult_groups: multGroups.map(multGroupJson),
       pairs: pairs.map(pairJson),
       expanders,
       expander_components: partnerComponents,

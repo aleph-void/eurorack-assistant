@@ -272,6 +272,25 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   reason; its siblings stay bidirectional, because a mult takes its input at
   exactly one of them and nothing yet says which. The cable pickers say the
   same thing in their hints (`switchRoleOf` in usePatchFacts.js).
+- WHICH JACKS ARE COPIES OF EACH OTHER IS NOT ALWAYS A FACT ABOUT THE MODULE.
+  A Doepfer A-182-1 puts each of its eight jacks on one of two internal buses
+  with a three-position toggle beside it, so no `group_label` could hold the
+  answer — it changes with the toggle. `component_mult_groups` (migration 038)
+  records one row per (jack, position): the control, the position, and the
+  group that position puts the jack on (a NULL label is a real answer — off
+  the buses). Same shape as the conditional routes and normalizations of
+  migration 008, and read the same way: `buildPatchTopology` resolves every
+  instance's sections against the patch's recorded settings and hands out
+  `mults` — the sections, onto instances, switch-section and bridged jacks
+  already excluded — and everything downstream reads THOSE rather than
+  grouping by label itself: `patchFlow.js` for the copy edges, the patch
+  payload for the picture, `PatchDiagram.vue` for which way a mult's jacks
+  point. A jack whose toggle the patch has not recorded stands in EVERY bus it
+  might be on, so a copy from it is exclusive (`condition.state === 'unset'`,
+  drawn as a possibility) and `cableProblem()` refuses nothing on the strength
+  of it — the mult rules bite on membership the patch is certain of. A jack
+  with no rows keeps its `group_label`, which is what every ordinary mult
+  still is. The rows are edited on `/jacks/bidirectional`.
 - A patch is made of the connections a person can reach, so a connector that
   is not a patch point never appears in one. `isPatchPoint()` (defined in
   `panelLayout.js`, re-exported by `usePatchFacts.js` so the diagram and the
