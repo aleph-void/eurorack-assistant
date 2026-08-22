@@ -22,8 +22,9 @@ jobs:
       fail-fast: false
       matrix:
         package: [server, client]
-        # 20 is what the server image ships; 22 is the current LTS.
-        node: ['20', '22']
+        # 24 is the oldest Node the packages declare support for; 26 is
+        # what both Docker images ship.
+        node: ['24', '26']
     defaults:
       run:
         working-directory: ${{ matrix.package }}
@@ -51,7 +52,7 @@ jobs:
       - name: Upload coverage to Codecov
         # One report per package is enough; the extra node version would only
         # duplicate the same lines.
-        if: matrix.node == '20'
+        if: matrix.node == '24'
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
