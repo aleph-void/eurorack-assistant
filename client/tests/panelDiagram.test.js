@@ -883,7 +883,8 @@ describe('PatchDiagram', () => {
 
   it('connects only when an output marker is dragged onto an input marker', async () => {
     const source = modules();
-    // A placed knob is visible in the diagram but cannot start a cable.
+    // A placed knob can be put on the picture from the key, but never starts
+    // a cable.
     source[0].components.push({ id: 9, type: 'knob', name: 'Rise' });
     source[0].panel.components.push({ component_id: 9, name: 'Rise', shape: 'knob', x: 0.5, y: 0.5, w: 0.06, h: 0.06 });
     const layout = layoutDiagram(source);
@@ -907,6 +908,9 @@ describe('PatchDiagram', () => {
       [{ from_patch_module_id: 11, from_component_id: 1, to_patch_module_id: 12, to_component_id: 3 }],
     ]);
 
+    // The knob is only on the picture once the key is pressed for it — and
+    // even then it is furniture, not a hole a cable goes in.
+    await wrapper.find('[data-test="legend-knob"]').trigger('click');
     await wrapper.find('[data-test="diagram-jack-11-9"]').trigger('pointerdown', {
       clientX: output.x,
       clientY: output.y,
@@ -914,6 +918,64 @@ describe('PatchDiagram', () => {
     });
     await svg.trigger('pointerup', { clientX: input.x, clientY: input.y, pointerId: 2 });
     expect(wrapper.emitted('connect')).toHaveLength(1);
+  });
+
+  // A studio is six thousand markers and all but the jacks are furniture no
+  // cable can go in: the picture opens on the jacks, and the key under it is
+  // where the rest of the front panel is asked for.
+  describe('the key is what the picture draws', () => {
+    const withControls = () => {
+      const source = modules();
+      source[0].components.push(
+        { id: 9, type: 'knob', name: 'Rise' },
+        { id: 10, type: 'toggle', name: 'Cycle' }
+      );
+      source[0].panel.components.push(
+        { component_id: 9, name: 'Rise', shape: 'knob', x: 0.5, y: 0.5, w: 0.06, h: 0.06 },
+        { component_id: 10, name: 'Cycle', shape: 'toggle', x: 0.2, y: 0.4, w: 0.06, h: 0.06 }
+      );
+      return source;
+    };
+    const markers = (wrapper) => wrapper.findAll('circle.jack-marker').length;
+
+    it('draws the jacks and nothing else until asked', () => {
+      const wrapper = mountDiagram({ modules: withControls() });
+      expect(markers(wrapper)).toBe(3);
+      // The key still names everything ON the picture, or there would be no
+      // way to ask for the knobs back.
+      expect(
+        wrapper.findAll('[data-test="component-legend"] > button').map((b) => b.text())
+      ).toEqual(['input jack', 'output jack', 'knob', 'toggle']);
+      expect(wrapper.find('[data-test="legend-input_jack"]').attributes('aria-pressed')).toBe(
+        'true'
+      );
+      expect(wrapper.find('[data-test="legend-knob"]').attributes('aria-pressed')).toBe('false');
+    });
+
+    it('puts another kind of thing on the picture at a press, one type at a time', async () => {
+      const wrapper = mountDiagram({ modules: withControls() });
+      await wrapper.find('[data-test="legend-knob"]').trigger('click');
+      expect(markers(wrapper)).toBe(4);
+      await wrapper.find('[data-test="legend-toggle"]').trigger('click');
+      expect(markers(wrapper)).toBe(5);
+      // And pressing one again takes only that one back off.
+      await wrapper.find('[data-test="legend-knob"]').trigger('click');
+      expect(markers(wrapper)).toBe(4);
+    });
+
+    it('takes a jack type off at a press too, down to the bare case', async () => {
+      const wrapper = mountDiagram({ modules: withControls() });
+      await wrapper.find('[data-test="legend-input_jack"]').trigger('click');
+      expect(markers(wrapper)).toBe(1);
+      await wrapper.find('[data-test="legend-output_jack"]').trigger('click');
+      expect(markers(wrapper)).toBe(0);
+      // The panels and the cable are still drawn — it is the case itself.
+      expect(wrapper.findAll('image')).toHaveLength(2);
+      expect(wrapper.find('[data-test="diagram-cable-21"]').exists()).toBe(true);
+      // …and the key is still there to put them back — both input jacks.
+      await wrapper.find('[data-test="legend-input_jack"]').trigger('click');
+      expect(markers(wrapper)).toBe(2);
+    });
   });
 });
 

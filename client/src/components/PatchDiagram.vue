@@ -332,13 +332,17 @@ const inView = (box) => {
   return !v || (box.x1 >= v.x0 && box.x0 <= v.x1 && box.y1 >= v.y0 && box.y0 <= v.y1);
 };
 
-// Zoomed out far enough, a marker is at its smallest and a panel is a couple
-// of hundred pixels wide: drawing every knob, LED and button on it turns the
-// case into a bead curtain and buries the jacks, which are the only things a
-// cable can go in. So the furniture appears as you zoom in to where you could
-// read it anyway. A jack is always drawn, at every zoom.
-const CONTROL_ZOOM = 0.55;
-const showControls = computed(() => zoom.value >= CONTROL_ZOOM);
+// WHAT KINDS OF THING THE PICTURE DRAWS — pressed in the key under it.
+// A studio is six thousand markers and all but the jacks are furniture no
+// cable can go in: drawing every knob, LED and button turns the case into a
+// bead curtain and buries the holes the patch is made of. So the picture
+// opens on the three jack types and nothing else, and every other type on it
+// is one press of the key away. Unlike the key under a module panel, this
+// selection IS what is drawn rather than a filter over everything: a jack
+// type presses off as readily as a knob presses on, and with none of them on
+// the picture is the bare case.
+const DEFAULT_MARKER_TYPES = ['input_jack', 'output_jack', 'bidirectional_jack'];
+const shownTypes = ref([...DEFAULT_MARKER_TYPES]);
 // Zoomed out past this — a whole studio taken in at once — a marker is two
 // pixels of a panel the size of a stamp, and six thousand of them are drawn
 // for nothing. The picture is then the case itself; the cables are still on
@@ -636,20 +640,18 @@ const directed = (a) => {
     color: component ? componentColor(type) : MARKER_NEUTRAL,
   };
 };
-// The markers built into the picture: the ones on a panel that is on screen.
-// Everything else about a marker — the legend below, what a cable may be
-// dragged to — is a fact about the whole diagram and keeps counting them all,
-// so scrolling never changes what the picture SAYS, only what it draws.
-// A direction only ever re-points a jack (a mult jack to an input or an
-// output), so the cheap test on the component's own type is the same test.
+// The markers built into the picture: the ones of a type the key has on, on
+// a panel that is on screen. Everything else about a marker — the legend
+// below, what a cable may be dragged to — is a fact about the whole diagram
+// and keeps counting them all, so scrolling never changes what the picture
+// SAYS, only what it draws. A marker is matched on what it is IN THIS PATCH,
+// the same reading the key is listed from, so a mult the patch has pointed
+// one way follows the entry it is now drawn under.
 const visibleAnchors = computed(() => {
   if (!showMarkers.value) return [];
+  const shown = new Set(shownTypes.value);
   return anchorBase.value
-    .filter(
-      (a) =>
-        visibleModuleIds.value.has(a.patchModuleId) &&
-        (showControls.value || Boolean(a.component?.type?.endsWith('_jack')))
-    )
+    .filter((a) => visibleModuleIds.value.has(a.patchModuleId) && shown.has(directedType(a)))
     .map(directed);
 });
 
@@ -1296,7 +1298,13 @@ const draftCable = computed(() =>
           {{ undrawn }} {{ undrawn === 1 ? 'cable is' : 'cables are' }} not drawn — an end of
           {{ undrawn === 1 ? 'it' : 'them' }} is a connection point with no place on a panel.
         </p>
-        <ComponentLegend :items="shownComponents" />
+        <ComponentLegend
+          :items="shownComponents"
+          selectable
+          :empty-shows-all="false"
+          :selected="shownTypes"
+          @update:selected="shownTypes = $event"
+        />
         <p class="muted" style="font-size: 0.85rem">
           <template v-if="interactive">
             Drag an output marker (or a bidirectional one) onto an input marker to patch it — the
@@ -1308,8 +1316,10 @@ const draftCable = computed(() =>
             ⌘-scroll zooms the picture. Controls and other component types cannot be wired here.
             <br />
           </template>
-          Panels are the front plates found for each module, or a drawing made from its manual
-          where no picture was found. A jack the picture does not place is out of frame and is
+          The key above is also what the picture draws: it opens on the jacks alone — press an
+          entry to take that kind of marker off, or to put the knobs, switches and the rest of
+          the front panel on. Panels are the front plates found for each module, or a drawing
+          made from its manual where no picture was found. A jack the picture does not place is out of frame and is
           not drawn — patch it from the cable list below, and correct where it sits on the
           module's own page.
         </p>
