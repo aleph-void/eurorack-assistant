@@ -39,6 +39,32 @@ const jackModule = {
   ],
 };
 
+// A module whose mult jacks are the point: a 2x2 mult the analysis left
+// ungrouped, plus a switch's jacks, which are bidirectional but not copies.
+const multModule = {
+  ...mathsModule,
+  panel,
+  components: [
+    ...mathsModule.components,
+    { id: 4, type: 'bidirectional_jack', name: 'M1 A', group_label: null },
+    { id: 5, type: 'bidirectional_jack', name: 'M1 B', group_label: null },
+    { id: 6, type: 'bidirectional_jack', name: 'M2 A', group_label: null },
+    { id: 7, type: 'bidirectional_jack', name: 'M2 B', group_label: null },
+    { id: 8, type: 'bidirectional_jack', name: 'SW COM', group_label: null },
+    { id: 9, type: 'bidirectional_jack', name: 'SW 1', group_label: null },
+  ],
+  switches: [
+    { id: 3, name: 'Router', common_component_id: 8, step_component_ids: [9] },
+  ],
+};
+
+const openWith = async (record, type) => {
+  api.get.mockResolvedValue(record);
+  const wrapper = mount(ModuleComponentTypeView, { props: { id: '1', type }, global: testGlobal() });
+  await flushPromises();
+  return wrapper;
+};
+
 const openType = async (type) => {
   api.get.mockResolvedValue(jackModule);
   const wrapper = mount(ModuleComponentTypeView, { props: { id: '1', type }, global: testGlobal() });
@@ -137,6 +163,79 @@ describe('ModuleComponentTypeView', () => {
     const displays = await openType('display');
     expect(displays.find('[data-test="jacks"] h2').text()).toBe('Displays');
     expect(displays.find('[data-test="panel-jacks-empty"]').exists()).toBe(true);
+  });
+
+  // A mult section IS its group label: a 2x2 mult left ungrouped is ONE
+  // section, so a cable into any of its four jacks copies to the other three.
+  // Setting that right is what this page is for.
+  it('sets the mult sections from the bidirectional page, in one save', async () => {
+    const wrapper = await openWith(multModule, 'bidirectional_jack');
+    expect(wrapper.find('[data-test="mult-section-ungrouped"]').text()).toContain('M1 A, M1 B');
+
+    await wrapper.find('[data-test="mult-group-input-4"]').setValue('1');
+    await wrapper.find('[data-test="mult-group-input-5"]').setValue('1');
+    await wrapper.find('[data-test="mult-group-input-6"]').setValue('2');
+    await wrapper.find('[data-test="mult-group-input-7"]').setValue('2');
+
+    // The sections say what the labels would make before anything is written.
+    expect(wrapper.find('[data-test="mult-section-1"]').text()).toContain('M1 A, M1 B');
+    expect(wrapper.find('[data-test="mult-section-2"]').text()).toContain('M2 A, M2 B');
+    expect(wrapper.find('[data-test="mult-groups-changed"]').text()).toContain('4 unsaved');
+
+    await wrapper.find('[data-test="mult-groups-save"]').trigger('click');
+    await flushPromises();
+
+    expect(api.put).toHaveBeenCalledTimes(4);
+    expect(api.put).toHaveBeenCalledWith('/api/modules/1/components/4', { group_label: '1' });
+    expect(api.put).toHaveBeenCalledWith('/api/modules/1/components/7', { group_label: '2' });
+  });
+
+  // A routing switch selects one step at a time; its jacks are bidirectional
+  // but they are not a mult, and neither the tracer nor the cable rules read
+  // a group off them.
+  it('leaves a switch section\'s jacks out of the mult sections, and says why', async () => {
+    const wrapper = await openWith(multModule, 'bidirectional_jack');
+    expect(wrapper.find('[data-test="mult-group-switch-8"]').text()).toContain('Router');
+    expect(wrapper.find('[data-test="mult-sections"]').text()).not.toContain('SW COM');
+  });
+
+  // A switch module's jacks are bidirectional and are NOT a mult, so the page
+  // they land on has to show the grouping they DO have and where it is built.
+  it('shows the module\'s switch sections beside the mult ones', async () => {
+    const wrapper = await openWith(multModule, 'bidirectional_jack');
+    const switches = wrapper.find('[data-test="switch-section-3"]');
+    expect(switches.text()).toContain('Router');
+    expect(switches.text()).toContain('SW COM');
+    expect(switches.text()).toContain('SW 1');
+    expect(wrapper.find('[data-test="mult-groups"]').text()).toContain('Switches');
+  });
+
+  // Nothing recorded is the case a switch module actually arrives in: the
+  // page has to say that a router is a section rather than a group.
+  it('says a router is a switch section rather than a group when none is recorded', async () => {
+    const wrapper = await openWith({ ...multModule, switches: [] }, 'bidirectional_jack');
+    expect(wrapper.find('[data-test="switch-sections-empty"]').text()).toContain('SELECTS');
+    // With no section recorded, every jack is grouped as a mult again.
+    expect(wrapper.find('[data-test="mult-sections"]').text()).toContain('SW COM');
+  });
+
+  it('offers the groups on the bidirectional page only', async () => {
+    const knobs = await openWith(multModule, 'knob');
+    expect(knobs.find('[data-test="mult-groups"]').exists()).toBe(false);
+    const mults = await openWith(multModule, 'bidirectional_jack');
+    expect(mults.find('[data-test="mult-groups"]').exists()).toBe(true);
+  });
+
+  it('keeps what was typed when a save fails part-way through', async () => {
+    api.put.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('nope'));
+    const wrapper = await openWith(multModule, 'bidirectional_jack');
+    await wrapper.find('[data-test="mult-group-input-4"]').setValue('1');
+    await wrapper.find('[data-test="mult-group-input-5"]').setValue('1');
+    await wrapper.find('[data-test="mult-groups-save"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="mult-groups-error"]').text()).toContain('1 of 2 saved');
+    expect(wrapper.find('[data-test="mult-group-input-5"]').element.value).toBe('1');
   });
 
   it('says so rather than offering an arrange with nothing to arrange on', async () => {

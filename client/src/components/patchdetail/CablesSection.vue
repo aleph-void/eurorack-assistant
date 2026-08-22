@@ -86,7 +86,7 @@ const fromJackOptions = computed(() => {
     } else if (feeding && c.type === 'bidirectional_jack') {
       hint = 'mult input — copies come out of the others';
     } else if (out) hint = out === 1 ? '1 cable already' : `${out} cables already`;
-    return { value: c.id, label: jackLabel(c), hint };
+    return { value: c.id, label: jackLabel(c, role), hint };
   });
 });
 
@@ -98,7 +98,7 @@ const toJackOptions = computed(() => {
     const taken = cableInto(pmId, c.id);
     return {
       value: c.id,
-      label: jackLabel(c),
+      label: jackLabel(c, switchRoleOf(pmId, c.id)),
       hint: taken ? `in use — ${taken.from_component_name} is patched here` : undefined,
       disabled: Boolean(taken),
     };

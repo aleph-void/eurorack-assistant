@@ -21,7 +21,7 @@ vi.mock('vue-router', async (importOriginal) => {
 import { api } from '../../src/api.js';
 import { dialog } from '../../src/dialog.js';
 import PatchCablesView from '../../src/views/PatchCablesView.vue';
-import { krellPatch, richPatch } from '../patchFixtures.js';
+import { krellPatch, richPatch, switchPatch } from '../patchFixtures.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -313,6 +313,28 @@ describe('PatchCablesView', () => {
     };
     expect(await jackNames('cable-from-module', 'cable-from-jack')).toContain('M1 (mult 1)');
     expect(await jackNames('cable-to-module', 'cable-to-jack')).toContain('M2 (mult 1)');
+  });
+
+  // A routing switch's jacks are bidirectional too and are the one thing a
+  // mult is not: a switch SELECTS the other side of its section where a mult
+  // COPIES to its siblings. Calling them mults in the picker is how a patch
+  // gets read wrong.
+  it('labels a switch section\'s jacks by their side, not as mults', async () => {
+    api.get.mockResolvedValue(switchPatch);
+    const wrapper = mount(PatchCablesView, { props: { id: '9' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+
+    await pick(wrapper, 'cable-from-module', 'a-151');
+    const box = wrapper.find('[data-test="cable-from-jack"]');
+    await box.trigger('focus');
+    const options = wrapper
+      .findAll('[data-test^="cable-from-jack-option-"]')
+      .map((o) => o.text())
+      .join(' ');
+    expect(options).toContain('I/O (switch common)');
+    expect(options).toContain('1 (switch step)');
+    expect(options).not.toContain('(mult)');
   });
 });
 

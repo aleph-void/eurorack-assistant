@@ -14,6 +14,7 @@
 
 import { computed, toRef } from 'vue';
 import ModuleDetailHeader from '../components/moduledetail/ModuleDetailHeader.vue';
+import MultGroupsSection from '../components/moduledetail/MultGroupsSection.vue';
 import PanelJacksSection from '../components/moduledetail/PanelJacksSection.vue';
 import { useArranging } from '../components/moduledetail/useArranging.js';
 import { useModuleRecord } from '../components/moduledetail/useModuleRecord.js';
@@ -84,5 +85,14 @@ const count = computed(
         </p>
       </div>
     </details>
+    <!-- Which of these jacks are copies of each other is a fact about the mult
+         rather than about any one jack, so it is edited here, over the whole
+         set, rather than a row at a time in the components table. -->
+    <MultGroupsSection
+      v-if="type === 'bidirectional_jack'"
+      :module="module"
+      :module-id="id"
+      @reload="load"
+    />
   </template>
 </template>
