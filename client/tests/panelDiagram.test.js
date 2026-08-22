@@ -338,13 +338,55 @@ describe('PatchDiagram', () => {
     expect(wrapper.emitted('disconnect')[0][0].id).toBe(21);
   });
 
+  // A touch screen has no alt key and no right button: a plain tap picks the
+  // cable out and the bar below the picture unplugs it, naming both ends
+  // first — a cable is one curve among forty on a whole studio.
+  it('unplugs a cable a plain tap picked out', async () => {
+    const wrapper = mountDiagram({ interactive: true });
+    expect(wrapper.find('[data-test="diagram-cable-bar"]').exists()).toBe(false);
+    await wrapper.find('[data-test="diagram-cable-21"]').trigger('click');
+    const bar = wrapper.find('[data-test="diagram-cable-bar"]');
+    expect(bar.text()).toContain('EOR');
+    expect(bar.text()).toContain('CH1 IN');
+    expect(wrapper.emitted('disconnect')).toBeUndefined();
+
+    await wrapper.find('[data-test="diagram-cable-unplug"]').trigger('click');
+    expect(wrapper.emitted('disconnect')[0][0].id).toBe(21);
+    expect(wrapper.find('[data-test="diagram-cable-bar"]').exists()).toBe(false);
+  });
+
+  // A cable is drawn seven pixels wide and a fingertip is nearer forty, so
+  // there is a fat invisible stroke over it to aim at.
+  it('gives every cable a handle wide enough for a finger', async () => {
+    const wrapper = mountDiagram({ interactive: true });
+    const hit = wrapper.find('[data-test="diagram-cable-hit-21"]');
+    expect(hit.attributes('d')).toBe(wrapper.find('[data-test="diagram-cable-21"]').attributes('d'));
+    expect(hit.attributes('stroke')).toBe('transparent');
+    await hit.trigger('click');
+    expect(wrapper.find('[data-test="diagram-cable-bar"]').text()).toContain('EOR');
+
+    // Nothing to unplug on a shared diagram, so nothing to aim at either.
+    expect(mountDiagram().find('[data-test="diagram-cable-hit-21"]').exists()).toBe(false);
+  });
+
+  // The second tap closes the bar again rather than leaving it standing.
+  it('lets a tap put a picked cable back', async () => {
+    const wrapper = mountDiagram({ interactive: true });
+    await wrapper.find('[data-test="diagram-cable-21"]').trigger('click');
+    await wrapper.find('[data-test="diagram-cable-21"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-cable-bar"]').exists()).toBe(false);
+    expect(wrapper.emitted('disconnect')).toBeUndefined();
+  });
+
   // A shared, read-only diagram keeps the browser's own context menu.
   it('leaves a read-only cable alone', async () => {
     const wrapper = mountDiagram();
     const path = wrapper.find('[data-test="diagram-cable-21"]');
     await path.trigger('click', { altKey: true });
     await path.trigger('contextmenu');
+    await path.trigger('click');
     expect(wrapper.emitted('disconnect')).toBeUndefined();
+    expect(wrapper.find('[data-test="diagram-cable-bar"]').exists()).toBe(false);
   });
 
   it('fetches each panel at the size it is painted, and re-asks when zoomed', async () => {
@@ -726,6 +768,101 @@ describe('PatchDiagram', () => {
     ]);
     // The editor closes with the correction made.
     expect(wrapper.find('[data-test="diagram-jack-editor"]').exists()).toBe(false);
+  });
+
+  // Patching on a phone: a drag is not available there — the picture scrolls
+  // under a finger — and the two jacks of a studio-wide cable are usually not
+  // on screen together anyway. So a cable is patched in two taps, with as
+  // much scrolling in between as it takes.
+  it('patches a cable with a tap at each end', async () => {
+    const wrapper = mountDiagram({ modules: modules(), cables: [], interactive: true });
+    await wrapper.find('[data-test="diagram-jack-11-1"]').trigger('click');
+    await wrapper.find('[data-test="diagram-jack-patch"]').trigger('click');
+
+    // The editor gives way to the bar that says which cable is being aimed.
+    expect(wrapper.find('[data-test="diagram-jack-editor"]').exists()).toBe(false);
+    const bar = wrapper.find('[data-test="diagram-patch-bar"]');
+    expect(bar.text()).toContain('EOR');
+    expect(bar.text()).toContain('Make Noise Maths');
+
+    // Everything the cable cannot reach fades back; the inputs stay lit.
+    expect(wrapper.find('[data-test="diagram-jack-11-1"]').classes()).not.toContain('dimmed');
+    expect(wrapper.find('[data-test="diagram-jack-12-3"]').classes()).not.toContain('dimmed');
+
+    await wrapper.find('[data-test="diagram-jack-12-3"]').trigger('click');
+    expect(wrapper.emitted('connect')).toEqual([
+      [{ from_patch_module_id: 11, from_component_id: 1, to_patch_module_id: 12, to_component_id: 3 }],
+    ]);
+    expect(wrapper.find('[data-test="diagram-patch-bar"]').exists()).toBe(false);
+  });
+
+  // A mis-tap on a jack the cable cannot reach must not quietly throw the
+  // half-made cable away; tapping the jack it came out of is what puts it back.
+  it('holds an aimed cable until it lands or is cancelled', async () => {
+    const source = modules();
+    // A second output: a jack, so the picture draws it whatever the key is
+    // pressed for, and nowhere a cable can END.
+    source[0].components.push({ id: 8, type: 'output_jack', name: 'EOF' });
+    source[0].panel.components.push({
+      component_id: 8,
+      name: 'EOF',
+      shape: 'jack',
+      x: 0.5,
+      y: 0.7,
+      w: 0.06,
+      h: 0.06,
+    });
+    const wrapper = mountDiagram({ modules: source, cables: [], interactive: true });
+    await wrapper.find('[data-test="diagram-jack-11-1"]').trigger('click');
+    await wrapper.find('[data-test="diagram-jack-patch"]').trigger('click');
+
+    const output = wrapper.find('[data-test="diagram-jack-11-8"]');
+    expect(output.classes()).toContain('dimmed');
+    await output.trigger('click');
+    expect(wrapper.emitted('connect')).toBeUndefined();
+    expect(wrapper.find('[data-test="diagram-patch-bar"]').exists()).toBe(true);
+
+    // Back to where it came from, and no cable made.
+    await wrapper.find('[data-test="diagram-jack-11-1"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-patch-bar"]').exists()).toBe(false);
+
+    // …and Cancel does the same from the bar itself.
+    await wrapper.find('[data-test="diagram-jack-11-1"]').trigger('click');
+    await wrapper.find('[data-test="diagram-jack-patch"]').trigger('click');
+    await wrapper.find('[data-test="diagram-patch-cancel"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-patch-bar"]').exists()).toBe(false);
+    expect(wrapper.emitted('connect')).toBeUndefined();
+  });
+
+  // An input jack has nothing to send, so it is not offered as one end of a
+  // new cable — the same rule the drag follows.
+  it('offers to patch only from a jack a cable can leave', async () => {
+    const wrapper = mountDiagram({ interactive: true });
+    await wrapper.find('[data-test="diagram-jack-12-3"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-jack-editor"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="diagram-jack-patch"]').exists()).toBe(false);
+  });
+
+  // The finger that would start a drag is the one that scrolls the picture:
+  // claiming it would leave a phone unable to scroll past the diagram, and
+  // would swallow the tap the two-tap gesture is made of.
+  it('leaves a touch on a marker to the browser', async () => {
+    const wrapper = mountDiagram({ modules: modules(), cables: [], interactive: true });
+    const layout = layoutDiagram(modules());
+    const svg = wrapper.find('[data-test="diagram-svg"]');
+    Object.defineProperty(svg.element, 'getBoundingClientRect', {
+      value: () => ({ left: 0, top: 0, width: layout.width, height: layout.height }),
+    });
+    const from = layout.anchors.get('11:1');
+    const to = layout.anchors.get('12:3');
+    await wrapper.find('[data-test="diagram-jack-11-1"]').trigger('pointerdown', {
+      pointerType: 'touch',
+      clientX: from.x,
+      clientY: from.y,
+      pointerId: 1,
+    });
+    await svg.trigger('pointerup', { clientX: to.x, clientY: to.y, pointerId: 1 });
+    expect(wrapper.emitted('connect')).toBeUndefined();
   });
 
   it('leaves the jacks of a read-only diagram alone', async () => {

@@ -197,6 +197,26 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   A cable is also what you alt-click to unplug, so its stroke is widened by
   the zoom below 1:1 (`--cable-width`) rather than thinning to a hairline
   nothing can hit.
+- A FINGER HAS NO ALT KEY, NO RIGHT BUTTON AND NO DRAG. The picture scrolls
+  under a touch — that is the gesture `startPan` and `startCable` both hand
+  straight back to the browser — so every gesture the diagram is patched with
+  has a TAP that does the same thing, and a phone is where that is the only
+  one there is. A cable is patched in two taps: tap the output marker, press
+  'Patch from here' in the jack bar, then tap the input (`patchFrom` in
+  PatchDiagram.vue) — with as much scrolling in between as it takes, because
+  a studio's two jacks are rarely on screen together, which is the same
+  reason the drag was never enough. While one is held, every marker and every
+  cable the picture is not asking about is DIMMED, so what is left lit is
+  where the cable may land. A cable is unplugged by tapping it: that picks it
+  out and names both its ends in a bar under the picture, and alt- or
+  right-click still does it in one. A drawn cable is seven pixels wide and a
+  fingertip is nearer forty, so each one also has an invisible stroke three
+  times its width to be tapped at (`.cable-hit`) — and that handle sits UNDER
+  the markers while the cable itself goes deaf (`pointer-events: none` on
+  `.cable.unpluggable`), because a cable's two ends lie exactly on the two
+  jacks it joins and a mult's second cable has to be startable from the
+  output the first one is already in: the middle of a cable is the cable, its
+  ends are the jacks.
 - ONLY WHAT IS ON SCREEN IS BUILT. A studio is two hundred panels and six
   thousand markers, and the picture is far wider than any screen: the diagram
   renders the panels whose box intersects the scroll viewport (plus a margin),
