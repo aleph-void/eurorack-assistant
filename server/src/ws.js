@@ -142,7 +142,7 @@ export function attachWebSocketServer(
         })
       );
       ws.on('message', (data) => {
-        let message = null;
+        let message;
         try {
           message = JSON.parse(data.toString());
         } catch {

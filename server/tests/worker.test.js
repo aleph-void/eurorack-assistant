@@ -34,6 +34,20 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(manualsDir, { recursive: true, force: true });
 });
+// A background worker is done when the queue says so, not after a fixed
+// sleep: the poll loop is what is under test, and a CI box under load takes
+// longer to get through a job than any number picked here would allow. Waits
+// for the condition and says what it last saw if it never comes.
+const waitFor = async (what, describe, timeoutMs = 10000) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const seen = await what();
+    if (seen) return seen;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${await describe()}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+};
+
 // Stands in for pdftotext: the extraction is exercised for real in
 // manualText.test.js, and no test should need poppler installed.
 const fakeExtract = async (db, manual, module) => {
@@ -1033,7 +1047,10 @@ describe('worker', () => {
     });
     worker.start();
     try {
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await waitFor(
+        async () => (await db.query('SELECT status FROM jobs')).rows[0].status === 'complete',
+        async () => `the job to finish, last: ${(await db.query('SELECT status FROM jobs')).rows[0].status}`
+      );
     } finally {
       worker.stop();
     }
@@ -1068,13 +1085,10 @@ describe('worker', () => {
     });
     worker.start();
     try {
-      const deadline = Date.now() + 5000;
-      for (;;) {
-        const { rows } = await db.query('SELECT status FROM jobs');
-        if (rows.every((r) => r.status === 'complete')) break;
-        if (Date.now() > deadline) throw new Error(`jobs did not finish: ${JSON.stringify(rows)}`);
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
+      await waitFor(
+        async () => (await db.query('SELECT status FROM jobs')).rows.every((r) => r.status === 'complete'),
+        async () => `every job to finish, last: ${JSON.stringify((await db.query('SELECT status FROM jobs')).rows)}`
+      );
     } finally {
       worker.stop();
     }
@@ -1370,8 +1384,14 @@ describe('worker', () => {
       );
       const claimedAt = new Date();
       worker.start();
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      await worker.stop();
+      try {
+        await waitFor(
+          () => beat,
+          () => 'the job to reach the backend and read its own heartbeat'
+        );
+      } finally {
+        await worker.stop();
+      }
       expect(beat).toBeTruthy();
       expect(new Date(beat).getTime()).toBeGreaterThanOrEqual(claimedAt.getTime());
     });

@@ -49,8 +49,8 @@ export function patchSettingRoutes(db) {
     const value = String(req.body?.value ?? '').trim();
     if (!value) return res.status(400).json({ error: 'value is required' });
 
-    let where = null;
-    let fields = null;
+    let where;
+    let fields;
     if (req.body?.parameter_id !== undefined && req.body?.parameter_id !== null && req.body?.parameter_id !== '') {
       const target = await resolveParameter(patch, req.body?.patch_module_id, req.body.parameter_id);
       if (target.error) return res.status(400).json({ error: target.error });

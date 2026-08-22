@@ -66,7 +66,7 @@ export function moduleVideoRoutes(db, { videosDir, fetchImpl, runImpl } = {}) {
     const rawPage = req.body?.page;
     const page = rawPage === undefined || rawPage === null ? '' : String(rawPage);
     let videos;
-    let nextPage = null;
+    let nextPage;
     try {
       if (apiKey) {
         if (page && !/^[A-Za-z0-9_=-]{1,128}$/.test(page)) {

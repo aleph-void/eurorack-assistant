@@ -484,7 +484,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 
 ## Development
 
-Server (Node 20+):
+Server (Node 24+):
 
 ```sh
 cd server
@@ -493,7 +493,7 @@ npm test          # vitest + supertest + pg-mem (no database needed)
 npm start         # needs DATABASE_URL or POSTGRES_* env vars
 ```
 
-Client:
+Client (Node 24+):
 
 ```sh
 cd client
@@ -507,7 +507,7 @@ database are all injected fakes (`pg-mem` in-memory Postgres for the server).
 
 Both suites also run with coverage (`npm run test:coverage`, writing
 `coverage/lcov.info`). CI runs lint, tests and coverage for both packages on
-Node 20 and 22, builds the client, and builds both Docker images; CodeQL,
+Node 24 and 26, builds the client, and builds both Docker images; CodeQL,
 dependency review, `npm audit` and an OpenSSF Scorecard run alongside, and
 Dependabot keeps npm, GitHub Actions and the base images current. Coverage is
 uploaded to Codecov — set the repository secret `CODECOV_TOKEN` (Codecov is

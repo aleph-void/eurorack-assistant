@@ -4,6 +4,9 @@
   "description": "Express API for asking LLMs about your eurorack modules",
   "type": "module",
   "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "start": "node src/index.js",
     "migrate": "node scripts/migrate.js",
@@ -29,12 +32,12 @@
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.2.0",
     "@vitest/coverage-v8": "^4.1.10",
-    "eslint": "^9.39.5",
+    "eslint": "^10.8.1",
     "globals": "^17.11.0",
     "moment": "^2.30.1",
     "pg-mem": "^3.0.14",
     "supertest": "^7.0.0",
     "typescript": "^7.0.2",
-    "vitest": "^2.0.5"
+    "vitest": "^4.1.11"
   }
 }
