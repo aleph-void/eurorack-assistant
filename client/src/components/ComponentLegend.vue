@@ -19,8 +19,14 @@ const props = defineProps({
   // Whether the entries filter the picture they belong to. A key under a
   // picture nothing filters stays a key.
   selectable: { type: Boolean, default: false },
-  // The types currently shown, or [] for all of them.
+  // The types currently shown, read against `emptyShowsAll`.
   selected: { type: Array, default: () => [] },
+  // What an EMPTY selection means, which is the one thing the entries' words
+  // turn on. Under a module panel nothing pressed shows the WHOLE panel, so
+  // an entry offers to show one type by itself; under the patch diagram the
+  // pressed entries ARE the picture (it opens on the jacks alone), so an
+  // entry offers to add its own type or take it away.
+  emptyShowsAll: { type: Boolean, default: true },
 });
 const emit = defineEmits(['update:selected']);
 
@@ -31,6 +37,18 @@ const entries = computed(() =>
     on: props.selected.includes(type),
   }))
 );
+
+// What pressing this entry would do, in the words the picture it belongs to
+// makes true.
+function entryTitle(entry) {
+  const label = typeLabel(entry.type);
+  if (props.emptyShowsAll) {
+    return entry.on
+      ? `Showing only these — press to stop filtering by ${label}`
+      : `Show only the ${label} on this panel`;
+  }
+  return entry.on ? `Stop drawing the ${label}` : `Draw the ${label} on this picture too`;
+}
 
 function toggle(type) {
   const next = props.selected.includes(type)
@@ -49,13 +67,7 @@ function toggle(type) {
       :type="selectable ? 'button' : undefined"
       :class="{ selectable, on: entry.on }"
       :aria-pressed="selectable ? String(entry.on) : undefined"
-      :title="
-        selectable
-          ? entry.on
-            ? `Showing only these — press to stop filtering by ${typeLabel(entry.type)}`
-            : `Show only the ${typeLabel(entry.type)} on this panel`
-          : undefined
-      "
+      :title="selectable ? entryTitle(entry) : undefined"
       :data-test="`legend-${entry.type}`"
       @click="selectable && toggle(entry.type)"
     >
