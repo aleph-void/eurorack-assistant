@@ -742,6 +742,12 @@ const OWN_GESTURE = 'circle, .jack-editor, input, select, button, a, textarea';
 
 function startPan(event) {
   if (dragging.value || panning.value) return;
+  // A finger already moves the picture: the box scrolls, and taking the
+  // gesture over would replace the browser's own two-axis drag (with its
+  // momentum, and its handover to the page at the edges) with a worse copy —
+  // and, since claiming it means preventDefault, would leave a phone unable
+  // to scroll PAST a diagram that is most of the screen.
+  if (event.pointerType === 'touch') return;
   if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey) return;
   if (event.target?.closest?.(OWN_GESTURE)) return;
   const el = wrap.value;
@@ -1130,6 +1136,14 @@ const draftCable = computed(() =>
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.5rem;
+}
+/* On a phone the picture is nearly the whole screen at 80vh, and it holds
+   its own scrolling (`overscroll-behavior: contain`) — so there has to be
+   page left above and below it to take hold of. */
+@media (max-width: 767px) {
+  .diagram-wrap {
+    max-height: 60vh;
+  }
 }
 .diagram-wrap.panning {
   cursor: grabbing;

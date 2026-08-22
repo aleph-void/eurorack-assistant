@@ -64,14 +64,14 @@ function normalizationStatus(n) {
               :key="`${n.patch_module_id}-${n.normalization_id}`"
               :data-test="`normalled-${n.patch_module_id}-${n.normalization_id}`"
             >
-              <td>{{ moduleLabel(modulesById.get(n.patch_module_id)) }}</td>
-              <td>{{ n.target_component_name }}</td>
-              <td>{{ n.source_component_name || n.source_label }}</td>
-              <td>
+              <td data-label="Module">{{ moduleLabel(modulesById.get(n.patch_module_id)) }}</td>
+              <td data-label="Jack">{{ n.target_component_name }}</td>
+              <td data-label="Normalled to">{{ n.source_component_name || n.source_label }}</td>
+              <td data-label="Only when">
                 {{ conditionText(n.condition) || 'always' }}
                 <span v-if="n.exclusive" class="badge pending">one of several</span>
               </td>
-              <td>
+              <td data-label="In this patch">
                 <span class="badge" :class="n.active ? 'found' : 'pending'">
                   {{ n.active ? 'active' : 'overridden' }}
                 </span>

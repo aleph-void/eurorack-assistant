@@ -292,7 +292,7 @@ async function removeOption(parameter, option) {
                 :key="parameter.id"
                 :data-test="`parameter-${parameter.id}`"
               >
-                <td>
+                <td data-label="Parameter">
                   <template v-if="editingId === parameter.id">
                     <input v-model="edit.name" :data-test="`edit-parameter-name-${parameter.id}`" />
                     <select v-model="edit.component_id" :data-test="`edit-parameter-component-${parameter.id}`">
@@ -313,7 +313,7 @@ async function removeOption(parameter, option) {
                     <div v-if="parameter.description" class="muted">{{ parameter.description }}</div>
                   </template>
                 </td>
-                <td>
+                <td data-label="Takes">
                   <template v-if="editingId === parameter.id">
                     <select v-model="edit.value_type" :data-test="`edit-parameter-type-${parameter.id}`">
                       <option v-for="t in VALUE_TYPES" :key="t.value" :value="t.value">
@@ -336,7 +336,7 @@ async function removeOption(parameter, option) {
                     </div>
                   </template>
                 </td>
-                <td>
+                <td data-label="Settings">
                   <ul v-if="optionsOf(parameter).length" class="option-list">
                     <li
                       v-for="option in optionsOf(parameter)"

@@ -86,13 +86,13 @@ async function removeBridge(bridge) {
           </thead>
           <tbody>
             <tr v-for="b in bridges" :key="b.id" :data-test="`bridge-${b.id}`">
-              <td>
+              <td data-label="Other panel">
                 <template v-if="b.self">a second copy of this module</template>
                 <RouterLink v-else-if="b.module_id" :to="`/modules/${b.module_id}`">
                   {{ b.manufacturer }} {{ b.name }}
                 </RouterLink>
               </td>
-              <td>
+              <td data-label="Wires">
                 {{ b.jacks?.length ? `${b.jacks.length} paired by hand` : 'paired by jack name' }}
               </td>
               <td>

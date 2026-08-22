@@ -35,15 +35,15 @@ const { modules, groupsById, multiRack, moduleLabel } = usePatchFacts(patch);
           </thead>
           <tbody>
             <tr v-for="pm in modules" :key="pm.id" :data-test="`patch-module-${pm.id}`">
-              <td>
+              <td data-label="Module">
                 <RouterLink v-if="pm.live" :to="`/modules/${pm.module_id}`">
                   {{ moduleLabel(pm) }}
                 </RouterLink>
                 <template v-else>{{ moduleLabel(pm) }}</template>
               </td>
-              <td v-if="multiRack">{{ pm.rack_name || '—' }}</td>
-              <td>{{ groupsById.get(pm.group_id)?.name || '—' }}</td>
-              <td>
+              <td v-if="multiRack" data-label="Rack">{{ pm.rack_name || '—' }}</td>
+              <td data-label="Bus">{{ groupsById.get(pm.group_id)?.name || '—' }}</td>
+              <td data-label="Status">
                 <span
                   class="badge"
                   :class="pm.live ? 'found' : pm.external ? 'pending' : 'failed'"

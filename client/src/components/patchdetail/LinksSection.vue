@@ -83,12 +83,12 @@ async function removeLink(link) {
           </thead>
           <tbody>
             <tr v-for="link in links" :key="link.id" :data-test="`link-${link.id}`">
-              <td>
+              <td data-label="Modules">
                 {{ moduleLabel(modulesById.get(link.a_patch_module_id)) }} ↔
                 {{ moduleLabel(modulesById.get(link.b_patch_module_id)) }}
               </td>
-              <td>{{ link.kind }}</td>
-              <td>
+              <td data-label="Kind">{{ link.kind }}</td>
+              <td data-label="Bridged jacks">
                 {{
                   link.jacks.length
                     ? link.jacks.map((j) => `${j.a_component_name}↔${j.b_component_name}`).join(', ')

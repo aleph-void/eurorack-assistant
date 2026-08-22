@@ -721,7 +721,7 @@ async function nudge(rowIndex, index, delta) {
         </thead>
         <tbody>
           <tr v-for="rack in racks" :key="rack.id" :data-test="`rack-${rack.id}`">
-            <td>
+            <td data-label="Name">
               <template v-if="renamingId === rack.id">
                 <form class="actions" @submit.prevent="rename(rack)">
                   <input v-model="renameValue" :data-test="`rename-input-${rack.id}`" />
@@ -735,8 +735,8 @@ async function nudge(rowIndex, index, delta) {
                 </RouterLink>
               </template>
             </td>
-            <td>{{ rack.module_count }}</td>
-            <td>
+            <td data-label="Modules">{{ rack.module_count }}</td>
+            <td data-label="System">
               <select
                 :value="rack.system_id ?? ''"
                 :data-test="`system-${rack.id}`"
@@ -749,7 +749,7 @@ async function nudge(rowIndex, index, delta) {
                 </option>
               </select>
             </td>
-            <td>
+            <td data-label="Layout">
               <button
                 class="secondary"
                 style="margin: 0"

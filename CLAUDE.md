@@ -286,6 +286,21 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   A name the USER typed and cannot have is refused (409, the name in the
   message); one the APP made up for them — a clone's `(copy)`, the name an
   imported file carries — takes the next free `<name> 2`, `<name> 3` instead.
+- A TABLE ROW IS A CARD ON A PHONE. A table is columns beside each other and
+  a phone has room for about two of them, so under 768px every `.table-wrap`
+  table stops being columns: each row becomes a small bordered block, one line
+  per column, with the column's own name in front of the value. The name comes
+  from the cell's `data-label`, which every `<td>` under a heading that has
+  text must carry — `tests/tableLabels.test.js` fails the build otherwise,
+  because a missing one is invisible on a desk and obvious on a train. Cells
+  that speak for themselves take no label: one under an empty heading (the
+  tick that picks a row, the bar of buttons that acts on it) and one that
+  spans the row. The columns pinned to an edge for a sideways scroll
+  (`.module-actions-cell` and friends) are unpinned there — nothing scrolls
+  sideways any more, and pinning the buttons over the module NAME was what
+  made that list unreadable on a phone in the first place. Above that width a
+  table still scrolls, and says so: `.table-wrap` carries a shadow at whichever
+  edge still has columns behind it.
 - Failures are said twice: inline where the work is, and as a toast over the
   page (`client/src/toast.js` + `components/ToastStack.vue`, mounted once in
   `App.vue`, styled in `style.css`). `api.js` raises the red one itself for

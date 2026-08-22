@@ -340,15 +340,15 @@ defineExpose({ connectCable, removeCable });
           </thead>
           <tbody>
             <tr v-for="cable in patch.cables" :key="cable.id" :data-test="`cable-${cable.id}`">
-              <td>
+              <td data-label="From (output)">
                 {{ moduleLabel(modulesById.get(cable.from_patch_module_id)) }} —
                 <strong>{{ cable.from_component_name }}</strong>
               </td>
-              <td>
+              <td data-label="To (input)">
                 {{ moduleLabel(modulesById.get(cable.to_patch_module_id)) }} —
                 <strong>{{ cable.to_component_name }}</strong>
               </td>
-              <td>
+              <td data-label="Notes">
                 <span v-if="cable.optional" class="badge pending">optional</span>
                 <span v-if="cable.stacked" class="badge found">stacked</span>
                 <span v-if="cable.alt_group" class="badge pending">{{ cable.alt_group }}</span>

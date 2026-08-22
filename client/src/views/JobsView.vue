@@ -340,18 +340,18 @@ onMounted(async () => {
         </thead>
         <tbody>
           <tr v-for="job in jobs.jobs" :key="job.id">
-            <td>{{ job.id }}</td>
-            <td>{{ job.type }}</td>
-            <td>{{ describeJob(job) }}</td>
-            <td>
+            <td data-label="#">{{ job.id }}</td>
+            <td data-label="Type">{{ job.type }}</td>
+            <td data-label="Target">{{ describeJob(job) }}</td>
+            <td data-label="Status">
               <span class="badge" :class="job.status">{{ job.status }}</span>
               <!-- Running, but its worker died holding it. -->
               <span v-if="job.stalled" class="badge failed" :data-test="`stalled-${job.id}`">
                 stalled
               </span>
             </td>
-            <td>{{ job.attempts }}</td>
-            <td class="muted">{{ job.error || '' }}</td>
+            <td data-label="Attempts">{{ job.attempts }}</td>
+            <td data-label="Error" class="muted">{{ job.error || '' }}</td>
             <!-- Up to four controls share this cell (Download, Retry, Stop,
                  Delete). The cell claims only the width they need and the bar
                  inside holds them on one line: the error column beside it

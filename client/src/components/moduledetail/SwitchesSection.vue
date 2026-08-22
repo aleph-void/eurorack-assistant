@@ -89,9 +89,9 @@ async function removeSwitch(section) {
           </thead>
           <tbody>
             <tr v-for="s in module.switches" :key="s.id" :data-test="`switch-${s.id}`">
-              <td>{{ s.name || `Switch ${s.id}` }}</td>
-              <td>{{ componentName(s.common_component_id) }}</td>
-              <td>{{ s.step_component_ids.map(componentName).join(', ') }}</td>
+              <td data-label="Section">{{ s.name || `Switch ${s.id}` }}</td>
+              <td data-label="Common">{{ componentName(s.common_component_id) }}</td>
+              <td data-label="Steps">{{ s.step_component_ids.map(componentName).join(', ') }}</td>
               <td>
                 <button
                   class="danger"
