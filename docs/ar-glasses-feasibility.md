@@ -10,12 +10,14 @@ does not hold up.** The three are worth separating, because they are three
 different projects with three different risk profiles, and only the third one is
 in doubt.
 
-The target hardware is the **Xreal One Pro**, and that choice settles more of
-the design than it looks. It is a display rather than an AR computer: no camera,
-no world tracking, all compute on a host it is plugged into. That sounds like a
-limitation and is mostly an escape — it pushes the camera off your head and onto
-the case, which removes the two hardest problems below and improves the third.
-Section "The hardware" is the argument.
+Two devices are under consideration — the **Xreal One Pro** and the **RayNeo
+X3 Pro** — and they are opposites: a large bright display with no camera and no
+compute, against a standalone computer with cameras and a much smaller window to
+draw in. The hardware section compares them. The conclusion there is the one
+worth carrying into everything else: **whichever glasses you buy, the camera
+that watches the patch should be on the case, not on your face.** That single
+decision removes the two hardest problems below and improves the third, and it
+is what the estimates assume.
 
 This document is an assessment, not a plan of record. It says what the codebase
 already gives such a feature, what would have to be built, what the hardware can
@@ -25,7 +27,7 @@ actually do, and where the accuracy ceiling sits.
 - [1. Plumbing: mostly already here](#1-plumbing-mostly-already-here)
 - [2. Recognising the module and the panel](#2-recognising-the-module-and-the-panel)
 - [3. Tracking the cables](#3-tracking-the-cables)
-- [The hardware: Xreal One Pro](#the-hardware-xreal-one-pro)
+- [The hardware: two candidates](#the-hardware-two-candidates)
 - [What would have to be built](#what-would-have-to-be-built)
 - [Effort, in the order I would do it](#effort-in-the-order-i-would-do-it)
 - [Risks worth stating up front](#risks-worth-stating-up-front)
@@ -68,8 +70,8 @@ code behind it is not scope-specific:
   the user's own browser sockets, which is how a page would light up when the
   glasses connect and how a proposed cable would arrive on screen.
 - **Storing pictures.** `services/captures.js` is the pattern for images a
-  device supplies: content-addressed by sha256, written to a temp name and renamed, and
-  deleted only once nothing references the bytes.
+  device supplies: content-addressed by sha256, written to a temp name and then
+  renamed, and deleted only once nothing references the bytes.
 
 Four things genuinely have to change, and they are all small and all
 identifiable:
@@ -278,111 +280,123 @@ something to skip.
 
 ---
 
-## The hardware: Xreal One Pro
+## The hardware: two candidates
 
-The target is the **Xreal One Pro**, and choosing it settles the architecture —
-in a way that turns out to help.
+Two devices are on the table, and they are opposites. The Xreal One Pro is a
+**display** with no camera and no compute; the RayNeo X3 Pro is a **standalone
+computer with cameras** and a much smaller window to draw in. Which one to buy
+depends on which half of this feature you care about, and the honest answer is
+that the cable-tracking half wants neither of them holding the camera.
 
-### What the device is
+| | **Xreal One Pro** | **RayNeo X3 Pro** |
+| --- | --- | --- |
+| Optics | Birdbath, micro-OLED | Waveguide, micro-LED |
+| Field of view | ~57° diagonal — large | Waveguide-typical, roughly 25–30° — small |
+| Brightness | Moderate; fine in a studio | Very high (marketed ~2,500 nits to the eye) |
+| Compute | **None.** A host drives it over USB-C DisplayPort | **On board.** Snapdragon AR1 Gen 1, standalone Android |
+| Camera | **None.** The clip-on Eye, or nothing | **Yes**, plus the sensors for gesture and spatial features |
+| Pose | 3DoF anchoring of a virtual screen (X1 chip) | 6DoF-class tracking on device |
+| Weight / tether | Light, but tethered to a host | ~76 g and free-standing |
+| Developer story | Mature, and the fixed-camera design needs no SDK at all | Younger, China-first; the go/no-go unknown |
 
-It is an **optical see-through display**, not a self-contained AR computer.
-Micro-OLED, 1080p per eye, around 57° diagonal field of view, an on-board X1
-chip that holds a virtual screen still in 3DoF, and a USB-C DisplayPort input.
-Everything else — the compute, the storage, the app — lives on whatever host is
-plugged into it: an Android phone with DisplayPort alt mode, a Beam Pro, a
-laptop, a mini PC under the bench.
+### What each one makes possible
 
-Two consequences follow immediately, and they are the whole assessment:
+**The One Pro cannot do a world-locked overlay, and that is not a tuning
+problem.** On a passthrough headset the world you see *is* a camera frame, so an
+overlay drawn on it stays glued no matter how late it is. An optical see-through
+display has no such luck: the real panel arrives at your eye at the speed of
+light and the overlay arrives after exposure, transfer to the host, detection,
+render and DisplayPort — realistically 60–150 ms, against a budget of about 20.
+Markers drawn on physical jacks smear off target on every head turn. What the
+One Pro is genuinely good at is a large, bright, stable virtual screen.
 
-- **There is no camera in the glasses.** The One series dropped the cameras the
-  Light had. A camera means the clip-on **Xreal Eye** accessory, or a camera
-  somewhere else entirely.
-- **There is no 6DoF world tracking of its own.** The X1's 3DoF anchoring keeps
-  a floating screen from swimming when you turn your head. It does not know
-  where your rack is, and it is not a substitute for tracking one.
+**The X3 Pro can plausibly do what the One Pro cannot.** Not because optical
+see-through stopped being optical see-through — the same physics applies — but
+because standalone changes the loop. Camera, compute, pose and display are all
+on one device with no host hop, and on-device pose at display rate is what makes
+**late-stage reprojection** possible: recognise the panel at 10–15 Hz, then
+re-project that result from the IMU every frame. That is the standard trick for
+holding an overlay still under head motion, and it needs exactly the low-latency
+pose a standalone has and a tethered display does not. Plausible is not easy —
+budget real time for it — but it is on the table.
 
-Neither is a problem. Both are decisions the design has to actually make rather
-than inherit.
+**What the X3 Pro charges for that is window and headroom.** At 50 cm — arm's
+length from the case — a ~57° image covers roughly 47 × 27 cm, about 90HP and
+two 3U rows. A ~30° image covers something nearer 23 × 13 cm: **about 46HP and a
+single row**. You would be looking at one module and its neighbours, not a case.
+And an AR1 Gen 1 in a 76 g frame has a thermal budget measured in minutes of
+sustained vision work, not hours of it — continuous frame-rate CV will throttle
+and will eat the battery. Anything running all evening has to be duty-cycled, or
+offloaded.
 
-### The registration problem this creates
+Offloading suits this codebase unusually well, as it happens: the device
+protocol already exists, and `ws.js` already sizes the device socket at 12 MB
+because a rendered waveform had to fit. Keyframes to the server, recognition on
+the server, results back — the same shape the oscilloscope already uses. It
+costs a WiFi round trip, which rules it out for the reprojection loop and is
+completely fine for "which module am I looking at".
 
-This is the one genuinely new technical constraint, and it is worth being blunt
-about it because it kills the obvious design.
+### It still does not want to hold the camera for cable tracking
 
-On a passthrough headset, the world you see *is* a camera frame, so an overlay
-drawn on that frame stays glued to the hardware no matter how late it is —
-latency shows up as a laggy world, not as a marker sliding off a jack. An
-optical see-through display has no such luck. The real panel arrives at your eye
-at the speed of light; the overlay arrives after exposure, transfer to the host,
-detection, render and DisplayPort. That round trip is realistically 60–150 ms.
-Tight registration wants under about 20.
+This is the part that does not change with the device, and it is worth repeating
+because the X3 Pro's cameras make it tempting to put everything on your face.
 
-So **drawing rings exactly on the physical jacks, from a head-mounted camera,
-will smear off target every time you move your head**, and no amount of tuning
-in the vision pipeline fixes a latency budget. Plan around it rather than
-against it.
+Occupancy detection wants a **static viewpoint**: fixed geometry, a known-empty
+reference frame of each jack under the same light from the same angle, both ends
+of a cable in view at once, and the freedom to wait for your hands to leave and
+then compare. A head-mounted camera has none of those, on any hardware. It sees
+where you happen to be looking, from wherever you happen to be standing, and the
+one moment it most needs to observe is the moment your own hand is in the way.
 
-Worth knowing while planning the display side: at 50 cm — arm's length from the
-case — a ~57° diagonal image covers roughly 47 × 27 cm, which is about 90HP wide
-and two 3U rows tall. Enough for a row-pair of a small case, nowhere near a
-studio.
+So the recommendation from the previous section survives the change of device:
+**camera on the case for the patch tracking**, glasses for the display. The X3
+Pro simply adds a second, genuinely useful thing on top — it knows which module
+you are looking at, which the fixed camera never will.
 
-### The move: put the camera on the case, not on your face
+### The hybrid, and what it needs from the hub
 
-Because the glasses are a display and the compute is on a host anyway, nothing
-requires the camera to be on your head. Mount it looking at the rack — a webcam
-clamped above the case, a phone on a desk arm — and let the glasses be the
-screen showing what it sees.
+The best version of this uses both, and the existing plumbing nearly supports it
+already: the fixed camera answers *what is patched*, and the glasses answer
+*what am I looking at* and draw the result. `deviceHub.js` already keeps a set
+of connections per user, so two devices of different kinds connect happily
+today.
 
-This is not a consolation prize. It removes the two hardest problems in this
-entire document at once, and improves the third:
+One real gap: `hub.pick()` returns the **most recently connected** device when
+the caller does not name one. With a single oscilloscope that is a sensible
+default; with a scope, a bench camera and a pair of glasses on one account it is
+a coin toss. Picking by `client_id` or by scope, rather than by recency, is a
+small change and a necessary one before there is more than one kind of device.
 
-- **The registration problem disappears.** The overlay is a virtual screen, not
-  a world-locked annotation. Head-locked content is precisely what these glasses
-  are good at, and it is immune to motion-to-photon latency.
-- **Module recognition collapses from a tracking loop to a one-time
-  calibration.** A fixed camera has a fixed homography onto each panel. Solve it
-  once at enrolment; it stays valid until the camera or the rack moves. Section
-  2's per-frame matching, its lighting sensitivity and its two-identical-modules
-  ambiguity all stop being real-time concerns.
-- **Cable tracking gets materially easier** — see the note in section 3. A
-  static viewpoint turns occupancy detection into background differencing
-  against a known-empty reference, which is a far stronger signal than anything
-  a moving head-mounted camera can offer.
+### The go/no-go item, for either device
 
-What you give up is gaze: a fixed camera does not know which module you are
-looking at. In practice that is answered by asking (point, tap, or say it — the
-voice grammar already parses module names), or later by adding the Eye purely as
-a "what am I looking at" sensor while the fixed camera keeps doing the real
-work.
+Both candidates have exactly one question that decides everything, and it is the
+same question: **can third-party code get live camera frames?**
 
-### The go/no-go item to verify first
+- **Xreal**: only via the clip-on Eye, which is marketed as a capture accessory.
+  A capture accessory and an SDK-exposed live frame source are not the same
+  thing, and support may be host- or Unity-specific.
+- **RayNeo**: the X3 Pro is Android and has the cameras, so the question is
+  developer-programme access to them — frames *and* pose — on a device that
+  launched China-first with a younger SDK and documentation to match.
 
-If you do want the Xreal Eye in the design — for gaze, or because a fixed camera
-is impractical in your room — **verify that third-party code can read its frames
-in real time, on your host, before planning anything around it.** The Eye is
-marketed for capture (photos, video, spatial video); a marketed capture
-accessory and an SDK-exposed live frame source are not the same thing, and NRSDK
-support for it may be host-specific or Unity-specific. Xreal's own developer
-documentation is the authority, and this document is not it.
+Verify against the vendor's own developer documentation before committing
+either. And note what the fixed-camera design is really buying you: a USB webcam
+raises neither question. That is a reason to build phase 1 that way even if you
+intend to add the glasses' own camera later.
 
-The fixed-camera design deliberately does not depend on the answer. That is the
-main reason to prefer it: a USB webcam has no SDK questions at all.
-
-### Which host
-
-Any of these work; pick on where the vision runs comfortably:
+### Which host, if it is the Xreal
 
 | Host | Notes |
 | --- | --- |
 | **Mini PC / laptop under the bench** | The easy choice. Real CPU/GPU for the vision, a USB webcam plugs straight in, no mobile SDK, and the glasses are a second monitor. Recommended for the prototype |
 | **Android phone / Beam Pro** | Portable, and the natural home if the Eye is ever used. More SDK surface, less compute |
-| **The existing web client** | The overlay UI can be a page in this app rendered on the glasses' virtual screen. The *vision* still has to run natively beside it — see the WebXR note below |
+| **The existing web client** | The overlay UI can be a page in this app rendered on the glasses' virtual screen. The *vision* still has to run natively beside it |
 
 Since the glasses present as a display, a large part of the UI can simply be the
-Vue client on a virtual screen. That is a real saving. What cannot live in the
-browser is the detection: WebXR gives pose, not raw camera frames, on most
-platforms, and here you do not want its pose anyway.
+Vue client on a virtual screen. That is a real saving on the Xreal, and a real
+constraint on the RayNeo, where the app is an Android app and the browser is not
+where any of this lives. What cannot live in the browser either way is the
+detection: WebXR gives pose, not raw camera frames, on most platforms.
 
 ---
 
@@ -393,6 +407,10 @@ New, in rough dependency order:
 - A migration adding an `ar` scope and an `oauth_clients` row, and generalising
   the device scope check in `ws.js`.
 - A device-initiated `event` message in `deviceHub.js`, published on the bus.
+- Addressing a device by kind rather than by recency: `hub.pick()` currently
+  answers with the most recently connected device, which is right for one
+  oscilloscope and a coin toss once a bench camera and a pair of glasses share
+  an account.
 - A lean patch read for constrained clients (jacks, positions, live cables),
   beside the existing serializers rather than inside them.
 - Either a scoped bearer-token path into the cable routes, or cable writes over
@@ -448,10 +466,16 @@ places the schedule could have run away.
   proposals for this reason.
 - **Payload weight.** A studio patch is megabytes. Anything on a headset needs
   the lean read, and needs deltas rather than polling.
-- **The Xreal Eye's SDK.** If the design ever depends on the clip-on camera,
-  confirm that third-party code can read its frames live on your host before
-  building on it. The fixed-camera design is preferred partly because it makes
-  the answer irrelevant.
+- **Camera access on whichever glasses you buy.** Xreal's clip-on Eye is
+  marketed as a capture accessory, not an SDK frame source; the RayNeo's cameras
+  are right there but sit behind a younger, China-first developer programme.
+  Confirm live frame access — and pose, if you want reprojection — before
+  building on either. The fixed-camera design is preferred partly because it
+  makes both answers irrelevant.
+- **Thermals and battery, if it is the RayNeo.** Sustained frame-rate vision in
+  a 76 g standalone frame is minutes of budget, not hours. Duty-cycle it, or
+  offload the recognition to the server over the device socket that already
+  exists.
 - **Optical see-through registration.** Drawing on the physical jacks from a
   head-mounted camera is a latency problem, not a vision problem, and it is not
   solvable at 60–150 ms. The virtual-screen design sidesteps it; anything that
@@ -478,12 +502,15 @@ approximated, but because the patch is the thing every answer is derived from,
 and a wrong cable recorded silently is a worse outcome than no cable recorded at
 all.
 
-**And a caution about the shape of it.** The One Pro is a screen, so resist
-designing for annotations pinned to real jacks: that is the one thing this
-hardware genuinely cannot do well, and every hour spent fighting the latency
-budget is an hour not spent on the part that works. A camera on the case and the
-case redrawn on the glasses gets you nearly everything, on hardware that is
-suited to it.
+**And a caution about the shape of it, whichever device you pick.** On the One
+Pro, annotations pinned to real jacks are the one thing the hardware genuinely
+cannot do — a tethered optical see-through display cannot hide its own latency —
+so designing for them wastes the schedule on a budget that will not close. On
+the X3 Pro they are plausible, via reprojection off on-device pose, and they are
+still not where the value is: a ~30° window shows one module, and the cable
+tracking wants a static camera regardless. Put the camera on the case, redraw
+the case on the glasses, and treat a world-locked overlay as something the
+RayNeo might earn later rather than something either device starts with.
 
 The plumbing is a fortnight. The seeing is a month or two. The rest is honest
 about what it does not know.
