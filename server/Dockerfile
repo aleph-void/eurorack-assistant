@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim
+FROM node:26-bookworm-slim
 
 # poppler-utils gives the LLM CLIs a way to read the manual PDFs
 # (pdftotext + the poppler renderer used by Claude Code's Read tool).
