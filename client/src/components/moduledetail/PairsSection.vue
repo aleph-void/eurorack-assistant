@@ -86,9 +86,9 @@ async function removePair(pair) {
           </thead>
           <tbody>
             <tr v-for="p in module.pairs" :key="p.id" :data-test="`pair-${p.id}`">
-              <td>{{ componentName(p.a_component_id) }}</td>
-              <td>{{ componentName(p.b_component_id) }}</td>
-              <td>{{ p.kind }}</td>
+              <td data-label="Jack">{{ componentName(p.a_component_id) }}</td>
+              <td data-label="Paired with">{{ componentName(p.b_component_id) }}</td>
+              <td data-label="Kind">{{ p.kind }}</td>
               <td>
                 <button
                   class="danger"

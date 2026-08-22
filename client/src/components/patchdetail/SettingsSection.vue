@@ -201,8 +201,8 @@ function settingLabel(setting) {
           </thead>
           <tbody>
             <tr v-for="setting in patch.settings" :key="setting.id" :data-test="`setting-${setting.id}`">
-              <td>{{ settingLabel(setting) }}</td>
-              <td>
+              <td data-label="Control">{{ settingLabel(setting) }}</td>
+              <td data-label="Value">
                 <strong>{{ setting.value }}</strong>
               </td>
               <td>
@@ -246,12 +246,12 @@ function settingLabel(setting) {
           </thead>
           <tbody>
             <tr v-for="c in settableComponents" :key="c.id" :data-test="`control-${c.id}`">
-              <td>
+              <td data-label="Control">
                 {{ c.name }}
                 <span v-if="currentSetting(Number(settingsModuleId), c.id)" class="badge found">set</span>
               </td>
-              <td>{{ c.type }}</td>
-              <td>
+              <td data-label="Type">{{ c.type }}</td>
+              <td data-label="Value">
                 <template v-if="control(c).kind === 'enum'">
                   <select v-model="draft[draftValue(Number(settingsModuleId), c)]" :data-test="`control-input-${c.id}`">
                     <option value="" disabled>Select…</option>
@@ -321,7 +321,7 @@ function settingLabel(setting) {
                   </span>
                   <div v-if="p.description" class="muted">{{ p.description }}</div>
                 </td>
-                <td>
+                <td data-label="Value">
                   <template v-if="parameterControl(p).kind === 'enum'">
                     <select
                       v-model="draft[parameterDraft(Number(settingsModuleId), p)]"

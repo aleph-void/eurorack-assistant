@@ -188,14 +188,14 @@ onMounted(load);
         </thead>
         <tbody>
           <tr v-for="user in users" :key="user.id">
-            <td>{{ user.username }}</td>
-            <td>
+            <td data-label="Username">{{ user.username }}</td>
+            <td data-label="Role">
               <span class="badge" :class="user.is_admin ? 'found' : ''">
                 {{ user.is_admin ? 'admin' : 'user' }}
               </span>
             </td>
-            <td class="muted">{{ new Date(user.created_at).toLocaleDateString() }}</td>
-            <td :data-test="`spent-${user.id}`">
+            <td data-label="Created" class="muted">{{ new Date(user.created_at).toLocaleDateString() }}</td>
+            <td data-label="Spent" :data-test="`spent-${user.id}`">
               {{ tokens(spending.get(user.id)?.used ?? 0) }}
               <span
                 v-if="spending.get(user.id)?.exhausted"
@@ -204,7 +204,7 @@ onMounted(load);
                 >budget spent</span
               >
             </td>
-            <td>
+            <td data-label="Budget">
               <template v-if="user.is_admin">
                 <span class="muted">exempt</span>
               </template>

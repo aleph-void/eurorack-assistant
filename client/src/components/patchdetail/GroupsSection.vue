@@ -167,7 +167,7 @@ const groupedModules = computed(() => [
             </thead>
             <tbody>
               <tr v-for="pm in entry.members" :key="pm.id" :data-test="`instance-${pm.id}`">
-                <td class="actions-cell">
+                <td data-label="Manufacturer and module" class="actions-cell">
                   <div class="actions nowrap">
                     <input
                       v-model="nameDraft[nameKey(pm)].manufacturer"
@@ -191,7 +191,7 @@ const groupedModules = computed(() => [
                     </button>
                   </div>
                 </td>
-                <td class="actions-cell">
+                <td data-label="Role in this patch" class="actions-cell">
                   <div class="actions nowrap">
                     <input
                       v-model="labelDraft[labelKey(pm)]"
@@ -207,7 +207,7 @@ const groupedModules = computed(() => [
                     </button>
                   </div>
                 </td>
-                <td>
+                <td data-label="Bus">
                   <select
                     :value="pm.group_id ?? ''"
                     :data-test="`group-select-${pm.id}`"

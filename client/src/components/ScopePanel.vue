@@ -321,11 +321,11 @@ watch(connected, (isConnected) => {
               :key="channel.channel_index"
               :data-test="`scope-channel-${channel.channel_index}`"
             >
-              <td>{{ channel.channel_index + 1 }}</td>
-              <td>{{ channel.component_name || '—' }}</td>
-              <td>{{ channel.label || '—' }}</td>
-              <td>{{ channel.signal_type || '—' }}</td>
-              <td>
+              <td data-label="Channel">{{ channel.channel_index + 1 }}</td>
+              <td data-label="Watching">{{ channel.component_name || '—' }}</td>
+              <td data-label="Showing">{{ channel.label || '—' }}</td>
+              <td data-label="Type">{{ channel.signal_type || '—' }}</td>
+              <td data-label="Set by">
                 <span class="badge" :class="channel.source === 'manual' ? 'found' : 'pending'">
                   {{ channel.source }}
                 </span>
@@ -391,8 +391,8 @@ watch(connected, (isConnected) => {
             </thead>
             <tbody>
               <tr v-for="row in tuner" :key="row.index">
-                <td>{{ (row.index ?? 0) + 1 }}</td>
-                <td>{{ reading(row.tuning || row) }}</td>
+                <td data-label="Channel">{{ (row.index ?? 0) + 1 }}</td>
+                <td data-label="Reading">{{ reading(row.tuning || row) }}</td>
               </tr>
             </tbody>
           </table>
@@ -484,14 +484,14 @@ watch(connected, (isConnected) => {
               </thead>
               <tbody>
                 <tr v-for="channel in row.channels" :key="channel.id">
-                  <td>{{ channel.channel_index + 1 }}</td>
-                  <td>
+                  <td data-label="Channel">{{ channel.channel_index + 1 }}</td>
+                  <td data-label="Showing">
                     {{ channel.label || channel.component_name || '—' }}
                     <span v-if="channel.source_description" class="muted">
                       ({{ channel.source_description }})
                     </span>
                   </td>
-                  <td>{{ reading(channel) }}</td>
+                  <td data-label="Reading">{{ reading(channel) }}</td>
                 </tr>
               </tbody>
             </table>

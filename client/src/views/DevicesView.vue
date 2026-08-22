@@ -92,9 +92,9 @@ onMounted(load);
           </thead>
           <tbody>
             <tr v-for="channel in connection.channels" :key="channel.index">
-              <td>{{ channel.index + 1 }}</td>
-              <td>{{ channel.name }}</td>
-              <td>{{ channel.signal_type }}</td>
+              <td data-label="Channel">{{ channel.index + 1 }}</td>
+              <td data-label="Name">{{ channel.name }}</td>
+              <td data-label="Type">{{ channel.signal_type }}</td>
             </tr>
           </tbody>
         </table>

@@ -76,12 +76,12 @@ async function removeExpander(link) {
           </thead>
           <tbody>
             <tr v-for="e in module.expanders" :key="e.id" :data-test="`expander-${e.id}`">
-              <td>
+              <td data-label="Module">
                 <RouterLink v-if="e.module_id" :to="`/modules/${e.module_id}`">
                   {{ e.manufacturer }} {{ e.name }}
                 </RouterLink>
               </td>
-              <td>
+              <td data-label="Relationship">
                 {{ e.role === 'expander' ? 'expands this module' : 'this module expands it' }}
               </td>
               <td>

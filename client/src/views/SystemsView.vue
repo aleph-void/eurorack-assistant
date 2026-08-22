@@ -462,7 +462,7 @@ async function assign(rackId, systemId) {
         </thead>
         <tbody>
           <tr v-for="system in systems" :key="system.id" :data-test="`system-${system.id}`">
-            <td>
+            <td data-label="Name">
               <template v-if="renamingId === system.id">
                 <form class="actions" @submit.prevent="rename(system)">
                   <input v-model="renameValue" :data-test="`rename-input-${system.id}`" />
@@ -475,9 +475,9 @@ async function assign(rackId, systemId) {
                 <span v-if="system.description" class="muted"> — {{ system.description }}</span>
               </template>
             </td>
-            <td>{{ system.rack_count }}</td>
-            <td>{{ system.module_count }}</td>
-            <td>
+            <td data-label="Racks">{{ system.rack_count }}</td>
+            <td data-label="Modules">{{ system.module_count }}</td>
+            <td data-label="Layout">
               <button
                 class="secondary"
                 style="margin: 0"

@@ -121,9 +121,9 @@ async function removeValue(v) {
           </thead>
           <tbody>
             <tr v-for="v in allValues" :key="v.id" :data-test="`value-${v.id}`">
-              <td>{{ v.component.name }}</td>
-              <td>{{ v.type }}</td>
-              <td>
+              <td data-label="Component">{{ v.component.name }}</td>
+              <td data-label="Type">{{ v.type }}</td>
+              <td data-label="Value">
                 <input
                   v-if="editingValueId === v.id"
                   v-model="editValueValue"
@@ -131,7 +131,7 @@ async function removeValue(v) {
                 />
                 <template v-else>{{ v.value }}</template>
               </td>
-              <td>
+              <td data-label="Description">
                 <input
                   v-if="editingValueId === v.id"
                   v-model="editValueDescription"

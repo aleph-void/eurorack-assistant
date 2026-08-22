@@ -385,7 +385,7 @@ watch(id, () => {
             </thead>
             <tbody>
               <tr v-for="c in group.components" :key="c.id">
-                <td>
+                <td data-label="Name">
                   <input
                     v-if="editingComponentId === c.id"
                     v-model="editName"
@@ -394,7 +394,7 @@ watch(id, () => {
                   />
                   <template v-else>{{ c.name }}</template>
                 </td>
-                <td>
+                <td data-label="Description">
                   <input
                     v-if="editingComponentId === c.id"
                     v-model="editDescription"
@@ -403,12 +403,12 @@ watch(id, () => {
                   />
                   <template v-else>{{ c.description || '—' }}</template>
                 </td>
-                <td v-if="group.type.endsWith('_jack')">{{ portKindLabel(c.port_kind) }}</td>
-                <td v-if="group.type.endsWith('_jack')">{{ voltageRange(c) }}</td>
-                <td v-if="group.type.endsWith('_jack')">{{ c.polarity || '—' }}</td>
-                <td v-if="group.type === 'bidirectional_jack'">{{ c.group_label || '—' }}</td>
-                <td v-if="group.type === 'output_jack'">{{ outputSignalSource(c) }}</td>
-                <td v-if="!group.type.endsWith('_jack')">{{ valueSummary(c) }}</td>
+                <td v-if="group.type.endsWith('_jack')" data-label="Connector">{{ portKindLabel(c.port_kind) }}</td>
+                <td v-if="group.type.endsWith('_jack')" data-label="Voltage range">{{ voltageRange(c) }}</td>
+                <td v-if="group.type.endsWith('_jack')" data-label="Polarity">{{ c.polarity || '—' }}</td>
+                <td v-if="group.type === 'bidirectional_jack'" data-label="Group">{{ c.group_label || '—' }}</td>
+                <td v-if="group.type === 'output_jack'" data-label="Signal">{{ outputSignalSource(c) }}</td>
+                <td v-if="!group.type.endsWith('_jack')" data-label="Valid values">{{ valueSummary(c) }}</td>
                 <td class="component-actions-cell">
                   <div v-if="editingComponentId === c.id" class="component-edit-actions">
                     <select v-model="editType" :data-test="`edit-type-${c.id}`" style="width: auto">

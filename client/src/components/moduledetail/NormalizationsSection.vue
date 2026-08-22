@@ -135,15 +135,15 @@ async function removeNormalization(n) {
           </thead>
           <tbody>
             <tr v-for="n in module.normalizations" :key="n.id" :data-test="`normalization-${n.id}`">
-              <td>{{ componentName(n.target_component_id) }}</td>
-              <td>{{ normalizationSource(n) }}</td>
-              <td>{{ NORMALIZATION_KIND_LABELS[n.kind] || n.kind }}</td>
-              <td :data-test="`normalization-condition-${n.id}`">
+              <td data-label="Jack">{{ componentName(n.target_component_id) }}</td>
+              <td data-label="Normalled to">{{ normalizationSource(n) }}</td>
+              <td data-label="Kind">{{ NORMALIZATION_KIND_LABELS[n.kind] || n.kind }}</td>
+              <td data-label="Only when" :data-test="`normalization-condition-${n.id}`">
                 {{ conditionText(n) || 'always' }}
                 <span v-if="n.alt_group" class="badge pending">{{ n.alt_group }}</span>
               </td>
-              <td>{{ breakText(n) || 'a cable into it' }}</td>
-              <td>{{ n.description || '—' }}</td>
+              <td data-label="Breaks on">{{ breakText(n) || 'a cable into it' }}</td>
+              <td data-label="Description">{{ n.description || '—' }}</td>
               <td>
                 <button
                   class="danger"

@@ -60,11 +60,11 @@ async function remove(q) {
         </thead>
         <tbody>
           <tr v-for="q in questions" :key="q.id">
-            <td>
+            <td data-label="Question">
               <RouterLink :to="`/questions/${q.id}`">{{ q.prompt }}</RouterLink>
             </td>
-            <td><span class="badge" :class="q.status">{{ q.status }}</span></td>
-            <td class="muted">{{ formatDate(q.created_at) }}</td>
+            <td data-label="Status"><span class="badge" :class="q.status">{{ q.status }}</span></td>
+            <td data-label="Asked" class="muted">{{ formatDate(q.created_at) }}</td>
             <td class="actions-cell">
               <div class="actions nowrap">
                 <ShareButton :id="q.id" type="question" :label="q.prompt" small />
