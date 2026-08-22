@@ -64,6 +64,9 @@ describe('zip service', () => {
   });
 });
 
+// Each line the writer actually drew, in order.
+const drawnLines = (pdf) => [...pdf.matchAll(/\((.*?)\) Tj/g)].map((m) => m[1]);
+
 describe('textPdf service', () => {
   it('renders paragraphs to a valid PDF, escaping delimiters and paginating', () => {
     const long = Array.from({ length: 300 }, (_, i) => `line ${i} with (parens) \\ …`).join('\n');
@@ -74,6 +77,39 @@ describe('textPdf service', () => {
     expect(text).toContain('%%EOF');
     // 300+ lines cannot fit one page.
     expect((text.match(/\/Type \/Page[^s]/g) || []).length).toBeGreaterThan(1);
+  });
+
+  it('breaks a word longer than the line, so a URL cannot run off the page', () => {
+    // Helvetica has no hyphenation and the writer no measuring: a token
+    // longer than the 88-character line is cut into whole-line pieces, and
+    // whatever is already on the line goes out first so nothing overlaps.
+    const url = `https://example.com/${'x'.repeat(300)}.pdf`;
+    const pdf = textToPdf([{ text: `see ${url} for the manual` }]);
+    expect(isProbablyPdfBuffer(pdf).ok).toBe(true);
+    const text = pdf.toString('latin1');
+    // The pieces are all there, in order, with the words around them intact.
+    expect(text).toContain('(see) Tj');
+    expect(drawnLines(text).at(-1)).toMatch(/\.pdf for the manual$/);
+    // No drawn line is longer than the wrap width.
+    const drawn = drawnLines(text);
+    expect(drawn.length).toBeGreaterThan(4);
+    for (const line of drawn) expect(line.length).toBeLessThanOrEqual(88);
+  });
+
+  it('renders an empty paragraph as a blank line rather than dropping it', () => {
+    const pdf = textToPdf([{ text: '' }, { text: 'after' }]);
+    expect(isProbablyPdfBuffer(pdf).ok).toBe(true);
+    expect(pdf.toString('latin1')).toContain('(after) Tj');
+  });
+
+  it('replaces characters the built-in fonts cannot address', () => {
+    // The PDF base fonts are single-byte WinAnsi: a Cyrillic name or an emoji
+    // has no glyph, and writing the raw bytes makes an unreadable file.
+    const pdf = textToPdf([{ text: 'Поливокс 🎛 café' }]);
+    const text = pdf.toString('latin1');
+    expect(text).toContain('?');
+    // …but a Latin-1 accent is inside WinAnsi and survives.
+    expect(text).toContain('caf');
   });
 });
 
@@ -266,6 +302,40 @@ describe('rack export', () => {
     expect(fs.existsSync(stale)).toBe(false);
     expect(fs.existsSync(fresh)).toBe(true);
     expect(fs.existsSync(other)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('shrugs at a directory that is not there, and at a file that goes mid-sweep', () => {
+    // Housekeeping must never be the thing that fails an export: the first
+    // export of a fresh install runs before the directory exists, and a
+    // download racing the sweep takes the file out from under statSync.
+    expect(() => pruneOldExports('/nope/not/a/directory')).not.toThrow();
+
+    const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'prune-race-'));
+    const raced = path.join(dir, 'rack-export-9.zip');
+    fs.writeFileSync(raced, 'x');
+    const statSync = fs.statSync;
+    fs.statSync = (file, ...rest) => {
+      if (String(file) === raced) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return statSync(file, ...rest);
+    };
+    try {
+      expect(() => pruneOldExports(dir)).not.toThrow();
+    } finally {
+      fs.statSync = statSync;
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('says which stale exports it took', () => {
+    const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'prune-log-'));
+    const stale = path.join(dir, 'rack-export-3.zip');
+    fs.writeFileSync(stale, 'x');
+    const old = Date.now() - EXPORT_MAX_AGE_MS - 1000;
+    fs.utimesSync(stale, old / 1000, old / 1000);
+    const logged = [];
+    pruneOldExports(dir, { log: (m) => logged.push(m) });
+    expect(logged).toEqual(['pruned stale export rack-export-3.zip']);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

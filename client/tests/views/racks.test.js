@@ -646,6 +646,56 @@ describe('RacksView', () => {
     expect(toastState.items).toHaveLength(0);
   });
 
+  it('keeps the menu open for a press inside it, and shuts it on any other key', async () => {
+    const wrapper = await openWithRows();
+    await wrapper.find('[data-test="available-module-4-0"]').trigger('click', { altKey: true });
+    await flushPromises();
+
+    // A key that is not Escape leaves it where it is — the menu's own buttons
+    // are focused, and typing must not dismiss what is being read.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', cancelable: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-test="row-menu"]').exists()).toBe(true);
+
+    // A press INSIDE the menu is the press that picks a row, not one that
+    // closes it before the click lands.
+    const menu = wrapper.find('[data-test="row-menu"]').element;
+    menu.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-test="row-menu"]').exists()).toBe(true);
+
+    // Scrolling the page moves the chip out from under the menu, which is
+    // pinned to where the cursor was: it goes.
+    window.dispatchEvent(new Event('scroll'));
+    await flushPromises();
+    expect(wrapper.find('[data-test="row-menu"]').exists()).toBe(false);
+  });
+
+  it('says a rack with no rows has nowhere to put the module', async () => {
+    // A rack whose rails have not been described yet: the menu opens and says
+    // so, rather than offering an empty list that looks broken.
+    api.get.mockImplementation((path) =>
+      Promise.resolve(
+        path === '/api/racks'
+          ? racksResponse
+          : {
+              id: 1,
+              name: 'main rack',
+              modules: [{ id: 4, manufacturer: '2hp', name: 'ARP', hp: 2, quantity: 1 }],
+              rows: [],
+            }
+      )
+    );
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="organize-1"]').trigger('click');
+    await flushPromises();
+    await wrapper.find('[data-test="available-module-4-0"]').trigger('contextmenu');
+    await flushPromises();
+    expect(wrapper.find('[data-test="row-menu-empty"]').exists()).toBe(true);
+    expect(wrapper.findAll('[data-test^="row-menu-0"]')).toHaveLength(0);
+  });
+
   it('closes the row menu on Escape and on a press elsewhere', async () => {
     const wrapper = await openWithRows();
     await wrapper.find('[data-test="available-module-4-0"]').trigger('click', { altKey: true });

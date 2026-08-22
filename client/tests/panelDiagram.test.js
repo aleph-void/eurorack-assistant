@@ -780,6 +780,90 @@ describe('PatchDiagram', () => {
     await svg.trigger('pointerup', { clientX: input.x, clientY: input.y, pointerId: 2 });
     expect(wrapper.emitted('connect')).toHaveLength(1);
   });
+
+  // The picture is MOVED the way a map is: a studio is far wider than any
+  // screen and the scroll bar is a long way from the panel being patched.
+  describe('moving the picture', () => {
+    // The scroll box, with a size and a scroll position jsdom will not give it.
+    const scrollBox = (wrapper) => {
+      const el = wrapper.find('.diagram-wrap').element;
+      el.scrollLeft = 100;
+      el.scrollTop = 50;
+      el.setPointerCapture = () => {};
+      el.releasePointerCapture = () => {};
+      return el;
+    };
+
+    it('scrolls the box under the pointer, and stops when the press ends', async () => {
+      const wrapper = mountDiagram({ interactive: true });
+      const el = scrollBox(wrapper);
+      const wrap = wrapper.find('.diagram-wrap');
+
+      await wrap.trigger('pointerdown', { pointerId: 1, button: 0, clientX: 300, clientY: 200 });
+      expect(wrap.classes()).toContain('panning');
+      // Dragging left and up pulls the picture the other way, like a map.
+      await wrap.trigger('pointermove', { pointerId: 1, clientX: 260, clientY: 175 });
+      expect(el.scrollLeft).toBe(140);
+      expect(el.scrollTop).toBe(75);
+
+      await wrap.trigger('pointerup', { pointerId: 1 });
+      expect(wrap.classes()).not.toContain('panning');
+      // A move after the release does nothing.
+      await wrap.trigger('pointermove', { pointerId: 1, clientX: 100, clientY: 100 });
+      expect(el.scrollLeft).toBe(140);
+    });
+
+    it('ignores a second pointer while one is already moving the picture', async () => {
+      const wrapper = mountDiagram({ interactive: true });
+      const el = scrollBox(wrapper);
+      const wrap = wrapper.find('.diagram-wrap');
+      await wrap.trigger('pointerdown', { pointerId: 1, button: 0, clientX: 300, clientY: 200 });
+      await wrap.trigger('pointermove', { pointerId: 2, clientX: 0, clientY: 0 });
+      expect(el.scrollLeft).toBe(100);
+      // …and the wrong pointer cannot end it either.
+      await wrap.trigger('pointerup', { pointerId: 2 });
+      expect(wrap.classes()).toContain('panning');
+    });
+
+    it('leaves the gesture alone for a finger, a modifier or a second button', async () => {
+      const wrapper = mountDiagram({ interactive: true });
+      scrollBox(wrapper);
+      const wrap = wrapper.find('.diagram-wrap');
+      const cases = [
+        // A finger already moves the picture: the box scrolls, and claiming
+        // the gesture would leave a phone unable to scroll PAST the diagram.
+        { pointerType: 'touch', pointerId: 1, button: 0 },
+        // Alt/right-click is unplugging.
+        { pointerId: 2, button: 2 },
+        { pointerId: 3, button: 0, altKey: true },
+        { pointerId: 4, button: 0, ctrlKey: true },
+        { pointerId: 5, button: 0, metaKey: true },
+      ];
+      for (const event of cases) {
+        await wrap.trigger('pointerdown', { clientX: 300, clientY: 200, ...event });
+        expect(wrap.classes()).not.toContain('panning');
+      }
+    });
+
+    it('lets a cable drag keep the gesture it already claimed', async () => {
+      // pointerdown reaches the jack marker first and sets `dragging`; the
+      // wrap sees the same event afterwards and must not start a pan.
+      const wrapper = mountDiagram({ interactive: true, cables: [] });
+      const el = scrollBox(wrapper);
+      const svg = wrapper.find('[data-test="diagram-svg"]');
+      Object.defineProperty(svg.element, 'getBoundingClientRect', {
+        value: () => ({ left: 0, top: 0, width: 100, height: 100 }),
+      });
+      await wrapper
+        .find('[data-test="diagram-jack-11-1"]')
+        .trigger('pointerdown', { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+      await wrapper
+        .find('.diagram-wrap')
+        .trigger('pointerdown', { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+      expect(wrapper.find('.diagram-wrap').classes()).not.toContain('panning');
+      expect(el.scrollLeft).toBe(100);
+    });
+  });
 });
 
 describe('ModulePanel', () => {

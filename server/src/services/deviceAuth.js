@@ -270,33 +270,3 @@ export async function pruneDeviceAuth(db, { now = Date.now(), keepRevokedMs = 7 
     where: { revoked_at: { [Op.lt]: new Date(now - keepRevokedMs) } },
   });
 }
-
-// Express middleware: authenticate a request by `Authorization: Bearer`.
-// Device tokens are deliberately NOT accepted by the session-authenticated
-// routes — a scope holds a token scoped to one job, not a login.
-export function requireDeviceAuth(db, { scope = 'oscilloscope' } = {}) {
-  return async (req, res, next) => {
-    try {
-      const header = String(req.headers.authorization || '');
-      const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-      if (!match) {
-        res.set('WWW-Authenticate', 'Bearer');
-        return res.status(401).json({ error: 'invalid_token' });
-      }
-      const found = await getDeviceTokenUser(db, match[1]);
-      if (!found) {
-        res.set('WWW-Authenticate', 'Bearer error="invalid_token"');
-        return res.status(401).json({ error: 'invalid_token' });
-      }
-      if (scope && !hasScope(found.token.scopes, scope)) {
-        return res.status(403).json({ error: 'insufficient_scope' });
-      }
-      req.user = found.user;
-      req.deviceToken = found.token;
-      await touchDeviceToken(db, found.token.id);
-      next();
-    } catch (e) {
-      next(e);
-    }
-  };
-}

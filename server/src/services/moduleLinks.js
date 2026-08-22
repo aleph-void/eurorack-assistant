@@ -17,7 +17,7 @@
 // puts the rows back.
 
 import { Op } from 'sequelize';
-import { normalizationKind } from './manualAnalyzer.js';
+import { normalizationKind } from './manualNormalize.js';
 
 const normalize = (value) =>
   String(value ?? '')

@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { normalizationKind, BREAK_MODES } from '../../services/manualAnalyzer.js';
+import { normalizationKind } from '../../services/manualNormalize.js';
+import { BREAK_MODES } from '../../services/manualVocabulary.js';
 import { linkedComponent, readCondition, requireOwnedModule } from './helpers.js';
 import {
   multGroupJson,

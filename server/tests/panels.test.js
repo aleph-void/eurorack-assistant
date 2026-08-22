@@ -28,15 +28,15 @@ import {
 } from '../src/services/image.js';
 import { loadSharp } from '../src/services/panelPixels.js';
 import { HP_MM, PANEL_MM_HEIGHT } from '../src/services/panelGeometry.js';
+import { buildPanelForModule } from '../src/services/panelImage.js';
 import {
-  buildPanelForModule,
   fallbackLayout,
   fillMissingPlacements,
   normalizeCrop,
   normalizeHp,
   normalizePlacements,
-  renderPanelSvg,
-} from '../src/services/panelImage.js';
+} from '../src/services/panelPlacements.js';
+import { renderPanelSvg } from '../src/services/panelSvg.js';
 import { createWorker, enqueueJob } from '../src/jobs/worker.js';
 
 // A structurally valid PNG of the given size. Only the signature and the IHDR

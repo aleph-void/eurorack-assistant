@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { Op, col, fn, where } from 'sequelize';
 import { manualPath } from '../../services/pdf.js';
 import { isCompanionDocumentName, isRetailerPageName } from '../../services/manualFinder.js';
-import { normalizeHp } from '../../services/panelImage.js';
+import { normalizeHp } from '../../services/panelPlacements.js';
 import { enqueueExtractManual, enqueueModuleJob } from '../../jobs/worker.js';
 import { removeShares } from '../../services/sharing.js';
 import { requireBudget } from '../../services/budgets.js';

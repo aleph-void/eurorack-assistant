@@ -521,6 +521,103 @@ describe('scope channel mapping', () => {
     expect(map.channels[0].label).toBe('Make Noise Maths — EOR (normalled)');
   });
 
+  it('follows a normalled connection that comes from a cable further back', () => {
+    // The jack is fed by a normal whose source is itself the far end of a
+    // patch cable, so the label names where the signal really comes from.
+    const map = buildScopeChannelMap({
+      detail: {
+        modules: [es9, maths],
+        cables: [],
+        normalizations: [
+          {
+            target_patch_module_id: 11,
+            target_component_id: 1,
+            active: true,
+            signals: [
+              { kind: 'none' },
+              {
+                kind: 'cable',
+                from_patch_module_id: 12,
+                from_component_id: 20,
+                from_component_name: 'EOR',
+              },
+            ],
+          },
+        ],
+      },
+      device: { audio_device: { name: 'ES-9', channel_count: 1 } },
+    });
+    expect(map.channels[0].label).toBe('Make Noise Maths — EOR (normalled)');
+    expect(map.channels[0].source_patch_module_id).toBe(12);
+    expect(map.channels[0].signal_type).toBe('cv');
+  });
+
+  it('names a normal that comes from inside the module rather than a jack', () => {
+    // An INTERNAL normal — the module's own oscillator feeding its own filter
+    // — has no source jack to point at, so the channel carries the label and
+    // no source ids.
+    const map = buildScopeChannelMap({
+      detail: {
+        modules: [es9, maths],
+        cables: [],
+        normalizations: [
+          {
+            target_patch_module_id: 11,
+            target_component_id: 1,
+            active: true,
+            signals: [{ kind: 'internal', label: 'internal VCO' }],
+          },
+        ],
+      },
+      device: { audio_device: { name: 'ES-9', channel_count: 1 } },
+    });
+    expect(map.channels[0].label).toBe('internal VCO (normalled)');
+    expect(map.channels[0].source_patch_module_id).toBeNull();
+    expect(map.channels[0].source_component_id).toBeNull();
+    expect(map.channels[0].signal_type).toBe('audio');
+  });
+
+  it('leaves scope channels past the interface\'s inputs unmapped', () => {
+    // Eight channels of scope against a two-input interface: the extras get a
+    // pane each with nothing in it rather than an invented jack.
+    const map = buildScopeChannelMap({
+      detail: { modules: [es9, maths], cables: [], normalizations: [] },
+      device: { audio_device: { name: 'ES-9', channel_count: 4 } },
+    });
+    expect(map.channels).toHaveLength(4);
+    expect(map.channels[2]).toMatchObject({
+      channel_index: 2,
+      patch_module_id: null,
+      component_id: null,
+      component_name: null,
+      label: null,
+      signal_type: null,
+      source_description: null,
+    });
+    expect(map.channels[3].component_id).toBeNull();
+  });
+
+  it('ignores a normal that is not switched on', () => {
+    const map = buildScopeChannelMap({
+      detail: {
+        modules: [es9, maths],
+        cables: [],
+        normalizations: [
+          {
+            target_patch_module_id: 11,
+            target_component_id: 1,
+            active: false,
+            signals: [
+              { kind: 'output', patch_module_id: 12, component_id: 20, component_name: 'EOR' },
+            ],
+          },
+        ],
+      },
+      device: { audio_device: { name: 'ES-9', channel_count: 1 } },
+    });
+    expect(map.channels[0].label).toBe('Input 1 (unpatched)');
+  });
+
   it('maps nothing when the patch holds no interface', () => {
     const map = buildScopeChannelMap({
       detail: { modules: [maths], cables: [], normalizations: [] },

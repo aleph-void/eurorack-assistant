@@ -16,6 +16,7 @@ import {
   DEFAULT_MODELS,
   modelNameProblem,
   childEnv,
+  noteQuotaExhaustion,
 } from '../src/services/llm.js';
 
 describe('modelNameProblem', () => {
@@ -168,6 +169,38 @@ describe('ClaudeBackend', () => {
     expect(fs.readdirSync(staged.dir).sort()).toEqual(['2-manual.pdf', 'manual.pdf']);
     expect(fs.readFileSync(staged.paths[1], 'utf-8')).toBe('2');
     staged.remove();
+    fs.rmSync(store, { recursive: true, force: true });
+  });
+
+  it('fails the job rather than quietly answering without a document it cannot stage', () => {
+    const store = fs.mkdtempSync(path.join(os.tmpdir(), 'manuals-'));
+    const missing = path.join(store, 'gone.pdf');
+    // Neither a link nor a copy can be made of a file that is not there. The
+    // whole jail goes with it, so nothing is left behind in /tmp.
+    let jail = null;
+    const tmpdir = () => {
+      jail = store;
+      return store;
+    };
+    expect(() => stageDocuments([missing], { tmpdir })).toThrow(/could not give the model/);
+    expect(jail).toBe(store);
+    // The staging directory it made for the call was removed on the way out.
+    expect(fs.readdirSync(store).filter((name) => name.startsWith('llm-docs-'))).toEqual([]);
+    fs.rmSync(store, { recursive: true, force: true });
+  });
+
+  it('carries the underlying failure as the cause, so a log says what went wrong', () => {
+    const store = fs.mkdtempSync(path.join(os.tmpdir(), 'manuals-'));
+    const error = (() => {
+      try {
+        stageDocuments([path.join(store, 'nope.pdf')], { tmpdir: () => store });
+        return null;
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(error.cause).toBeInstanceOf(Error);
+    expect(String(error.cause.code)).toBe('ENOENT');
     fs.rmSync(store, { recursive: true, force: true });
   });
 
@@ -440,5 +473,272 @@ describe('createBackend', () => {
     expect(createBackend({ provider: 'claude', model: null })).toBeInstanceOf(ClaudeBackend);
     expect(createBackend({ provider: 'codex', model: null })).toBeInstanceOf(CodexBackend);
     expect(() => createBackend({ provider: 'nope' })).toThrow(/Unknown LLM provider/);
+  });
+});
+
+describe('the global out-of-tokens note', () => {
+  it('keeps the latest reset time, and a known one over an unknown one', () => {
+    takeQuotaExhaustion(); // start clean
+    // Nothing to note is not a note.
+    noteQuotaExhaustion(null);
+    expect(takeQuotaExhaustion()).toBeNull();
+
+    // Concurrent runners all hit the wall at once. The first one with no
+    // reset time is kept until one arrives that knows when the limit lifts.
+    noteQuotaExhaustion({ message: 'first', resetAt: null });
+    noteQuotaExhaustion({ message: 'second', resetAt: 2000 });
+    // …and a later report that knows LESS does not overwrite it.
+    noteQuotaExhaustion({ message: 'third', resetAt: null });
+    noteQuotaExhaustion({ message: 'fourth', resetAt: 1000 });
+    const noted = takeQuotaExhaustion();
+    expect(noted.message).toBe('second');
+    expect(noted.resetAt).toBe(2000);
+    expect(takeQuotaExhaustion()).toBeNull();
+  });
+});
+
+describe('parseCodexUsage', () => {
+  it('reads the last turn that reported any tokens, ignoring the noise around it', () => {
+    const stdout = [
+      'thinking…',
+      'not json at all',
+      '{ malformed',
+      JSON.stringify({ type: 'item.completed', usage: { input_tokens: 99 } }),
+      JSON.stringify({
+        type: 'turn.completed',
+        usage: { input_tokens: 100, cached_input_tokens: 40, output_tokens: 7 },
+      }),
+    ].join('\n');
+    const usage = parseCodexUsage(stdout, 'gpt-5.1-codex');
+    expect(usage.provider).toBe('codex');
+    expect(usage.model).toBe('gpt-5.1-codex');
+    // The cached half is reported separately, not twice.
+    expect(usage.input_tokens).toBe(60);
+    expect(usage.cache_read_tokens).toBe(40);
+    expect(usage.output_tokens).toBe(7);
+  });
+
+  it('is null when nothing in the output accounts for anything', () => {
+    expect(parseCodexUsage('', 'gpt-5.1-codex')).toBeNull();
+    expect(parseCodexUsage('just prose', 'gpt-5.1-codex')).toBeNull();
+    // A turn that reports zero tokens is not an accounting record.
+    expect(
+      parseCodexUsage(
+        JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 0, output_tokens: 0 } }),
+        'gpt-5.1-codex'
+      )
+    ).toBeNull();
+  });
+});
+
+describe('parseClaudeResult', () => {
+  it('treats anything that is not a result envelope as the answer itself', () => {
+    // Plain prose.
+    expect(parseClaudeResult('the answer')).toEqual({
+      text: 'the answer',
+      usage: null,
+      isError: false,
+    });
+    // Something that starts like JSON but is not.
+    expect(parseClaudeResult('{ not json').text).toBe('{ not json');
+    // Valid JSON that is the ANSWER rather than the envelope — every analysis
+    // prompt asks for a JSON object, so this is the common case.
+    const answer = JSON.stringify({ components: [] });
+    expect(parseClaudeResult(answer)).toEqual({ text: answer, usage: null, isError: false });
+  });
+});
+
+describe('CodexBackend', () => {
+  // codex writes its final answer to the file named by --output-last-message
+  // rather than to stdout, so a fake run has to put it there. Returns the
+  // captured calls alongside.
+  function codexRun(answer = 'the answer', stdout = '') {
+    const calls = [];
+    const run = async (cmd, args, input, options = {}) => {
+      calls.push({ cmd, args, input, options });
+      const at = args.indexOf('--output-last-message');
+      if (at >= 0 && answer !== null) fs.writeFileSync(args[at + 1], answer);
+      return stdout;
+    };
+    run.calls = calls;
+    return run;
+  }
+
+  it('runs codex exec read-only, with the model and the answer file', async () => {
+    const run = codexRun('an answer');
+    expect(await new CodexBackend('gpt-5.1-codex', { run }).completeText('hi')).toBe('an answer');
+    const { cmd, args, input } = run.calls[0];
+    expect(cmd).toBe('codex');
+    expect(args[0]).toBe('exec');
+    expect(args).toContain('--sandbox');
+    expect(args[args.indexOf('--sandbox') + 1]).toBe('read-only');
+    expect(args).toContain('--skip-git-repo-check');
+    expect(args).toContain('--json');
+    expect(args.slice(args.indexOf('-m'))).toEqual(['-m', 'gpt-5.1-codex']);
+    expect(input).toBe('hi');
+  });
+
+  it('leaves the model out when none is configured, and adds --search on demand', async () => {
+    const run = codexRun();
+    await new CodexBackend(null, { run }).completeTextWithSearch('find it');
+    expect(run.calls[0].args).not.toContain('-m');
+    expect(run.calls[0].args).toContain('--search');
+  });
+
+  it('takes the answer file away with the jail, whatever happened', async () => {
+    const seen = [];
+    const run = codexRun('done');
+    const backend = new CodexBackend(null, { run });
+    await backend.completeText('hi');
+    // --cd is the document jail; --output-last-message is its own directory.
+    const { args } = run.calls[0];
+    const jail = args[args.indexOf('--cd') + 1];
+    const answerFile = args[args.indexOf('--output-last-message') + 1];
+    seen.push(jail, path.dirname(answerFile));
+    for (const dir of seen) expect(fs.existsSync(dir)).toBe(false);
+  });
+
+  it('fails loudly when codex exits cleanly having written no answer', async () => {
+    // An empty answer file is the shape a refusal or a crashed turn takes,
+    // and a job that "succeeded" with an empty string is the worst outcome.
+    const run = codexRun(null, 'some event log');
+    await expect(new CodexBackend(null, { run }).completeText('hi')).rejects.toThrow(
+      /codex CLI returned an empty answer/
+    );
+  });
+
+  it('names every staged document in the prompt it builds', async () => {
+    const store = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-docs-'));
+    const manual = path.join(store, 'maths.pdf');
+    const frameA = path.join(store, 'frame-1.png');
+    const frameB = path.join(store, 'frame-2.png');
+    for (const f of [manual, frameA, frameB]) fs.writeFileSync(f, 'x');
+    const run = codexRun('ok');
+    const backend = new CodexBackend(null, { run });
+
+    await backend.analyzeDocument('Analyze', manual);
+    expect(run.calls[0].input).toContain('- ');
+    expect(run.calls[0].input).toContain('maths.pdf');
+    expect(run.calls[0].input).toContain('pdftotext');
+
+    await backend.analyzeImage('Locate', frameA);
+    // A model that cannot open images must say so rather than invent
+    // positions, so the prompt gives it the words to say it with.
+    expect(run.calls[1].input).toContain('frame-1.png');
+    expect(run.calls[1].input).toContain('"is_panel": false');
+
+    await backend.analyzeImages('Watch', [frameA, frameB]);
+    expect(run.calls[2].input).toContain('frame-1.png');
+    expect(run.calls[2].input).toContain('frame-2.png');
+    expect(run.calls[2].input).toContain('in order');
+
+    await backend.answerWithDocuments(
+      'Why is it quiet?',
+      [manual],
+      [{ name: 'Earlier answer', text: 'because of the VCA' }],
+      [frameA]
+    );
+    const asked = run.calls[3].input;
+    expect(asked).toContain('Why is it quiet?');
+    expect(asked).toContain('module manuals');
+    expect(asked).toContain('oscilloscope images');
+    expect(asked).toContain('--- Previous answer document: Earlier answer ---');
+    expect(asked).toContain('because of the VCA');
+
+    // Nothing to attach: the prompt is just the question.
+    await backend.answerWithDocuments('Plain question', [], [], []);
+    expect(run.calls[4].input).toBe('Plain question');
+
+    fs.rmSync(store, { recursive: true, force: true });
+  });
+
+  it('reports what a codex run cost', async () => {
+    const usage = [];
+    const run = codexRun(
+      'the answer',
+      JSON.stringify({
+        type: 'turn.completed',
+        usage: { input_tokens: 500, cached_input_tokens: 200, output_tokens: 30 },
+      })
+    );
+    await new CodexBackend('gpt-5.1-codex', { run, onUsage: (u) => usage.push(u) }).completeText('hi');
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5.1-codex',
+      input_tokens: 300,
+      cache_read_tokens: 200,
+      output_tokens: 30,
+    });
+  });
+
+  it('carries the per-user credential environment and the quota listener through', async () => {
+    const run = codexRun();
+    const onQuota = () => {};
+    await new CodexBackend(null, { run, env: { CODEX_HOME: '/data/llm/7' }, onQuota }).completeText(
+      'hi'
+    );
+    expect(run.calls[0].options.env).toEqual({ CODEX_HOME: '/data/llm/7' });
+    expect(run.calls[0].options.onQuota).toBe(onQuota);
+  });
+});
+
+describe('ClaudeBackend images', () => {
+  function captureImageRun() {
+    const calls = [];
+    const run = async (cmd, args, input, options = {}) => {
+      calls.push({ cmd, args, input, options });
+      return JSON.stringify({ type: 'result', result: 'ok' });
+    };
+    run.calls = calls;
+    return run;
+  }
+
+  it('gives the Read tool the image it is asked to look at, and nothing else', async () => {
+    const store = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-images-'));
+    const one = path.join(store, 'panel.png');
+    const two = path.join(store, 'frame-2.png');
+    for (const f of [one, two]) fs.writeFileSync(f, 'x');
+    const run = captureImageRun();
+    const backend = new ClaudeBackend(null, { run });
+
+    await backend.analyzeImage('Locate the jacks', one);
+    const args = run.calls[0].args;
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read');
+    // …pointed at the jail the picture was copied into, and nowhere else —
+    // never at the panels directory where every user's uploads live.
+    const added = args[args.indexOf('--add-dir') + 1];
+    expect(added).toMatch(/llm-docs-/);
+    expect(added).not.toBe(store);
+    expect(run.calls[0].input).toContain('panel.png');
+
+    await backend.analyzeImages('Watch these', [one, two]);
+    expect(run.calls[1].args).toContain('--allowedTools');
+    expect(run.calls[1].input).toContain('panel.png');
+    expect(run.calls[1].input).toContain('frame-2.png');
+    expect(run.calls[1].input).toContain('in order');
+
+    fs.rmSync(store, { recursive: true, force: true });
+  });
+
+  it('attaches manuals, captures and previous answers to one question', async () => {
+    const store = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-answer-'));
+    const manual = path.join(store, 'maths.md');
+    const capture = path.join(store, 'capture-1.png');
+    for (const f of [manual, capture]) fs.writeFileSync(f, 'x');
+    const run = captureImageRun();
+    await new ClaudeBackend(null, { run }).answerWithDocuments(
+      'Why is it quiet?',
+      [manual],
+      [{ name: 'Earlier answer', text: 'because of the VCA' }],
+      [capture]
+    );
+    const asked = run.calls[0].input;
+    expect(asked).toContain('Why is it quiet?');
+    expect(asked).toContain('maths.md');
+    expect(asked).toContain('capture-1.png');
+    expect(asked).toContain('Each pane is one');
+    expect(asked).toContain('--- Previous answer document: Earlier answer ---');
+    fs.rmSync(store, { recursive: true, force: true });
   });
 });

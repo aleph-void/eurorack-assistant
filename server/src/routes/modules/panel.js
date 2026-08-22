@@ -7,17 +7,15 @@ import {
   sniffImage,
 } from '../../services/image.js';
 import { boxHp, panelCrop, readPixels } from '../../services/panelPixels.js';
+import { deletePanelImageIfOrphaned, savePanel } from '../../services/panelStore.js';
+import { trimIncomingPanel, trimPanelImage } from '../../services/panelTrim.js';
+import { loadPanels } from '../../services/panelJson.js';
 import {
-  deletePanelImageIfOrphaned,
-  fillMissingPlacements,
   FULL_CROP,
-  loadPanels,
+  fillMissingPlacements,
   normalizeHp,
   relinkPanelPlacements,
-  savePanel,
-  trimIncomingPanel,
-  trimPanelImage,
-} from '../../services/panelImage.js';
+} from '../../services/panelPlacements.js';
 import { enqueueModuleJob } from '../../jobs/worker.js';
 import { requireBudget } from '../../services/budgets.js';
 import { requireOwnedModule } from './helpers.js';
