@@ -19,6 +19,15 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: false,
+    // Node 26 ships its own Web Storage, which puts `localStorage` and
+    // `sessionStorage` on the global BEFORE jsdom is installed — and vitest
+    // leaves a global that already exists alone, so the window's real
+    // Storage never lands. `localStorage` is then the undefined a Node
+    // started without --localstorage-file hands back, and every test that
+    // clears it dies on the dot. Turn Node's off and jsdom's is the only
+    // one there is, which is what a browser test means by localStorage.
+    // Accepted as far back as Node 22, so it is safe on the whole matrix.
+    execArgv: ['--no-experimental-webstorage'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],
