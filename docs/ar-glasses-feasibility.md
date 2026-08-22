@@ -10,6 +10,13 @@ does not hold up.** The three are worth separating, because they are three
 different projects with three different risk profiles, and only the third one is
 in doubt.
 
+The target hardware is the **Xreal One Pro**, and that choice settles more of
+the design than it looks. It is a display rather than an AR computer: no camera,
+no world tracking, all compute on a host it is plugged into. That sounds like a
+limitation and is mostly an escape — it pushes the camera off your head and onto
+the case, which removes the two hardest problems below and improves the third.
+Section "The hardware" is the argument.
+
 This document is an assessment, not a plan of record. It says what the codebase
 already gives such a feature, what would have to be built, what the hardware can
 actually do, and where the accuracy ceiling sits.
@@ -18,7 +25,7 @@ actually do, and where the accuracy ceiling sits.
 - [1. Plumbing: mostly already here](#1-plumbing-mostly-already-here)
 - [2. Recognising the module and the panel](#2-recognising-the-module-and-the-panel)
 - [3. Tracking the cables](#3-tracking-the-cables)
-- [The hardware](#the-hardware)
+- [The hardware: Xreal One Pro](#the-hardware-xreal-one-pro)
 - [What would have to be built](#what-would-have-to-be-built)
 - [Effort, in the order I would do it](#effort-in-the-order-i-would-do-it)
 - [Risks worth stating up front](#risks-worth-stating-up-front)
@@ -31,7 +38,7 @@ actually do, and where the accuracy ceiling sits.
 | | What it means | Feasibility |
 | --- | --- | --- |
 | **Transport** | A headset links itself to an account, holds a connection, reads a patch, writes a cable | **Easy.** The oscilloscope integration is the same shape and most of it generalises |
-| **Recognition** | Which module am I looking at, where is its plate in the frame, where is each jack on screen | **Feasible.** Planar target tracking against a closed set — the well-behaved end of computer vision. The reference images are the risk, not the algorithm |
+| **Recognition** | Which module am I looking at, where is its plate in the frame, where is each jack on screen | **Feasible.** Planar target tracking against a closed set — the well-behaved end of computer vision. On a fixed camera it reduces further, to a one-time calibration. The reference images are the risk, not the algorithm |
 | **Cable tracking** | Which two jacks did that cable just join | **Not to the standard this app needs, unattended.** Feasible as a *proposal* the user confirms; not as a silent writer of truth |
 
 The third row is the one to argue about, and section 3 argues it.
@@ -60,8 +67,8 @@ code behind it is not scope-specific:
 - **Telling the browser.** The event bus publishes `kind: 'device'` events to
   the user's own browser sockets, which is how a page would light up when the
   glasses connect and how a proposed cable would arrive on screen.
-- **Storing pictures.** `services/captures.js` is the pattern for device-supplied
-  images: content-addressed by sha256, written to a temp name and renamed, and
+- **Storing pictures.** `services/captures.js` is the pattern for images a
+  device supplies: content-addressed by sha256, written to a temp name and renamed, and
   deleted only once nothing references the bytes.
 
 Four things genuinely have to change, and they are all small and all
@@ -239,6 +246,30 @@ jack and cable lists handed over as lazy functions, and the two-tap patching
 gesture in `PatchDiagram.vue` (`patchFrom`) is exactly the interaction a
 gaze-and-pinch maps onto.
 
+### A fixed camera changes this materially
+
+Everything above assumes the camera is on your head, moving. The hardware
+section argues for mounting it on the case instead, and that is worth revisiting
+here, because occupancy detection is where a static viewpoint pays best:
+
+- The geometry never changes, so the patch of pixels belonging to a given jack
+  is the same patch of pixels all evening. No per-frame homography, no drift.
+- You have a **known-empty reference** — the frame taken when the patch was
+  cleared — so "is something in this hole" becomes differencing against a
+  picture of that same hole empty, under the same light, from the same angle.
+  That is a far stronger signal than classifying a jack in isolation.
+- **Both ends of a cable are usually in frame**, because the camera sees the
+  whole case rather than the 47 cm your head is pointed at. Pair inference stops
+  depending on you happening to look at both jacks.
+- Your hands still occlude, but only in passing. A static camera can simply wait
+  for the view to settle and then compare, which a moving one cannot.
+
+The pessimism in this section is aimed at head-mounted capture. Under a fixed
+camera I would revise the expectation upward — enough that phase 2 below is
+worth attempting rather than merely worth prototyping. It does not change the
+conclusion about writing cables unattended: better odds are still odds, and the
+patch is still what every answer is derived from.
+
 What you should expect from this, honestly: good precision on a case you are
 working slowly and deliberately across, degrading as the patch gets dense and
 the hands get fast. A hard number is not available without a labelled test set
@@ -247,31 +278,111 @@ something to skip.
 
 ---
 
-## The hardware
+## The hardware: Xreal One Pro
 
-The device market is the least settled part of this, and worth checking against
-current SDK terms before committing — what follows is directional.
+The target is the **Xreal One Pro**, and choosing it settles the architecture —
+in a way that turns out to help.
 
-| Class | Examples | Camera frames to third-party code? | Verdict |
-| --- | --- | --- | --- |
-| **Passthrough headsets** | Quest 3/3S, Vision Pro, Android XR | Yes on Quest (passthrough camera access, recent OS versions); entitlement-gated on Vision Pro | Best development target. Nobody patches for two hours in a headset, but everything is provable there |
-| **Display-less smart glasses** | Ray-Ban Meta and kin | The blocker — continuous third-party frame access has been limited/preview, via the wearable access toolkit | Ergonomically the right device; verify what the SDK actually permits before planning around it |
-| **Tethered display glasses** | Xreal, Viture | No useful cameras of their own | A *screen*, not an AR platform. Perfectly good as the display for a phone-driven pipeline |
-| **Developer glasses** | Snap Spectacles | Yes, via Lens Studio | Full access, no distribution story |
+### What the device is
 
-Two conclusions follow.
+It is an **optical see-through display**, not a self-contained AR computer.
+Micro-OLED, 1080p per eye, around 57° diagonal field of view, an on-board X1
+chip that holds a virtual screen still in 3DoF, and a USB-C DisplayPort input.
+Everything else — the compute, the storage, the app — lives on whatever host is
+plugged into it: an Android phone with DisplayPort alt mode, a Beam Pro, a
+laptop, a mini PC under the bench.
 
-**Build the vision pipeline on a phone first.** A phone on a stand pointed at the
-case has the same camera, far more compute, a real SDK, and no distribution
-problem — and if the protocol is designed as "some device with a camera talks to
-the server", the glasses are later just another client of it. That decouples the
-project from a hardware market that has not resolved.
+Two consequences follow immediately, and they are the whole assessment:
 
-**Do not plan on doing the detection in the browser.** The client is Vue and it
-is tempting to reach for WebXR, but WebXR hands you a pose, not raw camera
-frames, on most platforms; raw camera access is patchy and platform-specific.
-The browser is a fine *viewer* for an overlay computed elsewhere. It is not
-where this recognition can live.
+- **There is no camera in the glasses.** The One series dropped the cameras the
+  Light had. A camera means the clip-on **Xreal Eye** accessory, or a camera
+  somewhere else entirely.
+- **There is no 6DoF world tracking of its own.** The X1's 3DoF anchoring keeps
+  a floating screen from swimming when you turn your head. It does not know
+  where your rack is, and it is not a substitute for tracking one.
+
+Neither is a problem. Both are decisions the design has to actually make rather
+than inherit.
+
+### The registration problem this creates
+
+This is the one genuinely new technical constraint, and it is worth being blunt
+about it because it kills the obvious design.
+
+On a passthrough headset, the world you see *is* a camera frame, so an overlay
+drawn on that frame stays glued to the hardware no matter how late it is —
+latency shows up as a laggy world, not as a marker sliding off a jack. An
+optical see-through display has no such luck. The real panel arrives at your eye
+at the speed of light; the overlay arrives after exposure, transfer to the host,
+detection, render and DisplayPort. That round trip is realistically 60–150 ms.
+Tight registration wants under about 20.
+
+So **drawing rings exactly on the physical jacks, from a head-mounted camera,
+will smear off target every time you move your head**, and no amount of tuning
+in the vision pipeline fixes a latency budget. Plan around it rather than
+against it.
+
+Worth knowing while planning the display side: at 50 cm — arm's length from the
+case — a ~57° diagonal image covers roughly 47 × 27 cm, which is about 90HP wide
+and two 3U rows tall. Enough for a row-pair of a small case, nowhere near a
+studio.
+
+### The move: put the camera on the case, not on your face
+
+Because the glasses are a display and the compute is on a host anyway, nothing
+requires the camera to be on your head. Mount it looking at the rack — a webcam
+clamped above the case, a phone on a desk arm — and let the glasses be the
+screen showing what it sees.
+
+This is not a consolation prize. It removes the two hardest problems in this
+entire document at once, and improves the third:
+
+- **The registration problem disappears.** The overlay is a virtual screen, not
+  a world-locked annotation. Head-locked content is precisely what these glasses
+  are good at, and it is immune to motion-to-photon latency.
+- **Module recognition collapses from a tracking loop to a one-time
+  calibration.** A fixed camera has a fixed homography onto each panel. Solve it
+  once at enrolment; it stays valid until the camera or the rack moves. Section
+  2's per-frame matching, its lighting sensitivity and its two-identical-modules
+  ambiguity all stop being real-time concerns.
+- **Cable tracking gets materially easier** — see the note in section 3. A
+  static viewpoint turns occupancy detection into background differencing
+  against a known-empty reference, which is a far stronger signal than anything
+  a moving head-mounted camera can offer.
+
+What you give up is gaze: a fixed camera does not know which module you are
+looking at. In practice that is answered by asking (point, tap, or say it — the
+voice grammar already parses module names), or later by adding the Eye purely as
+a "what am I looking at" sensor while the fixed camera keeps doing the real
+work.
+
+### The go/no-go item to verify first
+
+If you do want the Xreal Eye in the design — for gaze, or because a fixed camera
+is impractical in your room — **verify that third-party code can read its frames
+in real time, on your host, before planning anything around it.** The Eye is
+marketed for capture (photos, video, spatial video); a marketed capture
+accessory and an SDK-exposed live frame source are not the same thing, and NRSDK
+support for it may be host-specific or Unity-specific. Xreal's own developer
+documentation is the authority, and this document is not it.
+
+The fixed-camera design deliberately does not depend on the answer. That is the
+main reason to prefer it: a USB webcam has no SDK questions at all.
+
+### Which host
+
+Any of these work; pick on where the vision runs comfortably:
+
+| Host | Notes |
+| --- | --- |
+| **Mini PC / laptop under the bench** | The easy choice. Real CPU/GPU for the vision, a USB webcam plugs straight in, no mobile SDK, and the glasses are a second monitor. Recommended for the prototype |
+| **Android phone / Beam Pro** | Portable, and the natural home if the Eye is ever used. More SDK surface, less compute |
+| **The existing web client** | The overlay UI can be a page in this app rendered on the glasses' virtual screen. The *vision* still has to run natively beside it — see the WebXR note below |
+
+Since the glasses present as a display, a large part of the UI can simply be the
+Vue client on a virtual screen. That is a real saving. What cannot live in the
+browser is the detection: WebXR gives pose, not raw camera frames, on most
+platforms, and here you do not want its pose anyway.
 
 ---
 
@@ -286,13 +397,15 @@ New, in rough dependency order:
   beside the existing serializers rather than inside them.
 - Either a scoped bearer-token path into the cable routes, or cable writes over
   the socket. The former is cleaner for the client and needs a security review.
-- Storage for a rack's enrolment frames — the `captures.js` content-addressed
-  pattern applies directly.
+- Storage for a rack's enrolment frames and its known-empty reference — the
+  `captures.js` content-addressed pattern applies directly.
 - A pending-cable concept: something proposed, shown, confirmed or dismissed.
   This is genuinely new domain surface and should be designed once for both AR
   and voice.
-- The client app itself: enrolment, tracking, occupancy classification,
-  overlay — the bulk of the work, and the part that lives outside this repo.
+- The host app itself: camera capture, one-time rack calibration, occupancy
+  classification, and the overlay drawn on the glasses' virtual screen — the
+  bulk of the work, and the part that lives outside this repo. The overlay UI
+  can largely be the existing Vue client on that screen; the vision cannot.
 - A protocol document beside `docs/oscilloscope-protocol.md`, in the same shape.
   That document existing is a good sign for this feature: the project already
   knows how to specify an outboard client.
@@ -307,14 +420,19 @@ the client app is written by the same person, which is optimistic.
 | Phase | What lands | Weeks | Risk |
 | --- | --- | --- | --- |
 | **0. Protocol** | Scope, device events, lean patch read, cable writes, docs. A headset — or anything — can read a patch and write a cable | 1–2 | Low. Only the auth widening needs care |
-| **1. See it** | Enrolment sweep, module recognition, homography, jack markers drawn on the live plate. No writing yet | 4–8 | Medium. Reference-image quality is the variable |
-| **2. Suggest it** | Jack occupancy, pair inference, proposals validated by `cableProblem()`, confirm-or-correct in the existing UI | 6–12 | Medium-high. Needs a labelled test set off a real rack |
+| **1. See it** | Camera on the case, one-time rack calibration, the live view on the glasses with every jack named and typed from the stored fractions. No writing yet | 3–6 | Medium-low on a fixed camera. Reference-image quality is the variable |
+| **2. Suggest it** | Jack occupancy by differencing against the empty reference, pair inference, proposals validated by `cableProblem()`, confirm-or-correct in the existing UI | 5–10 | Medium. Needs a labelled test set off a real rack |
 | **3. Trust it** | Unattended, unconfirmed cable recording | — | **Not recommended.** See section 3 |
 
-Phase 1 is worth having even if phase 2 never ships: "point at a module, see
-what every jack is and what it does" is a genuinely useful thing on a bench, it
-needs no writes at all, and it uses data the app already has. If the appetite is
-for one phase, that is the one.
+Phase 1 is worth having even if phase 2 never ships: the case in front of you,
+on a screen you are already wearing, with every jack named, typed and coloured
+from the manual the app already read — that is a useful bench instrument on its
+own, it needs no writes at all, and it uses data that is already in the
+database. If the appetite is for one phase, that is the one.
+
+The estimates came down from the head-mounted version. A fixed camera removes
+the per-frame tracking loop and the registration budget, which were the two
+places the schedule could have run away.
 
 ---
 
@@ -330,9 +448,14 @@ for one phase, that is the one.
   proposals for this reason.
 - **Payload weight.** A studio patch is megabytes. Anything on a headset needs
   the lean read, and needs deltas rather than polling.
-- **Hardware churn.** Glasses SDK terms move faster than this codebase does.
-  Keeping the device as a protocol client, not a platform dependency, is what
-  keeps that from becoming a rewrite.
+- **The Xreal Eye's SDK.** If the design ever depends on the clip-on camera,
+  confirm that third-party code can read its frames live on your host before
+  building on it. The fixed-camera design is preferred partly because it makes
+  the answer irrelevant.
+- **Optical see-through registration.** Drawing on the physical jacks from a
+  head-mounted camera is a latency problem, not a vision problem, and it is not
+  solvable at 60–150 ms. The virtual-screen design sidesteps it; anything that
+  drifts back towards world-locked markers walks into it again.
 - **Scope creep into vision research.** The enrolment sweep, the occupancy
   classifier and the test set are each a project. They are not optional, and
   they are where the time actually goes.
@@ -342,7 +465,8 @@ for one phase, that is the one.
 ## Verdict
 
 **Yes to detecting the module and the panel, and drawing on it.** The data model
-is already the hard half of that problem, and it is in the right shape.
+is already the hard half of that problem, and it is in the right shape. On a
+fixed camera, recognition is a calibration step rather than a tracking loop.
 
 **Yes to noticing cables, as suggestions.** The existing legality rules make the
 suggestions much better than raw vision would be, and the voice patching feature
@@ -354,5 +478,12 @@ approximated, but because the patch is the thing every answer is derived from,
 and a wrong cable recorded silently is a worse outcome than no cable recorded at
 all.
 
-The plumbing is a fortnight. The seeing is a couple of months. The rest is
-honest about what it does not know.
+**And a caution about the shape of it.** The One Pro is a screen, so resist
+designing for annotations pinned to real jacks: that is the one thing this
+hardware genuinely cannot do well, and every hour spent fighting the latency
+budget is an hour not spent on the part that works. A camera on the case and the
+case redrawn on the glasses gets you nearly everything, on hardware that is
+suited to it.
+
+The plumbing is a fortnight. The seeing is a month or two. The rest is honest
+about what it does not know.
