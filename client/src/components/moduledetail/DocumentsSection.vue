@@ -128,15 +128,15 @@ async function removeDocument(doc) {
           </thead>
           <tbody>
             <tr v-for="doc in module.manuals" :key="doc.id" :data-test="`doc-${doc.id}`">
-              <td>{{ doc.name }}</td>
-              <td>
+              <td data-label="Name">{{ doc.name }}</td>
+              <td data-label="File">
                 <a :href="`/api/manuals/${doc.hash}`" target="_blank" rel="noopener">
                   {{ doc.original_name || `${doc.hash}.pdf` }}
                 </a>
               </td>
               <!-- Three kinds now: the manual every user gets, your own
                    upload, and an upload another user shared with you. -->
-              <td>
+              <td data-label="Kind">
                 <span class="badge" :class="doc.user_id === null ? 'found' : 'pending'">
                   <template v-if="doc.user_id === null">shared manual</template>
                   <template v-else-if="doc.shared_by">from {{ doc.shared_by }}</template>
@@ -145,7 +145,7 @@ async function removeDocument(doc) {
               </td>
               <!-- The manual as a readable page, once the extraction job has
                    turned the PDF into markdown. -->
-              <td>
+              <td data-label="Text">
                 <RouterLink
                   v-if="doc.has_text"
                   :to="`/manuals/${doc.hash}`"
@@ -159,7 +159,7 @@ async function removeDocument(doc) {
                    The manual itself arrives marked and can be unmarked
                    like anything else. A document somebody shared with you
                    is theirs to mark, not yours. -->
-              <td>
+              <td data-label="Analysis">
                 <input
                   type="checkbox"
                   :checked="doc.analysis_scope"

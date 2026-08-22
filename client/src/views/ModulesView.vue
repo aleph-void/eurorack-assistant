@@ -582,13 +582,13 @@ onUnmounted(() => clearTimeout(refreshTimer));
                     @change="toggleSelected(group, module)"
                   />
                 </td>
-                <td>{{ module.manufacturer }}</td>
-                <td>
+                <td data-label="Manufacturer">{{ module.manufacturer }}</td>
+                <td data-label="Module">
                   <RouterLink :to="moduleHref(module, group.rack)">{{ module.name }}</RouterLink>
                 </td>
                 <!-- Picked for a move, the count becomes editable: send some
                      of the copies and leave the rest in this rack. -->
-                <td class="qty-cell">
+                <td data-label="Qty" class="qty-cell">
                   <input
                     v-if="group.rack && isSelected(group.rack.id, module.id)"
                     v-model="moveQty[module.id]"
@@ -628,13 +628,13 @@ onUnmounted(() => clearTimeout(refreshTimer));
                   </div>
                   <template v-else>{{ heldIn(module, group.rack) }}</template>
                 </td>
-                <td>{{ module.hp ? `${module.hp}HP` : '—' }}</td>
-                <td v-if="!currentRack">{{ rackNames(module) }}</td>
-                <td><span class="badge" :class="module.manual_status">{{ module.manual_status }}</span></td>
-                <td>
+                <td data-label="HP">{{ module.hp ? `${module.hp}HP` : '—' }}</td>
+                <td v-if="!currentRack" data-label="Rack(s)">{{ rackNames(module) }}</td>
+                <td data-label="Manual"><span class="badge" :class="module.manual_status">{{ module.manual_status }}</span></td>
+                <td data-label="Analysis">
                   <span class="badge" :class="module.analysis_status">{{ module.analysis_status }}</span>
                 </td>
-                <td>
+                <td data-label="Panel">
                   <span class="badge" :class="module.panel_status">{{ module.panel_status }}</span>
                 </td>
                 <td class="module-actions-cell">

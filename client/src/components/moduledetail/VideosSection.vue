@@ -92,14 +92,14 @@ const working = (status) => ['pending', 'downloading', 'downloaded', 'analyzing'
           <tbody>
             <template v-for="video in module.videos" :key="video.id">
               <tr :data-test="`video-${video.id}`">
-                <td>
+                <td data-label="Video">
                   <a :href="video.url" target="_blank" rel="noopener">
                     {{ video.title || video.url }}
                   </a>
                 </td>
-                <td>{{ video.channel }}</td>
-                <td>{{ length(video) }}</td>
-                <td>
+                <td data-label="Channel">{{ video.channel }}</td>
+                <td data-label="Length">{{ length(video) }}</td>
+                <td data-label="Status">
                   <span class="badge" :class="video.status" :data-test="`video-status-${video.id}`">
                     {{ video.status }}
                   </span>
@@ -125,7 +125,7 @@ const working = (status) => ['pending', 'downloading', 'downloaded', 'analyzing'
                 </td>
               </tr>
               <tr v-if="video.summary || video.error || working(video.status)">
-                <td colspan="5">
+                <td data-label="Video" colspan="5">
                   <details v-if="video.summary" :data-test="`video-summary-${video.id}`">
                     <summary>Techniques</summary>
                     <!-- eslint-disable-next-line vue/no-v-html -- sanitized with DOMPurify -->

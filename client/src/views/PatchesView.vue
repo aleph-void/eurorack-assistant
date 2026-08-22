@@ -153,17 +153,17 @@ onMounted(load);
         </thead>
         <tbody>
           <tr v-for="patch in patches" :key="patch.id" :data-test="`patch-${patch.id}`">
-            <td>
+            <td data-label="Name">
               <RouterLink :to="`/patches/${patch.id}`">{{ patch.name }}</RouterLink>
               <span v-if="patch.description" class="muted"> — {{ patch.description }}</span>
             </td>
-            <td>
+            <td data-label="Rack or system">
               {{ patch.system_name || patch.rack_name }}
               <span v-if="patch.system_id" class="badge found" data-test="system-badge">system</span>
             </td>
-            <td>{{ patch.module_count }}</td>
-            <td>{{ patch.cable_count }}</td>
-            <td>{{ new Date(patch.created_at).toLocaleString() }}</td>
+            <td data-label="Modules">{{ patch.module_count }}</td>
+            <td data-label="Cables">{{ patch.cable_count }}</td>
+            <td data-label="Created">{{ new Date(patch.created_at).toLocaleString() }}</td>
             <td class="actions-cell">
               <div class="actions nowrap">
                 <a

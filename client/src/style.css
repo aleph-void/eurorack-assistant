@@ -743,6 +743,26 @@ details.expander > .expander-body {
   width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  /* A table wider than its box says so: a shadow at whichever edge still has
+     columns behind it. The pair of gradients is painted on the scrolling
+     content (`local`) and covered by the pair painted on the box itself
+     (`scroll`), so each shadow fades out as that end is reached — without it
+     a cut-off column reads as a page with its right-hand side missing. */
+  --table-bg: var(--panel);
+  background:
+    linear-gradient(to right, var(--table-bg), transparent) left center / 1.4rem 100% no-repeat
+      local,
+    linear-gradient(to left, var(--table-bg), transparent) right center / 1.4rem 100% no-repeat
+      local,
+    radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.45), transparent) left center / 0.7rem
+      100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.45), transparent) right center /
+      0.7rem 100% no-repeat scroll;
+}
+/* The shadows fade into whatever the table is standing on. */
+.subpanel .table-wrap,
+.component-add-form .table-wrap {
+  --table-bg: var(--bg-2);
 }
 
 table {
@@ -998,9 +1018,15 @@ button.linklike:hover {
   flex: 1;
   min-width: min(12rem, 100%);
 }
+/* An item in a row that wants only the room it needs. `flex: 0` is not that:
+   it zeroes the BASIS as well, so the box shrinks to its longest word and a
+   label like "Chain — the next cable starts where this one lands" comes out
+   one word per line. The basis has to stay `auto` — the natural width — and
+   only the growing is turned off. */
 .row > .shrink {
-  flex: 0;
+  flex: 0 0 auto;
   min-width: auto;
+  max-width: 100%;
 }
 
 /* A run of controls that belong on one line: buttons beside each other, or a
@@ -1081,8 +1107,9 @@ button.linklike:hover {
   margin: 0 0 0.6rem;
 }
 .bulk-move > * {
-  flex: 0;
+  flex: 0 0 auto;
   min-width: auto;
+  max-width: 100%;
 }
 .bulk-move select {
   margin: 0;
@@ -1127,8 +1154,9 @@ button.linklike:hover {
   margin: 0.6rem 0 0.2rem;
 }
 .reanalyze-row > * {
-  flex: 0;
+  flex: 0 0 auto;
   min-width: auto;
+  max-width: 100%;
 }
 .inline-check {
   display: inline-flex;
@@ -1218,17 +1246,194 @@ button.linklike:hover {
   td {
     padding: 0.45rem 0.5rem;
   }
-  /* Keep a scrolled table's cells legible instead of squeezing every
-     column into a couple of characters. */
-  .table-wrap td,
-  .table-wrap th {
-    min-width: 5.5rem;
-  }
   .row {
     gap: 0.7rem;
   }
   .topbar {
     padding: 0 0.7rem;
+  }
+  /* Previous and next fill the line and the way back out sits under them,
+     centered: on a phone "← Previous Module" is two lines wide on its own
+     and the three-column bar folded its links over each other. */
+  .module-detail-navigation {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.35rem 0.8rem;
+    margin: 0.6rem 0 1rem;
+  }
+  .module-detail-navigation > :nth-child(2) {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    text-align: center;
+  }
+  /* The title and its small actions (rename, duplicate, share, export): a
+     flex row of them squeezes the name of the thing being looked at into a
+     column beside the buttons. Let the heading have its line back and the
+     actions flow under it, at the size they are read at rather than the
+     heading's. */
+  h1.actions {
+    display: block;
+  }
+  h1.actions > * {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    margin: 0.45rem 0.45rem 0 0;
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+  .feed {
+    max-height: 14rem;
+  }
+}
+
+/* ---- narrow screens: a table row is a card --------------------------- */
+
+/* A table is columns beside each other, and a phone has room for about two
+   of them. Scrolling one sideways reads as a page with its right-hand side
+   missing — the modules list showed a column of tick boxes and a Delete
+   button with the module NAME scrolled off, and a failed job was a tall
+   empty row whose error text was somewhere off the screen. Under this width
+   every row becomes a small card instead: one line per column, the column's
+   own name in front of the value (`data-label`), nothing off the edge and
+   nothing to scroll sideways.
+   A cell with no `data-label` is one that speaks for itself — the name the
+   card is about, a row's buttons — and takes the full width. */
+@media (max-width: 767px) {
+  .table-wrap {
+    overflow-x: visible;
+    /* Nothing scrolls sideways here, so the shadows that said it did go. */
+    background: none;
+  }
+  .table-wrap table,
+  .table-wrap tbody,
+  .table-wrap tr,
+  .table-wrap td {
+    display: block;
+    width: auto;
+  }
+  /* The headings are said on every cell now. Kept in the document (rather
+     than `display: none`) so a screen reader still has them. */
+  .table-wrap thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .table-wrap tr {
+    margin: 0 0 0.6rem;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--bg-2);
+  }
+  .table-wrap tr:last-child {
+    margin-bottom: 0;
+  }
+  /* Hovering is not a thing a finger does, and the row is its own box now. */
+  .table-wrap tr:hover td {
+    background: none;
+  }
+  .table-wrap td {
+    min-width: 0;
+    padding: 0.2rem 0;
+    border: 0;
+    text-align: left;
+  }
+  /* A column with nothing in it for this row — a job that did not fail, a
+     patch with no note — says nothing rather than printing its own name over
+     a blank. */
+  .table-wrap td[data-label]:empty {
+    display: none;
+  }
+  /* The column's name, read in front of its value. Deliberately part of the
+     line rather than a column of its own: a cell is text with elements in it
+     ("Doepfer A-180-2 Multiples — <strong>OUT</strong>"), and a flex or grid
+     cell makes a separate column of every one of those elements, which then
+     shrinks to its longest word and breaks OUT across two lines. Inline, the
+     value stays one run of text that wraps where text wraps. */
+  .table-wrap td[data-label]::before {
+    content: attr(data-label);
+    display: inline-block;
+    margin-right: 0.55rem;
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    vertical-align: baseline;
+  }
+  /* Columns that were only ever as wide as their contents: the tick that
+     picks a row, the bar of buttons that acts on it, the quantity stepper.
+     Pinning the buttons to the right edge was what hid the module name; with
+     nothing scrolling sideways there is nothing left to pin them against. */
+  .actions-cell,
+  .module-actions-cell,
+  .component-actions-cell,
+  .select-cell {
+    width: auto;
+    white-space: normal;
+    position: static;
+    border-left: 0;
+    text-align: left;
+  }
+  .table-wrap .actions,
+  .table-wrap .actions.nowrap,
+  .module-row-actions,
+  .component-row-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  .table-wrap td:first-child,
+  .table-wrap td:last-child {
+    padding-top: 0.3rem;
+  }
+  /* Buttons in a row used to be squeezed into a column of their own; they
+     have the width of the card now and are read at their own size. */
+  .module-row-actions button,
+  .module-row-actions select {
+    flex: 0 1 auto;
+  }
+}
+
+/* ---- fingers ---------------------------------------------------------- */
+
+/* A pointer that cannot hover cannot aim at a 13-pixel tick box either. Every
+   control that is a target of its own gets a fingertip's worth of height;
+   `linklike` buttons are excluded because they are a word inside a sentence
+   and would space the sentence out. */
+@media (pointer: coarse) {
+  button:not(.linklike) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.4rem;
+  }
+  input,
+  select {
+    min-height: 2.4rem;
+  }
+  input[type='checkbox'],
+  input[type='radio'] {
+    min-height: 0;
+    width: 1.15rem;
+    height: 1.15rem;
+  }
+  .nav-drawer a {
+    min-height: 2.5rem;
+  }
+  details.panel > summary,
+  details.expander > summary {
+    min-height: 2.6rem;
+  }
+  /* Steppers and other buttons sized to sit inside a line of text keep their
+     own height — they are already beside a control that has one. */
+  .qty-step button,
+  .row-collapse,
+  .toast-close {
+    min-height: 0;
   }
 }
 
@@ -1318,6 +1523,17 @@ button.linklike:hover {
   /* A module with sixty jacks must not push the picture off the screen. */
   max-height: 34rem;
   overflow-y: auto;
+}
+/* Narrow enough and the rows are UNDER the picture rather than beside it, so
+   there is no picture left for them to push off the screen — and a list with
+   its own scrollbar inside a scrolling page is both a trap for the finger and
+   a row cut in half at the bottom edge. The page is the only thing that
+   scrolls here. */
+@media (max-width: 767px) {
+  .panel-jacks-list {
+    max-height: none;
+    overflow-y: visible;
+  }
 }
 .jack-rows {
   list-style: none;

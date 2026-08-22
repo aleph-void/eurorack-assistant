@@ -143,13 +143,13 @@ async function removePort(pm, port) {
           </thead>
           <tbody>
             <tr v-for="pm in declaredModules" :key="pm.id" :data-test="`declared-${pm.id}`">
-              <td>{{ moduleLabel(pm) }}</td>
-              <td>
+              <td data-label="Name">{{ moduleLabel(pm) }}</td>
+              <td data-label="Kind">
                 <span class="badge" :class="pm.external ? 'pending' : 'failed'">
                   {{ pm.external ? 'off-rack gear' : 'not in this rack' }}
                 </span>
               </td>
-              <td>
+              <td data-label="Connection points">
                 <span v-for="port in pm.components" :key="port.id" style="margin-right: 0.6rem">
                   {{ jackLabel(port) }}
                   <button

@@ -139,10 +139,10 @@ const patchLabel = (pm) =>
           </thead>
           <tbody>
             <tr v-for="m in item.modules" :key="m.id" :data-test="`shared-module-${m.id}`">
-              <td>{{ m.manufacturer }} {{ m.name }}</td>
-              <td>{{ m.hp ?? '—' }}</td>
-              <td>{{ m.quantity }}</td>
-              <td class="muted">{{ m.summary || '—' }}</td>
+              <td data-label="Module">{{ m.manufacturer }} {{ m.name }}</td>
+              <td data-label="HP">{{ m.hp ?? '—' }}</td>
+              <td data-label="Qty">{{ m.quantity }}</td>
+              <td data-label="What it does" class="muted">{{ m.summary || '—' }}</td>
             </tr>
           </tbody>
         </table>

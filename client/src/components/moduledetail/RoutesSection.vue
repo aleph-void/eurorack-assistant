@@ -99,13 +99,13 @@ async function removeRoute(route) {
           </thead>
           <tbody>
             <tr v-for="r in module.routes" :key="r.id" :data-test="`route-${r.id}`">
-              <td>{{ componentName(r.input_component_id) }}</td>
-              <td>{{ componentName(r.output_component_id) }}</td>
-              <td :data-test="`route-condition-${r.id}`">
+              <td data-label="Input">{{ componentName(r.input_component_id) }}</td>
+              <td data-label="Appears at">{{ componentName(r.output_component_id) }}</td>
+              <td data-label="Only when" :data-test="`route-condition-${r.id}`">
                 {{ conditionText(r) || 'always' }}
                 <span v-if="r.alt_group" class="badge pending">{{ r.alt_group }}</span>
               </td>
-              <td>{{ r.description || '—' }}</td>
+              <td data-label="Description">{{ r.description || '—' }}</td>
               <td>
                 <button
                   class="danger"
