@@ -1,4 +1,19 @@
 import { createPinia, setActivePinia } from 'pinia';
+import { flushPromises } from '@vue/test-utils';
+
+// Some of what a click starts finishes on a TASK rather than a microtask —
+// the FileReader behind an upload, a debounce — and `flushPromises()` cannot
+// see past that. Waits for what the click was for, rather than betting one
+// fixed tick against however loaded the machine running the suite is.
+export async function waitFor(done, what, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await flushPromises();
+    if (done()) return;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 // Fresh pinia per mount + shared mount options for view tests.
 export function testGlobal() {
