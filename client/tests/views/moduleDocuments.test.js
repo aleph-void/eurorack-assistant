@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { testGlobal } from '../setup.js';
+import { testGlobal, waitFor } from '../setup.js';
 
 vi.mock('../../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -109,9 +109,9 @@ describe('ModuleDocumentsView', () => {
     await wrapper.find('[data-test="doc-scope"]').setValue(true);
 
     await wrapper.find('[data-test="doc-send"]').trigger('click');
-    // The FileReader behind the upload resolves on a task, not a microtask.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await flushPromises();
+    // The FileReader behind the upload resolves on a task, not a microtask,
+    // and one tick of it is a bet a loaded CI box loses.
+    await waitFor(() => api.post.mock.calls.length > 0, 'the upload to be sent');
     expect(api.post).toHaveBeenCalledWith(
       '/api/modules/1/manuals',
       expect.objectContaining({
