@@ -243,7 +243,11 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   that is not a jack and dragging scrolls the box under the pointer (`startPan`
   in PatchDiagram.vue), because a studio is far wider than any screen and the
   scroll bar is a long way from the panel being patched. A cable drag has
-  already claimed the gesture by the time the wrap sees it, so patching wins.
+  already claimed the gesture by the time the wrap sees it, so patching wins —
+  and a dragged cable held near an edge of the box scrolls the picture that
+  way (`edgeScroll` in useCableDrag.js, a rAF loop, faster the nearer the
+  edge), because the jack it is headed for is usually off screen and the hand
+  is on the drag.
   A cable is also what you alt-click to unplug, so its stroke is widened by
   the zoom below 1:1 (`--cable-width`) rather than thinning to a hairline
   nothing can hit.

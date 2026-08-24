@@ -1186,6 +1186,78 @@ describe('PatchDiagram', () => {
     });
   });
 
+  // A studio's two jacks are rarely on screen together, and the hand is on
+  // the drag — letting go to reach the scroll bar drops the cable. So a cable
+  // held near an edge of the box scrolls the picture that way until the jack
+  // it is headed for arrives.
+  describe('scrolling at the edge under a dragged cable', () => {
+    const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    // The scroll box with a size jsdom will not give it, and the picture
+    // sliding under the box as it scrolls — which is what brings an
+    // off-screen jack to the stationary pointer.
+    const setup = () => {
+      const layout = layoutDiagram(modules());
+      const wrapper = mountDiagram({ interactive: true });
+      const el = wrapper.find('.diagram-wrap').element;
+      Object.defineProperty(el, 'getBoundingClientRect', {
+        value: () => ({ left: 0, top: 0, right: 400, bottom: 300, width: 400, height: 300 }),
+      });
+      const svg = wrapper.find('[data-test="diagram-svg"]');
+      Object.defineProperty(svg.element, 'getBoundingClientRect', {
+        value: () => ({
+          left: -el.scrollLeft,
+          top: -el.scrollTop,
+          width: layout.width,
+          height: layout.height,
+        }),
+      });
+      return { wrapper, el, svg, layout };
+    };
+    const startDrag = async ({ wrapper, layout }) => {
+      const from = layout.anchors.get('11:1');
+      await wrapper
+        .find('[data-test="diagram-jack-11-1"]')
+        .trigger('pointerdown', { pointerId: 1, clientX: from.x, clientY: from.y });
+    };
+
+    it('scrolls toward the edge the cable is held at, and the draft keeps up', async () => {
+      const parts = setup();
+      const { wrapper, el, svg } = parts;
+      await startDrag(parts);
+      // Held hard against the right edge.
+      await svg.trigger('pointermove', { pointerId: 1, clientX: 398, clientY: 150 });
+      await frame();
+      const once = el.scrollLeft;
+      expect(once).toBeGreaterThan(0);
+      // The loop keeps scrolling with no further pointer event at all…
+      await frame();
+      expect(el.scrollLeft).toBeGreaterThan(once);
+      // …and the draft cable's end follows the picture sliding under the
+      // stationary pointer, instead of staying at the point last moved to.
+      await wrapper.vm.$nextTick();
+      const d = wrapper.find('.draft-cable').attributes('d');
+      expect(pathEnds(d).to.x).toBeCloseTo(398 + el.scrollLeft, 0);
+
+      // Letting go is what stops it.
+      await svg.trigger('pointerup', { pointerId: 1, clientX: 398, clientY: 150 });
+      const rest = el.scrollLeft;
+      await frame();
+      await frame();
+      expect(el.scrollLeft).toBe(rest);
+    });
+
+    it('rests while the cable is held clear of the edges', async () => {
+      const parts = setup();
+      const { el, svg } = parts;
+      await startDrag(parts);
+      await svg.trigger('pointermove', { pointerId: 1, clientX: 200, clientY: 150 });
+      await frame();
+      await frame();
+      expect(el.scrollLeft).toBe(0);
+      expect(el.scrollTop).toBe(0);
+    });
+  });
+
   // A studio is six thousand markers and all but the jacks are furniture no
   // cable can go in: the picture opens on the jacks, and the key under it is
   // where the rest of the front panel is asked for.
