@@ -15,6 +15,7 @@ import {
   PANEL_HEIGHT,
   cableBounds,
   cableColor,
+  cableHitPath,
   cablePath,
   layoutDiagram,
   usedModules,
@@ -133,6 +134,7 @@ const {
   zoomPercent,
   markerRadius,
   markerStroke,
+  cableGap,
   MARKER_HALO,
   MARKER_NEUTRAL,
   MARKER_SELECTED,
@@ -198,6 +200,7 @@ const drawn = computed(() =>
       if (!from || !to) return null;
       return {
         cable,
+        index,
         d: cablePath(from, to, index),
         // The box the curve hangs in, so a cable across the studio is drawn
         // whenever any part of it is on screen — including the middle of a
@@ -218,6 +221,20 @@ const drawn = computed(() =>
 // A cable is on screen when any part of its curve is, whether or not either
 // panel it runs between is.
 const visibleCables = computed(() => drawn.value.filter((c) => inView(c.box)));
+
+// The invisible handle each cable on screen is tapped by: the same curve with
+// the jacks at both ends cut off it. Its own computed rather than a call in
+// the template, because the cut depends on the ZOOM — the handle is measured
+// in the picture's units and has to stay the same size on screen — and a
+// scroll must not re-derive it for cables that have not moved.
+const cableHits = computed(() =>
+  props.interactive
+    ? visibleCables.value.map((entry) => ({
+        entry,
+        d: cableHitPath(entry.from, entry.to, entry.index, cableGap.value),
+      }))
+    : []
+);
 
 // Cable ends, so a patched jack is marked even when its panel drew nothing
 // there.
@@ -638,28 +655,69 @@ function pickCable(entry, event) {
 
             <!-- The handle a finger unplugs by. A cable is drawn seven pixels
                  wide and a fingertip is nearer forty, so every cable also has
-                 an invisible stroke several times its width to be tapped at.
-                 It sits UNDER the markers, so the marker at a cable's end is
-                 still the thing a tap on that end finds, and it is built from
-                 the cables on screen like everything else here. -->
+                 an invisible stroke several times its width to be tapped at —
+                 STOPPING SHORT OF THE JACKS AT BOTH ENDS (`cableHitPath`), so
+                 that a press where a jack and the cable plugged into it lie on
+                 top of each other answers with the jack. It is built from the
+                 cables on screen like everything else here. -->
             <template v-if="interactive">
               <path
-                v-for="c in visibleCables"
-                :key="`hit-${c.cable.id}`"
-                :d="c.d"
+                v-for="h in cableHits"
+                :key="`hit-${h.entry.cable.id}`"
+                :d="h.d"
                 class="cable-hit"
                 :class="{ dimmed: Boolean(patchFrom) }"
                 stroke="transparent"
-                :data-test="`diagram-cable-hit-${c.cable.id}`"
-                @click="pickCable(c, $event)"
-                @contextmenu="unplugCable(c.cable, $event)"
-                @pointerenter="hoveredCableId = c.cable.id"
+                :data-test="`diagram-cable-hit-${h.entry.cable.id}`"
+                @click="pickCable(h.entry, $event)"
+                @contextmenu="unplugCable(h.entry.cable, $event)"
+                @pointerenter="hoveredCableId = h.entry.cable.id"
                 @pointerleave="hoveredCableId = null"
               />
             </template>
 
+            <path v-if="draftCable" :d="draftCable" class="cable draft-cable" />
+
+            <path
+              v-for="c in visibleCables"
+              :key="c.cable.id"
+              :d="c.d"
+              class="cable"
+              :class="{
+                optional: c.cable.optional,
+                unpluggable: interactive,
+                dimmed: interactive && Boolean(patchFrom),
+                picked: c.cable.id === selectedCableId,
+                hovered: c.cable.id === hoveredCableId,
+              }"
+              :stroke="c.color"
+              :data-test="`diagram-cable-${c.cable.id}`"
+              @click="pickCable(c, $event)"
+              @contextmenu="unplugCable(c.cable, $event)"
+            >
+              <title>
+                {{ c.title
+                }}{{ interactive ? ' — tap it, or alt- or right-click, to unplug' : '' }}
+              </title>
+            </path>
+            <!-- The plug at each end, under the markers with the rest of the
+                 cable: it is what marks a patched jack when no marker is drawn
+                 there at all — the type filtered off, or the picture zoomed
+                 out past the point markers are drawn. -->
+            <circle
+              v-for="end in ends"
+              :key="end.key"
+              :cx="end.point.x"
+              :cy="end.point.y"
+              r="7"
+              class="cable-end"
+              :fill="end.color"
+            />
+
             <!-- Every jack we know the position of, so an empty one still
-                 reads as somewhere a cable could go. -->
+                 reads as somewhere a cable could go. Drawn AFTER the cables,
+                 so a jack is never buried under the cable plugged into it —
+                 and so a press that lands on both is the jack's. -->
             <circle
               v-for="a in visibleAnchors"
               :key="a.key"
@@ -706,40 +764,6 @@ function pickCable(entry, event) {
                 }}
               </title>
             </circle>
-
-            <path v-if="draftCable" :d="draftCable" class="cable draft-cable" />
-
-            <path
-              v-for="c in visibleCables"
-              :key="c.cable.id"
-              :d="c.d"
-              class="cable"
-              :class="{
-                optional: c.cable.optional,
-                unpluggable: interactive,
-                dimmed: interactive && Boolean(patchFrom),
-                picked: c.cable.id === selectedCableId,
-                hovered: c.cable.id === hoveredCableId,
-              }"
-              :stroke="c.color"
-              :data-test="`diagram-cable-${c.cable.id}`"
-              @click="pickCable(c, $event)"
-              @contextmenu="unplugCable(c.cable, $event)"
-            >
-              <title>
-                {{ c.title
-                }}{{ interactive ? ' — tap it, or alt- or right-click, to unplug' : '' }}
-              </title>
-            </path>
-            <circle
-              v-for="end in ends"
-              :key="end.key"
-              :cx="end.point.x"
-              :cy="end.point.y"
-              r="7"
-              class="cable-end"
-              :fill="end.color"
-            />
 
             <template v-if="showJackNames">
               <text
@@ -1031,12 +1055,13 @@ function pickCable(entry, event) {
   stroke-width: calc(var(--cable-width, 7px) * 1.5);
   opacity: 1;
 }
-/* A cable is drawn OVER the markers, and its two ends lie exactly on the two
-   jacks it joins: left hittable, it is what a tap on a patched output finds,
-   and a mult's second cable could never be started. So on a diagram that can
-   be patched the stroke is deaf and the handle underneath — which sits below
-   the markers — does all the hearing: the middle of a cable is the cable, its
-   ends are the jacks. */
+/* A cable is drawn UNDER the markers and its two ends lie exactly on the two
+   jacks it joins: left hittable, its stroke would still answer for the ring of
+   picture around a marker, so a tap meant for a patched output would find the
+   cable and a mult's second cable could never be started. So on a diagram that
+   can be patched the stroke is deaf and the handle underneath — trimmed clear
+   of both jacks — does all the hearing: the middle of a cable is the cable,
+   its ends are the jacks. */
 .cable.unpluggable {
   pointer-events: none;
 }
@@ -1055,8 +1080,8 @@ function pickCable(entry, event) {
 }
 /* Last, so a cable a normalled connection only MIGHT make fades back with all
    the rest of them: while one end of a cable is held, everything the picture
-   is not asking about gets out of the way of the answer — including, for the
-   cables, out of the way of the markers they are drawn over. */
+   is not asking about gets out of the way of the answer — the cables included,
+   handle and all. */
 .cable.dimmed,
 .cable-hit.dimmed {
   pointer-events: none;
@@ -1070,8 +1095,9 @@ function pickCable(entry, event) {
   opacity: 0.9;
   pointer-events: none;
 }
-/* Decoration, drawn last and therefore over everything: it marks a patched
-   jack, it is not a thing to press. */
+/* Decoration: it marks a patched jack, it is not a thing to press — and it is
+   drawn with the cables, under the markers, so a jack is drawn over the plug
+   in it rather than under it. */
 .cable-end {
   stroke: var(--bg);
   stroke-width: 1.5;

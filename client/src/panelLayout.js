@@ -433,6 +433,78 @@ export function cablePath(from, to, index = 0) {
   );
 }
 
+// The same curve with a length cut off each END, which is what a cable is
+// TAPPED by. A cable's two ends lie exactly on the two jacks it joins and the
+// handle a finger unplugs by is three times the drawn width, so an untrimmed
+// handle covers the marker it ends on and swallows every press meant for that
+// jack — the annulus around a patched jack answered 'cable' where it looked
+// like 'jack'. Cutting `gap` off both ends is what makes the comment true:
+// the middle of a cable is the cable, its ends are the jacks. A cable too
+// short to give up that much keeps a fifth of itself in the middle.
+export function cableHitPath(from, to, index = 0, gap = 0) {
+  const sag = cableSag(from, to, index);
+  const curve = [from, { x: from.x, y: from.y + sag }, { x: to.x, y: to.y + sag }, to];
+  const t = gap > 0 ? clamp(cubicT(curve, gap), 0, 0.4) : 0;
+  if (!t) return cablePath(from, to, index);
+  const [p0, p1, p2, p3] = cubicSlice(curve, t, 1 - t);
+  return (
+    `M ${round(p0.x)} ${round(p0.y)} ` +
+    `C ${round(p1.x)} ${round(p1.y)} ` +
+    `${round(p2.x)} ${round(p2.y)} ` +
+    `${round(p3.x)} ${round(p3.y)}`
+  );
+}
+
+const lerpPoint = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+
+// Where along a cubic a given DISTANCE from its start lands, walked over a
+// flattened copy of it. A cubic has no closed-form arc length and the curve
+// only has to stop clear of a marker, so twenty-four chords are plenty.
+function cubicT(curve, distance) {
+  const STEPS = 24;
+  let previous = curve[0];
+  let walked = 0;
+  for (let i = 1; i <= STEPS; i += 1) {
+    const t = i / STEPS;
+    const point = cubicAt(curve, t);
+    const step = Math.hypot(point.x - previous.x, point.y - previous.y);
+    if (walked + step >= distance) {
+      return (i - 1 + (step ? (distance - walked) / step : 0)) / STEPS;
+    }
+    walked += step;
+    previous = point;
+  }
+  return 1;
+}
+
+function cubicAt(curve, t) {
+  const [p0, p1, p2, p3] = curve;
+  const a = lerpPoint(p0, p1, t);
+  const b = lerpPoint(p1, p2, t);
+  const c = lerpPoint(p2, p3, t);
+  const d = lerpPoint(a, b, t);
+  const e = lerpPoint(b, c, t);
+  return lerpPoint(d, e, t);
+}
+
+// De Casteljau twice: the piece of a cubic between two parameters is itself a
+// cubic, so the trimmed handle is still one curve rather than a polyline.
+function cubicSlice(curve, t0, t1) {
+  const right = splitCubic(curve, t0).right;
+  return splitCubic(right, (t1 - t0) / (1 - t0)).left;
+}
+
+function splitCubic(curve, t) {
+  const [p0, p1, p2, p3] = curve;
+  const a = lerpPoint(p0, p1, t);
+  const b = lerpPoint(p1, p2, t);
+  const c = lerpPoint(p2, p3, t);
+  const d = lerpPoint(a, b, t);
+  const e = lerpPoint(b, c, t);
+  const f = lerpPoint(d, e, t);
+  return { left: [p0, a, d, f], right: [f, e, c, p3] };
+}
+
 const round = (n) => Math.round(n * 10) / 10;
 
 // Distinct cable colours, in the order patch cables get handed out. Chosen to

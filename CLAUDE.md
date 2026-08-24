@@ -266,7 +266,15 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   `.cable.unpluggable`), because a cable's two ends lie exactly on the two
   jacks it joins and a mult's second cable has to be startable from the
   output the first one is already in: the middle of a cable is the cable, its
-  ends are the jacks.
+  ends are the jacks. A JACK IS DRAWN OVER THE CABLES PLUGGED INTO IT and
+  wins every press they share, which takes both halves: the cables, their
+  plugs and the draft cable are drawn BEFORE the markers, and the handle is
+  TRIMMED CLEAR of the jack at each end (`cableHitPath()` in panelLayout.js,
+  cut back by `cableGap` — the marker, its ring and the handle's own round
+  cap), because a fat stroke that ran all the way to a jack answered 'cable'
+  for the ring of picture around a marker that looked like 'jack'. A cable
+  with less length than the gap asks for keeps its middle fifth, so there is
+  always something to aim at.
 - ONLY WHAT IS ON SCREEN IS BUILT. A studio is two hundred panels and six
   thousand markers, and the picture is far wider than any screen: the diagram
   renders the panels whose box intersects the scroll viewport (plus a margin),

@@ -24,6 +24,7 @@ import { dialog } from '../src/dialog.js';
 import {
   PANEL_HEIGHT,
   cableColor,
+  cableHitPath,
   cablePath,
   layoutDiagram,
   panelImageUrl,
@@ -94,6 +95,14 @@ const cable = (extra = {}) => ({
   alt_group: null,
   ...extra,
 });
+
+// The two ends of a drawn cable, read back off its `d` — 'M x y C x1 y1 x2 y2
+// x3 y3', so the first pair and the last pair are where it starts and stops.
+const pathEnds = (d) => {
+  const n = d.match(/-?\d+(?:\.\d+)?/g).map(Number);
+  return { from: { x: n[0], y: n[1] }, to: { x: n[6], y: n[7] } };
+};
+const apart = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 describe('panel layout geometry', () => {
   it('sizes a panel from the HP of the module, so two widths are two widths', () => {
@@ -276,6 +285,28 @@ describe('panel layout geometry', () => {
     expect(cablePath({ x: 0, y: 0 }, { x: 100, y: 0 }, 1)).not.toBe(d);
   });
 
+  // The handle is the same curve with the jacks cut off both ends of it.
+  it('trims a cable handle clear of the jack at each end', () => {
+    const from = { x: 0, y: 0 };
+    const to = { x: 200, y: 0 };
+    const full = cablePath(from, to, 0);
+    // Nothing to keep clear of, nothing to cut.
+    expect(cableHitPath(from, to, 0, 0)).toBe(full);
+
+    const trimmed = pathEnds(cableHitPath(from, to, 0, 14));
+    expect(apart(trimmed.from, from)).toBeGreaterThan(10);
+    expect(apart(trimmed.from, from)).toBeLessThan(22);
+    expect(apart(trimmed.to, to)).toBeGreaterThan(10);
+    expect(apart(trimmed.to, to)).toBeLessThan(22);
+    // Still a curve between the two, not a straight line across the gap.
+    expect(trimmed.from.x).toBeLessThan(trimmed.to.x);
+
+    // A cable with less length than the gap asks for keeps its middle rather
+    // than disappearing: something has to be left to aim at.
+    const short = pathEnds(cableHitPath(from, { x: 6, y: 0 }, 0, 400));
+    expect(apart(short.from, short.to)).toBeGreaterThan(0);
+  });
+
   it('gives consecutive cables different colours', () => {
     expect(cableColor(0)).not.toBe(cableColor(1));
     expect(cableColor(0)).toBe(cableColor(8));
@@ -356,11 +387,16 @@ describe('PatchDiagram', () => {
   });
 
   // A cable is drawn seven pixels wide and a fingertip is nearer forty, so
-  // there is a fat invisible stroke over it to aim at.
+  // there is a fat invisible stroke over it to aim at — one that stops short
+  // of the jacks at both ends, so a press where a jack and the cable plugged
+  // into it lie on top of each other answers with the jack.
   it('gives every cable a handle wide enough for a finger', async () => {
     const wrapper = mountDiagram({ interactive: true });
     const hit = wrapper.find('[data-test="diagram-cable-hit-21"]');
-    expect(hit.attributes('d')).toBe(wrapper.find('[data-test="diagram-cable-21"]').attributes('d'));
+    const drawn = pathEnds(wrapper.find('[data-test="diagram-cable-21"]').attributes('d'));
+    const handle = pathEnds(hit.attributes('d'));
+    expect(apart(handle.from, drawn.from)).toBeGreaterThan(6);
+    expect(apart(handle.to, drawn.to)).toBeGreaterThan(6);
     expect(hit.attributes('stroke')).toBe('transparent');
     await hit.trigger('click');
     expect(wrapper.find('[data-test="diagram-cable-bar"]').text()).toContain('EOR');

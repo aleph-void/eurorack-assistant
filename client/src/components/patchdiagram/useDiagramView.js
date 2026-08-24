@@ -138,6 +138,15 @@ export function useDiagramView({ wrap, container, diagram }) {
   // hover rule can thicken it further without a second binding per cable.
   const CABLE_WIDTH = 7;
   const cableStroke = computed(() => clamp(CABLE_WIDTH / zoom.value, CABLE_WIDTH, 26));
+  // How far short of each jack a cable's TAP HANDLE stops. The handle is three
+  // times the drawn width (`.cable-hit`) and a round cap puts half of that
+  // beyond the path's end, so a handle that ran all the way to the jack would
+  // cover the marker and everything around it: a press on a patched jack would
+  // answer with the cable. Cut back by the marker, its ring and that cap, and
+  // the jack is the thing the jack answers with.
+  const cableGap = computed(
+    () => markerRadius.value + markerStroke.value + cableStroke.value * 1.5
+  );
   // The dark ring behind every marker, so a bright dot has an edge to be seen
   // against on a photograph of a panel. Kept here rather than in the stylesheet
   // because a marker's colours travel on the element itself — a rule in CSS
@@ -273,6 +282,7 @@ export function useDiagramView({ wrap, container, diagram }) {
     zoomPercent,
     markerRadius,
     markerStroke,
+    cableGap,
     MARKER_HALO,
     MARKER_NEUTRAL,
     MARKER_SELECTED,
