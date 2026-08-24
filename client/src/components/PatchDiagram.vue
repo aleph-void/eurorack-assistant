@@ -659,39 +659,37 @@ function pickCable(entry, event) {
 // that one control. Which panel or marker is under the pointer comes off the
 // event's own target (the `data-pm` on each panel group), because the browser
 // has already answered the hit test the moment it fired the event.
-const menu = ref(null); // { patchModuleId, x, y } — x/y are viewport coords
+// Where the menu is (viewport coords; null while closed) and which instance
+// it is open over. The instance rides in a ref of its own rather than inside
+// the position, because everything below reads it and nothing below is read
+// at all while the menu is closed — the whole menu hangs off `menuAt` in the
+// template, so a stale `menuFor` after closing is never looked at.
+const menuAt = ref(null); // { x, y }
+const menuFor = ref(0); // patch_module id
 const menuParameter = ref(null); // the menu parameter being set, once picked
 const menuComponent = ref(null); // the panel control being set, when the
 // gesture landed on its marker rather than on the panel
 const menuDraft = ref('');
-const menuModule = computed(() =>
-  menu.value ? (moduleById.value.get(menu.value.patchModuleId) ?? null) : null
-);
+// Null when the instance has left the payload under an open menu — a reload
+// after a write elsewhere — which the template reads as 'menu unknown'.
+const menuModule = computed(() => moduleById.value.get(menuFor.value) ?? null);
 const menuParameters = computed(() => menuModule.value?.parameters ?? []);
 // "OUT 1 · Clock division" — the jack a parameter configures, named the way
 // the module names it now, falling back to the name the parameter kept.
 const menuComponentName = (parameter) => {
   if (!parameter.component_id) return null;
-  return (
-    (menuModule.value?.components ?? []).find((c) => c.id === parameter.component_id)?.name ??
-    parameter.component_name ??
-    null
-  );
+  const live = menuModule.value.components.find((c) => c.id === parameter.component_id);
+  return live ? live.name : parameter.component_name;
 };
 const menuSettingFor = (parameterId) =>
   props.settings.find(
-    (s) => s.patch_module_id === menu.value?.patchModuleId && s.parameter_id === parameterId
+    (s) => s.patch_module_id === menuFor.value && s.parameter_id === parameterId
   ) ?? null;
-const menuComponentSetting = computed(() =>
-  menuComponent.value
-    ? (props.settings.find(
-        (s) =>
-          s.patch_module_id === menu.value?.patchModuleId &&
-          s.component_id === menuComponent.value.id &&
-          !s.parameter_id
-      ) ?? null)
-    : null
-);
+const componentSettingOf = (component) =>
+  props.settings.find(
+    (s) =>
+      s.patch_module_id === menuFor.value && s.component_id === component.id && !s.parameter_id
+  ) ?? null;
 
 // The same reading the settings page gives a value: a listed set becomes
 // buttons to press, a bounded number a number box, anything else free text.
@@ -741,7 +739,7 @@ const menuEditor = computed(() => {
       description: null,
       unit: null,
       control: componentControlOf(c),
-      current: menuComponentSetting.value?.value ?? null,
+      current: componentSettingOf(c)?.value ?? null,
     };
   }
   return null;
@@ -752,11 +750,11 @@ function placeMenu(patchModuleId, event) {
   selectedCableId.value = null;
   menuParameter.value = null;
   menuComponent.value = null;
-  menu.value = {
-    patchModuleId,
+  menuFor.value = patchModuleId;
+  menuAt.value = {
     // At the pointer, pulled back from the right edge so a press there does
     // not open the menu off the screen.
-    x: Math.min(event.clientX, Math.max(0, (window.innerWidth || 0) - 336)),
+    x: Math.min(event.clientX, Math.max(0, window.innerWidth - 336)),
     y: event.clientY,
   };
 }
@@ -770,7 +768,7 @@ function openModuleMenu(event) {
   if (!panelEl) {
     // Not over a module at all: nothing to set, and the browser keeps its own
     // context menu for the empty parts of the picture.
-    menu.value = null;
+    menuAt.value = null;
     return;
   }
   event.preventDefault();
@@ -789,7 +787,7 @@ function openControlMenu(anchor, event) {
   event?.preventDefault();
   placeMenu(anchor.patchModuleId, event);
   menuComponent.value = component;
-  menuDraft.value = menuComponentSetting.value?.value ?? '';
+  menuDraft.value = componentSettingOf(component)?.value ?? '';
   return true;
 }
 
@@ -800,7 +798,7 @@ function diagramClick(event) {
   }
   // A plain click on the picture is some other gesture's business — whatever
   // it does, the menu it was not aimed at gets out of the way.
-  if (menu.value) menu.value = null;
+  menuAt.value = null;
 }
 
 function pickMenuParameter(parameter) {
@@ -809,11 +807,11 @@ function pickMenuParameter(parameter) {
 }
 
 function setMenuValue(value) {
-  const text = String(value ?? '').trim();
-  if (!text || !menu.value) return;
+  const text = String(value).trim();
+  if (!text) return;
   if (menuParameter.value) {
     emit('setting', {
-      patch_module_id: menu.value.patchModuleId,
+      patch_module_id: menuFor.value,
       parameter_id: menuParameter.value.id,
       value: text,
     });
@@ -822,16 +820,14 @@ function setMenuValue(value) {
     menuParameter.value = null;
     return;
   }
-  if (menuComponent.value) {
-    emit('setting', {
-      patch_module_id: menu.value.patchModuleId,
-      component_id: menuComponent.value.id,
-      value: text,
-    });
-    // One control, one value: done.
-    menu.value = null;
-    menuComponent.value = null;
-  }
+  emit('setting', {
+    patch_module_id: menuFor.value,
+    component_id: menuComponent.value.id,
+    value: text,
+  });
+  // One control, one value: done.
+  menuAt.value = null;
+  menuComponent.value = null;
 }
 </script>
 
@@ -1143,19 +1139,19 @@ function setMenuValue(value) {
              inside the fullscreen panel and never scrolls with the picture —
              but unlike the tip it is pressed, so it hears the pointer. -->
         <div
-          v-if="interactive && menu"
+          v-if="interactive && menuAt"
           class="module-menu"
-          :style="{ left: `${menu.x}px`, top: `${menu.y}px` }"
+          :style="{ left: `${menuAt.x}px`, top: `${menuAt.y}px` }"
           data-test="diagram-module-menu"
         >
           <div class="module-menu-head">
-            <strong>{{ moduleName(menu.patchModuleId) }}</strong>
+            <strong>{{ moduleName(menuFor) }}</strong>
             <button
               type="button"
               class="secondary"
               style="margin: 0"
               data-test="diagram-menu-close"
-              @click="menu = null"
+              @click="menuAt = null"
             >
               Close
             </button>

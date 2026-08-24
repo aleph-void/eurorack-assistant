@@ -251,6 +251,24 @@ describe('PatchDetailView', () => {
     expect(api.get).toHaveBeenCalledTimes(2);
   });
 
+  // api.js has already raised the toast for a refused setting; the page has
+  // nothing to add and nothing to re-read.
+  it('shrugs off a setting the server refuses', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.put.mockRejectedValue(new Error('that module is not part of this patch'));
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+    wrapper.findComponent(PatchDiagram).vm.$emit('setting', {
+      patch_module_id: 11,
+      component_id: 3,
+      value: '5',
+    });
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledTimes(1);
+    expect(api.get).toHaveBeenCalledTimes(1);
+  });
+
   it('duplicates the patch and opens the copy', async () => {
     api.get.mockResolvedValue(patchResponse);
     api.post.mockResolvedValue({ id: 99, name: 'Krell (copy)' });

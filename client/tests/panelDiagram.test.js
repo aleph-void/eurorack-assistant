@@ -432,6 +432,21 @@ describe('PatchDiagram', () => {
       value_min: null,
       value_max: null,
       unit: null,
+      description: 'How fast EOR runs against the clock.',
+    },
+    // A parameter whose jack a re-analysis has since taken away: the name it
+    // snapshotted is all there is left to show.
+    {
+      id: 104,
+      component_id: 99,
+      component_name: 'OLD OUT',
+      name: 'Slew',
+      value_type: 'enum',
+      options: [{ id: 9, value: 'on', description: null }],
+      default_value: null,
+      value_min: null,
+      value_max: null,
+      unit: null,
       description: null,
     },
     {
@@ -489,8 +504,16 @@ describe('PatchDiagram', () => {
     const entry = wrapper.find('[data-test="diagram-menu-parameter-101"]');
     expect(entry.text()).toContain('EOR · Clock division');
     expect(entry.text()).toContain('/4');
+    // A parameter whose jack is gone still says which jack it configured.
+    expect(wrapper.find('[data-test="diagram-menu-parameter-104"]').text()).toContain(
+      'OLD OUT · Slew'
+    );
 
     await entry.trigger('click');
+    // What the manual says the parameter does rides along.
+    expect(wrapper.find('[data-test="diagram-module-menu"]').text()).toContain(
+      'How fast EOR runs against the clock.'
+    );
     const option = wrapper.find('[data-test="diagram-menu-option-2"]');
     expect(option.text()).toContain('x2');
     await option.trigger('click');
@@ -621,6 +644,20 @@ describe('PatchDiagram', () => {
     const note = wrapper.find('[data-test="diagram-menu-empty"]');
     expect(note.text()).toContain('No menu parameters');
     expect(note.find('a').attributes('to')).toBe('/modules/2/parameters');
+  });
+
+  // A write elsewhere reloads the payload under an open menu, and the
+  // instance it was open over may not come back — the menu says so rather
+  // than crashing or listing a ghost.
+  it('survives the module leaving the payload while its menu is open', async () => {
+    const wrapper = mountDiagram({ modules: withMenu(), interactive: true });
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    expect(wrapper.find('[data-test="diagram-menu-parameter-101"]').exists()).toBe(true);
+    await wrapper.setProps({ modules: [modules()[1]], cables: [] });
+    const menu = wrapper.find('[data-test="diagram-module-menu"]');
+    expect(menu.find('[data-test="diagram-menu-empty"]').text()).toContain(
+      'no longer in the rack'
+    );
   });
 
   // A knob, toggle or button is a thing ON the panel with a position of its
