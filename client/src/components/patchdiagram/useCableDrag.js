@@ -12,7 +12,7 @@
 //
 // Split out of PatchDiagram.vue, which is otherwise the picture itself.
 
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { cablePath } from '../../panelLayout.js';
 
 // `svg` is the drawing surface (the coordinate space a pointer is read into),
@@ -50,10 +50,65 @@ export function useCableDrag({ props, emit, svg, wrap, diagram, inputs, drawnCou
     if (!dragging.value) return;
     const point = pointAt(event);
     if (point) dragging.value = { ...dragging.value, point };
+    dragPointer = { clientX: event.clientX, clientY: event.clientY };
+    if (!scrollFrame) scrollFrame = requestAnimationFrame(edgeScroll);
   }
+
+  // ---- scrolling at the edge ----
+  // A studio is far wider than any screen, so the jack a dragged cable is
+  // headed for is often not on it — and the hand is on the drag: letting go
+  // to reach the scroll bar drops the cable. So holding the drag near an edge
+  // of the scroll box scrolls the picture that way, faster the nearer the
+  // edge; the pointer capture keeps the moves coming past it, where the speed
+  // tops out. The scrolling is a rAF loop rather than work per pointer event
+  // — the house rule, and also the only thing that keeps the picture moving
+  // while the pointer HOLDS STILL at the edge, when no event arrives at all.
+  const EDGE = 48; // how far from an edge the scrolling starts, in px
+  const EDGE_SPEED = 24; // px per frame hard against the edge
+  let dragPointer = null; // where the dragged cable last was, in client px
+  let scrollFrame = 0;
+
+  // How hard one axis pushes: nothing inside the band, up to full speed at
+  // (or beyond) the edge itself.
+  function edgePush(at, low, high) {
+    if (at < low + EDGE) return -Math.min(1, (low + EDGE - at) / EDGE);
+    if (at > high - EDGE) return Math.min(1, (at - (high - EDGE)) / EDGE);
+    return 0;
+  }
+
+  function edgeScroll() {
+    scrollFrame = 0;
+    const el = wrap.value;
+    if (!dragging.value || !el || !dragPointer) return;
+    const box = el.getBoundingClientRect();
+    // A box with no size (a test renderer with no layout) has no edges.
+    if (!box.width || !box.height) return;
+    const dx = edgePush(dragPointer.clientX, box.left, box.right);
+    const dy = edgePush(dragPointer.clientY, box.top, box.bottom);
+    // Out of the band: the loop rests until the next pointer move re-arms it.
+    if (!dx && !dy) return;
+    const { scrollLeft, scrollTop } = el;
+    el.scrollLeft = scrollLeft + dx * EDGE_SPEED;
+    el.scrollTop = scrollTop + dy * EDGE_SPEED;
+    // Pinned against the end of the scroll range: nothing left to scroll to.
+    if (el.scrollLeft === scrollLeft && el.scrollTop === scrollTop) return;
+    // The picture slid under a pointer that may be holding still, so the
+    // draft cable's end follows it the way a pointer move would have made it.
+    const point = pointAt(dragPointer);
+    if (point) dragging.value = { ...dragging.value, point };
+    scrollFrame = requestAnimationFrame(edgeScroll);
+  }
+
+  function stopEdgeScroll() {
+    dragPointer = null;
+    if (scrollFrame) cancelAnimationFrame(scrollFrame);
+    scrollFrame = 0;
+  }
+  onBeforeUnmount(stopEdgeScroll);
 
   function finishCable(event) {
     if (!dragging.value) return;
+    stopEdgeScroll();
     const point = pointAt(event);
     const source = dragging.value.source;
     dragging.value = null;
