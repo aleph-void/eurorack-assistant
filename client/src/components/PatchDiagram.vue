@@ -385,7 +385,7 @@ function selectJack(anchor, event) {
   // Alt-clicking a control's marker opens its value editor, the same thing
   // right-clicking it does. On a jack this declines and the tap goes on to
   // mean what it always has.
-  if (event?.altKey && openControlMenu(anchor, event)) return;
+  if (event.altKey && openControlMenu(anchor, event)) return;
   // A tap means 'this end of the cable' while one is armed, and 'tell me
   // about this jack' the rest of the time. Tapping the jack the cable comes
   // out of puts it back; a jack the cable cannot reach is dimmed and does
@@ -763,8 +763,8 @@ function openModuleMenu(event) {
   if (!props.interactive) return;
   // Over a jack or a cable the gesture already means something — unplugging,
   // or the jack's own bar. This menu belongs to the panel behind them.
-  if (event.target?.closest?.('circle, .cable, .cable-hit')) return;
-  const panelEl = event.target?.closest?.('[data-pm]');
+  if (event.target.closest('circle, .cable, .cable-hit')) return;
+  const panelEl = event.target.closest('[data-pm]');
   if (!panelEl) {
     // Not over a module at all: nothing to set, and the browser keeps its own
     // context menu for the empty parts of the picture.
@@ -784,7 +784,7 @@ function openControlMenu(anchor, event) {
   if (!props.interactive) return false;
   const component = anchor.component;
   if (!component || String(component.type).endsWith('_jack')) return false;
-  event?.preventDefault();
+  event.preventDefault();
   placeMenu(anchor.patchModuleId, event);
   menuComponent.value = component;
   menuDraft.value = componentSettingOf(component)?.value ?? '';
