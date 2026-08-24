@@ -118,6 +118,99 @@ describe('asking about a module', () => {
     );
     expect(links.map((l) => l.module_id)).toEqual([fixture.module.id]);
   });
+
+  // The asker has already said what the question is about, so nothing is
+  // queued to work it out: the question is 'scoped' the moment it exists and
+  // the review step is what it lands in.
+  it('skips the scoping pass entirely and takes the components asked about', async () => {
+    const fixture = await withModules();
+    const { app, db, aliceCookie } = fixture;
+
+    const res = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({
+        prompt: 'Why so quiet?',
+        module_id: fixture.module.id,
+        component_ids: [fixture.jack.id, fixture.jack.id],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('scoped');
+
+    const { rows: jobs } = await db.query(
+      "SELECT id FROM jobs WHERE type = 'scope_question' AND question_id = $1",
+      [res.body.id]
+    );
+    expect(jobs).toHaveLength(0);
+
+    const { rows: components } = await db.query(
+      'SELECT component_id FROM question_components WHERE question_id = $1',
+      [res.body.id]
+    );
+    expect(components.map((c) => c.component_id)).toEqual([fixture.jack.id]);
+
+    // Ready to review: the options route offers it with both links already
+    // ticked, so the picks come back as the selection.
+    const options = await request(app)
+      .get(`/api/questions/${res.body.id}/options`)
+      .set('Cookie', aliceCookie);
+    expect(options.status).toBe(200);
+    expect(options.body.modules.find((m) => m.id === fixture.module.id).in_scope).toBe(true);
+    expect(options.body.components.find((c) => c.id === fixture.jack.id).in_scope).toBe(true);
+  });
+
+  it('refuses components that are not of the modules asked about', async () => {
+    const fixture = await withModules();
+    const { app, db, aliceCookie } = fixture;
+    const other = await insertModule(db, fixture.alice.id, {
+      manufacturer: 'Mutable',
+      name: 'Plaits',
+    });
+    const { rows: strayJack } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES ($1, 'input_jack', 'V/OCT')
+       RETURNING id`,
+      [other.id]
+    );
+
+    const stray = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({
+        prompt: 'Why so quiet?',
+        module_id: fixture.module.id,
+        component_ids: [strayJack[0].id],
+      });
+    expect(stray.status).toBe(400);
+    expect(stray.body.error).toMatch(/component_ids must be components of the modules asked about/);
+
+    // A component with no module named alongside it has nothing to belong to.
+    const loose = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({ prompt: 'Why so quiet?', component_ids: [fixture.jack.id] });
+    expect(loose.status).toBe(400);
+    expect(loose.body.error).toMatch(/component_ids must be components of the modules asked about/);
+  });
+
+  // A patch reaches modules beyond the page it was asked from, so naming one
+  // keeps the scoping pass even when a module is named too.
+  it('still scopes a question that names a patch as well as a module', async () => {
+    const fixture = await withModules();
+    const { app, db, aliceCookie } = fixture;
+    const patch = await createPatch(fixture, 'Krell');
+
+    const res = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({ prompt: 'Why so quiet?', module_id: fixture.module.id, patch_ids: [patch.id] });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('scoping');
+    const { rows: jobs } = await db.query(
+      "SELECT id FROM jobs WHERE type = 'scope_question' AND question_id = $1",
+      [res.body.id]
+    );
+    expect(jobs).toHaveLength(1);
+  });
 });
 
 describe('the questions of one record', () => {

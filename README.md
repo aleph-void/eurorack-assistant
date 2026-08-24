@@ -197,6 +197,11 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   to the selected modules/components, oscilloscope captures, and your patches).
   Questions, answers, the reviewed scope, and the attachments are all stored
   and linked in the database.
+- **Ask about a module**: a question asked on a module's own questions page
+  needs none of that guesswork — the module is the scope, and you tick which
+  of its jacks, knobs and switches the question is about right beside the box
+  you type it in. No scoping pass runs at all: the question goes straight to
+  the review step with your picks already selected.
 - **Manuals go to the model as text, not as PDFs**: an attached manual is sent
   as the markdown the extraction already produced from it, which costs a
   fraction of what reading the PDF does — a model reading a PDF renders its
