@@ -3,6 +3,12 @@
 //
 // Asking does not answer: POST / queues a scope_question job, and the review
 // step in ./review.js is what turns a scoped question into an answered one.
+//
+// Unless the asker already said what the question is about. A question asked
+// from a MODULE's page names its own scope — that module, and the components
+// of it the asker ticked — so there is nothing for a scoping model to work
+// out: the question is created 'scoped' with those links written and NO
+// scope_question job, and lands straight in the review step.
 
 import { Router } from 'express';
 import { userModuleIds } from '../../services/racks.js';
@@ -179,7 +185,8 @@ export function questionCoreRoutes(db) {
   }));
 
   // Questions are scoped asynchronously by the job worker; the client polls
-  // and then presents the review step.
+  // and then presents the review step. One asked about a named module skips
+  // that pass entirely and comes back ready to review.
   router.post('/', requireBudget(db), requireLlmAccount(db), asyncHandler(async (req, res) => {
     const prompt = String(req.body?.prompt || '').trim();
     if (!prompt) return res.status(400).json({ error: 'prompt is required' });
@@ -201,11 +208,9 @@ export function questionCoreRoutes(db) {
       }
     }
 
-    // Asking about a MODULE: the module is in scope from the start, whatever
-    // the scoping model makes of the wording — a question asked from a
-    // module's page is about that module even when its name never appears in
-    // the sentence ("why is this so quiet?"). scopeQuestion keeps the links
-    // it finds already written; the user can still take one out in review.
+    // Asking about a MODULE: the asker has already said what the question is
+    // about — a question asked from a module's page is about that module even
+    // when its name never appears in the sentence ("why is this so quiet?").
     const moduleIds = uniqueIds(
       req.body?.module_ids ?? (req.body?.module_id ? [req.body.module_id] : [])
     );
@@ -216,11 +221,40 @@ export function questionCoreRoutes(db) {
       }
     }
 
+    // ...and which of its controls and jacks, if any: the components ticked
+    // beside the box the question was typed in. They are the same links the
+    // component scoping pass would have guessed at, so they go in as the
+    // question's component scope and come back ticked in the review step.
+    const componentIds = uniqueIds(req.body?.component_ids);
+    if (componentIds.length > 0) {
+      if (moduleIds.length === 0) {
+        return res
+          .status(400)
+          .json({ error: 'component_ids must be components of the modules asked about' });
+      }
+      const owned = await ModuleComponent.count({
+        where: { id: componentIds, module_id: moduleIds },
+      });
+      if (owned !== componentIds.length) {
+        return res
+          .status(400)
+          .json({ error: 'component_ids must be components of the modules asked about' });
+      }
+    }
+
+    // A named module IS the scope, so no model reads the wording to find one:
+    // the question is created 'scoped' and skips the scope_question job
+    // altogether. A question that also names a patch still goes through
+    // scoping — a patch reaches modules beyond the one page it was asked
+    // from — as does one that names no module at all.
+    const preScoped = moduleIds.length > 0 && patchIds.length === 0;
+
     // The question and the job that scopes it are created together — a
-    // question without its job would sit unscoped forever.
+    // question without its job would sit unscoped forever. A pre-scoped one
+    // has no job to wait for: it is 'scoped' the moment it exists.
     const question = await db.sequelize.transaction(async (transaction) => {
       const created = await Question.create(
-        { user_id: req.user.id, prompt, status: 'scoping' },
+        { user_id: req.user.id, prompt, status: preScoped ? 'scoped' : 'scoping' },
         { transaction }
       );
       if (patchIds.length > 0) {
@@ -235,15 +269,23 @@ export function questionCoreRoutes(db) {
           { transaction }
         );
       }
-      await Job.create(
-        {
-          type: 'scope_question',
-          user_id: req.user.id,
-          question_id: created.id,
-          status: 'pending',
-        },
-        { transaction }
-      );
+      if (componentIds.length > 0) {
+        await QuestionComponent.bulkCreate(
+          componentIds.map((id) => ({ question_id: created.id, component_id: id })),
+          { transaction }
+        );
+      }
+      if (!preScoped) {
+        await Job.create(
+          {
+            type: 'scope_question',
+            user_id: req.user.id,
+            question_id: created.id,
+            status: 'pending',
+          },
+          { transaction }
+        );
+      }
       return created;
     });
     res.status(201).json(question);
