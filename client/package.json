@@ -24,7 +24,7 @@
     "marked": "^14.1.0",
     "pinia": "^2.2.2",
     "vue": "^3.4.38",
-    "vue-router": "^4.4.3"
+    "vue-router": "^5.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
