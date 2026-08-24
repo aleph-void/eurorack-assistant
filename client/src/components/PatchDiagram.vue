@@ -1238,7 +1238,7 @@ function setMenuValue(value) {
               <button
                 type="button"
                 style="margin: 0"
-                :disabled="!String(menuDraft ?? '').trim()"
+                :disabled="!String(menuDraft).trim()"
                 data-test="diagram-menu-set"
                 @click="setMenuValue(menuDraft)"
               >

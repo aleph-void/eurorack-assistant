@@ -461,6 +461,20 @@ describe('PatchDiagram', () => {
       unit: 'BPM',
       description: null,
     },
+    // A number the manual gives no bounds for: still a number box, with the
+    // range it cannot state shrugged in the placeholder.
+    {
+      id: 105,
+      component_id: null,
+      name: 'Swing',
+      value_type: 'number',
+      options: [],
+      default_value: null,
+      value_min: null,
+      value_max: null,
+      unit: '%',
+      description: null,
+    },
     // Neither a listed set nor a range: the handful a manual describes
     // without bounding take free text.
     {
@@ -539,6 +553,13 @@ describe('PatchDiagram', () => {
     expect(wrapper.emitted('setting')).toEqual([
       [{ patch_module_id: 11, parameter_id: 102, value: '140' }],
     ]);
+
+    // A number with no stated bounds still gets a number box, and the
+    // placeholder shrugs at the range the manual never gave.
+    await wrapper.find('[data-test="diagram-menu-parameter-105"]').trigger('click');
+    const unbounded = wrapper.find('[data-test="diagram-menu-input"]');
+    expect(unbounded.attributes('type')).toBe('number');
+    expect(unbounded.attributes('placeholder')).toBe('? … ? %');
   });
 
   it('takes free text for a parameter with neither options nor a range', async () => {
