@@ -446,6 +446,19 @@ describe('PatchDiagram', () => {
       unit: 'BPM',
       description: null,
     },
+    // Neither a listed set nor a range: the handful a manual describes
+    // without bounding take free text.
+    {
+      id: 103,
+      component_id: null,
+      name: 'Preset',
+      value_type: 'text',
+      default_value: null,
+      value_min: null,
+      value_max: null,
+      unit: null,
+      description: null,
+    },
   ];
   const withMenu = () => {
     const [maths, lpg] = modules();
@@ -503,6 +516,103 @@ describe('PatchDiagram', () => {
     expect(wrapper.emitted('setting')).toEqual([
       [{ patch_module_id: 11, parameter_id: 102, value: '140' }],
     ]);
+  });
+
+  it('takes free text for a parameter with neither options nor a range', async () => {
+    const wrapper = mountDiagram({ modules: withMenu(), interactive: true });
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    await wrapper.find('[data-test="diagram-menu-parameter-103"]').trigger('click');
+    const input = wrapper.find('[data-test="diagram-menu-input"]');
+    expect(input.attributes('type')).toBe('text');
+    // Nothing recorded and no default: the box starts empty, and Enter with
+    // nothing typed sets nothing.
+    expect(input.element.value).toBe('');
+    await input.trigger('keyup.enter');
+    expect(wrapper.emitted('setting')).toBeUndefined();
+    await input.setValue('bank A');
+    await input.trigger('keyup.enter');
+    expect(wrapper.emitted('setting')).toEqual([
+      [{ patch_module_id: 11, parameter_id: 103, value: 'bank A' }],
+    ]);
+  });
+
+  it('closes and steps back through the menu without setting anything', async () => {
+    const wrapper = mountDiagram({ modules: withMenu(), interactive: true });
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    await wrapper.find('[data-test="diagram-menu-parameter-101"]').trigger('click');
+    // Back to the list of parameters.
+    await wrapper.find('[data-test="diagram-menu-back"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-menu-parameter-102"]').exists()).toBe(true);
+    // Close puts the menu away entirely.
+    await wrapper.find('[data-test="diagram-menu-close"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    // Reopened, a plain click on the picture puts it away too — whatever the
+    // click was for, the menu it was not aimed at gets out of the way.
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('click', { altKey: true });
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(true);
+    await wrapper.find('[data-test="diagram-svg"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    // And the empty picture outside every panel has nothing to open: the
+    // browser keeps its own context menu there.
+    await wrapper.find('[data-test="diagram-svg"]').trigger('contextmenu');
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    expect(wrapper.emitted('setting')).toBeUndefined();
+  });
+
+  // A control's recorded values shape its editor exactly as they do on the
+  // settings page: enum positions become buttons, a range whose ends are
+  // words — or no values at all — free text.
+  it("offers a listed control's positions as buttons, and free text otherwise", async () => {
+    const [maths, lpg] = modules();
+    maths.components.push(
+      {
+        id: 9,
+        type: 'switch',
+        name: 'Mode',
+        values: [
+          { id: 3, type: 'enum', value: 'Cycle' },
+          { id: 4, type: 'enum', value: 'Sustain' },
+        ],
+      },
+      { id: 10, type: 'button', name: 'Hold' },
+      {
+        id: 14,
+        type: 'slider',
+        name: 'Fall',
+        values: [
+          { id: 5, type: 'min', value: 'CCW' },
+          { id: 6, type: 'max', value: 'CW' },
+        ],
+      }
+    );
+    maths.panel.components.push(
+      { component_id: 9, name: 'Mode', shape: 'switch', type: 'switch', x: 0.3, y: 0.3, w: 0.06, h: 0.06 },
+      { component_id: 10, name: 'Hold', shape: 'button', type: 'button', x: 0.7, y: 0.3, w: 0.06, h: 0.06 },
+      { component_id: 14, name: 'Fall', shape: 'slider', type: 'slider', x: 0.5, y: 0.5, w: 0.06, h: 0.06 }
+    );
+    const wrapper = mountDiagram({ modules: [maths, lpg], interactive: true });
+    for (const type of ['switch', 'button', 'slider']) {
+      await wrapper.find(`[data-test="legend-${type}"]`).trigger('click');
+    }
+    // Alt-click is the same gesture as the right button.
+    await wrapper.find('[data-test="diagram-jack-11-9"]').trigger('click', { altKey: true });
+    await wrapper.find('[data-test="diagram-menu-option-4"]').trigger('click');
+    expect(wrapper.emitted('setting')).toEqual([
+      [{ patch_module_id: 11, component_id: 9, value: 'Sustain' }],
+    ]);
+    // A control with no recorded values takes free text, starting empty.
+    await wrapper.find('[data-test="diagram-jack-11-10"]').trigger('contextmenu');
+    const input = wrapper.find('[data-test="diagram-menu-input"]');
+    expect(input.attributes('type')).toBe('text');
+    expect(input.element.value).toBe('');
+    await input.setValue('latched');
+    await wrapper.find('[data-test="diagram-menu-set"]').trigger('click');
+    expect(wrapper.emitted('setting')[1]).toEqual([
+      { patch_module_id: 11, component_id: 10, value: 'latched' },
+    ]);
+    // A range whose ends are words rather than numbers is typed, not counted.
+    await wrapper.find('[data-test="diagram-jack-11-14"]').trigger('contextmenu');
+    expect(wrapper.find('[data-test="diagram-menu-input"]').attributes('type')).toBe('text');
   });
 
   it('says when a module keeps no menu, and where to record one', async () => {
@@ -571,6 +681,10 @@ describe('PatchDiagram', () => {
 
     const readOnly = mountDiagram({ modules: withMenu() });
     await readOnly.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    expect(readOnly.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    // The markers keep the browser's own context menu on a read-only diagram
+    // too.
+    await readOnly.find('[data-test="diagram-jack-11-1"]').trigger('contextmenu');
     expect(readOnly.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
   });
 
