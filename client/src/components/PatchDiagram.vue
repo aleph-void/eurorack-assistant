@@ -47,8 +47,11 @@ const props = defineProps({
   // A jack whose toggle the patch has not recorded stands in every section it
   // might be on, which is why a jack can appear in more than one.
   mults: { type: Array, default: () => [] },
+  // The patch's recorded settings, so the module menu can say what each menu
+  // parameter is already dialed to.
+  settings: { type: Array, default: () => [] },
 });
-const emit = defineEmits(['connect', 'disconnect', 'move', 'retype']);
+const emit = defineEmits(['connect', 'disconnect', 'move', 'retype', 'setting']);
 
 // A patch snapshots the whole rack, and the rack is what the picture is OF:
 // the case in front of you, with the patched jacks marked on it. So every
@@ -377,8 +380,12 @@ const selectedJack = computed(() => {
   if (!pm || !component || !String(component.type).endsWith('_jack')) return null;
   return { pm, component };
 });
-function selectJack(anchor) {
+function selectJack(anchor, event) {
   if (!props.interactive) return;
+  // Alt-clicking a control's marker opens its value editor, the same thing
+  // right-clicking it does. On a jack this declines and the tap goes on to
+  // mean what it always has.
+  if (event?.altKey && openControlMenu(anchor, event)) return;
   // A tap means 'this end of the cable' while one is armed, and 'tell me
   // about this jack' the rest of the time. Tapping the jack the cable comes
   // out of puts it back; a jack the cable cannot reach is dimmed and does
@@ -641,6 +648,191 @@ function pickCable(entry, event) {
   selectedCableId.value = selectedCableId.value === entry.cable.id ? null : entry.cable.id;
 }
 
+// ---- dialing a module in from the picture ----
+// A MENU PARAMETER is a setting a module keeps behind an encoder and a screen
+// (module_parameters), so there is nothing on the panel to press: the PANEL is
+// the thing being set. Alt- or right-clicking a panel anywhere that is not a
+// jack or a cable opens the module's menu at the pointer — pick the parameter,
+// pick the value, and the patch records it exactly as the settings page would.
+// A control that IS on the panel — a knob, a toggle, a button — is its own
+// target instead: the same gesture on its marker opens the value editor for
+// that one control. Which panel or marker is under the pointer comes off the
+// event's own target (the `data-pm` on each panel group), because the browser
+// has already answered the hit test the moment it fired the event.
+const menu = ref(null); // { patchModuleId, x, y } — x/y are viewport coords
+const menuParameter = ref(null); // the menu parameter being set, once picked
+const menuComponent = ref(null); // the panel control being set, when the
+// gesture landed on its marker rather than on the panel
+const menuDraft = ref('');
+const menuModule = computed(() =>
+  menu.value ? (moduleById.value.get(menu.value.patchModuleId) ?? null) : null
+);
+const menuParameters = computed(() => menuModule.value?.parameters ?? []);
+// "OUT 1 · Clock division" — the jack a parameter configures, named the way
+// the module names it now, falling back to the name the parameter kept.
+const menuComponentName = (parameter) => {
+  if (!parameter.component_id) return null;
+  return (
+    (menuModule.value?.components ?? []).find((c) => c.id === parameter.component_id)?.name ??
+    parameter.component_name ??
+    null
+  );
+};
+const menuSettingFor = (parameterId) =>
+  props.settings.find(
+    (s) => s.patch_module_id === menu.value?.patchModuleId && s.parameter_id === parameterId
+  ) ?? null;
+const menuComponentSetting = computed(() =>
+  menuComponent.value
+    ? (props.settings.find(
+        (s) =>
+          s.patch_module_id === menu.value?.patchModuleId &&
+          s.component_id === menuComponent.value.id &&
+          !s.parameter_id
+      ) ?? null)
+    : null
+);
+
+// The same reading the settings page gives a value: a listed set becomes
+// buttons to press, a bounded number a number box, anything else free text.
+const parameterControlOf = (parameter) => {
+  if ((parameter.options || []).length > 0) return { kind: 'enum', options: parameter.options };
+  if (
+    parameter.value_type === 'number' ||
+    parameter.value_min != null ||
+    parameter.value_max != null
+  ) {
+    return { kind: 'range', min: parameter.value_min, max: parameter.value_max };
+  }
+  return { kind: 'text' };
+};
+const componentControlOf = (component) => {
+  const options = (component.values || []).filter((v) => v.type === 'enum');
+  if (options.length > 0) return { kind: 'enum', options };
+  const min = (component.values || []).find((v) => v.type === 'min')?.value;
+  const max = (component.values || []).find((v) => v.type === 'max')?.value;
+  if (min !== undefined || max !== undefined) {
+    const numeric = [min, max].every(
+      (v) => v === undefined || v.trim() === '' || !Number.isNaN(Number(v))
+    );
+    return { kind: numeric ? 'range' : 'text', min, max };
+  }
+  return { kind: 'text' };
+};
+
+// What the menu is asking for right now, whichever way it was opened: the
+// value of a picked menu parameter, or of the control whose marker was
+// pressed. Null while the menu is still the list of parameters.
+const menuEditor = computed(() => {
+  if (menuParameter.value) {
+    const p = menuParameter.value;
+    return {
+      name: [menuComponentName(p), p.name].filter(Boolean).join(' · '),
+      description: p.description ?? null,
+      unit: p.unit ?? null,
+      control: parameterControlOf(p),
+      current: menuSettingFor(p.id)?.value ?? null,
+    };
+  }
+  if (menuComponent.value) {
+    const c = menuComponent.value;
+    return {
+      name: c.name,
+      description: null,
+      unit: null,
+      control: componentControlOf(c),
+      current: menuComponentSetting.value?.value ?? null,
+    };
+  }
+  return null;
+});
+
+function placeMenu(patchModuleId, event) {
+  selected.value = null;
+  selectedCableId.value = null;
+  menuParameter.value = null;
+  menuComponent.value = null;
+  menu.value = {
+    patchModuleId,
+    // At the pointer, pulled back from the right edge so a press there does
+    // not open the menu off the screen.
+    x: Math.min(event.clientX, Math.max(0, (window.innerWidth || 0) - 336)),
+    y: event.clientY,
+  };
+}
+
+function openModuleMenu(event) {
+  if (!props.interactive) return;
+  // Over a jack or a cable the gesture already means something — unplugging,
+  // or the jack's own bar. This menu belongs to the panel behind them.
+  if (event.target?.closest?.('circle, .cable, .cable-hit')) return;
+  const panelEl = event.target?.closest?.('[data-pm]');
+  if (!panelEl) {
+    // Not over a module at all: nothing to set, and the browser keeps its own
+    // context menu for the empty parts of the picture.
+    menu.value = null;
+    return;
+  }
+  event.preventDefault();
+  placeMenu(Number(panelEl.getAttribute('data-pm')), event);
+}
+
+// The same gesture on a CONTROL's marker: a knob, toggle or button is a thing
+// on the panel with a position of its own, so its marker opens the value
+// editor for that one control rather than the module's whole menu. A jack is
+// not settable (its menu entries are parameters, reached through the panel),
+// so on a jack this declines and the gesture keeps its old meaning.
+function openControlMenu(anchor, event) {
+  if (!props.interactive) return false;
+  const component = anchor.component;
+  if (!component || String(component.type).endsWith('_jack')) return false;
+  event?.preventDefault();
+  placeMenu(anchor.patchModuleId, event);
+  menuComponent.value = component;
+  menuDraft.value = menuComponentSetting.value?.value ?? '';
+  return true;
+}
+
+function diagramClick(event) {
+  if (event.altKey) {
+    openModuleMenu(event);
+    return;
+  }
+  // A plain click on the picture is some other gesture's business — whatever
+  // it does, the menu it was not aimed at gets out of the way.
+  if (menu.value) menu.value = null;
+}
+
+function pickMenuParameter(parameter) {
+  menuParameter.value = parameter;
+  menuDraft.value = menuSettingFor(parameter.id)?.value ?? parameter.default_value ?? '';
+}
+
+function setMenuValue(value) {
+  const text = String(value ?? '').trim();
+  if (!text || !menu.value) return;
+  if (menuParameter.value) {
+    emit('setting', {
+      patch_module_id: menu.value.patchModuleId,
+      parameter_id: menuParameter.value.id,
+      value: text,
+    });
+    // Back to the list rather than closed: a menu-driven module is dialed in
+    // a dozen entries at a time, and the reloaded patch marks what is set.
+    menuParameter.value = null;
+    return;
+  }
+  if (menuComponent.value) {
+    emit('setting', {
+      patch_module_id: menu.value.patchModuleId,
+      component_id: menuComponent.value.id,
+      value: text,
+    });
+    // One control, one value: done.
+    menu.value = null;
+    menuComponent.value = null;
+  }
+}
 </script>
 
 <template>
@@ -730,10 +922,12 @@ function pickCable(entry, event) {
             @pointermove="moveCable"
             @pointerup="finishCable"
             @pointercancel="dragging = null"
+            @click="diagramClick"
+            @contextmenu="openModuleMenu"
           >
             <!-- One panel per module instance: the image, cropped to the
                  front plate, with the module's name above it. -->
-            <g v-for="placed in visiblePanels" :key="placed.pm.id">
+            <g v-for="placed in visiblePanels" :key="placed.pm.id" :data-pm="placed.pm.id">
               <title>{{ label(placed.pm) }}</title>
               <text v-if="showModuleNames" :x="placed.x" :y="placed.labelY" class="panel-label">
                 {{ label(placed.pm) }}
@@ -891,7 +1085,8 @@ function pickCable(entry, event) {
               @pointerdown="
                 CABLE_OUT.includes(a.type) && !patchFrom && !moving && startCable(a, $event)
               "
-              @click="selectJack(a)"
+              @click="selectJack(a, $event)"
+              @contextmenu="openControlMenu(a, $event)"
             >
               <title>
                 {{ a.name
@@ -941,6 +1136,120 @@ function pickCable(entry, event) {
             {{ hoveredCable.cable.to_component_name }}
           </div>
           <div v-if="hoveredCable.cable.note" class="muted">{{ hoveredCable.cable.note }}</div>
+        </div>
+        <!-- The module's menu, opened by alt- or right-clicking its panel (or
+             the value editor for one control, opened the same way on its
+             marker). Fixed to the viewport like the cable tip, so it works
+             inside the fullscreen panel and never scrolls with the picture —
+             but unlike the tip it is pressed, so it hears the pointer. -->
+        <div
+          v-if="interactive && menu"
+          class="module-menu"
+          :style="{ left: `${menu.x}px`, top: `${menu.y}px` }"
+          data-test="diagram-module-menu"
+        >
+          <div class="module-menu-head">
+            <strong>{{ moduleName(menu.patchModuleId) }}</strong>
+            <button
+              type="button"
+              class="secondary"
+              style="margin: 0"
+              data-test="diagram-menu-close"
+              @click="menu = null"
+            >
+              Close
+            </button>
+          </div>
+          <template v-if="!menuEditor">
+            <template v-if="menuParameters.length">
+              <p class="muted">Menu settings — pick one to dial it in.</p>
+              <button
+                v-for="p in menuParameters"
+                :key="p.id"
+                type="button"
+                class="secondary menu-item"
+                :data-test="`diagram-menu-parameter-${p.id}`"
+                @click="pickMenuParameter(p)"
+              >
+                <span>
+                  <template v-if="menuComponentName(p)">{{ menuComponentName(p) }} · </template
+                  >{{ p.name }}
+                </span>
+                <span v-if="menuSettingFor(p.id)" class="badge found">
+                  {{ menuSettingFor(p.id).value }}
+                </span>
+              </button>
+            </template>
+            <p v-else-if="!menuModule?.live" class="muted" data-test="diagram-menu-empty">
+              This module is no longer in the rack, so its menu is unknown.
+            </p>
+            <p v-else class="muted" data-test="diagram-menu-empty">
+              No menu parameters are recorded for this module — the settings it keeps behind an
+              encoder rather than under a control.
+              <RouterLink
+                v-if="menuModule?.module_id"
+                :to="`/modules/${menuModule.module_id}/parameters`"
+              >
+                Record them on its parameters page.
+              </RouterLink>
+            </p>
+          </template>
+          <template v-else>
+            <button
+              v-if="menuParameter"
+              type="button"
+              class="secondary menu-back"
+              data-test="diagram-menu-back"
+              @click="menuParameter = null"
+            >
+              ← All settings
+            </button>
+            <p class="menu-editor-name">
+              <strong>{{ menuEditor.name }}</strong>
+              <span v-if="menuEditor.current" class="badge found">{{ menuEditor.current }}</span>
+            </p>
+            <p v-if="menuEditor.description" class="muted">{{ menuEditor.description }}</p>
+            <template v-if="menuEditor.control.kind === 'enum'">
+              <button
+                v-for="o in menuEditor.control.options"
+                :key="o.id"
+                type="button"
+                class="secondary menu-item"
+                :data-test="`diagram-menu-option-${o.id}`"
+                @click="setMenuValue(o.value)"
+              >
+                <span>{{ o.value }}<template v-if="o.description"> — {{ o.description }}</template></span>
+                <span v-if="menuEditor.current === o.value" class="badge found">set</span>
+              </button>
+            </template>
+            <div v-else class="menu-value">
+              <input
+                v-model="menuDraft"
+                :type="menuEditor.control.kind === 'range' ? 'number' : 'text'"
+                :step="menuEditor.control.kind === 'range' ? 'any' : undefined"
+                :min="menuEditor.control.min ?? undefined"
+                :max="menuEditor.control.max ?? undefined"
+                :placeholder="
+                  menuEditor.control.kind === 'range'
+                    ? `${menuEditor.control.min ?? '?'} … ${menuEditor.control.max ?? '?'}${
+                        menuEditor.unit ? ' ' + menuEditor.unit : ''
+                      }`
+                    : 'e.g. 12 o\'clock'
+                "
+                data-test="diagram-menu-input"
+                @keyup.enter="setMenuValue(menuDraft)"
+              />
+              <button
+                type="button"
+                style="margin: 0"
+                :disabled="!String(menuDraft ?? '').trim()"
+                data-test="diagram-menu-set"
+                @click="setMenuValue(menuDraft)"
+              >
+                Set
+              </button>
+            </div>
+          </template>
         </div>
         <div v-if="interactive && moving" class="picture-bar" data-test="diagram-move-bar">
           <span>
@@ -1115,8 +1424,10 @@ function pickCable(entry, event) {
             output's cables are moved from its jack bar, since a tap there is how a mult's next
             cable is started. Tapping an empty jack marker is how its direction is corrected, and
             tapping a cable is how it is unplugged — alt- or right-clicking one does that in a
-            single gesture. Ctrl- or ⌘-scroll zooms the picture. Controls and other component
-            types cannot be wired here.
+            single gesture. Alt- or right-click a panel anywhere that is not a jack or a cable to
+            set the module's menu parameters — the settings it keeps behind an encoder — and the
+            marker of a knob, switch or button to record that control's position. Ctrl- or
+            ⌘-scroll zooms the picture. Controls and other component types cannot be wired here.
             <br />
           </template>
           The key above is also what the picture draws: it opens on the jacks alone — press an
@@ -1259,6 +1570,60 @@ function pickCable(entry, event) {
   border-radius: 6px;
   font-size: 0.85rem;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+/* The module's menu, at the pointer. Fixed like the cable tip so it works in
+   the fullscreen panel, but this one is pressed rather than read, so it hears
+   the pointer and scrolls its own list when a menu outgrows the screen. */
+.module-menu {
+  position: fixed;
+  z-index: 41;
+  width: min(20rem, calc(100vw - 1rem));
+  max-height: min(24rem, 70vh);
+  overflow: auto;
+  padding: 0.5rem 0.6rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+.module-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.35rem;
+}
+.module-menu .muted {
+  margin: 0.2rem 0 0.4rem;
+  font-size: 0.82rem;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  width: 100%;
+  margin: 0 0 0.25rem;
+  text-align: left;
+}
+.menu-back {
+  margin: 0 0 0.4rem;
+}
+.menu-editor-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.35rem;
+}
+.menu-value {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.menu-value input {
+  flex: 1;
+  margin: 0;
 }
 .tip-end {
   display: inline-block;

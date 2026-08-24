@@ -414,6 +414,166 @@ describe('PatchDiagram', () => {
     expect(wrapper.emitted('disconnect')).toBeUndefined();
   });
 
+  // ---- the module menu ----
+  // Alt- or right-clicking a panel anywhere that is not a jack or a cable
+  // opens the module's menu: the settings it keeps behind an encoder
+  // (module_parameters), picked and dialed in at the pointer.
+  const menuParameters = () => [
+    {
+      id: 101,
+      component_id: 1,
+      name: 'Clock division',
+      value_type: 'enum',
+      options: [
+        { id: 1, value: '/4', description: 'Four times slower' },
+        { id: 2, value: 'x2', description: null },
+      ],
+      default_value: null,
+      value_min: null,
+      value_max: null,
+      unit: null,
+      description: null,
+    },
+    {
+      id: 102,
+      component_id: null,
+      name: 'Tempo',
+      value_type: 'number',
+      options: [],
+      default_value: '120',
+      value_min: '10',
+      value_max: '300',
+      unit: 'BPM',
+      description: null,
+    },
+  ];
+  const withMenu = () => {
+    const [maths, lpg] = modules();
+    return [{ ...maths, parameters: menuParameters() }, lpg];
+  };
+
+  it('opens the module menu on a panel and dials a listed parameter in', async () => {
+    const wrapper = mountDiagram({
+      modules: withMenu(),
+      interactive: true,
+      settings: [
+        {
+          id: 33,
+          patch_module_id: 11,
+          component_id: 1,
+          component_name: 'EOR',
+          parameter_id: 101,
+          parameter_name: 'Clock division',
+          value: '/4',
+        },
+      ],
+    });
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    const menu = wrapper.find('[data-test="diagram-module-menu"]');
+    expect(menu.text()).toContain('Make Noise Maths');
+    // The parameter names the jack it configures and what it is already set to.
+    const entry = wrapper.find('[data-test="diagram-menu-parameter-101"]');
+    expect(entry.text()).toContain('EOR · Clock division');
+    expect(entry.text()).toContain('/4');
+
+    await entry.trigger('click');
+    const option = wrapper.find('[data-test="diagram-menu-option-2"]');
+    expect(option.text()).toContain('x2');
+    await option.trigger('click');
+    expect(wrapper.emitted('setting')).toEqual([
+      [{ patch_module_id: 11, parameter_id: 101, value: 'x2' }],
+    ]);
+    // Back at the list rather than closed: a menu-driven module is dialed in
+    // a dozen entries at a time.
+    expect(wrapper.find('[data-test="diagram-menu-parameter-102"]').exists()).toBe(true);
+  });
+
+  it('takes a number for a parameter with a range rather than a list', async () => {
+    const wrapper = mountDiagram({ modules: withMenu(), interactive: true });
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('click', { altKey: true });
+    await wrapper.find('[data-test="diagram-menu-parameter-102"]').trigger('click');
+    const input = wrapper.find('[data-test="diagram-menu-input"]');
+    expect(input.attributes('type')).toBe('number');
+    expect(input.attributes('max')).toBe('300');
+    // Prefilled from the parameter's own default.
+    expect(input.element.value).toBe('120');
+    await input.setValue('140');
+    await wrapper.find('[data-test="diagram-menu-set"]').trigger('click');
+    expect(wrapper.emitted('setting')).toEqual([
+      [{ patch_module_id: 11, parameter_id: 102, value: '140' }],
+    ]);
+  });
+
+  it('says when a module keeps no menu, and where to record one', async () => {
+    const wrapper = mountDiagram({ interactive: true });
+    await wrapper.find('g[data-pm="12"] .panel-frame').trigger('contextmenu');
+    const note = wrapper.find('[data-test="diagram-menu-empty"]');
+    expect(note.text()).toContain('No menu parameters');
+    expect(note.find('a').attributes('to')).toBe('/modules/2/parameters');
+  });
+
+  // A knob, toggle or button is a thing ON the panel with a position of its
+  // own, so its marker opens the value editor for that one control.
+  it('opens a value editor for a control whose marker is right-clicked', async () => {
+    const [maths, lpg] = modules();
+    maths.components.push({
+      id: 9,
+      type: 'knob',
+      name: 'Rise',
+      values: [
+        { id: 1, type: 'min', value: '0' },
+        { id: 2, type: 'max', value: '10' },
+      ],
+    });
+    maths.panel.components.push({
+      component_id: 9,
+      name: 'Rise',
+      shape: 'knob',
+      type: 'knob',
+      x: 0.5,
+      y: 0.3,
+      w: 0.06,
+      h: 0.06,
+    });
+    const wrapper = mountDiagram({
+      modules: [maths, lpg],
+      interactive: true,
+      settings: [{ id: 31, patch_module_id: 11, component_id: 9, component_name: 'Rise', value: '7' }],
+    });
+    // The picture opens on the jacks alone; the knobs are a press of the key away.
+    await wrapper.find('[data-test="legend-knob"]').trigger('click');
+    await wrapper.find('[data-test="diagram-jack-11-9"]').trigger('contextmenu');
+    const menu = wrapper.find('[data-test="diagram-module-menu"]');
+    expect(menu.text()).toContain('Rise');
+    const input = wrapper.find('[data-test="diagram-menu-input"]');
+    expect(input.attributes('type')).toBe('number');
+    expect(input.attributes('max')).toBe('10');
+    // Prefilled with what the patch has recorded for it.
+    expect(input.element.value).toBe('7');
+    await input.setValue('5');
+    await wrapper.find('[data-test="diagram-menu-set"]').trigger('click');
+    expect(wrapper.emitted('setting')).toEqual([
+      [{ patch_module_id: 11, component_id: 9, value: '5' }],
+    ]);
+    // One control, one value: the menu is done.
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+  });
+
+  // Over a jack or a cable the gesture already means something — and a shared,
+  // read-only diagram keeps the browser's own context menu everywhere.
+  it('keeps the module menu off the jacks, the cables and read-only diagrams', async () => {
+    const wrapper = mountDiagram({ modules: withMenu(), interactive: true });
+    await wrapper.find('[data-test="diagram-jack-11-1"]').trigger('contextmenu');
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    await wrapper.find('[data-test="diagram-cable-hit-21"]').trigger('contextmenu');
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+
+    const readOnly = mountDiagram({ modules: withMenu() });
+    await readOnly.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    expect(readOnly.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+  });
+
   // A shared, read-only diagram keeps the browser's own context menu.
   it('leaves a read-only cable alone', async () => {
     const wrapper = mountDiagram();

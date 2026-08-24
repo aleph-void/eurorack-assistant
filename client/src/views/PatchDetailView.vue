@@ -128,6 +128,20 @@ async function retypeDiagramJack({ module_id: moduleId, component_id: componentI
   }
 }
 
+// A setting recorded from the picture — a menu parameter picked from the
+// module menu, or a control's position from its marker — is the same PUT the
+// settings page makes. Unlike a cable, a setting can flip a conditional
+// normalled connection or a switched mult, so the patch is re-read rather
+// than patched in place.
+async function setDiagramSetting(body) {
+  try {
+    await api.put(`/api/patches/${props.id}/settings`, body);
+    await load();
+  } catch {
+    // api.js has already said so, in red, over the page.
+  }
+}
+
 // Catch the patch up with the racks it stands in. A patch draws the studio
 // as it stood when it was made, so this is the only thing that ever changes
 // its arrangement — asked for, never quietly.
@@ -179,6 +193,7 @@ async function resyncLayout() {
       :cables="patch.cables"
       :switches="patch.switches || []"
       :mults="patch.mults || []"
+      :settings="patch.settings || []"
       :label-for="moduleLabel"
       :rack-rows="patch.rack_layout"
       interactive
@@ -186,6 +201,7 @@ async function resyncLayout() {
       @disconnect="disconnectDiagramCable"
       @move="moveDiagramCable"
       @retype="retypeDiagramJack"
+      @setting="setDiagramSetting"
     />
 
     <p class="muted" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap">
