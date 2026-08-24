@@ -15,8 +15,8 @@ import {
   MIN_CONTRAST,
   backgroundLevel,
   boxHp,
+  discCandidates,
   discScore,
-  findDisc,
   growBox,
   cropImage,
   loadSharp,
@@ -260,7 +260,7 @@ describe('snapping a marker onto the hardware it names', () => {
     const cx = Math.round(truth(control).x * IMAGE_W);
     const cy = Math.round(truth(control).y * IMAGE_H);
     const r = Math.round(RADIUS_MM.jack * PX_PER_MM);
-    const found = findDisc(FIXTURE, PLATE_BOUNDS, cx, cy + 27, r, 35);
+    const [found] = discCandidates(FIXTURE, PLATE_BOUNDS, cx, cy + 27, r, 35);
     expect(found.score).toBeGreaterThan(MIN_CONTRAST);
     expect(found.y).toBeCloseTo(cy, 6);
   });

@@ -57,9 +57,6 @@ export function useModuleFacts(module) {
   );
 
   return {
-    linkedComponents,
-    panelName,
-    patchableComponents,
     componentLabel,
     componentName,
     conditionText,

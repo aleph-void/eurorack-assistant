@@ -25,8 +25,6 @@ import { createVideosHandlers } from './handlers/videos.js';
 import { createQuestionsHandlers } from './handlers/questions.js';
 import { createExportsHandlers } from './handlers/exports.js';
 
-export { isBuildDocument, isPerfectCircuitDocument } from './handlers/documents.js';
-
 export function createHandlers(
   db,
   {

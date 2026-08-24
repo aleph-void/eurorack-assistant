@@ -44,19 +44,12 @@ export {
   growBox,
   panelCrop,
   pointInBox,
-  TRIM_TOLERANCE,
   trimBox,
   writeCrop,
 } from './panelPlate.js';
 export {
-  CONFIDENT_SHARE,
-  DRAG_PENALTY,
   discCandidates,
   discScore,
-  findDisc,
   MIN_CONTRAST,
-  RAIL_MM,
-  SEARCH_MM,
-  SNAP_RADIUS_MM,
   snapPlacements,
 } from './panelSnap.js';

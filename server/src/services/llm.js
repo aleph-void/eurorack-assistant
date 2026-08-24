@@ -23,7 +23,7 @@ export * from './llmModels.js';
 export * from './llmQuota.js';
 export { stageDocuments } from './llmDocuments.js';
 export { parseClaudeResult, parseCodexUsage } from './llmUsage.js';
-export { CHILD_ENV_ALLOWLIST, childEnv, runCli } from './llmProcess.js';
+export { childEnv, runCli } from './llmProcess.js';
 
 export class ClaudeBackend {
   constructor(model, { run = runCli, tmpdir = os.tmpdir, onUsage = null, env = null, onQuota = null } = {}) {

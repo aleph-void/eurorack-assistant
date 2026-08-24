@@ -287,7 +287,6 @@ export function useDiagramView({ wrap, container, diagram }) {
     MARKER_NEUTRAL,
     MARKER_SELECTED,
     viewport,
-    measureViewport,
     onScroll,
     inView,
     showMarkers,

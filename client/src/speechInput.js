@@ -198,5 +198,3 @@ function createWhisperInput(options = {}) {
 export function createSpeechInput({ engine = 'webspeech', ...options } = {}) {
   return engine === 'whisper' ? createWhisperInput(options) : createWebSpeechInput(options);
 }
-
-export { createWebSpeechInput, createWhisperInput };
