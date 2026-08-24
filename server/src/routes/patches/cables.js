@@ -156,6 +156,65 @@ export function patchCableRoutes(db) {
     res.status(201).json(cableJson(reversed));
   }));
 
+  // Move a cable: the same wire, re-plugged. One end usually stays where it
+  // was and the other lands on a different jack — the picture's 'pick the plug
+  // up and put it there' gesture. Body: the four endpoint fields of POST,
+  // naming where BOTH ends should now be. Validated as the cable it will
+  // become before the old one is touched, so a refused move leaves the patch
+  // exactly as it was; annotations ride along like a reversal's do.
+  router.post('/:id/cables/:cableId/move', requireOwnedPatch(db), asyncHandler(async (req, res) => {
+    const patch = req.patch;
+    const cable = await PatchCable.findOne({
+      where: { id: Number(req.params.cableId) || 0, patch_id: patch.id },
+    });
+    if (!cable) return res.status(404).json({ error: 'Cable not found' });
+
+    const from = await resolveEndpoint(
+      db,
+      patch,
+      req.body?.from_patch_module_id,
+      req.body?.from_component_id
+    );
+    if (from.error) return res.status(400).json({ error: `from: ${from.error}` });
+    const to = await resolveEndpoint(
+      db,
+      patch,
+      req.body?.to_patch_module_id,
+      req.body?.to_component_id
+    );
+    if (to.error) return res.status(400).json({ error: `to: ${to.error}` });
+
+    // Judged against the patch as it will be once the old cable is gone —
+    // pulling a plug out of an input frees that input in the same gesture.
+    const existing = (await PatchCable.findAll({ where: { patch_id: patch.id } })).filter(
+      (c) => c.id !== cable.id
+    );
+    const problem = await cableProblem(db, patch, from, to, existing);
+    if (problem) return res.status(problem.status).json({ error: problem.error });
+
+    let moved;
+    await db.sequelize.transaction(async (transaction) => {
+      await cable.destroy({ transaction });
+      moved = await PatchCable.create(
+        {
+          patch_id: patch.id,
+          from_patch_module_id: from.pm.id,
+          from_component_id: from.component.id,
+          from_component_name: from.component.name,
+          to_patch_module_id: to.pm.id,
+          to_component_id: to.component.id,
+          to_component_name: to.component.name,
+          note: cable.note,
+          optional: cable.optional,
+          stacked: cable.stacked,
+          alt_group: cable.alt_group,
+        },
+        { transaction }
+      );
+    });
+    res.status(201).json(cableJson(moved));
+  }));
+
   router.delete('/:id/cables/:cableId', requireOwnedPatch(db), asyncHandler(async (req, res) => {
     const patch = req.patch;
     const deleted = await PatchCable.destroy({

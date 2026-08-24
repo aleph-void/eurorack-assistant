@@ -116,6 +116,40 @@ describe('PatchDetailView', () => {
     );
   });
 
+  // Moving a plug is an unplug and a re-plug in one validated request, and
+  // the row the server made swaps in for the old one with no second read.
+  it('moves a cable in one request and swaps in the row the server made', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.post.mockResolvedValue({
+      id: 30,
+      from_patch_module_id: 11,
+      from_component_id: 2,
+      to_patch_module_id: 12,
+      to_component_id: 5,
+    });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+    wrapper.findComponent(PatchDiagram).vm.$emit('move', {
+      cable: { id: 21 },
+      from_patch_module_id: 11,
+      from_component_id: 2,
+      to_patch_module_id: 12,
+      to_component_id: 5,
+    });
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/cables/21/move', {
+      from_patch_module_id: 11,
+      from_component_id: 2,
+      to_patch_module_id: 12,
+      to_component_id: 5,
+    });
+    const ids = wrapper.findComponent(PatchDiagram).props('cables').map((c) => c.id);
+    expect(ids).toContain(30);
+    expect(ids).not.toContain(21);
+    expect(api.get).toHaveBeenCalledTimes(1);
+  });
+
   it('deletes a cable the diagram asks to unplug', async () => {
     api.get.mockResolvedValue(patchResponse);
     api.delete.mockResolvedValue({});

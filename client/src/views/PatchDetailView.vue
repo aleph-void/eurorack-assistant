@@ -86,6 +86,21 @@ async function connectDiagramCable(ends) {
   }
 }
 
+// Moving a plug from one jack to another is an unplug and a re-plug in one
+// gesture, so the server does it in one validated step: the old cable is only
+// replaced once the new ends pass the same rules a fresh cable would, and a
+// refused move leaves the patch exactly as it was. The row that comes back
+// swaps in for the old one — the same no-second-read rule as plugging.
+async function moveDiagramCable({ cable, ...ends }) {
+  cableError.value = '';
+  try {
+    const moved = await api.post(`/api/patches/${props.id}/cables/${cable.id}/move`, ends);
+    setCables([...patch.value.cables.filter((c) => c.id !== cable.id), moved]);
+  } catch (e) {
+    cableError.value = e.message;
+  }
+}
+
 // Unplugging is not gated behind a modal: patching is done by plugging and
 // unplugging over and over, and a cable is one drag away from being plugged
 // again.
@@ -169,6 +184,7 @@ async function resyncLayout() {
       interactive
       @connect="connectDiagramCable"
       @disconnect="disconnectDiagramCable"
+      @move="moveDiagramCable"
       @retype="retypeDiagramJack"
     />
 
