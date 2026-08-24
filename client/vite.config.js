@@ -19,6 +19,9 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: false,
+    // jsdom 30 gained PointerEvent, which @vue/test-utils writes to
+    // twice; see tests/eventProps.js.
+    setupFiles: ['./tests/eventProps.js'],
     // Node 26 ships its own Web Storage, which puts `localStorage` and
     // `sessionStorage` on the global BEFORE jsdom is installed — and vitest
     // leaves a global that already exists alone, so the window's real
