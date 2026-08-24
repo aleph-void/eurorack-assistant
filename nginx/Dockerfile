@@ -6,7 +6,7 @@ RUN npm ci
 COPY client/ ./
 RUN npm run build
 
-FROM nginx:1.30-alpine
+FROM nginx:1.31-alpine
 COPY nginx/nginx.conf /etc/nginx/conf.d/default.conf
 # Included by both vhosts, so it has to be in the image even when the TLS
 # override mounts its own template over the config above.
