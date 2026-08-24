@@ -18,8 +18,6 @@
 //     and up). Where it is missing, the cues play wherever the system sends
 //     them, and speech synthesis ignores it everywhere.
 
-export const SYSTEM_DEFAULT = '';
-
 const emptyList = () => ({ inputs: [], outputs: [], named: false });
 
 const defaultMediaDevices = () =>

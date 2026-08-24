@@ -20,7 +20,6 @@ import { createJobEvents } from './jobEvents.js';
 import { createJobPauses } from './jobPauses.js';
 
 export * from './enqueue.js';
-export { isPerfectCircuitDocument, isBuildDocument } from './handlers.js';
 
 export const MAX_ATTEMPTS = 3;
 

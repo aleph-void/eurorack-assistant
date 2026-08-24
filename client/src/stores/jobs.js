@@ -54,9 +54,6 @@ export const useJobsStore = defineStore('jobs', {
     activeCount: (state) =>
       state.jobs.filter((j) => j.status === 'pending' || j.status === 'running').length,
     failedJobs: (state) => state.jobs.filter((j) => j.status === 'failed'),
-    // Stalled jobs are still 'running', but the worker holding them died —
-    // the server reclaims them on its next pass and accepts a retry meanwhile.
-    retryableJobs: (state) => state.jobs.filter((j) => j.status === 'failed' || j.stalled),
     // Stopping and deleting are owner-only: an admin's list also holds other
     // users' jobs, which they may watch and retry but not throw away. The
     // list marks each row; anything unmarked (a job that arrived over the

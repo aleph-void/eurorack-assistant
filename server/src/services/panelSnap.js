@@ -284,19 +284,6 @@ export function discCandidates(px, bounds, cx, cy, r, search, { minContrast = MI
     .sort((a, b) => b.score - a.score);
 }
 
-// The single most convincing disc within `search` pixels of (cx, cy), counting
-// distance from (cx, cy) against a candidate at `dragPerPx` per pixel of it.
-// Returns null when nothing within reach reads as hardware at all.
-export function findDisc(px, bounds, cx, cy, r, search, { minContrast = MIN_CONTRAST, dragPerPx = 0 } = {}) {
-  const candidates = discCandidates(px, bounds, cx, cy, r, search, { minContrast });
-  let best = null;
-  for (const candidate of candidates) {
-    const value = candidate.score - dragPerPx * Math.hypot(candidate.x - cx, candidate.y - cy);
-    if (!best || value > best.value) best = { ...candidate, value };
-  }
-  return best;
-}
-
 const median = (values) => {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = sorted.length >> 1;

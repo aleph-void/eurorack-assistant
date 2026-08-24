@@ -150,5 +150,5 @@ export function useMultDirections(props, componentAt) {
     return directions;
   });
 
-  return { jackKey, switchJackKeys, multDirections };
+  return { switchJackKeys, multDirections };
 }

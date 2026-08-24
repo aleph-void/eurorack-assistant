@@ -19,7 +19,6 @@
 // reading one as bytes (services/patchDocumentParse.js) and resolving it
 // against a user's rack (services/patchImport.js).
 
-export { PATCH_FORMAT, PATCH_FORMAT_VERSION } from './patchDocumentLimits.js';
 export { exportPatchDocument, patchFileName } from './patchExport.js';
 export { DocumentError, parsePatchDocument } from './patchDocumentParse.js';
 export { importPatchDocument } from './patchImport.js';
