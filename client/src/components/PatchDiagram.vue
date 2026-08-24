@@ -48,7 +48,7 @@ const props = defineProps({
   // might be on, which is why a jack can appear in more than one.
   mults: { type: Array, default: () => [] },
 });
-const emit = defineEmits(['connect', 'disconnect', 'retype']);
+const emit = defineEmits(['connect', 'disconnect', 'move', 'retype']);
 
 // A patch snapshots the whole rack, and the rack is what the picture is OF:
 // the case in front of you, with the patched jacks marked on it. So every
@@ -399,7 +399,31 @@ function selectJack(anchor) {
     });
     return;
   }
+  // A plug is in hand: the tap says where it lands. Tapping the jack it came
+  // out of puts it back, and a jack it cannot reach is dimmed and does
+  // nothing — a mis-tap never quietly unplugs the cable.
+  if (moving.value) {
+    if (anchor.key === movingHeld.value.key) {
+      moving.value = null;
+      return;
+    }
+    if (!isMoveTarget(anchor)) return;
+    dropMove(anchor);
+    return;
+  }
   selectedCableId.value = null;
+  // A patched input holds exactly one plug and starts nothing itself, so
+  // tapping it means moving that plug.
+  if (anchor.type === 'input_jack') {
+    const plugged = props.cables.find(
+      (c) =>
+        c.to_patch_module_id === anchor.patchModuleId && c.to_component_id === anchor.componentId
+    );
+    if (plugged) {
+      startMove(plugged, 'to');
+      return;
+    }
+  }
   selected.value =
     selected.value?.componentId === anchor.componentId &&
     selected.value?.patchModuleId === anchor.patchModuleId
@@ -447,6 +471,97 @@ function cancelPatch() {
   patchFrom.value = null;
 }
 
+// ---- moving a cable already patched ----
+// Tapping a patched INPUT jack means 'this plug': an input takes exactly one
+// cable and nothing new can start from it, so the tap picks the plug up and
+// the next jack tapped is where it goes instead — the same
+// disconnect-and-reconnect a hand makes, done by the server in one validated
+// step so a refused move never loses the cable. An output fans out, so a tap
+// there still opens the jack bar; each cable it carries has a move button of
+// its own in it.
+const moving = ref(null); // { cable, end } — end: which end of it is in hand
+const cableEnd = (cable, end) =>
+  end === 'from'
+    ? {
+        key: `${cable.from_patch_module_id}:${cable.from_component_id}`,
+        patchModuleId: cable.from_patch_module_id,
+        componentId: cable.from_component_id,
+        name: cable.from_component_name,
+      }
+    : {
+        key: `${cable.to_patch_module_id}:${cable.to_component_id}`,
+        patchModuleId: cable.to_patch_module_id,
+        componentId: cable.to_component_id,
+        name: cable.to_component_name,
+      };
+// The plug in hand, and the end that stays where it is.
+const movingHeld = computed(() =>
+  moving.value ? cableEnd(moving.value.cable, moving.value.end) : null
+);
+const movingFixed = computed(() =>
+  moving.value ? cableEnd(moving.value.cable, moving.value.end === 'from' ? 'to' : 'from') : null
+);
+// Where the plug may land: a jack that can play the role the held end plays,
+// other than the two the cable is already in. The server's cable rules decide
+// whether that particular cable is legal, exactly as they do for a new one.
+const isMoveTarget = (a) =>
+  Boolean(moving.value) &&
+  a.key !== movingHeld.value.key &&
+  a.key !== movingFixed.value.key &&
+  (moving.value.end === 'to' ? CABLE_IN : CABLE_OUT).includes(a.type);
+
+function startMove(cable, end) {
+  moving.value = { cable, end };
+  selected.value = null;
+  selectedCableId.value = null;
+  patchFrom.value = null;
+}
+
+function dropMove(anchor) {
+  const { cable, end } = moving.value;
+  moving.value = null;
+  emit('move', {
+    cable,
+    from_patch_module_id: end === 'from' ? anchor.patchModuleId : cable.from_patch_module_id,
+    from_component_id: end === 'from' ? anchor.componentId : cable.from_component_id,
+    to_patch_module_id: end === 'to' ? anchor.patchModuleId : cable.to_patch_module_id,
+    to_component_id: end === 'to' ? anchor.componentId : cable.to_component_id,
+  });
+}
+
+function unplugMoving() {
+  if (!moving.value) return;
+  const { cable } = moving.value;
+  moving.value = null;
+  emit('disconnect', cable);
+}
+
+// The move bar's way back to the jack bar, or a retype on a patched input
+// would be unreachable: tapping the jack is what picks its plug up.
+function editMovingJack() {
+  const held = movingHeld.value;
+  if (!held) return;
+  moving.value = null;
+  selected.value = { patchModuleId: held.patchModuleId, componentId: held.componentId };
+  retypeTo.value = selectedJack.value?.component.type ?? '';
+}
+
+// The cables plugged into the selected jack, and which end of each it holds —
+// what the jack bar offers to move.
+const selectedJackCables = computed(() => {
+  if (!selected.value) return [];
+  const { patchModuleId, componentId } = selected.value;
+  const at = [];
+  for (const c of props.cables) {
+    if (c.from_patch_module_id === patchModuleId && c.from_component_id === componentId) {
+      at.push({ cable: c, end: 'from' });
+    } else if (c.to_patch_module_id === patchModuleId && c.to_component_id === componentId) {
+      at.push({ cable: c, end: 'to' });
+    }
+  }
+  return at;
+});
+
 // The two MOUSE gestures on the picture: dragging a cable between two jacks,
 // and dragging the picture itself. Both are left to the browser under a
 // finger — patching and unplugging by TAP are below.
@@ -490,8 +605,24 @@ const selectedCableId = ref(null);
 // The visible stroke is deaf (see the stylesheet: it lies OVER the markers,
 // and a tap on a patched output has to reach the marker), so the thickening
 // under the pointer cannot be a `:hover` rule on it. The handle underneath
-// says which cable is under the pointer instead.
+// says which cable is under the pointer instead — and for the same reason the
+// browser's own tooltip never fires there, so resting on a cable also raises
+// a tip of our own naming the jack at each end. Pinned where the pointer
+// entered rather than following it: following would be work once an event
+// where the rule here is work once a frame, and the words do not change.
 const hoveredCableId = ref(null);
+const cableTip = ref(null);
+function hoverCable(entry, event) {
+  hoveredCableId.value = entry.cable.id;
+  cableTip.value = { x: event.clientX, y: event.clientY };
+}
+function unhoverCable() {
+  hoveredCableId.value = null;
+  cableTip.value = null;
+}
+const hoveredCable = computed(
+  () => drawn.value.find((c) => c.cable.id === hoveredCableId.value) ?? null
+);
 const pickedCable = computed(() =>
   drawn.value.find((c) => c.cable.id === selectedCableId.value) ?? null
 );
@@ -501,9 +632,10 @@ function pickCable(entry, event) {
     unplugCable(entry.cable, event);
     return;
   }
-  // Half a cable is already being patched: the picture is asking which input,
-  // and the cables are dimmed out of the way of that answer.
-  if (patchFrom.value) return;
+  // Half a cable is already being patched, or a plug is in hand: the picture
+  // is asking which jack, and the cables are dimmed out of the way of that
+  // answer.
+  if (patchFrom.value || moving.value) return;
   event.preventDefault();
   selected.value = null;
   selectedCableId.value = selectedCableId.value === entry.cable.id ? null : entry.cable.id;
@@ -666,13 +798,13 @@ function pickCable(entry, event) {
                 :key="`hit-${h.entry.cable.id}`"
                 :d="h.d"
                 class="cable-hit"
-                :class="{ dimmed: Boolean(patchFrom) }"
+                :class="{ dimmed: Boolean(patchFrom) || Boolean(moving) }"
                 stroke="transparent"
                 :data-test="`diagram-cable-hit-${h.entry.cable.id}`"
                 @click="pickCable(h.entry, $event)"
                 @contextmenu="unplugCable(h.entry.cable, $event)"
-                @pointerenter="hoveredCableId = h.entry.cable.id"
-                @pointerleave="hoveredCableId = null"
+                @pointerenter="hoverCable(h.entry, $event)"
+                @pointerleave="unhoverCable"
               />
             </template>
 
@@ -686,14 +818,19 @@ function pickCable(entry, event) {
               :class="{
                 optional: c.cable.optional,
                 unpluggable: interactive,
-                dimmed: interactive && Boolean(patchFrom),
-                picked: c.cable.id === selectedCableId,
+                dimmed:
+                  interactive &&
+                  (Boolean(patchFrom) || Boolean(moving)) &&
+                  c.cable.id !== moving?.cable.id,
+                picked: c.cable.id === selectedCableId || c.cable.id === moving?.cable.id,
                 hovered: c.cable.id === hoveredCableId,
               }"
               :stroke="c.color"
               :data-test="`diagram-cable-${c.cable.id}`"
               @click="pickCable(c, $event)"
               @contextmenu="unplugCable(c.cable, $event)"
+              @pointerenter="hoverCable(c, $event)"
+              @pointerleave="unhoverCable"
             >
               <title>
                 {{ c.title
@@ -729,7 +866,8 @@ function pickCable(entry, event) {
               :stroke="
                 (selected?.patchModuleId === a.patchModuleId &&
                   selected?.componentId === a.componentId) ||
-                patchFrom?.key === a.key
+                patchFrom?.key === a.key ||
+                movingHeld?.key === a.key
                   ? MARKER_SELECTED
                   : MARKER_HALO
               "
@@ -740,11 +878,19 @@ function pickCable(entry, event) {
                 selected:
                   (selected?.patchModuleId === a.patchModuleId &&
                     selected?.componentId === a.componentId) ||
-                  patchFrom?.key === a.key,
-                dimmed: Boolean(patchFrom) && patchFrom.key !== a.key && !isPatchTarget(a),
+                  patchFrom?.key === a.key ||
+                  movingHeld?.key === a.key,
+                dimmed:
+                  (Boolean(patchFrom) && patchFrom.key !== a.key && !isPatchTarget(a)) ||
+                  (Boolean(moving) &&
+                    movingHeld.key !== a.key &&
+                    movingFixed.key !== a.key &&
+                    !isMoveTarget(a)),
               }"
               :data-test="`diagram-jack-${a.patchModuleId}-${a.componentId}`"
-              @pointerdown="CABLE_OUT.includes(a.type) && startCable(a, $event)"
+              @pointerdown="
+                CABLE_OUT.includes(a.type) && !patchFrom && !moving && startCable(a, $event)
+              "
               @click="selectJack(a)"
             >
               <title>
@@ -777,6 +923,62 @@ function pickCable(entry, event) {
               </text>
             </template>
           </svg>
+        </div>
+        <div
+          v-if="hoveredCable && cableTip"
+          class="cable-tip"
+          :style="{ left: `${cableTip.x + 14}px`, top: `${cableTip.y + 12}px` }"
+          data-test="diagram-cable-tip"
+        >
+          <div>
+            <span class="tip-end">out</span>
+            {{ moduleName(hoveredCable.cable.from_patch_module_id) }} —
+            {{ hoveredCable.cable.from_component_name }}
+          </div>
+          <div>
+            <span class="tip-end">in</span>
+            {{ moduleName(hoveredCable.cable.to_patch_module_id) }} —
+            {{ hoveredCable.cable.to_component_name }}
+          </div>
+          <div v-if="hoveredCable.cable.note" class="muted">{{ hoveredCable.cable.note }}</div>
+        </div>
+        <div v-if="interactive && moving" class="picture-bar" data-test="diagram-move-bar">
+          <span>
+            Moving the cable {{ moving.end === 'to' ? 'plugged into' : 'out of' }}
+            <strong>{{ movingHeld.name }}</strong> on {{ moduleName(movingHeld.patchModuleId) }} —
+            its other end stays at <strong>{{ movingFixed.name }}</strong> on
+            {{ moduleName(movingFixed.patchModuleId) }}. Tap the
+            {{ moving.end === 'to' ? 'input' : 'output' }} jack it should
+            {{ moving.end === 'to' ? 'go to' : 'come from' }} instead, or tap
+            {{ movingHeld.name }} again to leave it where it is.
+          </span>
+          <button
+            type="button"
+            class="danger"
+            style="margin: 0"
+            data-test="diagram-move-unplug"
+            @click="unplugMoving"
+          >
+            Unplug it instead
+          </button>
+          <button
+            type="button"
+            class="secondary"
+            style="margin: 0"
+            data-test="diagram-move-edit"
+            @click="editMovingJack"
+          >
+            Edit the jack
+          </button>
+          <button
+            type="button"
+            class="secondary"
+            style="margin: 0 0 0 auto"
+            data-test="diagram-move-cancel"
+            @click="moving = null"
+          >
+            Cancel
+          </button>
         </div>
         <div v-if="interactive && patchFrom" class="picture-bar" data-test="diagram-patch-bar">
           <span>
@@ -811,6 +1013,23 @@ function pickCable(entry, event) {
             @click="armPatch"
           >
             Patch from here
+          </button>
+          <button
+            v-for="pc in selectedJackCables"
+            :key="`move-${pc.cable.id}`"
+            type="button"
+            class="secondary"
+            style="margin: 0"
+            :data-test="`diagram-jack-move-${pc.cable.id}`"
+            @click="startMove(pc.cable, pc.end)"
+          >
+            Move the cable {{ pc.end === 'from' ? 'to' : 'from' }}
+            {{
+              moduleName(
+                pc.end === 'from' ? pc.cable.to_patch_module_id : pc.cable.from_patch_module_id
+              )
+            }}
+            {{ pc.end === 'from' ? pc.cable.to_component_name : pc.cable.from_component_name }}
           </button>
           <template v-if="selectedJack.pm.module_id">
             <select v-model="retypeTo" data-test="diagram-jack-type">
@@ -890,10 +1109,14 @@ function pickCable(entry, event) {
             Drag an output marker (or a bidirectional one) onto an input marker to patch it — the
             key above says which colour is which. On a touch screen a finger scrolls the picture
             instead, so tap the output marker and press 'Patch from here', then tap the input:
-            the picture dims everything the cable cannot reach while you scroll to it. Tapping a
-            jack marker is also how its direction is corrected, and tapping a cable is how it is
-            unplugged — alt- or right-clicking one does that in a single gesture. Ctrl- or
-            ⌘-scroll zooms the picture. Controls and other component types cannot be wired here.
+            the picture dims everything the cable cannot reach while you scroll to it. Rest the
+            pointer on a cable to see what it joins. Tapping a patched input jack picks its plug
+            up — tap the input it should go to instead, and the cable is moved there; a patched
+            output's cables are moved from its jack bar, since a tap there is how a mult's next
+            cable is started. Tapping an empty jack marker is how its direction is corrected, and
+            tapping a cable is how it is unplugged — alt- or right-clicking one does that in a
+            single gesture. Ctrl- or ⌘-scroll zooms the picture. Controls and other component
+            types cannot be wired here.
             <br />
           </template>
           The key above is also what the picture draws: it opens on the jacks alone — press an
@@ -1018,6 +1241,32 @@ function pickCable(entry, event) {
    to aim at across a scroll. Only how solid a marker is, never its colour. */
 .jack-marker.dimmed {
   fill-opacity: 0.12;
+}
+/* What a cable is plugged between, said at the pointer. The browser's own
+   tooltip cannot do it on an interactive diagram — the visible stroke is deaf
+   and the handle invisible — and a second of hover delay is a long time in
+   the middle of patching. Fixed to the viewport, so it works inside the
+   fullscreen panel and never scrolls with the picture; deaf, so it never
+   steals the hover that raised it. */
+.cable-tip {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  max-width: 24rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+.tip-end {
+  display: inline-block;
+  min-width: 2.2em;
+  color: var(--faint);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 .picture-bar {
   display: flex;

@@ -1684,6 +1684,77 @@ describe('patch shortcuts', () => {
     expect(after.cables.some((c) => c.id === both.body.id)).toBe(false);
   });
 
+  it('moves one end of a cable to another jack in a single validated step', async () => {
+    const fixture = await withPatchFixture();
+    const { app, db, aliceCookie, alice, output, knob } = fixture;
+    const vca = await insertModule(db, alice.id, { manufacturer: 'Intellijel', name: 'Dual VCA' });
+    const { rows: vcaJacks } = await db.query(
+      `INSERT INTO module_components (module_id, type, name) VALUES
+         ($1, 'input_jack', 'IN 1'), ($1, 'input_jack', 'IN 2') RETURNING *`,
+      [vca.id]
+    );
+    const [in1, in2] = vcaJacks;
+    const patch = (await createPatch(fixture)).body;
+    const detail = async () =>
+      (await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie)).body;
+    const before = await detail();
+    const mathsPm = before.modules.find((m) => m.module_name === 'Maths');
+    const vcaPm = before.modules.find((m) => m.module_name === 'Dual VCA');
+
+    const cable = await request(app)
+      .post(`/api/patches/${patch.id}/cables`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: mathsPm.id,
+        from_component_id: output.id,
+        to_patch_module_id: vcaPm.id,
+        to_component_id: in1.id,
+        note: 'keep me',
+      });
+    expect(cable.status).toBe(201);
+
+    // A refused move leaves the patch exactly as it was: a knob is not a jack.
+    const refused = await request(app)
+      .post(`/api/patches/${patch.id}/cables/${cable.body.id}/move`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: mathsPm.id,
+        from_component_id: output.id,
+        to_patch_module_id: mathsPm.id,
+        to_component_id: knob.id,
+      });
+    expect(refused.status).toBe(400);
+    expect((await detail()).cables[0]).toMatchObject({ id: cable.body.id, to_component_id: in1.id });
+
+    // Re-plugged into the neighbouring input, note and all; the old row goes.
+    const moved = await request(app)
+      .post(`/api/patches/${patch.id}/cables/${cable.body.id}/move`)
+      .set('Cookie', aliceCookie)
+      .send({
+        from_patch_module_id: mathsPm.id,
+        from_component_id: output.id,
+        to_patch_module_id: vcaPm.id,
+        to_component_id: in2.id,
+      });
+    expect(moved.status).toBe(201);
+    expect(moved.body).toMatchObject({
+      from_component_name: 'EOR',
+      to_component_name: 'IN 2',
+      note: 'keep me',
+    });
+    const after = await detail();
+    expect(after.cables).toHaveLength(1);
+    expect(after.cables[0].id).toBe(moved.body.id);
+    expect(after.cables[0].id).not.toBe(cable.body.id);
+
+    // Only the patch's owner, and only the patch's own cables.
+    const stranger = await request(app)
+      .post(`/api/patches/${patch.id}/cables/${moved.body.id}/move`)
+      .set('Cookie', fixture.adminCookie)
+      .send({});
+    expect(stranger.status).toBe(404);
+  });
+
   it('suggests cables from the patches the user has already built', async () => {
     const fixture = await withPatchFixture();
     const { app, db, aliceCookie, alice, input, output } = fixture;
