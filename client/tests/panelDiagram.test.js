@@ -414,6 +414,338 @@ describe('PatchDiagram', () => {
     expect(wrapper.emitted('disconnect')).toBeUndefined();
   });
 
+  // ---- the module menu ----
+  // Alt- or right-clicking a panel anywhere that is not a jack or a cable
+  // opens the module's menu: the settings it keeps behind an encoder
+  // (module_parameters), picked and dialed in at the pointer.
+  const menuParameters = () => [
+    {
+      id: 101,
+      component_id: 1,
+      name: 'Clock division',
+      value_type: 'enum',
+      options: [
+        { id: 1, value: '/4', description: 'Four times slower' },
+        { id: 2, value: 'x2', description: null },
+      ],
+      default_value: null,
+      value_min: null,
+      value_max: null,
+      unit: null,
+      description: 'How fast EOR runs against the clock.',
+    },
+    // A parameter whose jack a re-analysis has since taken away: the name it
+    // snapshotted is all there is left to show.
+    {
+      id: 104,
+      component_id: 99,
+      component_name: 'OLD OUT',
+      name: 'Slew',
+      value_type: 'enum',
+      options: [{ id: 9, value: 'on', description: null }],
+      default_value: null,
+      value_min: null,
+      value_max: null,
+      unit: null,
+      description: null,
+    },
+    {
+      id: 102,
+      component_id: null,
+      name: 'Tempo',
+      value_type: 'number',
+      options: [],
+      default_value: '120',
+      value_min: '10',
+      value_max: '300',
+      unit: 'BPM',
+      description: null,
+    },
+    // A number the manual gives no bounds for: still a number box, with the
+    // range it cannot state shrugged in the placeholder.
+    {
+      id: 105,
+      component_id: null,
+      name: 'Swing',
+      value_type: 'number',
+      options: [],
+      default_value: null,
+      value_min: null,
+      value_max: null,
+      unit: '%',
+      description: null,
+    },
+    // Neither a listed set nor a range: the handful a manual describes
+    // without bounding take free text.
+    {
+      id: 103,
+      component_id: null,
+      name: 'Preset',
+      value_type: 'text',
+      default_value: null,
+      value_min: null,
+      value_max: null,
+      unit: null,
+      description: null,
+    },
+  ];
+  const withMenu = () => {
+    const [maths, lpg] = modules();
+    return [{ ...maths, parameters: menuParameters() }, lpg];
+  };
+
+  it('opens the module menu on a panel and dials a listed parameter in', async () => {
+    const wrapper = mountDiagram({
+      modules: withMenu(),
+      interactive: true,
+      settings: [
+        {
+          id: 33,
+          patch_module_id: 11,
+          component_id: 1,
+          component_name: 'EOR',
+          parameter_id: 101,
+          parameter_name: 'Clock division',
+          value: '/4',
+        },
+      ],
+    });
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    const menu = wrapper.find('[data-test="diagram-module-menu"]');
+    expect(menu.text()).toContain('Make Noise Maths');
+    // The parameter names the jack it configures and what it is already set to.
+    const entry = wrapper.find('[data-test="diagram-menu-parameter-101"]');
+    expect(entry.text()).toContain('EOR · Clock division');
+    expect(entry.text()).toContain('/4');
+    // A parameter whose jack is gone still says which jack it configured.
+    expect(wrapper.find('[data-test="diagram-menu-parameter-104"]').text()).toContain(
+      'OLD OUT · Slew'
+    );
+
+    await entry.trigger('click');
+    // What the manual says the parameter does rides along.
+    expect(wrapper.find('[data-test="diagram-module-menu"]').text()).toContain(
+      'How fast EOR runs against the clock.'
+    );
+    const option = wrapper.find('[data-test="diagram-menu-option-2"]');
+    expect(option.text()).toContain('x2');
+    await option.trigger('click');
+    expect(wrapper.emitted('setting')).toEqual([
+      [{ patch_module_id: 11, parameter_id: 101, value: 'x2' }],
+    ]);
+    // Back at the list rather than closed: a menu-driven module is dialed in
+    // a dozen entries at a time.
+    expect(wrapper.find('[data-test="diagram-menu-parameter-102"]').exists()).toBe(true);
+  });
+
+  it('takes a number for a parameter with a range rather than a list', async () => {
+    const wrapper = mountDiagram({ modules: withMenu(), interactive: true });
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('click', { altKey: true });
+    await wrapper.find('[data-test="diagram-menu-parameter-102"]').trigger('click');
+    const input = wrapper.find('[data-test="diagram-menu-input"]');
+    expect(input.attributes('type')).toBe('number');
+    expect(input.attributes('max')).toBe('300');
+    // Prefilled from the parameter's own default.
+    expect(input.element.value).toBe('120');
+    await input.setValue('140');
+    await wrapper.find('[data-test="diagram-menu-set"]').trigger('click');
+    expect(wrapper.emitted('setting')).toEqual([
+      [{ patch_module_id: 11, parameter_id: 102, value: '140' }],
+    ]);
+
+    // A number with no stated bounds still gets a number box, and the
+    // placeholder shrugs at the range the manual never gave.
+    await wrapper.find('[data-test="diagram-menu-parameter-105"]').trigger('click');
+    const unbounded = wrapper.find('[data-test="diagram-menu-input"]');
+    expect(unbounded.attributes('type')).toBe('number');
+    expect(unbounded.attributes('placeholder')).toBe('? … ? %');
+  });
+
+  it('takes free text for a parameter with neither options nor a range', async () => {
+    const wrapper = mountDiagram({ modules: withMenu(), interactive: true });
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    await wrapper.find('[data-test="diagram-menu-parameter-103"]').trigger('click');
+    const input = wrapper.find('[data-test="diagram-menu-input"]');
+    expect(input.attributes('type')).toBe('text');
+    // Nothing recorded and no default: the box starts empty, and Enter with
+    // nothing typed sets nothing.
+    expect(input.element.value).toBe('');
+    await input.trigger('keyup.enter');
+    expect(wrapper.emitted('setting')).toBeUndefined();
+    await input.setValue('bank A');
+    await input.trigger('keyup.enter');
+    expect(wrapper.emitted('setting')).toEqual([
+      [{ patch_module_id: 11, parameter_id: 103, value: 'bank A' }],
+    ]);
+  });
+
+  it('closes and steps back through the menu without setting anything', async () => {
+    const wrapper = mountDiagram({ modules: withMenu(), interactive: true });
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    await wrapper.find('[data-test="diagram-menu-parameter-101"]').trigger('click');
+    // Back to the list of parameters.
+    await wrapper.find('[data-test="diagram-menu-back"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-menu-parameter-102"]').exists()).toBe(true);
+    // Close puts the menu away entirely.
+    await wrapper.find('[data-test="diagram-menu-close"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    // Reopened, a plain click on the picture puts it away too — whatever the
+    // click was for, the menu it was not aimed at gets out of the way.
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('click', { altKey: true });
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(true);
+    await wrapper.find('[data-test="diagram-svg"]').trigger('click');
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    // And the empty picture outside every panel has nothing to open: the
+    // browser keeps its own context menu there.
+    await wrapper.find('[data-test="diagram-svg"]').trigger('contextmenu');
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    expect(wrapper.emitted('setting')).toBeUndefined();
+  });
+
+  // A control's recorded values shape its editor exactly as they do on the
+  // settings page: enum positions become buttons, a range whose ends are
+  // words — or no values at all — free text.
+  it("offers a listed control's positions as buttons, and free text otherwise", async () => {
+    const [maths, lpg] = modules();
+    maths.components.push(
+      {
+        id: 9,
+        type: 'switch',
+        name: 'Mode',
+        values: [
+          { id: 3, type: 'enum', value: 'Cycle' },
+          { id: 4, type: 'enum', value: 'Sustain' },
+        ],
+      },
+      { id: 10, type: 'button', name: 'Hold' },
+      {
+        id: 14,
+        type: 'slider',
+        name: 'Fall',
+        values: [
+          { id: 5, type: 'min', value: 'CCW' },
+          { id: 6, type: 'max', value: 'CW' },
+        ],
+      }
+    );
+    maths.panel.components.push(
+      { component_id: 9, name: 'Mode', shape: 'switch', type: 'switch', x: 0.3, y: 0.3, w: 0.06, h: 0.06 },
+      { component_id: 10, name: 'Hold', shape: 'button', type: 'button', x: 0.7, y: 0.3, w: 0.06, h: 0.06 },
+      { component_id: 14, name: 'Fall', shape: 'slider', type: 'slider', x: 0.5, y: 0.5, w: 0.06, h: 0.06 }
+    );
+    const wrapper = mountDiagram({ modules: [maths, lpg], interactive: true });
+    for (const type of ['switch', 'button', 'slider']) {
+      await wrapper.find(`[data-test="legend-${type}"]`).trigger('click');
+    }
+    // Alt-click is the same gesture as the right button.
+    await wrapper.find('[data-test="diagram-jack-11-9"]').trigger('click', { altKey: true });
+    await wrapper.find('[data-test="diagram-menu-option-4"]').trigger('click');
+    expect(wrapper.emitted('setting')).toEqual([
+      [{ patch_module_id: 11, component_id: 9, value: 'Sustain' }],
+    ]);
+    // A control with no recorded values takes free text, starting empty.
+    await wrapper.find('[data-test="diagram-jack-11-10"]').trigger('contextmenu');
+    const input = wrapper.find('[data-test="diagram-menu-input"]');
+    expect(input.attributes('type')).toBe('text');
+    expect(input.element.value).toBe('');
+    await input.setValue('latched');
+    await wrapper.find('[data-test="diagram-menu-set"]').trigger('click');
+    expect(wrapper.emitted('setting')[1]).toEqual([
+      { patch_module_id: 11, component_id: 10, value: 'latched' },
+    ]);
+    // A range whose ends are words rather than numbers is typed, not counted.
+    await wrapper.find('[data-test="diagram-jack-11-14"]').trigger('contextmenu');
+    expect(wrapper.find('[data-test="diagram-menu-input"]').attributes('type')).toBe('text');
+  });
+
+  it('says when a module keeps no menu, and where to record one', async () => {
+    const wrapper = mountDiagram({ interactive: true });
+    await wrapper.find('g[data-pm="12"] .panel-frame').trigger('contextmenu');
+    const note = wrapper.find('[data-test="diagram-menu-empty"]');
+    expect(note.text()).toContain('No menu parameters');
+    expect(note.find('a').attributes('to')).toBe('/modules/2/parameters');
+  });
+
+  // A write elsewhere reloads the payload under an open menu, and the
+  // instance it was open over may not come back — the menu says so rather
+  // than crashing or listing a ghost.
+  it('survives the module leaving the payload while its menu is open', async () => {
+    const wrapper = mountDiagram({ modules: withMenu(), interactive: true });
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    expect(wrapper.find('[data-test="diagram-menu-parameter-101"]').exists()).toBe(true);
+    await wrapper.setProps({ modules: [modules()[1]], cables: [] });
+    const menu = wrapper.find('[data-test="diagram-module-menu"]');
+    expect(menu.find('[data-test="diagram-menu-empty"]').text()).toContain(
+      'no longer in the rack'
+    );
+  });
+
+  // A knob, toggle or button is a thing ON the panel with a position of its
+  // own, so its marker opens the value editor for that one control.
+  it('opens a value editor for a control whose marker is right-clicked', async () => {
+    const [maths, lpg] = modules();
+    maths.components.push({
+      id: 9,
+      type: 'knob',
+      name: 'Rise',
+      values: [
+        { id: 1, type: 'min', value: '0' },
+        { id: 2, type: 'max', value: '10' },
+      ],
+    });
+    maths.panel.components.push({
+      component_id: 9,
+      name: 'Rise',
+      shape: 'knob',
+      type: 'knob',
+      x: 0.5,
+      y: 0.3,
+      w: 0.06,
+      h: 0.06,
+    });
+    const wrapper = mountDiagram({
+      modules: [maths, lpg],
+      interactive: true,
+      settings: [{ id: 31, patch_module_id: 11, component_id: 9, component_name: 'Rise', value: '7' }],
+    });
+    // The picture opens on the jacks alone; the knobs are a press of the key away.
+    await wrapper.find('[data-test="legend-knob"]').trigger('click');
+    await wrapper.find('[data-test="diagram-jack-11-9"]').trigger('contextmenu');
+    const menu = wrapper.find('[data-test="diagram-module-menu"]');
+    expect(menu.text()).toContain('Rise');
+    const input = wrapper.find('[data-test="diagram-menu-input"]');
+    expect(input.attributes('type')).toBe('number');
+    expect(input.attributes('max')).toBe('10');
+    // Prefilled with what the patch has recorded for it.
+    expect(input.element.value).toBe('7');
+    await input.setValue('5');
+    await wrapper.find('[data-test="diagram-menu-set"]').trigger('click');
+    expect(wrapper.emitted('setting')).toEqual([
+      [{ patch_module_id: 11, component_id: 9, value: '5' }],
+    ]);
+    // One control, one value: the menu is done.
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+  });
+
+  // Over a jack or a cable the gesture already means something — and a shared,
+  // read-only diagram keeps the browser's own context menu everywhere.
+  it('keeps the module menu off the jacks, the cables and read-only diagrams', async () => {
+    const wrapper = mountDiagram({ modules: withMenu(), interactive: true });
+    await wrapper.find('[data-test="diagram-jack-11-1"]').trigger('contextmenu');
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    await wrapper.find('[data-test="diagram-cable-hit-21"]').trigger('contextmenu');
+    expect(wrapper.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+
+    const readOnly = mountDiagram({ modules: withMenu() });
+    await readOnly.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    expect(readOnly.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+    // The markers keep the browser's own context menu on a read-only diagram
+    // too.
+    await readOnly.find('[data-test="diagram-jack-11-1"]').trigger('contextmenu');
+    expect(readOnly.find('[data-test="diagram-module-menu"]').exists()).toBe(false);
+  });
+
   // A shared, read-only diagram keeps the browser's own context menu.
   it('leaves a read-only cable alone', async () => {
     const wrapper = mountDiagram();

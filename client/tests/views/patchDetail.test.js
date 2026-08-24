@@ -186,6 +186,89 @@ describe('PatchDetailView', () => {
     expect(api.get).toHaveBeenCalledWith('/api/patches/7');
   });
 
+  // A menu parameter dialed in from the picture is the same PUT the settings
+  // page makes — and unlike a cable, a setting can flip a conditional
+  // normalled connection or a switched mult, so the patch is re-read.
+  it('records a menu parameter picked from the module menu', async () => {
+    const withMenu = structuredClone(patchResponse);
+    withMenu.modules.find((m) => m.id === 11).parameters = [
+      {
+        id: 101,
+        component_id: 2,
+        name: 'Clock division',
+        value_type: 'enum',
+        options: [
+          { id: 1, value: '/4', description: 'Four times slower' },
+          { id: 2, value: 'x2', description: null },
+        ],
+        default_value: null,
+        value_min: null,
+        value_max: null,
+        unit: null,
+        description: null,
+      },
+    ];
+    api.get.mockResolvedValue(withMenu);
+    api.put.mockResolvedValue({ id: 34 });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+
+    // Alt- or right-click on the panel, anywhere that is not a jack or a
+    // cable, opens the module's menu at the pointer.
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    const entry = wrapper.find('[data-test="diagram-menu-parameter-101"]');
+    expect(entry.text()).toContain('EOR · Clock division');
+    await entry.trigger('click');
+    await wrapper.find('[data-test="diagram-menu-option-2"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/patches/7/settings', {
+      patch_module_id: 11,
+      parameter_id: 101,
+      value: 'x2',
+    });
+    // The page re-reads the patch: a setting can change what the picture says.
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("records a control's position the diagram asks to set", async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.put.mockResolvedValue({ id: 35 });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+    wrapper.findComponent(PatchDiagram).vm.$emit('setting', {
+      patch_module_id: 11,
+      component_id: 3,
+      value: '5',
+    });
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/patches/7/settings', {
+      patch_module_id: 11,
+      component_id: 3,
+      value: '5',
+    });
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
+  // api.js has already raised the toast for a refused setting; the page has
+  // nothing to add and nothing to re-read.
+  it('shrugs off a setting the server refuses', async () => {
+    api.get.mockResolvedValue(patchResponse);
+    api.put.mockRejectedValue(new Error('that module is not part of this patch'));
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+    wrapper.findComponent(PatchDiagram).vm.$emit('setting', {
+      patch_module_id: 11,
+      component_id: 3,
+      value: '5',
+    });
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledTimes(1);
+    expect(api.get).toHaveBeenCalledTimes(1);
+  });
+
   it('duplicates the patch and opens the copy', async () => {
     api.get.mockResolvedValue(patchResponse);
     api.post.mockResolvedValue({ id: 99, name: 'Krell (copy)' });
