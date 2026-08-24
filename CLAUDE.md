@@ -524,7 +524,8 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
 
 Everything slow is a DB-backed job (`jobs` table): import → find_manual (per
 module) → analyze_manual → panel_image + find_parameters; extract_manual runs
-alongside; questions run scope_question → user review → answer_question; attached
+alongside; questions run scope_question → user review → answer_question (a
+question asked from a module's page skips scope_question — see below); attached
 YouTube videos run download_video (yt-dlp + ffmpeg frames/transcript, no
 LLM) → analyze_video (techniques summary onto `module_videos`, then the
 work files are deleted); a rack-scoped channel scan (`services/youtube.js`)
@@ -547,11 +548,23 @@ read the scope links and the patch attachments) and are where the next one is
 asked. Both draw the SAME `components/QuestionsPanel.vue` — one list of one
 kind of record, only the word and the query key differ. Asking there sends
 `module_ids`/`patch_ids` with the prompt, so the record is in the question's
-scope BEFORE the scoping model reads a word: a question asked from a module's
-page is about that module even when the wording never names it ("why is this
-so quiet?"), and `scopeQuestion()` keeps the links it finds already written
-rather than replacing them with what the model picked. The general Ask page is
-still there for a question about the whole system.
+scope before anything else looks at it: a question asked from a module's page
+is about that module even when the wording never names it ("why is this so
+quiet?").
+
+A MODULE'S PAGE NAMES ITS OWN SCOPE, SO NOTHING SCOPES IT. There is nothing
+for a model to work out — the module is the scope, and which of its jacks,
+knobs and switches the question is about is a thing the asker knows and the
+scoping pass could only guess at. So the components are TICKED BESIDE THE BOX
+the question is typed in (`component_ids` on `POST /api/questions`, validated
+as components of the modules named), and the question is created 'scoped' with
+both sets of links written and NO scope_question job at all: no LLM call, no
+polling, straight into the review step with the picks already ticked. A
+question that also names a PATCH still gets the scoping pass — a patch reaches
+modules beyond the page it was asked from — as does one from the general Ask
+page, which is still there for a question about the whole system; there
+`scopeQuestion()` keeps the links it finds already written rather than
+replacing them with what the model picked.
 
 A **system** is a collection of racks patched together as one instrument
 (migration 028). Racks stay the unit of inventory and physical row layout;

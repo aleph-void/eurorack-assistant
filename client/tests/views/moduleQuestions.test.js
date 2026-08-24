@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { testGlobal } from '../setup.js';
+import { openPanels, testGlobal } from '../setup.js';
 
 vi.mock('../../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -57,12 +57,47 @@ describe('ModuleQuestionsView', () => {
     await flushPromises();
 
     // The module goes into the question's scope as it is created — the
-    // wording never names it.
+    // wording never names it — and nothing is asked about which parts of it,
+    // because nothing was ticked.
     expect(api.post).toHaveBeenCalledWith('/api/questions', {
       prompt: 'Why is this so quiet?',
       module_ids: [1],
+      component_ids: [],
     });
     expect(routerPush).toHaveBeenCalledWith({ name: 'question-detail', params: { id: 9 } });
+  });
+
+  it('asks about named parts of the module, grouped by what they are', async () => {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path.startsWith('/api/questions') ? [] : mathsModule)
+    );
+    api.post.mockResolvedValue({ id: 11 });
+    const wrapper = mount(ModuleQuestionsView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    // The picker is built the first time it is opened (lazyPanel.js).
+    await openPanels(wrapper);
+    const parts = wrapper.find('[data-test="ask-components"]');
+    expect(parts.text()).toContain('Input jacks');
+    expect(parts.text()).toContain('Knobs');
+
+    const options = wrapper.findAll('[data-test="ask-component-option"]');
+    expect(options).toHaveLength(mathsModule.components.length);
+
+    await wrapper.find('[data-test="components-all"]').trigger('click');
+    await wrapper.find('[data-test="components-none"]').trigger('click');
+    // 'Signal In' — the first jack of the fixture.
+    await options[0].setValue(true);
+
+    await wrapper.find('[data-test="ask-prompt"]').setValue('What voltage does this want?');
+    await wrapper.find('[data-test="record-questions"] form').trigger('submit');
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith('/api/questions', {
+      prompt: 'What voltage does this want?',
+      module_ids: [1],
+      component_ids: [1],
+    });
   });
 
   it('says so when nothing has been asked about the module yet', async () => {
