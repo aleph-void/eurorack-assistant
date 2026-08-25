@@ -1420,6 +1420,7 @@ describe('filling in what modules are missing', () => {
         panel_image: 1,
         extract_manual: 1,
         describe_components: 0,
+        find_parameters: 0,
       },
       skipped: 0,
       complete: 1,
@@ -1444,8 +1445,10 @@ describe('filling in what modules are missing', () => {
   });
 
   // Reading a module's menu is a gap like a missing summary: the sweep is
-  // how every module analyzed before menus existed gets one.
-  it('counts a menu nobody has read as a gap the narrow pass fills', async () => {
+  // how every module analyzed before menus existed gets one. A module with
+  // nothing else missing takes the job named for that work, so someone
+  // watching the queue can see the menu being read.
+  it('queues the menu pass for a menu nobody has read', async () => {
     const module = await completeModule();
     await ctx.db.models.Module.update(
       { parameters_status: 'pending' },
@@ -1457,8 +1460,11 @@ describe('filling in what modules are missing', () => {
       analyze_manual: 0,
       panel_image: 0,
       extract_manual: 0,
-      describe_components: 1,
+      describe_components: 0,
+      find_parameters: 1,
     });
+    const jobs = await ctx.db.models.Job.findAll({ where: { type: 'find_parameters' } });
+    expect(jobs.map((j) => j.module_id)).toEqual([module.id]);
     // And once it has been read — whether or not the module had a menu — the
     // sweep leaves it alone rather than paying for the pass again.
     await ctx.db.models.Module.update(
@@ -1466,7 +1472,42 @@ describe('filling in what modules are missing', () => {
       { where: { id: module.id } }
     );
     await ctx.db.models.Job.destroy({ where: {} });
-    expect((await reanalyze()).body).toMatchObject({ complete: 1, queued: { describe_components: 0 } });
+    expect((await reanalyze()).body).toMatchObject({
+      complete: 1,
+      queued: { describe_components: 0, find_parameters: 0 },
+    });
+  });
+
+  // A module missing sentences AND its menu takes ONE job: the description
+  // pass reads the menu itself, so queueing both would read the same
+  // documents twice.
+  it('folds the menu into the description pass when both are missing', async () => {
+    const module = await completeModule();
+    await ctx.db.models.Module.update(
+      { parameters_status: 'pending', summary: null },
+      { where: { id: module.id } }
+    );
+    const res = await reanalyze();
+    expect(res.body.queued).toMatchObject({ describe_components: 1, find_parameters: 0 });
+  });
+
+  // 'complete' is the only status that means the menu has been read. A pass
+  // that FAILED, or one whose job died between setting 'reading' and
+  // finishing, is a menu nobody has read — and treating either as done left
+  // those modules invisible to every later sweep, for good.
+  it.each(['failed', 'reading'])('counts a menu left on %s as a gap', async (status) => {
+    const module = await completeModule();
+    await ctx.db.models.Module.update(
+      { parameters_status: status },
+      { where: { id: module.id } }
+    );
+    const res = await reanalyze();
+    expect(res.body.queued).toMatchObject({ find_parameters: 1 });
+    const jobs = await ctx.db.models.Job.findAll({ where: { type: 'find_parameters' } });
+    expect(jobs.map((j) => j.module_id)).toEqual([module.id]);
+    // The status starts over with the job, so the page does not go on saying
+    // the read failed while its re-read is queued.
+    expect((await ctx.db.models.Module.findByPk(module.id)).parameters_status).toBe('pending');
   });
 
   // A menu with parameters already in it is not a blank, whatever the status
@@ -1485,7 +1526,10 @@ describe('filling in what modules are missing', () => {
     });
     const res = await reanalyze();
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ complete: 1, queued: { describe_components: 0 } });
+    expect(res.body).toMatchObject({
+      complete: 1,
+      queued: { describe_components: 0, find_parameters: 0 },
+    });
     expect(await ctx.db.models.Job.count()).toBe(0);
   });
 
@@ -1512,6 +1556,7 @@ describe('filling in what modules are missing', () => {
       panel_image: 0,
       extract_manual: 0,
       describe_components: 1,
+      find_parameters: 0,
     });
     const jobs = await ctx.db.models.Job.findAll({ where: { type: 'describe_components' } });
     expect(jobs.map((j) => j.module_id)).toEqual([module.id]);
@@ -1564,6 +1609,7 @@ describe('filling in what modules are missing', () => {
       panel_image: 0,
       extract_manual: 0,
       describe_components: 0,
+      find_parameters: 0,
     });
     const after = await ctx.db.models.Module.findByPk(module.id);
     expect(after.manual_status).toBe('pending');
@@ -1589,6 +1635,7 @@ describe('filling in what modules are missing', () => {
         panel_image: 0,
         extract_manual: 0,
         describe_components: 0,
+        find_parameters: 0,
       },
       skipped: 1,
       complete: 0,

@@ -9,6 +9,7 @@ import { findParametersForModule } from '../src/services/moduleParameters.js';
 import { analyzeManualForModule } from '../src/services/manualAnalyzer.js';
 import { moduleFactGaps } from '../src/services/componentDescriber.js';
 import { createHandlers } from '../src/jobs/handlers.js';
+import { resetJobTarget } from '../src/jobs/worker.js';
 import { patchTextDocument } from '../src/services/patchDocument.js';
 
 // alice has ALM's Pamela's Pro Workout in her rack: one encoder, one screen
@@ -526,6 +527,48 @@ describe('the menu in the pipeline', () => {
     // 'complete' with nothing found is still complete: most modules keep
     // nothing in a menu, and asking again every sweep costs a model run each.
     expect((await moduleFactGaps(ctx.db, ctx.module)).parameters).toBe(false);
+    // Every other status is a menu nobody has read: a pass that failed, and
+    // the 'reading' a job that died between setting it and finishing leaves
+    // behind. Reading either as done is what hid those modules from the
+    // sweep for good.
+    for (const status of ['failed', 'reading', 'pending']) {
+      await ctx.db.models.Module.update(
+        { parameters_status: status },
+        { where: { id: ctx.module.id } }
+      );
+      expect((await moduleFactGaps(ctx.db, ctx.module)).parameters).toBe(true);
+    }
+  });
+
+  // The menu half of the description pass carries a status of its own, so a
+  // job that dies mid-read has to walk it back like every other status the
+  // worker resets — otherwise the module sits on 'reading' with nothing
+  // reading it, which the sweep takes for work already in hand.
+  it('walks a menu left mid-read back when the description job is requeued', async () => {
+    const ctx = await withMenuModule();
+    const job = { type: 'describe_components', module_id: ctx.module.id, user_id: ctx.alice.id };
+    await ctx.db.models.Module.update(
+      { parameters_status: 'reading' },
+      { where: { id: ctx.module.id } }
+    );
+    await resetJobTarget(ctx.db, job, 'pending', 'requeued');
+    expect((await ctx.db.models.Module.findByPk(ctx.module.id)).parameters_status).toBe('pending');
+
+    await ctx.db.models.Module.update(
+      { parameters_status: 'reading' },
+      { where: { id: ctx.module.id } }
+    );
+    await resetJobTarget(ctx.db, job, 'failed', 'gave up');
+    expect((await ctx.db.models.Module.findByPk(ctx.module.id)).parameters_status).toBe('failed');
+
+    // A menu that was read before the job died is complete and stays that
+    // way: only a 'reading' is walked back.
+    await ctx.db.models.Module.update(
+      { parameters_status: 'complete' },
+      { where: { id: ctx.module.id } }
+    );
+    await resetJobTarget(ctx.db, job, 'failed', 'gave up');
+    expect((await ctx.db.models.Module.findByPk(ctx.module.id)).parameters_status).toBe('complete');
   });
 
   it('reads the menu from the fill-the-blanks pass, and says it is done', async () => {

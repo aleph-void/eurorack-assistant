@@ -73,9 +73,11 @@ export async function undescribedComponents(db, moduleId) {
 // The menu is its own model pass (services/moduleParameters.js) rather than
 // part of the description prompt — it asks a different question and answers
 // with rows rather than sentences — but it is the same KIND of gap, so it is
-// filled from the same job and reported here. 'pending' is what makes it a
-// gap: a module whose documents have been read and hold no menu is complete,
+// filled from the same job and reported here. 'complete' is what makes it
+// filled: a module whose documents have been read and hold no menu is done,
 // and asking again every sweep would cost a model run per module forever.
+// Every other status is a menu nobody has read — 'failed', and the 'reading'
+// a job that died between setting it and finishing leaves behind.
 // A menu with parameters already in it is no gap either, whatever the status
 // says — entered by hand, or by an earlier run the status never caught up
 // with — because a blank is what this pass fills and that menu is not one.
@@ -90,7 +92,7 @@ export async function moduleFactGaps(db, module) {
     components: await undescribedComponents(db, module.id),
     summary: !String(record?.summary ?? '').trim(),
     hp: record?.hp == null,
-    parameters: recorded === 0 && (record?.parameters_status ?? 'pending') === 'pending',
+    parameters: recorded === 0 && (record?.parameters_status ?? 'pending') !== 'complete',
   };
 }
 

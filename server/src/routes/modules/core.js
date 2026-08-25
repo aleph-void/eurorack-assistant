@@ -185,24 +185,28 @@ export function moduleCoreRoutes(db, { manualsDir }) {
       return null;
     }
     // The facts the narrow pass can fill: blank component descriptions, a
-    // blank summary, a missing width, and a MENU nobody has read yet. A
-    // module going back to the panel step has its width researched there, so
-    // that one only counts when nothing upstream will run.
-    //
-    // The menu counts as a gap only while the status is 'pending': most
-    // modules keep nothing in a menu, and "asked, found none" has to be
-    // distinguishable from "never asked" or every sweep would pay for a model
-    // run on every module in the rack, forever. A module with parameters
-    // already recorded — entered by hand, or by an earlier run the status
-    // never caught up with — is no gap either: its menu is not a blank, and
-    // the pass would only be adding to a list someone curated. The module's
-    // own button still re-reads such a menu on an explicit ask.
-    const factGaps = (module, step) =>
+    // blank summary and a missing width. A module going back to the panel
+    // step has its width researched there, so that one only counts when
+    // nothing upstream will run.
+    const describeGaps = (module, step) =>
       undescribed.has(module.id) ||
       !String(module.summary ?? '').trim() ||
-      ((module.parameters_status ?? 'pending') === 'pending' &&
-        !hasParameters.has(module.id)) ||
       (step === null && module.hp == null);
+
+    // The MENU is the other blank, and it is its own model pass. 'complete'
+    // is the only status that is not a gap: "asked, found none" has to be
+    // distinguishable from "never asked" or every sweep would pay for a model
+    // run on every module in the rack, forever — but 'failed' and a 'reading'
+    // left behind by a job that died are both a menu nobody has read, and
+    // treating them as done is what made those modules invisible to the sweep
+    // for good. A module with parameters already recorded — entered by hand,
+    // or by an earlier run the status never caught up with — is no gap
+    // either: its menu is not a blank, and the pass would only be adding to a
+    // list someone curated. The module's own button still re-reads such a
+    // menu on an explicit ask.
+    const menuGap = (module) =>
+      (module.parameters_status ?? 'pending') !== 'complete' &&
+      !hasParameters.has(module.id);
 
     const queued = {
       find_manual: 0,
@@ -210,6 +214,7 @@ export function moduleCoreRoutes(db, { manualsDir }) {
       panel_image: 0,
       extract_manual: 0,
       describe_components: 0,
+      find_parameters: 0,
     };
     let skipped = 0;
     let complete = 0;
@@ -233,9 +238,27 @@ export function moduleCoreRoutes(db, { manualsDir }) {
       // search on a component-less module, which chains one) rewrites every
       // component anyway, so the narrow pass only queues when nothing
       // upstream of it will run.
-      if (factGaps(module, step) && (step === null || step === 'panel_image')) {
-        if (await enqueueModuleJob(db, 'describe_components', module, req.user.id)) {
-          queued.describe_components += 1;
+      //
+      // describe_components fills the menu as well as the sentences, so a
+      // module missing both takes the one job. A module whose ONLY gap is the
+      // menu takes find_parameters instead: the description pass would make
+      // no model call for the sentences anyway, and a job named for the work
+      // it is doing is what someone watching the queue can see.
+      const wantsDescribe = describeGaps(module, step);
+      const facts = wantsDescribe || menuGap(module);
+      if (facts && (step === null || step === 'panel_image')) {
+        const factType = wantsDescribe ? 'describe_components' : 'find_parameters';
+        if (await enqueueModuleJob(db, factType, module, req.user.id)) {
+          queued[factType] += 1;
+          if (factType === 'find_parameters') {
+            // The status the job walks through starts here, so a menu left on
+            // 'failed' or a stale 'reading' does not sit there saying so
+            // while its re-read is queued.
+            await Module.update(
+              { parameters_status: 'pending' },
+              { where: { id: module.id } }
+            );
+          }
         } else if (step === null) {
           skipped += 1;
         }

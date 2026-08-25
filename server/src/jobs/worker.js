@@ -97,6 +97,17 @@ export async function resetJobTarget(db, job, status, message) {
       { parameters_status: status === 'failed' ? 'failed' : 'pending' },
       { where: { id: job.module_id } }
     );
+  } else if (job.type === 'describe_components' && job.module_id) {
+    // The menu half of this job carries a status of its own, and a job that
+    // dies between setting it to 'reading' and finishing leaves the module
+    // reading forever — which every later sweep read as work already in hand
+    // and skipped, so the menu was never read at all. Only a 'reading' is
+    // walked back: the rest of this job fills blanks that have no status, and
+    // a menu that finished before the job died is complete.
+    await Module.update(
+      { parameters_status: status === 'failed' ? 'failed' : 'pending' },
+      { where: { id: job.module_id, parameters_status: 'reading' } }
+    );
   } else if (job.type === 'panel_image' && job.module_id) {
     await Module.update(
       { panel_status: status === 'failed' ? 'failed' : 'pending' },
