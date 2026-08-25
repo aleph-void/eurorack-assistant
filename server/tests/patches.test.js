@@ -975,8 +975,10 @@ describe('patches API', () => {
     const created = await createPatch(fixture);
     const list = await request(app).get('/api/patches').set('Cookie', aliceCookie);
     expect(list.status).toBe(200);
-    expect(list.body).toHaveLength(1);
-    expect(list.body[0]).toMatchObject({ name: 'Krell', module_count: 2, cable_count: 0 });
+    expect(list.body.patches).toHaveLength(1);
+    expect(list.body.total).toBe(1);
+    expect(list.body.has_more).toBe(false);
+    expect(list.body.patches[0]).toMatchObject({ name: 'Krell', module_count: 2, cable_count: 0 });
 
     const renamed = await request(app)
       .put(`/api/patches/${created.body.id}`)
@@ -989,7 +991,68 @@ describe('patches API', () => {
       .delete(`/api/patches/${created.body.id}`)
       .set('Cookie', aliceCookie);
     expect(del.status).toBe(200);
-    expect((await request(app).get('/api/patches').set('Cookie', aliceCookie)).body).toHaveLength(0);
+    const after = (await request(app).get('/api/patches').set('Cookie', aliceCookie)).body;
+    expect(after.patches).toHaveLength(0);
+    expect(after.total).toBe(0);
+  });
+
+  it('pages the list by id, newest first, and says how many there are', async () => {
+    const fixture = await withPatchFixture();
+    const { app, db, aliceCookie } = fixture;
+    for (let i = 1; i <= 5; i += 1) {
+      await db.query(
+        `INSERT INTO patches (user_id, rack_name, name) VALUES ($1, 'main', $2)`,
+        [fixture.alice.id, `patch ${i}`]
+      );
+    }
+
+    const first = await request(app).get('/api/patches?limit=2').set('Cookie', aliceCookie);
+    expect(first.status).toBe(200);
+    expect(first.body.patches).toHaveLength(2);
+    // The count is of the whole list; the page is the newest end of it.
+    expect(first.body.total).toBe(5);
+    expect(first.body.limit).toBe(2);
+    expect(first.body.has_more).toBe(true);
+    expect(first.body.patches[0].id).toBeGreaterThan(first.body.patches[1].id);
+    expect(first.body.next_before).toBe(first.body.patches[1].id);
+
+    // The next page starts where the last one ended, and holds none of it.
+    const second = await request(app)
+      .get(`/api/patches?limit=2&before=${first.body.next_before}`)
+      .set('Cookie', aliceCookie);
+    expect(second.body.patches.map((p) => p.id)).toEqual(
+      expect.not.arrayContaining(first.body.patches.map((p) => p.id))
+    );
+    expect(second.body.patches[0].id).toBeLessThan(first.body.next_before);
+    expect(second.body.has_more).toBe(true);
+
+    // A patch made while the reader pages does not shift the page under them:
+    // it is newer than everything held, so it belongs above the first page.
+    await db.query(`INSERT INTO patches (user_id, rack_name, name) VALUES ($1, 'main', 'newest')`, [
+      fixture.alice.id,
+    ]);
+    const third = await request(app)
+      .get(`/api/patches?limit=2&before=${second.body.next_before}`)
+      .set('Cookie', aliceCookie);
+    expect(third.body.patches).toHaveLength(1);
+    expect(third.body.has_more).toBe(false);
+    expect(third.body.next_before).toBeNull();
+    expect(third.body.total).toBe(6);
+
+    // A whole-list read is still a whole-list read; the page is only a cap.
+    const all = await request(app).get('/api/patches').set('Cookie', aliceCookie);
+    expect(all.body.patches).toHaveLength(6);
+    expect(all.body.has_more).toBe(false);
+
+    // Nonsense paging arguments fall back to the default page rather than
+    // returning nothing or everything.
+    const junk = await request(app)
+      .get('/api/patches?limit=0&before=abc')
+      .set('Cookie', aliceCookie);
+    expect(junk.body.limit).toBe(100);
+    expect(junk.body.patches).toHaveLength(6);
+    const capped = await request(app).get('/api/patches?limit=9999').set('Cookie', aliceCookie);
+    expect(capped.body.limit).toBe(500);
   });
 
   it('plugs cables from output jacks into input jacks only', async () => {

@@ -474,7 +474,11 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
     newer where `id < before` walks straight there on `(user_id, id)`. The
     store holds the newest page and appends with `loadMore()`; a bulk stop or
     delete re-reads it rather than filtering the rows on screen, because the
-    rows that went may have been keeping older ones off the page.
+    rows that went may have been keeping older ones off the page. The PATCH
+    LIST pages the same way (`GET /api/patches` answers
+    `{ patches, total, has_more, next_before }`): PatchesView holds the newest
+    page and appends, and the Ask page's patch picker asks for the biggest
+    page there is (500) rather than the whole library.
 - WORK IS DONE ONCE A FRAME, NOT ONCE AN EVENT. Pointer and scroll events
   arrive far faster than the screen redraws, and in this app one of them
   redraws hundreds of panels or filters six thousand markers: the organizer's

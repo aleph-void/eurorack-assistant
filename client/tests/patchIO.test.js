@@ -40,7 +40,19 @@ const DOCUMENT = {
 };
 
 const mountView = () => {
-  api.get.mockImplementation((path) => Promise.resolve(path === '/api/racks' ? racks : patches));
+  // The patch list arrives as one page of the library; racks and systems are
+  // still plain lists.
+  api.get.mockImplementation((path) => {
+    if (path === '/api/racks') return Promise.resolve(racks);
+    if (path === '/api/systems') return Promise.resolve([]);
+    return Promise.resolve({
+      total: patches.length,
+      limit: 100,
+      has_more: false,
+      next_before: null,
+      patches,
+    });
+  });
   return mount(PatchesView, { global: testGlobal() });
 };
 
@@ -95,7 +107,7 @@ describe('importing a patch', () => {
     expect(notice).toContain("Imported 'Krell'");
     expect(notice).toContain('3 module(s)');
     // The list is re-read so the new patch is on it.
-    expect(api.get).toHaveBeenCalledWith('/api/patches');
+    expect(api.get).toHaveBeenCalledWith('/api/patches?limit=100');
   });
 
   it('files it under no rack when none is chosen', async () => {

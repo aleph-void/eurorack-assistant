@@ -34,11 +34,22 @@ describe('PatchesView', () => {
 
   const systemsResponse = [{ id: 7, name: 'studio', rack_count: 2, module_count: 9 }];
 
-  function mockLists(patches, { systems = [] } = {}) {
+  // The patch list arrives as one PAGE of the library, the way the server
+  // sends it: rows plus the whole-list count and where the next page starts.
+  const asPage = (patches, extra = {}) => ({
+    total: patches.length,
+    limit: 100,
+    has_more: false,
+    next_before: null,
+    patches,
+    ...extra,
+  });
+
+  function mockLists(patches, { systems = [], page = {} } = {}) {
     api.get.mockImplementation((path) => {
       if (path === '/api/racks') return Promise.resolve(racksResponse);
       if (path === '/api/systems') return Promise.resolve(systems);
-      return Promise.resolve(patches);
+      return Promise.resolve(asPage(patches, page));
     });
   }
 
@@ -80,7 +91,37 @@ describe('PatchesView', () => {
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith('/api/patches/5/clone', {});
     // The list is reloaded so the copy shows up.
-    expect(api.get).toHaveBeenCalledWith('/api/patches');
+    expect(api.get).toHaveBeenCalledWith('/api/patches?limit=100');
+  });
+
+  it('pages the list, fetching the next page below the one showing', async () => {
+    mockLists(
+      [
+        { id: 5, name: 'Krell', rack_name: 'main rack', module_count: 3, cable_count: 2, created_at: '2026-08-12T10:00:00Z' },
+      ],
+      { page: { total: 3, has_more: true, next_before: 5 } }
+    );
+    const wrapper = mount(PatchesView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="patch-count"]').text()).toContain('Showing 1 of 3');
+
+    mockLists(
+      [
+        { id: 4, name: 'Drone', rack_name: 'main rack', module_count: 3, cable_count: 1, created_at: '2026-08-11T10:00:00Z' },
+        { id: 3, name: 'Bleep', rack_name: 'main rack', module_count: 2, cable_count: 0, created_at: '2026-08-10T10:00:00Z' },
+      ],
+      { page: { total: 3, has_more: false, next_before: null } }
+    );
+    await wrapper.find('[data-test="load-more"]').trigger('click');
+    await flushPromises();
+    // The next page starts where this one ended, and lands under it.
+    expect(api.get).toHaveBeenCalledWith('/api/patches?limit=100&before=5');
+    expect(wrapper.findAll('tbody tr').map((r) => r.attributes('data-test'))).toEqual([
+      'patch-5',
+      'patch-4',
+      'patch-3',
+    ]);
+    expect(wrapper.find('[data-test="load-more"]').exists()).toBe(false);
   });
 
   it('creates a patch from the selected rack', async () => {

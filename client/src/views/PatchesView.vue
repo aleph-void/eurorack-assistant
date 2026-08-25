@@ -5,6 +5,16 @@ import { dialog } from '../dialog.js';
 import ShareButton from '../components/ShareButton.vue';
 
 const patches = ref([]);
+// The list is one PAGE of the library, newest first: patches pile up for as
+// long as the account is used, and the page used to read every one of them
+// (with its module and cable counts) on each visit. `total` is how many there
+// are; `hasMore` and `nextBefore` are the server's answer to whether there is
+// another page and where it starts.
+const PAGE = 100;
+const total = ref(0);
+const hasMore = ref(false);
+const nextBefore = ref(null);
+const loadingMore = ref(false);
 const racks = ref([]);
 const systems = ref([]);
 const error = ref('');
@@ -15,13 +25,25 @@ const newName = ref('');
 const newSource = ref('');
 const newDescription = ref('');
 
+// One page of the list as the server sends it.
+function applyPage(page, { append = false } = {}) {
+  const rows = page?.patches ?? [];
+  patches.value = append ? patches.value.concat(rows) : rows;
+  total.value = page?.total ?? patches.value.length;
+  hasMore.value = Boolean(page?.has_more);
+  nextBefore.value = page?.next_before ?? null;
+}
+
 async function load() {
   try {
-    [patches.value, racks.value, systems.value] = await Promise.all([
-      api.get('/api/patches'),
+    const [page, rackList, systemList] = await Promise.all([
+      api.get(`/api/patches?limit=${PAGE}`),
       api.get('/api/racks'),
       api.get('/api/systems'),
     ]);
+    applyPage(page);
+    racks.value = rackList;
+    systems.value = systemList;
     // Preselect a system with modules if there is one — a patch over the whole
     // instrument is the more useful default — else the first usable rack.
     if (!newSource.value) {
@@ -34,6 +56,25 @@ async function load() {
     error.value = e.message;
   } finally {
     loading.value = false;
+  }
+}
+
+// The page below the one showing. A patch made in the meantime lands above
+// the first page — that is what paging by id buys — so what is on screen
+// stays put; failing to fetch leaves it alone too, just shorter than the
+// library.
+async function loadMore() {
+  if (!hasMore.value || loadingMore.value) return;
+  error.value = '';
+  loadingMore.value = true;
+  try {
+    applyPage(await api.get(`/api/patches?limit=${PAGE}&before=${nextBefore.value}`), {
+      append: true,
+    });
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    loadingMore.value = false;
   }
 }
 
@@ -120,6 +161,7 @@ async function remove(patch) {
   try {
     await api.delete(`/api/patches/${patch.id}`);
     patches.value = patches.value.filter((p) => p.id !== patch.id);
+    total.value = Math.max(0, total.value - 1);
   } catch (e) {
     error.value = e.message;
   }
@@ -192,6 +234,22 @@ onMounted(load);
       </table>
     </div>
     <p v-else class="muted" data-test="empty">No patches yet — create one from a rack below.</p>
+    <!-- The list is the newest page of the library, not all of it. The line
+         says which part is on screen; the button fetches the page below. -->
+    <div v-if="hasMore || patches.length < total" class="paging">
+      <span class="muted" data-test="patch-count">
+        Showing {{ patches.length }} of {{ total }}
+      </span>
+      <button
+        v-if="hasMore"
+        class="secondary"
+        :disabled="loadingMore"
+        data-test="load-more"
+        @click="loadMore"
+      >
+        {{ loadingMore ? 'Loading…' : 'Load more' }}
+      </button>
+    </div>
 
     <form @submit.prevent="create">
       <label for="new-patch-name">New patch</label>
@@ -271,5 +329,15 @@ onMounted(load);
 .export-link {
   font-size: 0.85rem;
   margin-right: 0.4rem;
+}
+
+/* The count and the button that fetches the next page sit on one line under
+   the table, the same way the jobs page does it. */
+.paging {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
 }
 </style>
