@@ -509,6 +509,16 @@ describe('the menu in the pipeline', () => {
   it('counts a menu nobody has read as a gap, and stops counting it once read', async () => {
     const ctx = await withMenuModule();
     expect((await moduleFactGaps(ctx.db, ctx.module)).parameters).toBe(true);
+    // A parameter already recorded ends the gap on its own, whatever the
+    // status says: that menu is not a blank, and the pass would only be
+    // adding to a list someone curated.
+    const typed = await ctx.db.models.ModuleParameter.create({
+      module_id: ctx.module.id,
+      name: 'Clock division',
+    });
+    expect((await moduleFactGaps(ctx.db, ctx.module)).parameters).toBe(false);
+    await typed.destroy();
+    expect((await moduleFactGaps(ctx.db, ctx.module)).parameters).toBe(true);
     await ctx.db.models.Module.update(
       { parameters_status: 'complete' },
       { where: { id: ctx.module.id } }

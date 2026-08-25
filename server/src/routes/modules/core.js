@@ -19,6 +19,7 @@ export function moduleCoreRoutes(db, { manualsDir }) {
     RackModule,
     ModuleComponent,
     ModulePanel,
+    ModuleParameter,
     Manual,
     ManualDocument,
     Note,
@@ -133,9 +134,9 @@ export function moduleCoreRoutes(db, { manualsDir }) {
     const rebuildPanels = Boolean(req.body?.rebuild_panels);
     const moduleIds = modules.map((m) => m.id);
 
-    const [manuals, components, panels, documents] =
+    const [manuals, components, panels, documents, parameters] =
       moduleIds.length === 0
-        ? [[], [], [], []]
+        ? [[], [], [], [], []]
         : await Promise.all([
             Manual.findAll({
               where: { module_id: moduleIds, user_id: null },
@@ -150,11 +151,16 @@ export function moduleCoreRoutes(db, { manualsDir }) {
               where: { module_id: moduleIds },
               attributes: ['manual_id'],
             }),
+            ModuleParameter.findAll({
+              where: { module_id: moduleIds },
+              attributes: ['module_id'],
+            }),
           ]);
     const hasManual = new Set(manuals.map((m) => m.module_id));
     const hasText = new Set(documents.map((d) => d.manual_id));
     const hasComponents = new Set(components.map((c) => c.module_id));
     const hasPanel = new Set(panels.map((p) => p.module_id));
+    const hasParameters = new Set(parameters.map((p) => p.module_id));
     // Components with no description: the ones the user added by hand after
     // the import missed them. Their gap is filled by a narrow model pass that
     // touches nothing else (jobs describe_components).
@@ -186,11 +192,16 @@ export function moduleCoreRoutes(db, { manualsDir }) {
     // The menu counts as a gap only while the status is 'pending': most
     // modules keep nothing in a menu, and "asked, found none" has to be
     // distinguishable from "never asked" or every sweep would pay for a model
-    // run on every module in the rack, forever.
+    // run on every module in the rack, forever. A module with parameters
+    // already recorded — entered by hand, or by an earlier run the status
+    // never caught up with — is no gap either: its menu is not a blank, and
+    // the pass would only be adding to a list someone curated. The module's
+    // own button still re-reads such a menu on an explicit ask.
     const factGaps = (module, step) =>
       undescribed.has(module.id) ||
       !String(module.summary ?? '').trim() ||
-      (module.parameters_status ?? 'pending') === 'pending' ||
+      ((module.parameters_status ?? 'pending') === 'pending' &&
+        !hasParameters.has(module.id)) ||
       (step === null && module.hp == null);
 
     const queued = {

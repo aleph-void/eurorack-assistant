@@ -1469,6 +1469,26 @@ describe('filling in what modules are missing', () => {
     expect((await reanalyze()).body).toMatchObject({ complete: 1, queued: { describe_components: 0 } });
   });
 
+  // A menu with parameters already in it is not a blank, whatever the status
+  // says — entered by hand on the parameters page, or by an earlier run the
+  // status never caught up with. The sweep leaves it alone; re-reading a menu
+  // that has entries is the module page's own button, which asks explicitly.
+  it('does not count a menu that already has parameters recorded', async () => {
+    const module = await completeModule();
+    await ctx.db.models.Module.update(
+      { parameters_status: 'pending' },
+      { where: { id: module.id } }
+    );
+    await ctx.db.models.ModuleParameter.create({
+      module_id: module.id,
+      name: 'Clock division',
+    });
+    const res = await reanalyze();
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ complete: 1, queued: { describe_components: 0 } });
+    expect(await ctx.db.models.Job.count()).toBe(0);
+  });
+
   it('counts an analysis that produced no components as missing', async () => {
     const module = await completeModule();
     await ctx.db.models.ModuleComponent.destroy({ where: { module_id: module.id } });
