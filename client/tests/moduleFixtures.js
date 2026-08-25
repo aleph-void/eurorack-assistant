@@ -192,4 +192,28 @@ export const videosModule = {
       error: 'yt-dlp failed (exit 1): video unavailable',
     },
   ],
+  clips: [
+    {
+      id: 12,
+      module_id: 1,
+      patch_id: 7,
+      patch_name: 'Krell',
+      device_name: 'Bench scope',
+      title: 'EOR rising',
+      caption: null,
+      video_format: 'webm',
+      duration_seconds: 10,
+      captured_at: '2026-08-12T18:00:00Z',
+      channels: [
+        {
+          id: 1,
+          channel_index: 1,
+          label: 'Make Noise Maths — EOR',
+          signal_type: 'cv',
+          component_name: 'Input 2',
+          source_description: 'patched from Make Noise Maths EOR',
+        },
+      ],
+    },
+  ],
 };

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { testGlobal } from '../setup.js';
+import { openPanels, testGlobal } from '../setup.js';
 
 vi.mock('../../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -100,6 +100,38 @@ describe('ModuleVideosView', () => {
     expect(api.post).toHaveBeenCalledWith('/api/modules/1/videos', {
       url: 'https://www.youtube.com/watch?v=BBBBBBBBBBB',
     });
+  });
+
+  it('shows the oscilloscope clips with their panes, saves a caption and deletes one', async () => {
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.get.mockResolvedValue(structuredClone(moduleResponse));
+    api.put.mockResolvedValue({ ok: true });
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = mount(ModuleVideosView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+
+    const clip = wrapper.find('[data-test="clip-12"]');
+    expect(clip.text()).toContain('EOR rising');
+    expect(clip.text()).toContain('recorded on patch “Krell”');
+    expect(clip.find('[data-test="clip-video-12"]').attributes('src')).toBe('/api/clips/12/video');
+    // Each pane says what it was showing at record time.
+    expect(clip.text()).toContain('Make Noise Maths — EOR');
+    expect(clip.text()).toContain('patched from Make Noise Maths EOR');
+
+    await wrapper.find('[data-test="clip-caption-12"]').setValue('slow rise');
+    await wrapper.find('[data-test="clip-save-12"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/clips/12', { caption: 'slow rise' });
+
+    confirm.mockResolvedValue(false);
+    await wrapper.find('[data-test="clip-delete-12"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).not.toHaveBeenCalled();
+    confirm.mockResolvedValue(true);
+    await wrapper.find('[data-test="clip-delete-12"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/clips/12');
   });
 
   it('removes a video after confirming, and not without', async () => {

@@ -6,6 +6,7 @@
 // taken weeks later still says which jack it came from. A channel the user
 // set by hand is never overwritten by a re-map.
 
+import path from 'node:path';
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { loadPatchDetail } from '../services/patchDetail.js';
@@ -15,11 +16,23 @@ import {
   parseCaptureResult,
   saveCaptureImage,
 } from '../services/captures.js';
+import { clampClipDuration, clipJson, parseClipResult, saveClipVideo } from '../services/clips.js';
+import { userModule } from './modules/helpers.js';
 import { asyncHandler } from './asyncHandler.js';
 
 export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES_DIR || '/data/captures' } = {}) {
-  const { Patch, PatchScopeChannel, Capture, CaptureChannel, Note, NotePatch, NoteComponent } =
-    db.models;
+  const {
+    Patch,
+    PatchScopeChannel,
+    Capture,
+    CaptureChannel,
+    Note,
+    NotePatch,
+    NoteComponent,
+    ScopeClip,
+    ScopeClipChannel,
+  } = db.models;
+  const clipsDir = path.join(capturesDir, 'clips');
   const router = Router();
   router.use(requireAuth(db));
 
@@ -419,6 +432,165 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
       note_id: note.id,
       channels: channels.map((c) => c.get({ plain: true })),
     });
+  }));
+
+  // Ask the scope to record a short video clip of the chosen panes and
+  // attach it to a MODULE — the one whose signal the panes are showing, or
+  // the one the body names. A clip lands on the module's videos page rather
+  // than in the patch's notes: what a module's output looks like moving is
+  // a fact about the module, whatever patch it was recorded during.
+  //
+  // Body: { connection_id?, channels?, duration_seconds?, module_id?,
+  //         title?, caption? }
+  router.post('/patches/:id/clips', asyncHandler(async (req, res) => {
+    const patch = await ownPatch(req.user.id, req.params.id);
+    if (!patch) return res.status(404).json({ error: 'Patch not found' });
+    const device = pickDevice(req.user.id, req.body?.connection_id);
+    if (!device) return res.status(409).json({ error: 'No oscilloscope is connected' });
+    const state = hub.summarize(device);
+    // A device that announced its capabilities and left recording out gets a
+    // clear refusal now, not a silent 30-second timeout.
+    if (Array.isArray(state.capabilities) && !state.capabilities.includes('record')) {
+      return res
+        .status(409)
+        .json({ error: 'The connected oscilloscope does not support recording clips' });
+    }
+
+    const mapped = await storedChannels(patch.id);
+    const byIndex = new Map(mapped.map((c) => [c.channel_index, c]));
+    const requested = Array.isArray(req.body?.channels)
+      ? req.body.channels.map(Number).filter((n) => Number.isInteger(n) && n >= 0)
+      : null;
+    const indices =
+      requested && requested.length > 0
+        ? requested
+        : (mapped.length > 0 ? mapped : state.channels).map((c) =>
+            c.channel_index === undefined ? c.index : c.channel_index
+          );
+
+    const { json: detail } = await loadPatchDetail(db, patch);
+    const map = buildScopeChannelMap({ detail, device: state });
+    const derivedByIndex = new Map(map.channels.map((c) => [c.channel_index, c]));
+
+    // The module the clip attaches to: the one named, or the one feeding the
+    // first recorded pane (falling back to the pane's own jack — an
+    // unpatched input is showing the interface itself).
+    let module = null;
+    if (req.body?.module_id) {
+      module = await userModule(db, req.user.id, req.body.module_id);
+      if (!module) return res.status(404).json({ error: 'Module not found' });
+    } else {
+      for (const index of indices) {
+        const derived = derivedByIndex.get(index);
+        const stored = byIndex.get(index);
+        const instance =
+          detail.modules.find((m) => m.id === derived?.source_patch_module_id) ??
+          detail.modules.find((m) => m.id === (stored?.patch_module_id ?? derived?.patch_module_id));
+        if (!instance?.module_id) continue;
+        module = await userModule(db, req.user.id, instance.module_id);
+        if (module) break;
+      }
+      if (!module) {
+        return res.status(400).json({
+          error:
+            'No module to attach the clip to — the recorded panes are not mapped to any module in your racks, so name one with module_id',
+        });
+      }
+    }
+
+    const duration = clampClipDuration(req.body?.duration_seconds);
+    let payload;
+    try {
+      payload = await hub.request(
+        device,
+        'record',
+        {
+          channels: indices.map((index) => {
+            const channel = byIndex.get(index);
+            return {
+              index,
+              label: channel?.label ?? undefined,
+              signal_type: channel?.signal_type ?? undefined,
+            };
+          }),
+          duration_seconds: duration,
+        },
+        // The device cannot answer before the recording ends, so the usual
+        // timeout starts counting after the requested duration.
+        { timeoutMs: duration * 1000 + 30000 }
+      );
+    } catch (e) {
+      return res.status(504).json({ error: e.message });
+    }
+
+    let parsed;
+    try {
+      parsed = parseClipResult(payload);
+    } catch (e) {
+      return res.status(502).json({ error: `The oscilloscope sent an unusable clip: ${e.message}` });
+    }
+
+    // The file lands first: a video with no row is reaped later, but a row
+    // pointing at a missing file is a broken clip forever.
+    const hash = saveClipVideo(clipsDir, parsed.buffer, parsed.format);
+
+    const fromDevice = new Map(parsed.channels.map((c) => [c.channel_index, c]));
+    const channelRows = indices.map((index) => {
+      const answered = fromDevice.get(index);
+      const stored = byIndex.get(index);
+      const derived = derivedByIndex.get(index);
+      const instance = detail.modules.find(
+        (m) => m.id === (stored?.patch_module_id ?? derived?.patch_module_id)
+      );
+      return {
+        channel_index: index,
+        label: answered?.label || stored?.label || derived?.label || null,
+        signal_type: answered?.signal_type || stored?.signal_type || derived?.signal_type || null,
+        patch_module_id: stored?.patch_module_id ?? derived?.patch_module_id ?? null,
+        component_id: stored?.component_id ?? derived?.component_id ?? null,
+        component_name: stored?.component_name ?? derived?.component_name ?? null,
+        module_label: instance
+          ? instance.label || `${instance.manufacturer} ${instance.module_name}`
+          : null,
+        source_description: derived?.source_description ?? null,
+      };
+    });
+
+    const clip = await db.sequelize.transaction(async (transaction) => {
+      const created = await ScopeClip.create(
+        {
+          user_id: req.user.id,
+          module_id: module.id,
+          patch_id: patch.id,
+          patch_name: patch.name,
+          device_token_id: device.tokenId,
+          device_name: device.name,
+          audio_device_id: state.audio_device?.id ?? null,
+          audio_device_name: state.audio_device?.name ?? null,
+          title: req.body?.title ? String(req.body.title).slice(0, 200) : null,
+          caption: req.body?.caption ? String(req.body.caption).slice(0, 2000) : null,
+          video_hash: hash,
+          video_format: parsed.format,
+          video_width: parsed.width,
+          video_height: parsed.height,
+          video_bytes: parsed.buffer.length,
+          duration_seconds: parsed.duration_seconds ?? duration,
+          sample_rate: parsed.sample_rate ?? state.audio_device?.sample_rate ?? null,
+          captured_at: parsed.captured_at,
+        },
+        { transaction }
+      );
+      for (const channel of channelRows) {
+        await ScopeClipChannel.create({ ...channel, clip_id: created.id }, { transaction });
+      }
+      return created;
+    });
+
+    const channels = await ScopeClipChannel.findAll({
+      where: { clip_id: clip.id },
+      order: [['channel_index', 'ASC']],
+    });
+    res.status(201).json(clipJson(clip, channels));
   }));
 
   return router;

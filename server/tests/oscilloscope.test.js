@@ -24,6 +24,7 @@ import {
   orderedInputJacks,
 } from '../src/services/scopeMapping.js';
 import { parseCaptureResult, tuningLabel } from '../src/services/captures.js';
+import { clampClipDuration, parseClipResult } from '../src/services/clips.js';
 import { answerQuestion } from '../src/services/ask.js';
 import {
   DEVICE_CODE_GRANT,
@@ -119,6 +120,28 @@ const DEVICE_STATE = {
     signal_type: 'audio',
   })),
 };
+
+// A minimal EBML/webm header plus padding — enough for the format sniff.
+const WEBM_BASE64 = Buffer.concat([
+  Buffer.from([0x1a, 0x45, 0xdf, 0xa3]),
+  Buffer.alloc(20, 1),
+]).toString('base64');
+
+const recordAnswer = (params) => ({
+  video: {
+    format: 'webm',
+    data: WEBM_BASE64,
+    width: 640,
+    height: 360,
+    duration_seconds: params.duration_seconds,
+  },
+  captured_at: '2026-08-12T18:00:00Z',
+  sample_rate: 48000,
+  channels: (params.channels || []).map((c) => ({
+    index: c.index,
+    signal_type: c.index === 1 ? 'cv' : 'audio',
+  })),
+});
 
 const captureAnswer = (params) => ({
   image: { format: 'png', data: PNG_BASE64, width: 640, height: 480 },
@@ -652,6 +675,51 @@ describe('capture parsing', () => {
   });
 });
 
+describe('clip parsing', () => {
+  it('sniffs the container and refuses anything that is not webm or mp4', () => {
+    expect(() => parseClipResult({})).toThrow(/no video data/);
+    expect(() =>
+      parseClipResult({ video: { format: 'avi', data: WEBM_BASE64 } }),
+    ).toThrow(/unsupported video format/);
+    expect(() =>
+      parseClipResult({
+        video: { data: Buffer.from('not a video at all').toString('base64') },
+      }),
+    ).toThrow(/not webm or mp4/);
+    // A container mislabeled by the device would be stored under the wrong
+    // extension forever, so the bytes win and the mismatch is refused.
+    expect(() =>
+      parseClipResult({ video: { format: 'mp4', data: WEBM_BASE64 } }),
+    ).toThrow(/declared 'mp4'/);
+  });
+
+  it('accepts both containers and keeps the metadata', () => {
+    const webm = parseClipResult({
+      video: { format: 'webm', data: WEBM_BASE64, width: 640, height: 360, duration_seconds: 5 },
+      sample_rate: 48000,
+    });
+    expect(webm.format).toBe('webm');
+    expect(webm.width).toBe(640);
+    expect(webm.duration_seconds).toBe(5);
+
+    const mp4Bytes = Buffer.concat([
+      Buffer.from([0, 0, 0, 24]),
+      Buffer.from('ftypisom'),
+      Buffer.alloc(16),
+    ]);
+    const mp4 = parseClipResult({ video: { data: mp4Bytes.toString('base64') } });
+    expect(mp4.format).toBe('mp4');
+  });
+
+  it('clamps the requested duration into the short-clip range', () => {
+    expect(clampClipDuration(undefined)).toBe(10);
+    expect(clampClipDuration('nonsense')).toBe(10);
+    expect(clampClipDuration(0)).toBe(1);
+    expect(clampClipDuration(500)).toBe(30);
+    expect(clampClipDuration(7.4)).toBe(7);
+  });
+});
+
 describe('scope routes', () => {
   it('maps the patch to the connected scope and pushes the labels back', async () => {
     const fixture = await withScopeFixture();
@@ -1179,6 +1247,215 @@ describe('scope routes', () => {
       .send({});
     expect(failing.status).toBe(500);
     void device2;
+  });
+});
+
+describe('scope clips', () => {
+  it('records a clip, attaches it to the module feeding the pane and serves the video', async () => {
+    const fixture = await withScopeFixture();
+    const { sent } = await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { record: recordAnswer },
+    });
+
+    const recorded = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1], duration_seconds: 8, title: 'EOR rising' });
+    expect(recorded.status).toBe(201);
+    // Pane 2 is showing the Maths EOR, so the clip lands on the Maths.
+    expect(recorded.body.module_id).toBe(fixture.maths.id);
+    expect(recorded.body.video_format).toBe('webm');
+    expect(recorded.body.duration_seconds).toBe(8);
+    expect(recorded.body.patch_name).toBe('Krell');
+    expect(recorded.body.channels).toHaveLength(1);
+    expect(recorded.body.channels[0].label).toBe('Make Noise Maths — EOR');
+    expect(recorded.body.channels[0].source_description).toBe(
+      'patched from Make Noise Maths EOR',
+    );
+
+    // The device was asked for exactly that pane and that duration.
+    const ask = sent.find((m) => m.action === 'record');
+    expect(ask.params.duration_seconds).toBe(8);
+    expect(ask.params.channels).toHaveLength(1);
+    expect(ask.params.channels[0].index).toBe(1);
+
+    // The bytes are on disk under their hash and downloadable, immutable.
+    const clip = await request(fixture.app)
+      .get(`/api/clips/${recorded.body.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(clip.status).toBe(200);
+    const video = await request(fixture.app)
+      .get(`/api/clips/${recorded.body.id}/video`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(video.status).toBe(200);
+    expect(video.headers['content-type']).toBe('video/webm');
+    expect(video.headers['cache-control']).toContain('immutable');
+
+    // The module page shows it, and the list filters both ways.
+    const module = await request(fixture.app)
+      .get(`/api/modules/${fixture.maths.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(module.body.clips).toHaveLength(1);
+    expect(module.body.clips[0].id).toBe(recorded.body.id);
+    const byPatch = await request(fixture.app)
+      .get(`/api/clips?patch_id=${fixture.patch.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(byPatch.body).toHaveLength(1);
+    const byOtherModule = await request(fixture.app)
+      .get(`/api/clips?module_id=${fixture.es9.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(byOtherModule.body).toHaveLength(0);
+  });
+
+  it('honours an explicit module choice and refuses one the user does not have racked', async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { record: recordAnswer },
+    });
+
+    const onEs9 = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1], module_id: fixture.es9.id });
+    expect(onEs9.status).toBe(201);
+    expect(onEs9.body.module_id).toBe(fixture.es9.id);
+
+    const foreign = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1], module_id: 99999 });
+    expect(foreign.status).toBe(404);
+  });
+
+  it('clamps a runaway duration before asking the device', async () => {
+    const fixture = await withScopeFixture();
+    const { sent } = await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { record: recordAnswer },
+    });
+    const recorded = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1], duration_seconds: 500 });
+    expect(recorded.status).toBe(201);
+    expect(sent.find((m) => m.action === 'record').params.duration_seconds).toBe(30);
+  });
+
+  it('refuses cleanly when the scope does not list the record capability', async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: { ...DEVICE_STATE, capabilities: ['capture', 'tuner'] },
+      answers: { record: recordAnswer },
+    });
+    const res = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1] });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/does not support recording/);
+  });
+
+  it('asks for a module by name when the panes map to nothing', async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { record: recordAnswer },
+    });
+    // A pane past the interface's inputs is mapped to no jack at all, so
+    // nothing says which module the clip is about.
+    const res = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [12] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/module_id/);
+  });
+
+  it('reports a device that answers with something unusable', async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { record: { video: { format: 'webm', data: PNG_BASE64 } } },
+    });
+    const res = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1] });
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/unusable clip/);
+  });
+
+  it('keeps clips private and deletes the file only with the last reference', async () => {
+    const fixture = await withScopeFixture();
+    await createUser(fixture.db, { username: 'bob' });
+    const bobCookie = await login(fixture.app, 'bob');
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { record: recordAnswer },
+    });
+    const take = () =>
+      request(fixture.app)
+        .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+        .set('Cookie', fixture.aliceCookie)
+        .send({ channels: [1] });
+    const first = await take();
+    const second = await take();
+    expect(first.status).toBe(201);
+
+    for (const url of [
+      `/api/clips/${first.body.id}`,
+      `/api/clips/${first.body.id}/video`,
+    ]) {
+      const res = await request(fixture.app).get(url).set('Cookie', bobCookie);
+      expect(res.status).toBe(404);
+    }
+
+    // Same bytes, one file; it goes only when the last row does.
+    const clip = await request(fixture.app)
+      .get(`/api/clips/${first.body.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(clip.status).toBe(200);
+    const files = () => fs.readdirSync(path.join(fixture.capturesDir, 'clips'));
+    expect(files()).toHaveLength(1);
+
+    await request(fixture.app)
+      .delete(`/api/clips/${first.body.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(files()).toHaveLength(1);
+    await request(fixture.app)
+      .delete(`/api/clips/${second.body.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(files()).toHaveLength(0);
+  });
+
+  it("edits a clip's title and caption, trimming and capping them", async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { record: recordAnswer },
+    });
+    const recorded = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1] });
+
+    const updated = await request(fixture.app)
+      .put(`/api/clips/${recorded.body.id}`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ title: `  ${'x'.repeat(300)}  `, caption: '  slow rise  ' });
+    expect(updated.status).toBe(200);
+    expect(updated.body.title).toHaveLength(200);
+    expect(updated.body.caption).toBe('slow rise');
   });
 });
 
