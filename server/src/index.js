@@ -106,7 +106,18 @@ async function main() {
   }
 }
 
+// A failed boot is very often the database refusing the connection, and a
+// Sequelize connection error carries the connection URL — POSTGRES_PASSWORD
+// included — in its message, its config and its nested causes. So the raw
+// error object is never printed: the log gets the stacks (which say where
+// the boot died), with any URL credentials struck out first.
+const redactCredentials = (text) => String(text).replace(/\/\/([^\s/@:]+):[^\s@]*@/g, '//$1:***@');
+
 main().catch((e) => {
-  console.error(e);
+  const chain = [];
+  for (let err = e, hops = 0; err && hops < 5; err = err.parent ?? err.original ?? err.cause, hops++) {
+    chain.push(err.stack || String(err));
+  }
+  console.error('startup failed:', redactCredentials(chain.join('\ncaused by: ')));
   process.exit(1);
 });

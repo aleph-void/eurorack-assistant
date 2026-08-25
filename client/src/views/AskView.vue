@@ -26,8 +26,11 @@ const patchOptions = computed(() =>
 onMounted(async () => {
   try {
     // Nothing depends on this list arriving; a failure is not worth a toast.
-    const list = await api.get('/api/patches', { quiet: true });
-    patches.value = Array.isArray(list) ? list : [];
+    // The list endpoint pages; the picker asks for the biggest page there is,
+    // so it holds the newest five hundred patches — a question is about a
+    // patch on the bench, not one from years back.
+    const page = await api.get('/api/patches?limit=500', { quiet: true });
+    patches.value = Array.isArray(page?.patches) ? page.patches : [];
   } catch {
     patches.value = [];
   }

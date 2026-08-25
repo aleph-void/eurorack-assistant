@@ -13,6 +13,7 @@
 import { WebSocketServer } from 'ws';
 import { ALL_USERS } from './events.js';
 import { getSessionUser, SESSION_COOKIE } from './auth.js';
+import { parseTrustedOrigins, upgradeOriginProblem } from './csrf.js';
 import { getDeviceTokenUser, hasScope, touchDeviceToken } from './services/deviceAuth.js';
 
 // A rendered waveform arrives as base64 inside the result frame, so the limit
@@ -56,7 +57,7 @@ export function attachWebSocketServer(
   httpServer,
   db,
   bus,
-  { path = '/api/ws', devicePath = '/api/devices/ws', hub = null } = {}
+  { path = '/api/ws', devicePath = '/api/devices/ws', hub = null, trustedOrigins = parseTrustedOrigins() } = {}
 ) {
   const wss = new WebSocketServer({ noServer: true });
   const deviceWss = hub
@@ -91,6 +92,14 @@ export function attachWebSocketServer(
     if (url.pathname !== path) {
       socket.destroy();
       return;
+    }
+    // This endpoint authenticates by the session cookie, which the browser
+    // attaches for ANY page that opens a socket here — so a handshake from
+    // another origin is refused outright. The device endpoint above is
+    // exempt on purpose: its bearer token is presented explicitly, never
+    // ambiently, so there is nothing for a hostile page to ride on.
+    if (upgradeOriginProblem(req, { trustedOrigins })) {
+      return reject(socket, 403, 'Forbidden');
     }
     let user = null;
     try {

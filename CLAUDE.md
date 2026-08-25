@@ -439,6 +439,22 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   for failed. A refusal decided in the client (the organizer's HP capacity
   check) calls `toast.error` alongside setting its own message. Repeats of the
   same line count up on the toast already on screen rather than stacking.
+- CSRF protection is browser-origin verification, in one place
+  (`server/src/csrf.js`), never per route: the session cookie authenticates
+  the BROWSER, not the page that made it ask, so every unsafe-method `/api`
+  request a browser labels as another site's (`Sec-Fetch-Site`, else
+  `Origin` vs `Host`) is refused before any router sees it — login included,
+  which is why it is not a token scheme (login CSRF has no session to bind a
+  token to). A request with neither header is not a browser (curl, supertest,
+  a linked device) and passes: those clients present credentials explicitly,
+  so there is nothing to forge. The cookie-authenticated WebSocket handshake
+  (`/api/ws`) runs the same check (`upgradeOriginProblem`); the device socket
+  is exempt on purpose (bearer token, no ambient credential). A legitimate
+  cross-origin caller is named in `CSRF_TRUSTED_ORIGINS` (full origins,
+  comma-separated; malformed entries fail the boot). Only the Origin's host
+  is compared — TLS ends at nginx, so the scheme is unknowable — and the
+  Vite dev proxy must NOT set `changeOrigin`, or every dev request would
+  look cross-origin.
 - Cache policy is set in one place per layer, never ad hoc in a handler:
   `app.js` stamps every `/api` response `private, no-cache` (`no-store` on
   the credential routes), and the routes that stream content-addressed bytes
@@ -474,7 +490,11 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
     newer where `id < before` walks straight there on `(user_id, id)`. The
     store holds the newest page and appends with `loadMore()`; a bulk stop or
     delete re-reads it rather than filtering the rows on screen, because the
-    rows that went may have been keeping older ones off the page.
+    rows that went may have been keeping older ones off the page. The PATCH
+    LIST pages the same way (`GET /api/patches` answers
+    `{ patches, total, has_more, next_before }`): PatchesView holds the newest
+    page and appends, and the Ask page's patch picker asks for the biggest
+    page there is (500) rather than the whole library.
 - WORK IS DONE ONCE A FRAME, NOT ONCE AN EVENT. Pointer and scroll events
   arrive far faster than the screen redraws, and in this app one of them
   redraws hundreds of panels or filters six thousand markers: the organizer's

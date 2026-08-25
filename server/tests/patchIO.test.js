@@ -322,7 +322,7 @@ describe('importing a patch', () => {
     expect(taken.body.error).toContain("you already have a patch called 'Krell 2'");
     // Nothing was written for the refused import.
     const list = (await request(app).get('/api/patches').set('Cookie', aliceCookie)).body;
-    expect(list.map((p) => p.name).sort()).toEqual(['Krell', 'Krell 2', 'Krell 3']);
+    expect(list.patches.map((p) => p.name).sort()).toEqual(['Krell', 'Krell 2', 'Krell 3']);
   });
 
   // A file is a file: it can be anything at all.

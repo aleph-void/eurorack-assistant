@@ -43,10 +43,12 @@ describe('AskView', () => {
 
   it('asks about the patch named in the URL', async () => {
     currentRouteQuery = { patch: '3' };
-    api.get.mockResolvedValue([
-      { id: 3, name: 'Krell', rack_name: 'main rack' },
-      { id: 4, name: 'Drone', rack_name: 'main rack' },
-    ]);
+    api.get.mockResolvedValue({
+      patches: [
+        { id: 3, name: 'Krell', rack_name: 'main rack' },
+        { id: 4, name: 'Drone', rack_name: 'main rack' },
+      ],
+    });
     api.post.mockResolvedValue({ id: 12 });
     const wrapper = mount(AskView, { global: testGlobal() });
     await flushPromises();
@@ -62,10 +64,12 @@ describe('AskView', () => {
   });
 
   it('finds a patch by typing its name', async () => {
-    api.get.mockResolvedValue([
-      { id: 3, name: 'Krell', rack_name: 'main rack' },
-      { id: 4, name: 'Drone', rack_name: 'main rack' },
-    ]);
+    api.get.mockResolvedValue({
+      patches: [
+        { id: 3, name: 'Krell', rack_name: 'main rack' },
+        { id: 4, name: 'Drone', rack_name: 'main rack' },
+      ],
+    });
     api.post.mockResolvedValue({ id: 12 });
     const wrapper = mount(AskView, { global: testGlobal() });
     await flushPromises();
