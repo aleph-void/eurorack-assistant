@@ -1156,6 +1156,17 @@ function setMenuValue(value) {
               Close
             </button>
           </div>
+          <!-- The menu is opened on the panel of a module, and its page is
+               where everything else about it lives. module_id is already null
+               when the module has left the library, so no dead link. -->
+          <RouterLink
+            v-if="menuModule?.module_id"
+            class="menu-module-link"
+            :to="`/modules/${menuModule.module_id}`"
+            data-test="diagram-menu-module-link"
+          >
+            Open the module's page →
+          </RouterLink>
           <template v-if="!menuEditor">
             <template v-if="menuParameters.length">
               <p class="muted">Menu settings — pick one to dial it in.</p>
@@ -1592,6 +1603,11 @@ function setMenuValue(value) {
 }
 .module-menu .muted {
   margin: 0.2rem 0 0.4rem;
+  font-size: 0.82rem;
+}
+.menu-module-link {
+  display: block;
+  margin: 0 0 0.4rem;
   font-size: 0.82rem;
 }
 .menu-item {

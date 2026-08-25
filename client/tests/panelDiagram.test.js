@@ -667,6 +667,26 @@ describe('PatchDiagram', () => {
     expect(note.find('a').attributes('to')).toBe('/modules/2/parameters');
   });
 
+  // The menu is opened on the panel of a module, and its page is where
+  // everything else about it lives — so the menu links there.
+  it("links to the module's own page, unless the module is gone", async () => {
+    const wrapper = mountDiagram({ interactive: true });
+    await wrapper.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    expect(wrapper.find('[data-test="diagram-menu-module-link"]').attributes('to')).toBe(
+      '/modules/1'
+    );
+    // A snapshot whose module has left the library serializes module_id as
+    // null: nothing to link to, so no link.
+    const [maths, lpg] = modules();
+    const dead = mountDiagram({
+      modules: [{ ...maths, module_id: null, live: false }, lpg],
+      interactive: true,
+    });
+    await dead.find('g[data-pm="11"] .panel-frame').trigger('contextmenu');
+    expect(dead.find('[data-test="diagram-module-menu"]').exists()).toBe(true);
+    expect(dead.find('[data-test="diagram-menu-module-link"]').exists()).toBe(false);
+  });
+
   // A write elsewhere reloads the payload under an open menu, and the
   // instance it was open over may not come back — the menu says so rather
   // than crashing or listing a ghost.
