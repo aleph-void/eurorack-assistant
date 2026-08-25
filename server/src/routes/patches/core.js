@@ -42,6 +42,14 @@ export function patchCoreRoutes(db) {
   } = db.models;
   const router = Router();
 
+  // One page of the list. A patch is a keeper — a library of moments in the
+  // studio, added to for as long as the account is used — so the list is
+  // paged the way the job list is (routes/jobs.js): BY ID rather than by
+  // offset, because patches are created while the list is read and a page
+  // anchored at `id < before` is the same page whatever lands above it.
+  const DEFAULT_PAGE = 100;
+  const MAX_PAGE = 500;
+
   // Every write that takes a patch name checks the name is free first, and
   // then does the write through this: two requests can both find one free,
   // and the unique index behind the check catches the second. That one gets
@@ -59,33 +67,52 @@ export function patchCoreRoutes(db) {
   };
 
   router.get('/', asyncHandler(async (req, res) => {
-    const patches = await Patch.findAll({
-      where: { user_id: req.user.id },
+    const limit = Math.min(MAX_PAGE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE));
+    const before = Math.max(0, Number(req.query.before) || 0);
+    const mine = { user_id: req.user.id };
+    // The count is of the whole list, not of the page: the footer says which
+    // part of what the reader is looking at.
+    const total = await Patch.count({ where: mine });
+    // One more row than the page needs, which is what says whether there is
+    // another page — a count of its own would be a second answer to the same
+    // question, and the two can disagree while patches are being made.
+    const rows = await Patch.findAll({
+      where: before ? { ...mine, id: { [Op.lt]: before } } : mine,
       order: [['id', 'DESC']],
+      limit: limit + 1,
     });
+    const has_more = rows.length > limit;
+    const patches = has_more ? rows.slice(0, limit) : rows;
     const ids = patches.map((p) => p.id);
-    // Counts grouped in JS (pg-mem-friendly flat queries).
+    // Counts grouped in JS (pg-mem-friendly flat queries) — over the page's
+    // rows only, which is most of what paging buys: the module and cable
+    // rows of every patch the account ever made are the expensive part.
     const [moduleRows, cableRows] = ids.length
       ? await Promise.all([
           PatchModule.findAll({ where: { patch_id: ids }, attributes: ['patch_id'] }),
           PatchCable.findAll({ where: { patch_id: ids }, attributes: ['patch_id'] }),
         ])
       : [[], []];
-    const count = (rows) => {
+    const count = (linked) => {
       const map = new Map();
-      for (const r of rows) map.set(r.patch_id, (map.get(r.patch_id) ?? 0) + 1);
+      for (const r of linked) map.set(r.patch_id, (map.get(r.patch_id) ?? 0) + 1);
       return map;
     };
     const moduleCounts = count(moduleRows);
     const cableCounts = count(cableRows);
-    res.json(
-      patches.map((p) =>
+    res.json({
+      total,
+      limit,
+      has_more,
+      // Where the next page starts; null when this was the last of them.
+      next_before: has_more ? patches[patches.length - 1].id : null,
+      patches: patches.map((p) =>
         patchJson(p, {
           module_count: moduleCounts.get(p.id) ?? 0,
           cable_count: cableCounts.get(p.id) ?? 0,
         })
-      )
-    );
+      ),
+    });
   }));
 
   // Create a patch from one of the user's racks, or from a whole system —

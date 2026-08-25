@@ -190,7 +190,8 @@ describe('what a shared record lets you do', () => {
 
     // Not in the recipient's own list, and not theirs to edit or delete.
     const list = await request(app).get('/api/patches').set('Cookie', adminCookie);
-    expect(list.body).toEqual([]);
+    expect(list.body.patches).toEqual([]);
+    expect(list.body.total).toBe(0);
     const renamed = await request(app)
       .put(`/api/patches/${patch.id}`)
       .set('Cookie', adminCookie)
