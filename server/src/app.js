@@ -21,6 +21,7 @@ import { oauthRoutes } from './routes/oauth.js';
 import { deviceRoutes } from './routes/devices.js';
 import { scopeRoutes } from './routes/scope.js';
 import { captureRoutes } from './routes/captures.js';
+import { clipRoutes } from './routes/clips.js';
 import { panelRoutes } from './routes/panels.js';
 import { shareRoutes } from './routes/shares.js';
 
@@ -112,6 +113,7 @@ export function createApp(
   app.use('/api/devices', deviceRoutes(db, { hub }));
   app.use('/api/scope', scopeRoutes(db, { hub, capturesDir }));
   app.use('/api/captures', captureRoutes(db, { capturesDir }));
+  app.use('/api/clips', clipRoutes(db, { capturesDir }));
 
   app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

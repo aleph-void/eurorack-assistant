@@ -10,3 +10,16 @@ paths-ignore:
   - client/dist
   - server/tests
   - client/tests
+
+query-filters:
+  # CSRF protection here is browser-origin verification (server/src/csrf.js,
+  # mounted on all of /api in app.js), chosen over a token scheme on purpose:
+  # tokens cannot cover the login form (no session to bind one to yet) and
+  # non-browser clients (the linked oscilloscope) carry no ambient
+  # credential to forge. This query only recognizes token middleware
+  # (csurf/lusca or csrf-named token checks), so it flags the cookie parser
+  # on every pull request that adds a state-changing handler, however
+  # protected the handler is. Verified against main with the CodeQL CLI:
+  # the alert fires there too, naming every cookie-authenticated handler.
+  - exclude:
+      id: js/missing-token-validation

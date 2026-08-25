@@ -23,12 +23,17 @@ const devices = useDevicesStore();
 const channels = ref([]);
 const suggestion = ref(null);
 const captures = ref([]);
+const clips = ref([]);
 const tuner = ref([]);
 const error = ref('');
 const status = ref('');
 const busy = ref(false);
 const captionDraft = ref({});
 const captureTitle = ref('');
+const clipTitle = ref('');
+const clipDuration = ref(10);
+const clipModuleId = ref('');
+const recording = ref(false);
 
 // Override form state, per channel index.
 const overrideModule = ref({});
@@ -36,6 +41,13 @@ const overrideComponent = ref({});
 
 const connection = computed(() => devices.current);
 const connected = computed(() => Boolean(connection.value));
+
+// Recording is offered only when the scope says it can. A device that
+// announces no capability list at all is assumed to answer everything.
+const canRecord = computed(() => {
+  const caps = connection.value?.capabilities;
+  return !Array.isArray(caps) || caps.includes('record');
+});
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 
@@ -47,6 +59,16 @@ const jacksOf = (patchModuleId) => {
 
 const moduleLabel = (pm) =>
   pm ? pm.label || `${pm.manufacturer} ${pm.module_name}`.trim() : '(unknown module)';
+
+// The modules a clip can be attached to: patch instances that still point at
+// a live module record, one entry per module however often it is racked.
+const clipModules = computed(() => {
+  const seen = new Map();
+  for (const pm of props.modules) {
+    if (pm.module_id && !seen.has(pm.module_id)) seen.set(pm.module_id, pm);
+  }
+  return [...seen.values()];
+});
 
 // Every channel a capture could take: what the device announced, plus any the
 // patch has a mapping for. Named by the mapping where there is one, since a
@@ -106,6 +128,8 @@ async function load() {
     suggestion.value = state?.suggestion ?? null;
     const list = await api.get(`/api/captures?patch_id=${props.patchId}`);
     captures.value = asArray(list);
+    const clipList = await api.get(`/api/clips?patch_id=${props.patchId}`);
+    clips.value = asArray(clipList);
   } catch (e) {
     error.value = e.message;
   }
@@ -208,6 +232,55 @@ async function capture() {
     error.value = e.message;
   } finally {
     busy.value = false;
+  }
+}
+
+// Record a short clip of the ticked channels and attach it to a module —
+// the one the select names, or (left on the default) whichever module the
+// server finds feeding the first recorded pane.
+async function record() {
+  error.value = '';
+  status.value = '';
+  const picked = [...chosenChannels.value].sort((a, b) => a - b);
+  if (captureChannels.value.length > 0 && picked.length === 0) {
+    error.value = 'Pick at least one channel to record.';
+    return;
+  }
+  recording.value = true;
+  try {
+    const created = await api.post(`/api/scope/patches/${props.patchId}/clips`, {
+      connection_id: connection.value?.id,
+      channels: picked.length > 0 ? picked : undefined,
+      duration_seconds: Number(clipDuration.value) || undefined,
+      module_id: clipModuleId.value ? Number(clipModuleId.value) : undefined,
+      title: clipTitle.value.trim() || undefined,
+    });
+    clipTitle.value = '';
+    clips.value = [created, ...clips.value];
+    const owner = clipModules.value.find((pm) => pm.module_id === created.module_id);
+    status.value = `Recorded — the clip is on ${
+      owner ? `${moduleLabel(owner)}’s` : 'the module’s'
+    } Videos page.`;
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    recording.value = false;
+  }
+}
+
+async function removeClip(clip) {
+  const ok = await dialog.confirm({
+    title: 'Delete clip',
+    message: 'Delete this clip? It also disappears from the module’s Videos page.',
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await api.delete(`/api/clips/${clip.id}`);
+    clips.value = clips.value.filter((c) => c.id !== clip.id);
+  } catch (e) {
+    error.value = e.message;
   }
 }
 
@@ -448,6 +521,97 @@ watch(connected, (isConnected) => {
             uses does not fill the picture with flat lines.
           </span>
         </p>
+      </div>
+
+      <div class="subpanel" data-test="clip-panel">
+        <h3>Record a clip</h3>
+        <p v-if="connected && !canRecord" class="muted" data-test="clip-unsupported">
+          The connected oscilloscope does not support recording clips.
+        </p>
+        <template v-else>
+          <div class="row">
+            <div class="shrink">
+              <label for="clip-duration">Seconds (1–30)</label>
+              <input
+                id="clip-duration"
+                v-model="clipDuration"
+                type="number"
+                min="1"
+                max="30"
+                data-test="clip-duration"
+              />
+            </div>
+            <div>
+              <label for="clip-module">Attach to</label>
+              <select id="clip-module" v-model="clipModuleId" data-test="clip-module">
+                <option value="">Module feeding the first recorded pane</option>
+                <option v-for="pm in clipModules" :key="pm.module_id" :value="pm.module_id">
+                  {{ moduleLabel(pm) }}
+                </option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <input v-model="clipTitle" placeholder="Title (optional)" data-test="clip-title" />
+            <button
+              class="shrink"
+              :disabled="!connected || busy || recording"
+              data-test="scope-record"
+              @click="record"
+            >
+              {{ recording ? 'Recording…' : 'Record clip' }}
+            </button>
+          </div>
+          <p class="muted">
+            The ticked channels above are recorded for a few seconds and the clip is attached to
+            a module — it appears on that module’s Videos page, next to its YouTube videos.
+          </p>
+        </template>
+
+        <!-- Clips carry a video each, so all but the one just taken stay
+             folded away. -->
+        <details
+          v-for="(clip, i) in clips"
+          :key="clip.id"
+          class="expander"
+          :open="i === 0"
+          :data-test="`clip-${clip.id}`"
+        >
+          <summary>
+            <h3>{{ clip.title || `Clip #${clip.id}` }}</h3>
+            <span class="summary-count">
+              {{ new Date(clip.captured_at).toLocaleString() }}
+            </span>
+          </summary>
+          <div class="expander-body">
+            <p class="muted">
+              <span v-if="clip.device_name">{{ clip.device_name }}</span>
+              <span v-if="clip.duration_seconds"> · {{ Math.round(clip.duration_seconds) }}s</span>
+              <span v-if="clip.module_id">
+                · on
+                <RouterLink :to="`/modules/${clip.module_id}/videos`">
+                  the module’s Videos page
+                </RouterLink>
+              </span>
+            </p>
+            <video
+              controls
+              preload="metadata"
+              :src="`/api/clips/${clip.id}/video`"
+              style="max-width: 100%; height: auto"
+              :data-test="`clip-video-${clip.id}`"
+            ></video>
+            <div class="row">
+              <button
+                class="danger shrink"
+                :data-test="`clip-delete-${clip.id}`"
+                @click="removeClip(clip)"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </details>
       </div>
 
       <!-- Captures carry a waveform image each, so all but the one just

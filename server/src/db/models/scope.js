@@ -78,5 +78,51 @@ export function defineScopeModels(define) {
     { tableName: 'capture_channels', createdAt: 'created_at', updatedAt: false }
   );
 
-  return { PatchScopeChannel, Capture, CaptureChannel };
+  // A short video of the panes, attached to a module (migration 040). The
+  // patch it was recorded during is kept softly — id nulled when the patch
+  // goes, name kept as text — because the clip belongs to the module.
+  const ScopeClip = define(
+    'ScopeClip',
+    {
+      id,
+      user_id: { type: DataTypes.INTEGER, allowNull: false },
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      patch_id: { type: DataTypes.INTEGER },
+      patch_name: { type: DataTypes.TEXT },
+      device_token_id: { type: DataTypes.INTEGER },
+      device_name: { type: DataTypes.TEXT },
+      audio_device_id: { type: DataTypes.TEXT },
+      audio_device_name: { type: DataTypes.TEXT },
+      title: { type: DataTypes.TEXT },
+      caption: { type: DataTypes.TEXT },
+      video_hash: { type: DataTypes.TEXT },
+      video_format: { type: DataTypes.TEXT },
+      video_width: { type: DataTypes.INTEGER },
+      video_height: { type: DataTypes.INTEGER },
+      video_bytes: { type: DataTypes.INTEGER },
+      duration_seconds: { type: DataTypes.REAL },
+      sample_rate: { type: DataTypes.REAL },
+      captured_at: { type: DataTypes.DATE },
+    },
+    { tableName: 'scope_clips', createdAt: 'created_at', updatedAt: false }
+  );
+
+  const ScopeClipChannel = define(
+    'ScopeClipChannel',
+    {
+      id,
+      clip_id: { type: DataTypes.INTEGER, allowNull: false },
+      channel_index: { type: DataTypes.INTEGER, allowNull: false },
+      label: { type: DataTypes.TEXT },
+      signal_type: { type: DataTypes.TEXT },
+      patch_module_id: { type: DataTypes.INTEGER },
+      component_id: { type: DataTypes.INTEGER },
+      component_name: { type: DataTypes.TEXT },
+      module_label: { type: DataTypes.TEXT },
+      source_description: { type: DataTypes.TEXT },
+    },
+    { tableName: 'scope_clip_channels', createdAt: 'created_at', updatedAt: false }
+  );
+
+  return { PatchScopeChannel, Capture, CaptureChannel, ScopeClip, ScopeClipChannel };
 }

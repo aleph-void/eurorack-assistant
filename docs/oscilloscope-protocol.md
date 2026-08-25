@@ -217,7 +217,7 @@ the channel list, or the channel names/types change. The two have the same body.
   "device_name": "CVOsc on STUDIO-PC",
   "app": "CVOsc",
   "version": "1.0.0",
-  "capabilities": ["capture", "tuner", "set_labels"],
+  "capabilities": ["capture", "tuner", "set_labels", "record"],
   "audio_device": {
     "id": "wasapi:{0.0.1.00000000}.{…}",
     "name": "ES-9 (Expert Sleepers)",
@@ -320,7 +320,52 @@ they were requested**, plus a per-channel reading:
 - The readings are stored as numbers and shown as text, so they survive even
   where the image cannot be read.
 
-### 3.2 `tuner`
+### 3.2 `record`
+
+Record a short video clip of the requested channels — the moving version of a
+`capture`. Only sent to devices whose `capabilities` include `"record"` (or
+that announce no capability list at all).
+
+```json
+{
+  "channels": [
+    { "index": 0, "label": "Make Noise Maths — EOR", "signal_type": "cv" }
+  ],
+  "duration_seconds": 10
+}
+```
+
+`duration_seconds` is between 1 and 30 — record for that long, then answer with
+the encoded video:
+
+```json
+{
+  "video": {
+    "format": "webm",
+    "data": "<base64>",
+    "width": 1280,
+    "height": 720,
+    "duration_seconds": 10.0
+  },
+  "captured_at": "2026-08-12T18:00:00Z",
+  "sample_rate": 48000,
+  "channels": [ { "index": 0, "signal_type": "cv" } ]
+}
+```
+
+- `format` must be `webm` or `mp4`, and the bytes must really be that
+  container — the server sniffs the magic and refuses a mismatch.
+- Keep the file small: the whole answer has to fit in one WebSocket frame, so
+  the video is capped at 8 MB. A 1280×720 clip of waveforms at a modest
+  bitrate is well under that for 30 seconds.
+- `channels` is optional; when present it labels the panes the same way a
+  capture answer does.
+
+The server waits `duration_seconds` plus the usual request timeout for the
+answer, so there is no need to stream progress — but do answer with an `error`
+frame immediately if recording cannot start.
+
+### 3.3 `tuner`
 
 A live reading with no image, for the "Read tuner now" button.
 
@@ -330,7 +375,7 @@ A live reading with no image, for the "Read tuner now" button.
 
 Answer with `{ "channels": [ { "index": 0, "tuning": { … } }, … ] }`.
 
-### 3.3 `set_labels`
+### 3.4 `set_labels`
 
 Sent after a channel mapping is worked out, so the panes on the bench read the
 same as the ones on screen.
@@ -378,6 +423,12 @@ what can be attached to a question afterwards — at which point the LLM gets th
 image *and* a text document spelling out every reading in it, so an answer never
 depends on the model being able to open a PNG.
 
+A `record` clip is stored the same way (sha256 of the video, under
+`CAPTURES_DIR/clips/`) but is attached to a **module** rather than filed under a
+patch note: the clip shows what that module's output looks like moving, so it
+lives on the module's videos page, next to its YouTube videos. The module is
+the one feeding the recorded panes, or whichever one the user picked.
+
 ---
 
 ## 6. Limits and failure modes
@@ -386,7 +437,9 @@ depends on the model being able to open a PNG.
 | ---------------------------- | ---------- | --------------------------------------------- |
 | WebSocket frame              | 12 MB      | The socket is closed                          |
 | Capture image                | 8 MB       | HTTP 502 to the browser, capture discarded    |
-| Request answer               | 30 s       | HTTP 504 to the browser, late answer ignored  |
+| Clip video                   | 8 MB       | HTTP 502 to the browser, clip discarded       |
+| Clip duration                | 30 s       | The request is clamped before it is sent      |
+| Request answer               | 30 s (+ the clip duration for `record`) | HTTP 504 to the browser, late answer ignored |
 | Device code lifetime         | 10 min     | `expired_token`                               |
 | Access token lifetime        | 24 h       | Refresh                                       |
 
@@ -412,4 +465,8 @@ entitlement"). It is shown verbatim in the browser.
       pass, answer with both.
 - [ ] `tuner`: answer with the current readings.
 - [ ] `set_labels`: rename panes.
+- [ ] Optionally `record`: encode a webm/mp4 clip of the named channels for the
+      requested duration, and announce `"record"` in `capabilities`. A device
+      that lists its capabilities without `record` is refused cleanly instead
+      of timed out.
 - [ ] Answer *every* request, with `error` when it cannot be done.

@@ -63,6 +63,8 @@ export function associate(m) {
     PatchScopeChannel,
     Capture,
     CaptureChannel,
+    ScopeClip,
+    ScopeClipChannel,
     Share,
     LlmUsage,
     Job,
@@ -258,6 +260,12 @@ export function associate(m) {
   Capture.belongsTo(Note, { foreignKey: 'note_id' });
   Capture.hasMany(CaptureChannel, { foreignKey: 'capture_id' });
   CaptureChannel.belongsTo(Capture, { foreignKey: 'capture_id' });
+
+  ScopeClip.belongsTo(User, { foreignKey: 'user_id' });
+  ScopeClip.belongsTo(Module, { foreignKey: 'module_id' });
+  ScopeClip.belongsTo(Patch, { foreignKey: 'patch_id' });
+  ScopeClip.hasMany(ScopeClipChannel, { foreignKey: 'clip_id' });
+  ScopeClipChannel.belongsTo(ScopeClip, { foreignKey: 'clip_id' });
 
   Share.belongsTo(User, { foreignKey: 'owner_id', as: 'Owner' });
   Share.belongsTo(User, { foreignKey: 'user_id', as: 'Recipient' });
