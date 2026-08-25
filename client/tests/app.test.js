@@ -222,4 +222,24 @@ describe('App', () => {
     expect(createProgressSocket.mock.results[0].value.close).toHaveBeenCalled();
     wrapper.unmount();
   });
+
+  // The admin pages are guarded on the server and again by the router; the
+  // drawer is the third place the same rule has to hold, because a link to a
+  // page that answers 403 is worse than no link at all.
+  it('lists the admin pages for an admin and for nobody else', async () => {
+    const plain = mountApp();
+    await flushPromises();
+    expect(plain.wrapper.find('[data-test="nav-csp-reports"]').exists()).toBe(false);
+    expect(plain.wrapper.text()).not.toContain('Application Config');
+    plain.wrapper.unmount();
+
+    const admin = mountApp({ id: 2, username: 'root', is_admin: true });
+    await flushPromises();
+    expect(admin.wrapper.text()).toContain('Users');
+    expect(admin.wrapper.text()).toContain('Application Config');
+    // Where the browser's own refusals are read (nginx/csp.conf,
+    // server/src/routes/cspReports.js).
+    expect(admin.wrapper.find('[data-test="nav-csp-reports"]').exists()).toBe(true);
+    admin.wrapper.unmount();
+  });
 });

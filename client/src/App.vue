@@ -216,6 +216,9 @@ async function logout() {
       <p class="nav-heading">Admin</p>
       <RouterLink to="/admin/users">Users</RouterLink>
       <RouterLink to="/admin/config">Application Config</RouterLink>
+      <RouterLink to="/admin/csp-reports" data-test="nav-csp-reports">
+        Policy violations
+      </RouterLink>
     </template>
 
     <div class="nav-foot">

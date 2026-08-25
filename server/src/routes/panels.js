@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
+import { STORED_FILE_POLICY } from '../csp.js';
 import { IMAGE_TYPES, panelPath } from '../services/image.js';
 import { bucketWidth, panelVariant } from '../services/panelThumbs.js';
 import { asyncHandler } from './asyncHandler.js';
@@ -38,7 +39,7 @@ export function panelRoutes(db, { panelsDir = process.env.PANELS_DIR || '/data/p
     // A drawn panel is an SVG we wrote ourselves, but it is still a
     // document: served under a policy that lets it load nothing and run
     // nothing, so it can only ever be a picture.
-    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+    res.set('Content-Security-Policy', STORED_FILE_POLICY);
     res.set('X-Content-Type-Options', 'nosniff');
     // The bytes are addressed by their own hash, so they can never change.
     res.set('Cache-Control', 'private, max-age=31536000, immutable');

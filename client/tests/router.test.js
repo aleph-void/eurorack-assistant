@@ -55,7 +55,7 @@ describe('route guard', () => {
 
   it('marks the admin pages with the admin meta flag', () => {
     const adminRoutes = routes.filter((r) => r.meta?.admin).map((r) => r.name);
-    expect(adminRoutes.sort()).toEqual(['config', 'users']);
+    expect(adminRoutes.sort()).toEqual(['config', 'csp-reports', 'users']);
   });
 });
 

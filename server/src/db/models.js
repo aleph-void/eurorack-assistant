@@ -14,6 +14,7 @@ import { definePatchesModels } from './models/patches.js';
 import { defineNotesModels } from './models/notes.js';
 import { defineScopeModels } from './models/scope.js';
 import { defineJobsModels } from './models/jobs.js';
+import { defineSecurityModels } from './models/security.js';
 import { associate } from './models/associations.js';
 
 export function defineModels(sequelize) {
@@ -28,5 +29,6 @@ export function defineModels(sequelize) {
     ...defineNotesModels(define),
     ...defineScopeModels(define),
     ...defineJobsModels(define),
+    ...defineSecurityModels(define),
   });
 }

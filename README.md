@@ -545,6 +545,19 @@ free for public repositories) to turn that on.
   read-only sandbox is read-only about *writing*: containing what it can read
   would take a container per job.
 - LLM answers are rendered as markdown sanitized with DOMPurify.
+- Every page is served under a content security policy (`nginx/csp.conf`):
+  scripts and styles come from the app's own files, nothing may frame it, and
+  there is no `unsafe-inline` anywhere — so a mistake in the sanitizing above
+  still has nothing to run with. Every `/api` response carries a policy of its
+  own (`server/src/csp.js`) that permits nothing at all, because a manual or a
+  panel picture is a file somebody else supplied and a browser must not treat
+  it as a page.
+- What a browser refuses is reported to `POST /api/csp-reports`, which takes no
+  session — the policy bites hardest on the login page, where nobody has one.
+  Reading those reports is an admin's alone (`/admin/csp-reports`), and posting
+  one is bounded from every direction: its own rate-limit bucket, a 64 kB body,
+  one row per distinct violation with a count rather than a row per report, and
+  a ceiling on how many distinct violations are ever stored.
 - An oscilloscope never sees a password: it gets a token only after the user
   approves its short code in an already-authenticated browser session. Device
   tokens are stored as sha256 hashes, carry a single `oscilloscope` scope, are
