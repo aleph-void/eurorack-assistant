@@ -9,9 +9,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // No changeOrigin: the CSRF check (server/src/csrf.js) compares the
+      // browser's Origin against the Host the request arrived with, and
+      // rewriting Host to the proxy target would make every dev request
+      // look cross-origin. Express does no virtual hosting, so nothing
+      // needs the rewrite.
       '/api': {
         target: 'http://localhost:3000',
-        changeOrigin: true,
         ws: true,
       },
     },
