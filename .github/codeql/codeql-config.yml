@@ -10,3 +10,33 @@ paths-ignore:
   - client/dist
   - server/tests
   - client/tests
+
+# js/missing-token-validation ("Missing CSRF middleware") cannot see the CSRF
+# protection this app has, and there is no way to show it one.
+#
+# The query flags any unsafe-method route handler that sits behind
+# cookie-parsing middleware unless the chain contains something it recognises
+# as CSRF protection — and what it recognises is hard-coded: the csurf,
+# tiny-csrf or lusca packages, fastify's csrfProtection, or a handler that
+# writes or compares a property whose NAME contains "csrf"/"xsrf". There is no
+# data-extension hook to teach it a fourth thing.
+#
+# This app protects against CSRF by verifying the browser's own account of
+# where the request came from — Sec-Fetch-Site, else Origin against Host —
+# refused once on /api before any router sees it (server/src/csrf.js). That is
+# the same design as Go's net/http CrossOriginProtection, and it was chosen
+# over a token scheme deliberately: a token cannot cover login CSRF, there
+# being no session yet to bind one to. None of it looks like csurf, so the
+# query reports every state-changing handler in the app — two hundred of them,
+# in one alert on the cookieParser() line — and reports them again as new
+# whenever a change to app.js moves that line.
+#
+# The rule is therefore excluded rather than dismissed alert by alert. What
+# stands in its place is server/tests/csrf.test.js, which drives the real app:
+# a cross-site write with a valid session is refused, a cross-site login is
+# refused, and a same-origin browser and a headerless client are served as
+# before. Delete the protection and those fail — which is the warning this
+# query would have been giving us.
+query-filters:
+  - exclude:
+      id: js/missing-token-validation
