@@ -76,13 +76,21 @@ export async function undescribedComponents(db, moduleId) {
 // filled from the same job and reported here. 'pending' is what makes it a
 // gap: a module whose documents have been read and hold no menu is complete,
 // and asking again every sweep would cost a model run per module forever.
+// A menu with parameters already in it is no gap either, whatever the status
+// says — entered by hand, or by an earlier run the status never caught up
+// with — because a blank is what this pass fills and that menu is not one.
+// Re-reading a menu that has entries is the module page's own button, which
+// queues find_parameters directly and never asks what is missing.
 export async function moduleFactGaps(db, module) {
   const record = await db.models.Module.findByPk(module.id);
+  const recorded = await db.models.ModuleParameter.count({
+    where: { module_id: module.id },
+  });
   return {
     components: await undescribedComponents(db, module.id),
     summary: !String(record?.summary ?? '').trim(),
     hp: record?.hp == null,
-    parameters: (record?.parameters_status ?? 'pending') === 'pending',
+    parameters: recorded === 0 && (record?.parameters_status ?? 'pending') === 'pending',
   };
 }
 
