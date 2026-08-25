@@ -50,6 +50,7 @@ const DevicesView = () => import('./views/DevicesView.vue');
 const LinkDeviceView = () => import('./views/LinkDeviceView.vue');
 const UsersView = () => import('./views/UsersView.vue');
 const ConfigView = () => import('./views/ConfigView.vue');
+const CspReportsView = () => import('./views/CspReportsView.vue');
 const ChangePasswordView = () => import('./views/ChangePasswordView.vue');
 const LlmSettingsView = () => import('./views/LlmSettingsView.vue');
 const VoiceSettingsView = () => import('./views/VoiceSettingsView.vue');
@@ -201,6 +202,14 @@ export const routes = [
   { path: '/link', name: 'link-device', component: LinkDeviceView },
   { path: '/admin/users', name: 'users', component: UsersView, meta: { admin: true } },
   { path: '/admin/config', name: 'config', component: ConfigView, meta: { admin: true } },
+  // What browsers refused to load, reported by the browsers themselves. The
+  // policy is nginx/csp.conf and server/src/csp.js; this is its other end.
+  {
+    path: '/admin/csp-reports',
+    name: 'csp-reports',
+    component: CspReportsView,
+    meta: { admin: true },
+  },
 ];
 
 // Exported for tests: decides where (if anywhere) to redirect a navigation.

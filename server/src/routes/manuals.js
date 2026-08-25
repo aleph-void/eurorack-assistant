@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { Router } from 'express';
 import { QueryTypes } from 'sequelize';
 import { requireAuth } from '../auth.js';
+import { STORED_FILE_POLICY } from '../csp.js';
 import { manualPath, safeManualName } from '../services/pdf.js';
 import { readableIds } from '../services/sharing.js';
 import { asyncHandler } from './asyncHandler.js';
@@ -83,7 +84,7 @@ export function manualRoutes(db, { manualsDir = process.env.MANUALS_DIR || '/dat
     // loading or running anything if a viewer renders it inline. Mirrors the
     // policy the panel route already applies to its images.
     res.set('X-Content-Type-Options', 'nosniff');
-    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+    res.set('Content-Security-Policy', STORED_FILE_POLICY);
     // The file is addressed by the hash of its own bytes, so it can never
     // change under that URL — the same policy the panel and capture images
     // are served with. Private, because who may read a manual is a question

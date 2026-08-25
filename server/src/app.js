@@ -1,6 +1,7 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import { csrfProtection } from './csrf.js';
+import { cspHeaders, CSP_REPORT_PATH } from './csp.js';
 import { createLimiters } from './rateLimit.js';
 import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
@@ -23,6 +24,7 @@ import { scopeRoutes } from './routes/scope.js';
 import { captureRoutes } from './routes/captures.js';
 import { panelRoutes } from './routes/panels.js';
 import { shareRoutes } from './routes/shares.js';
+import { cspReportRoutes } from './routes/cspReports.js';
 
 export function createApp(
   db,
@@ -70,6 +72,13 @@ export function createApp(
     });
   }
 
+  // Content security policy for the API. Nothing served from here is a page:
+  // every response is JSON or a stream of bytes, so the policy is that a
+  // browser talked into treating one of them as a document may load nothing
+  // and run nothing. The policy the CLIENT SHELL is served under is nginx's
+  // (nginx/csp.conf) — see csp.js, which holds both ends of the reasoning.
+  app.use('/api', cspHeaders());
+
   // Registered before the limiters so probes never consume a request budget.
   app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -83,6 +92,9 @@ export function createApp(
   app.use('/api', limiters.api);
   app.use('/api/auth/login', limiters.credentials);
   app.use('/api/auth/password', limiters.credentials);
+  // The one write with no session behind it, so it is held to a bucket of
+  // its own on top of the shared one.
+  app.use(CSP_REPORT_PATH, limiters.reports);
 
   app.use('/api/auth', authRoutes(db));
   app.use('/api/users', userRoutes(db));
@@ -104,6 +116,10 @@ export function createApp(
   app.use('/api/jobs', jobRoutes(db, { bus }));
   app.use('/api/notes', noteRoutes(db));
   app.use('/api/shares', shareRoutes(db));
+  // Where the browser posts what the policy refused, and where an admin
+  // reads it. Posting is unauthenticated by necessity; everything else on
+  // the route is the admin's.
+  app.use(CSP_REPORT_PATH, cspReportRoutes(db));
   app.use('/api/exports', exportRoutes(db, { exportsDir }));
   app.use('/api/patches', patchRoutes(db));
   // Oscilloscope integration: /api/oauth is the device's half of the linking

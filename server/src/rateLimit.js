@@ -13,12 +13,21 @@
 //     scraper) cannot pin the LLM job queue or the database. Generous enough
 //     that ordinary browsing, imports and exports stay well underneath.
 //
+//   reports — CSP violation reports (routes/cspReports.js). The one write in
+//     the app that takes no session at all, because the reporter is a browser
+//     refusing to load something rather than a signed-in user, so it gets a
+//     bucket of its own ON TOP of the api one. A page that violates its
+//     policy in a render loop reports once a frame, and a stranger can post
+//     here all day: this is what stops either from being a way to write to
+//     the database as fast as the network allows.
+//
 // Both key on the client address, which is only correct because createApp
 // trusts nginx's X-Forwarded-For — see the `trust proxy` note in app.js.
 import rateLimit from 'express-rate-limit';
 
 export const CREDENTIALS_LIMIT = { windowMs: 15 * 60 * 1000, limit: 10 };
 export const API_LIMIT = { windowMs: 60 * 1000, limit: 300 };
+export const REPORTS_LIMIT = { windowMs: 60 * 1000, limit: 60 };
 
 function build({ windowMs, limit, message, skipSuccessfulRequests = false }) {
   return rateLimit({
@@ -35,12 +44,15 @@ function build({ windowMs, limit, message, skipSuccessfulRequests = false }) {
 
 const passthrough = (req, res, next) => next();
 
-// options === false disables both limiters (used by the test suite, which
+// options === false disables every limiter (used by the test suite, which
 // would otherwise exhaust a shared bucket across unrelated assertions).
-// Otherwise { credentials, api } override the defaults field by field.
+// Otherwise { credentials, api, reports } override the defaults field by
+// field.
 export function createLimiters(options = {}) {
-  if (options === false) return { credentials: passthrough, api: passthrough };
-  const { credentials = {}, api = {} } = options || {};
+  if (options === false) {
+    return { credentials: passthrough, api: passthrough, reports: passthrough };
+  }
+  const { credentials = {}, api = {}, reports = {} } = options || {};
   return {
     credentials: build({
       ...CREDENTIALS_LIMIT,
@@ -52,6 +64,11 @@ export function createLimiters(options = {}) {
       ...API_LIMIT,
       message: 'Too many requests. Slow down and try again shortly.',
       ...api,
+    }),
+    reports: build({
+      ...REPORTS_LIMIT,
+      message: 'Too many violation reports. Slow down and try again shortly.',
+      ...reports,
     }),
   };
 }

@@ -139,7 +139,7 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
 - Schema: the migrations in `server/migrations/` are the source of truth
   (never `sequelize.sync()`); models in `server/src/db/models.js`, which is
   only the composer — the tables live one domain per file under `db/models/`
-  (accounts, modules, racks, patches, notes, scope, jobs) and the association
+  (accounts, modules, racks, patches, notes, scope, jobs, security) and the association
   graph, which has to be read whole, is `db/models/associations.js`. Each
   migration is a module exporting `up`/`down` against the helpers in
   `src/db/migrationContext.js`; `src/db/migrate.js` applies, reverts and
@@ -455,6 +455,28 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   is compared — TLS ends at nginx, so the scheme is unknowable — and the
   Vite dev proxy must NOT set `changeOrigin`, or every dev request would
   look cross-origin.
+- CONTENT SECURITY POLICY is set one place per LAYER, like the cache policy
+  below it, because nginx serves the pages and Express never sees them: the
+  CLIENT SHELL's policy is `nginx/csp.conf` (a `map`, at the http level, added
+  per location by `nginx/csp-headers.conf` — `add_header` does not inherit into
+  a location that sets one of its own, and cache.conf gives both `/assets/` and
+  `index.html` theirs), and every `/api` response carries `API_POLICY` from
+  `server/src/csp.js`, which permits nothing at all. The routes that stream
+  stored bytes (panels, manuals) override it with `STORED_FILE_POLICY`, which
+  adds inline STYLE and nothing else: a drawn panel is an SVG with a `<style>`
+  block. The shell's policy names no `unsafe-inline` anywhere — the build emits
+  no inline script and Vue applies `:style` through the CSSOM, which CSP does
+  not govern — and names the WebSocket outright (`ws://$http_host`), because
+  browsers have never agreed that `'self'` covers `ws://` on a plain-HTTP page.
+  What a browser REFUSES is posted to `/api/csp-reports`, which takes no
+  session (the login page is where a policy first bites, and a browser sends a
+  report with no Origin and no Sec-Fetch-Site, so the CSRF check waves it
+  through). READING them is the admin's alone, at `/admin/csp-reports`. One row
+  per distinct violation with a count, never a row per report
+  (`services/cspReports.js` fingerprints them), and a ceiling on how many
+  distinct ones are stored: it is a write anyone on the internet can make.
+  `server/tests/csp.test.js` reads the nginx file and holds it to its
+  invariants, since no test can run nginx.
 - Cache policy is set in one place per layer, never ad hoc in a handler:
   `app.js` stamps every `/api` response `private, no-cache` (`no-store` on
   the credential routes), and the routes that stream content-addressed bytes
