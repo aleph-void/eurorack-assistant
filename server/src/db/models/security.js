@@ -6,7 +6,7 @@
 // one sequelize instance.
 //
 // A CSP report belongs to nobody — no user_id, no association graph to join
-// it into (see migration 040) — which is why it is a domain of its own rather
+// it into (see migration 041) — which is why it is a domain of its own rather
 // than a table filed under accounts.
 
 import { DataTypes } from 'sequelize';

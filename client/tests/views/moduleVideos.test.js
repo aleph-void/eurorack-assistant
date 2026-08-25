@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { testGlobal } from '../setup.js';
+import { openPanels, testGlobal } from '../setup.js';
 
 vi.mock('../../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -100,6 +100,102 @@ describe('ModuleVideosView', () => {
     expect(api.post).toHaveBeenCalledWith('/api/modules/1/videos', {
       url: 'https://www.youtube.com/watch?v=BBBBBBBBBBB',
     });
+  });
+
+  it('shows the oscilloscope clips with their panes, saves a caption and deletes one', async () => {
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.get.mockResolvedValue(structuredClone(moduleResponse));
+    api.put.mockResolvedValue({ ok: true });
+    api.delete.mockResolvedValue({ ok: true });
+    const wrapper = mount(ModuleVideosView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+
+    const clip = wrapper.find('[data-test="clip-12"]');
+    expect(clip.text()).toContain('EOR rising');
+    expect(clip.text()).toContain('recorded on patch “Krell”');
+    expect(clip.find('[data-test="clip-video-12"]').attributes('src')).toBe('/api/clips/12/video');
+    // Each pane says what it was showing at record time.
+    expect(clip.text()).toContain('Make Noise Maths — EOR');
+    expect(clip.text()).toContain('patched from Make Noise Maths EOR');
+
+    await wrapper.find('[data-test="clip-caption-12"]').setValue('slow rise');
+    await wrapper.find('[data-test="clip-save-12"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/clips/12', { caption: 'slow rise' });
+
+    confirm.mockResolvedValue(false);
+    await wrapper.find('[data-test="clip-delete-12"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).not.toHaveBeenCalled();
+    confirm.mockResolvedValue(true);
+    await wrapper.find('[data-test="clip-delete-12"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/clips/12');
+  });
+
+  it('says so when there are no clips yet', async () => {
+    const noClips = structuredClone(moduleResponse);
+    delete noClips.clips;
+    api.get.mockResolvedValue(noClips);
+    const wrapper = mount(ModuleVideosView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+
+    expect(wrapper.find('[data-test="no-clips"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="clips"]').text()).toMatch(/0\s+clips/);
+  });
+
+  it('names an untitled clip by its number, falls back pane by pane, and only opens the newest', async () => {
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    const withBareClip = structuredClone(moduleResponse);
+    // A clip with nothing optional filled in: no title, no device, no patch
+    // name, panes with less and less to say for themselves.
+    withBareClip.clips.push({
+      id: 13,
+      module_id: 1,
+      patch_id: null,
+      patch_name: null,
+      device_name: null,
+      title: null,
+      caption: 'old words',
+      video_format: 'webm',
+      duration_seconds: null,
+      captured_at: '2026-08-13T18:00:00Z',
+      channels: [
+        { id: 2, channel_index: 0, label: null, component_name: 'Out', source_description: null },
+        { id: 3, channel_index: 1, label: null, component_name: null, source_description: null },
+      ],
+    });
+    api.get.mockResolvedValue(withBareClip);
+    api.put.mockRejectedValue(new Error('Clip not found'));
+    api.delete.mockRejectedValue(new Error('Clip not found'));
+    const wrapper = mount(ModuleVideosView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+
+    expect(wrapper.find('[data-test="clips"]').text()).toMatch(/2\s+clips/);
+    const bare = wrapper.find('[data-test="clip-13"]');
+    expect(bare.find('h3').text()).toBe('Clip #13');
+    // Panes fall back from label to jack name to their own number.
+    expect(bare.text()).toContain('Out');
+    expect(bare.text()).toContain('Channel 2');
+    // Only the newest clip starts open; openPanels only opens the panels.
+    expect(wrapper.find('[data-test="clip-12"]').attributes('open')).toBeDefined();
+    expect(bare.attributes('open')).toBeUndefined();
+
+    // Saving without typing clears the caption — and a refusal is shown.
+    await bare.find('[data-test="clip-save-13"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/clips/13', { caption: '' });
+    expect(wrapper.find('[data-test="clip-error"]').text()).toContain('Clip not found');
+
+    // The delete names the clip the same way the heading does.
+    await bare.find('[data-test="clip-delete-13"]').trigger('click');
+    await flushPromises();
+    expect(confirm.mock.calls.at(-1)[0].message).toContain('Clip #13');
+    expect(api.delete).toHaveBeenCalledWith('/api/clips/13');
+    expect(wrapper.find('[data-test="clip-error"]').text()).toContain('Clip not found');
   });
 
   it('removes a video after confirming, and not without', async () => {

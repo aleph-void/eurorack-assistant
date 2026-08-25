@@ -4,6 +4,7 @@ import { loadPanels } from '../../services/panelJson.js';
 import { unlinkedExpanderHints } from '../../services/moduleLinks.js';
 import { readableIds } from '../../services/sharing.js';
 import { videoJson } from '../../services/videos.js';
+import { clipJson } from '../../services/clips.js';
 import { parametersByModule } from '../../services/moduleParameters.js';
 import { requireOwnedModule } from './helpers.js';
 import {
@@ -35,6 +36,8 @@ export function moduleDetailRoutes(db) {
     Manual,
     ManualDocument,
     ModuleVideo,
+    ScopeClip,
+    ScopeClipChannel,
     Note,
     NoteModule,
     NoteComponent,
@@ -307,6 +310,19 @@ export function moduleDetailRoutes(db) {
       where: { module_id: module.id, user_id: req.user.id },
       order: [['id', 'ASC']],
     });
+    // The requesting user's oscilloscope clips of this module — recordings
+    // of their own bench, private like their notes.
+    const clipRows = await ScopeClip.findAll({
+      where: { module_id: module.id, user_id: req.user.id },
+      order: [['id', 'DESC']],
+    });
+    const clipChannels =
+      clipRows.length === 0
+        ? []
+        : await ScopeClipChannel.findAll({
+            where: { clip_id: clipRows.map((c) => c.id) },
+            order: [['channel_index', 'ASC']],
+          });
     // The requesting user's notes attached to this module (component_id NULL)
     // or to one of its components. Notes are strictly private per user.
     const moduleNotes = await NoteModule.findAll({
@@ -351,6 +367,12 @@ export function moduleDetailRoutes(db) {
       expander_suggestions: await unlinkedExpanderHints(db, module),
       manuals,
       videos: videoRows.map(videoJson),
+      clips: clipRows.map((clip) =>
+        clipJson(
+          clip,
+          clipChannels.filter((c) => c.clip_id === clip.id)
+        )
+      ),
       notes: [
         ...moduleNotes.map((nm) => noteJson(nm.Note, null)),
         ...componentNotes.map((nc) => noteJson(nc.Note, nc.component_id)),

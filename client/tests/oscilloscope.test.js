@@ -53,6 +53,7 @@ const CHANNELS = [
 const PATCH_MODULES = [
   {
     id: 11,
+    module_id: 101,
     manufacturer: 'Expert Sleepers',
     module_name: 'ES-9',
     components: [
@@ -60,6 +61,22 @@ const PATCH_MODULES = [
       { id: 2, type: 'input_jack', name: 'Input 2' },
       { id: 3, type: 'knob', name: 'Gain' },
     ],
+  },
+  {
+    id: 12,
+    module_id: 102,
+    manufacturer: 'Make Noise',
+    module_name: 'Maths',
+    components: [{ id: 4, type: 'output_jack', name: 'EOR' }],
+  },
+  // An instance whose module record is gone: still in the patch, but not a
+  // module a clip could be attached to.
+  {
+    id: 13,
+    module_id: null,
+    manufacturer: 'Bygone',
+    module_name: 'Gone',
+    components: [],
   },
 ];
 
@@ -306,6 +323,222 @@ describe('ScopePanel', () => {
     await wrapper.find('[data-test="scope-capture"]').trigger('click');
     await flushPromises();
     expect(wrapper.find('[data-test="scope-error"]').text()).toContain('did not answer');
+  });
+
+  it('records a clip of the ticked panes and says whose Videos page it landed on', async () => {
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
+    );
+    api.post.mockResolvedValue({
+      id: 9,
+      module_id: 102,
+      title: null,
+      captured_at: '2026-08-12T18:00:00Z',
+      device_name: 'Bench scope',
+      duration_seconds: 10,
+      video_format: 'webm',
+      channels: [],
+    });
+
+    const wrapper = mountPanel();
+    useDevicesStore().connections = [CONNECTION];
+    await flushPromises();
+    await openPanels(wrapper);
+
+    await wrapper.find('[data-test="capture-channel-0"]').setValue(false);
+    await wrapper.find('[data-test="scope-record"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/scope/patches/7/clips', {
+      connection_id: 3,
+      channels: [1],
+      duration_seconds: 10,
+      module_id: undefined,
+      title: undefined,
+    });
+    const clip = wrapper.find('[data-test="clip-9"]');
+    expect(clip.find('[data-test="clip-video-9"]').attributes('src')).toBe('/api/clips/9/video');
+    expect(clip.text()).toContain('10s');
+    // The clip landed on the Maths, and the status says so by name.
+    expect(wrapper.find('[data-test="scope-status"]').text()).toContain('Make Noise Maths');
+  });
+
+  it('records onto a chosen module for a chosen duration', async () => {
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
+    );
+    api.post.mockResolvedValue({
+      id: 10,
+      module_id: 101,
+      captured_at: '2026-08-12T18:00:00Z',
+      duration_seconds: 5,
+      channels: [],
+    });
+
+    const wrapper = mountPanel();
+    useDevicesStore().connections = [CONNECTION];
+    await flushPromises();
+    await openPanels(wrapper);
+
+    await wrapper.find('[data-test="clip-duration"]').setValue('5');
+    await wrapper.find('[data-test="clip-module"]').setValue(101);
+    await wrapper.find('[data-test="clip-title"]').setValue('EOR rising');
+    await wrapper.find('[data-test="scope-record"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/scope/patches/7/clips', {
+      connection_id: 3,
+      channels: [0, 1],
+      duration_seconds: 5,
+      module_id: 101,
+      title: 'EOR rising',
+    });
+  });
+
+  it('will not record with every channel unticked', async () => {
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
+    );
+
+    const wrapper = mountPanel();
+    useDevicesStore().connections = [CONNECTION];
+    await flushPromises();
+    await openPanels(wrapper);
+
+    await wrapper.find('[data-test="capture-channels-all"]').trigger('click');
+    await wrapper.find('[data-test="scope-record"]').trigger('click');
+    await flushPromises();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="scope-error"]').text()).toContain('at least one channel');
+  });
+
+  it('records whatever the scope has when no channels are known, without inventing a duration', async () => {
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/scope') ? { patch_id: 7, channels: [], devices: [] } : []
+    );
+    api.post.mockResolvedValue({
+      id: 11,
+      // A module this patch has no instance of, so the status cannot name it.
+      module_id: 999,
+      captured_at: '2026-08-12T18:00:00Z',
+      duration_seconds: 10,
+      channels: [],
+    });
+
+    const wrapper = mountPanel();
+    useDevicesStore().connections = [
+      { ...CONNECTION, audio_device: { ...CONNECTION.audio_device, channel_count: 0 }, channels: [] },
+    ];
+    await flushPromises();
+    await openPanels(wrapper);
+
+    await wrapper.find('[data-test="clip-duration"]').setValue('');
+    await wrapper.find('[data-test="scope-record"]').trigger('click');
+    await flushPromises();
+    // With nothing to tick, the server picks the panes; an emptied duration
+    // field is left to the server's default the same way.
+    expect(api.post).toHaveBeenCalledWith('/api/scope/patches/7/clips', {
+      connection_id: 3,
+      channels: undefined,
+      duration_seconds: undefined,
+      module_id: undefined,
+      title: undefined,
+    });
+    expect(wrapper.find('[data-test="scope-status"]').text()).toContain(
+      'the module’s Videos page'
+    );
+  });
+
+  it('surfaces a recording the device refused', async () => {
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
+    );
+    api.post.mockRejectedValue(new Error('a recording is already in progress'));
+
+    const wrapper = mountPanel();
+    useDevicesStore().connections = [CONNECTION];
+    await flushPromises();
+    await openPanels(wrapper);
+    await wrapper.find('[data-test="scope-record"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="scope-error"]').text()).toContain('already in progress');
+  });
+
+  it('keeps a clip when the delete is declined, and shows why one failed', async () => {
+    const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/clips')
+        ? [
+            {
+              id: 4,
+              module_id: 102,
+              title: 'EOR rising',
+              captured_at: '2026-08-12T18:00:00Z',
+              duration_seconds: 10,
+              channels: [],
+            },
+          ]
+        : path.startsWith('/api/scope')
+          ? { patch_id: 7, channels: [], devices: [] }
+          : []
+    );
+    api.delete.mockRejectedValue(new Error('Clip not found'));
+
+    const wrapper = mountPanel();
+    await flushPromises();
+    await openPanels(wrapper);
+
+    await wrapper.find('[data-test="clip-delete-4"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="clip-4"]').exists()).toBe(true);
+
+    confirm.mockResolvedValue(true);
+    await wrapper.find('[data-test="clip-delete-4"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="clip-4"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="scope-error"]').text()).toContain('Clip not found');
+  });
+
+  it('hides the record controls from a scope that cannot record', async () => {
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
+    );
+    const wrapper = mountPanel();
+    useDevicesStore().connections = [{ ...CONNECTION, capabilities: ['capture', 'tuner'] }];
+    await flushPromises();
+    await openPanels(wrapper);
+    expect(wrapper.find('[data-test="clip-unsupported"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="scope-record"]').exists()).toBe(false);
+  });
+
+  it('deletes a clip once the user confirms', async () => {
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/clips')
+        ? [
+            {
+              id: 4,
+              module_id: 102,
+              title: 'EOR rising',
+              captured_at: '2026-08-12T18:00:00Z',
+              duration_seconds: 10,
+              channels: [],
+            },
+          ]
+        : path.startsWith('/api/scope')
+          ? { patch_id: 7, channels: [], devices: [] }
+          : []
+    );
+    api.delete.mockResolvedValue({ ok: true });
+
+    const wrapper = mountPanel();
+    await flushPromises();
+    await openPanels(wrapper);
+    expect(wrapper.find('[data-test="clip-4"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="clip-delete-4"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/clips/4');
+    expect(wrapper.find('[data-test="clip-4"]').exists()).toBe(false);
   });
 
   const CAPTURE = {
