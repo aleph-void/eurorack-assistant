@@ -1,5 +1,6 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import { csrfProtection } from './csrf.js';
 import { createLimiters } from './rateLimit.js';
 import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
@@ -25,7 +26,19 @@ import { shareRoutes } from './routes/shares.js';
 
 export function createApp(
   db,
-  { manualsDir, exportsDir, capturesDir, panelsDir, videosDir, rateLimit, hub, bus = null, fetchImpl, runImpl } = {}
+  {
+    manualsDir,
+    exportsDir,
+    capturesDir,
+    panelsDir,
+    videosDir,
+    rateLimit,
+    hub,
+    bus = null,
+    fetchImpl,
+    runImpl,
+    csrf,
+  } = {}
 ) {
   const app = express();
   // nginx is the only hop in front of the server and it sets X-Forwarded-For.
@@ -59,6 +72,12 @@ export function createApp(
 
   // Registered before the limiters so probes never consume a request budget.
   app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+  // Cross-site request forgery: every state-changing request the browser
+  // labels as another site's is refused before any router sees it — the
+  // session cookie authenticates the browser, not the page that made it ask.
+  // The rules (and the CSRF_TRUSTED_ORIGINS escape hatch) live in csrf.js.
+  app.use('/api', csrfProtection(csrf));
 
   const limiters = createLimiters(rateLimit);
   app.use('/api', limiters.api);
