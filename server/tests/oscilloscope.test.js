@@ -24,7 +24,11 @@ import {
   orderedInputJacks,
 } from '../src/services/scopeMapping.js';
 import { parseCaptureResult, tuningLabel } from '../src/services/captures.js';
-import { clampClipDuration, parseClipResult } from '../src/services/clips.js';
+import {
+  MAX_VIDEO_BYTES,
+  clampClipDuration,
+  parseClipResult,
+} from '../src/services/clips.js';
 import { answerQuestion } from '../src/services/ask.js';
 import {
   DEVICE_CODE_GRANT,
@@ -691,6 +695,18 @@ describe('clip parsing', () => {
     expect(() =>
       parseClipResult({ video: { format: 'mp4', data: WEBM_BASE64 } }),
     ).toThrow(/declared 'mp4'/);
+    // Base64 that decodes to nothing is an empty video, not a crash.
+    expect(() => parseClipResult({ video: { data: '!!!' } })).toThrow(
+      /empty video/,
+    );
+    // A video past the WebSocket-frame budget is refused, not stored.
+    const huge = Buffer.concat([
+      Buffer.from([0x1a, 0x45, 0xdf, 0xa3]),
+      Buffer.alloc(MAX_VIDEO_BYTES),
+    ]).toString('base64');
+    expect(() => parseClipResult({ video: { data: huge } })).toThrow(
+      /byte limit/,
+    );
   });
 
   it('accepts both containers and keeps the metadata', () => {
@@ -1329,6 +1345,46 @@ describe('scope clips', () => {
       .set('Cookie', fixture.aliceCookie)
       .send({ channels: [1], module_id: 99999 });
     expect(foreign.status).toBe(404);
+  });
+
+  it('records every mapped or announced pane when none are named', async () => {
+    const fixture = await withScopeFixture();
+    const { sent } = await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { record: recordAnswer },
+    });
+    const recorded = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({});
+    expect(recorded.status).toBe(201);
+    // No channel list in the body means all of them, exactly as a capture.
+    expect(
+      sent.find((m) => m.action === 'record').params.channels.map((c) => c.index),
+    ).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    // Pane 1 is unpatched, so the fallback is the jack itself: the ES-9.
+    expect(recorded.body.module_id).toBe(fixture.es9.id);
+    expect(recorded.body.channels).toHaveLength(8);
+  });
+
+  it('turns a device that fails the recording into a 504, not a crash', async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: {
+        record: () => {
+          throw new Error('a recording is already in progress');
+        },
+      },
+    });
+    const res = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1] });
+    expect(res.status).toBe(504);
+    expect(res.body.error).toMatch(/already in progress/);
   });
 
   it('clamps a runaway duration before asking the device', async () => {
