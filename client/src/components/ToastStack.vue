@@ -3,7 +3,7 @@
 // raises one. Nothing is rendered until something has been said.
 import { dismissToast, holdToast, releaseToast, toastState } from '../toast.js';
 
-const ICONS = { success: '✓', error: '✕', info: 'i' };
+const ICONS = { success: '✓', error: '✕', info: 'i', warning: '!' };
 </script>
 
 <template>
@@ -17,7 +17,7 @@ const ICONS = { success: '✓', error: '✕', info: 'i' };
         :key="item.id"
         class="toast"
         :class="`toast-${item.kind}`"
-        :role="item.kind === 'error' ? 'alert' : undefined"
+        :role="item.kind === 'error' || item.kind === 'warning' ? 'alert' : undefined"
         :data-test="`toast-${item.kind}`"
         @mouseenter="holdToast(item.id)"
         @mouseleave="releaseToast(item.id)"

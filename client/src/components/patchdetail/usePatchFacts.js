@@ -84,6 +84,31 @@ const cablesOutOf = (pmId, componentId) =>
     (c) => c.from_patch_module_id === pmId && c.from_component_id === componentId
   );
 
+// ---- polarity ----
+// A unipolar CV output into a bipolar CV input — or the reverse — is a cable
+// the rules allow (nothing about the hardware refuses it), but the modulation
+// lands wrong: a unipolar signal only ever drives the top half of a bipolar
+// input's range, and a bipolar signal swings below the floor of a unipolar
+// input, where its bottom half is clipped or ignored. Polarity is a fact the
+// analysis records on each jack (unipolar / bipolar / unknown), so the check
+// is a lookup on the two ends of the cable row the server made; either end
+// unknown means nothing worth interrupting anyone over.
+const componentOf = (pmId, componentId) =>
+  modulesById.value.get(pmId)?.components.find((c) => c.id === componentId) ?? null;
+
+function cablePolarityWarning(cable) {
+  const from = componentOf(cable.from_patch_module_id, cable.from_component_id);
+  const to = componentOf(cable.to_patch_module_id, cable.to_component_id);
+  if (!from?.polarity || !to?.polarity || from.polarity === to.polarity) return null;
+  const fromLabel = `${moduleLabel(modulesById.value.get(cable.from_patch_module_id))} ${from.name}`;
+  const toLabel = `${moduleLabel(modulesById.value.get(cable.to_patch_module_id))} ${to.name}`;
+  return from.polarity === 'unipolar'
+    ? `${fromLabel} is a unipolar output patched into the bipolar input ${toLabel}: ` +
+        'the signal only reaches the top half of that range, so the modulation sits off-centre.'
+    : `${fromLabel} is a bipolar output patched into the unipolar input ${toLabel}: ` +
+        'the half of the signal below 0V is clipped or ignored.';
+}
+
 // ---- routing switches ----
 // A switch SELECTS one of its connections where a mult COPIES to all of them,
 // so a cable into a switch jack means something else entirely: it comes out
@@ -173,6 +198,7 @@ const jackCandidates = (types, forDestination) => {
     cables,
     cableInto,
     cablesOutOf,
+    cablePolarityWarning,
     switchRoleOf,
     jackCandidates,
     conditionText,

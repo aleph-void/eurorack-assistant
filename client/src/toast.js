@@ -23,7 +23,10 @@ const LIMIT = 4;
 
 // A failure is read, not glanced at, so it stays up more than twice as long as
 // a success — and hovering it stops the clock entirely (see holdToast).
-const LIFETIME = { success: 5000, error: 12000, info: 7000 };
+// A WARNING has no clock at all: it is advice about something that worked
+// anyway (a cable the rules allow but the hardware will mishear), so nothing
+// prompts a second look later — it stands until the user dismisses it.
+const LIFETIME = { success: 5000, error: 12000, info: 7000, warning: 0 };
 
 let nextId = 1;
 const timers = new Map();
@@ -92,6 +95,9 @@ export const toast = {
   success: (message, options) => push('success', message, options),
   /** Something failed, or was refused: drawn red. */
   error: (message, options) => push('error', message, options),
+  /** Something worked but deserves a second thought: drawn amber, and stays
+   *  until dismissed. */
+  warning: (message, options) => push('warning', message, options),
   /** Neither — something is under way, or worth knowing. */
   info: (message, options) => push('info', message, options),
 };

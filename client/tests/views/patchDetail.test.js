@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { openPanels, testGlobal } from '../setup.js';
 
@@ -20,6 +20,7 @@ vi.mock('vue-router', async (importOriginal) => {
 
 import { api } from '../../src/api.js';
 import { dialog } from '../../src/dialog.js';
+import { clearToasts, toastState } from '../../src/toast.js';
 import PatchDetailView from '../../src/views/PatchDetailView.vue';
 import PatchDiagram from '../../src/components/PatchDiagram.vue';
 import { componentColor } from '../../src/componentTypes.js';
@@ -280,6 +281,101 @@ describe('PatchDetailView', () => {
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith('/api/patches/7/clone', {});
     expect(routerPush).toHaveBeenCalledWith('/patches/99');
+  });
+});
+
+// Plugging a unipolar CV output into a bipolar CV input (or the reverse) is a
+// cable nothing refuses — so the page says it as a warning over the picture,
+// one that stays up until dismissed, rather than as an error that undoes
+// anything.
+describe('PatchDetailView polarity warnings', () => {
+  // Maths EOR is a 0–10V gate-ish output; Signal In takes CV either side of
+  // zero. The fixture leaves polarity unstated, as most payloads do, so the
+  // mismatched pair is set up here.
+  const withPolarity = () => {
+    const p = structuredClone(krellPatch);
+    const maths = p.modules.find((m) => m.id === 11).components;
+    maths.find((c) => c.id === 2).polarity = 'unipolar'; // EOR
+    maths.find((c) => c.id === 1).polarity = 'bipolar'; // Signal In
+    return p;
+  };
+  const ends = {
+    from_patch_module_id: 11,
+    from_component_id: 2,
+    to_patch_module_id: 11,
+    to_component_id: 1,
+  };
+
+  beforeEach(() => clearToasts());
+  afterEach(() => clearToasts());
+
+  it('warns, until dismissed by hand, when a unipolar output lands in a bipolar input', async () => {
+    api.get.mockResolvedValue(withPolarity());
+    api.post.mockResolvedValue({ id: 22, ...ends, paired_cable: null });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    wrapper.findComponent(PatchDiagram).vm.$emit('connect', ends);
+    await flushPromises();
+
+    // The cable is still plugged — the warning is advice, not a refusal.
+    expect(wrapper.findComponent(PatchDiagram).props('cables').map((c) => c.id)).toContain(22);
+    expect(toastState.items).toHaveLength(1);
+    expect(toastState.items[0].kind).toBe('warning');
+    expect(toastState.items[0].title).toBe('Polarity mismatch');
+    expect(toastState.items[0].message).toContain('Make Noise Maths EOR');
+    expect(toastState.items[0].message).toContain('bipolar input Make Noise Maths Signal In');
+    // No clock on it: it stands until the user takes it down.
+    expect(toastState.items[0].timeout).toBeFalsy();
+  });
+
+  it('says which half of a bipolar signal a unipolar input will lose', async () => {
+    const patch = withPolarity();
+    const maths = patch.modules.find((m) => m.id === 11).components;
+    maths.find((c) => c.id === 2).polarity = 'bipolar';
+    maths.find((c) => c.id === 1).polarity = 'unipolar';
+    api.get.mockResolvedValue(patch);
+    api.post.mockResolvedValue({ id: 22, ...ends, paired_cable: null });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    wrapper.findComponent(PatchDiagram).vm.$emit('connect', ends);
+    await flushPromises();
+
+    expect(toastState.items).toHaveLength(1);
+    expect(toastState.items[0].message).toContain('below 0V is clipped or ignored');
+  });
+
+  it('warns when moving a plug lands a cable on a mismatched jack', async () => {
+    api.get.mockResolvedValue(withPolarity());
+    api.post.mockResolvedValue({ id: 30, ...ends });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    wrapper.findComponent(PatchDiagram).vm.$emit('move', { cable: { id: 21 }, ...ends });
+    await flushPromises();
+
+    expect(toastState.items.map((item) => item.kind)).toEqual(['warning']);
+  });
+
+  it('says nothing when the polarities agree, or when either is unknown', async () => {
+    // The stock fixture states no polarity at all — the common case.
+    api.get.mockResolvedValue(krellPatch);
+    api.post.mockResolvedValue({ id: 22, ...ends, paired_cable: null });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    wrapper.findComponent(PatchDiagram).vm.$emit('connect', ends);
+    await flushPromises();
+    expect(toastState.items).toHaveLength(0);
+
+    // Both ends stated and the same is just as quiet.
+    const agreeing = withPolarity();
+    agreeing.modules
+      .find((m) => m.id === 11)
+      .components.find((c) => c.id === 1).polarity = 'unipolar';
+    api.get.mockResolvedValue(agreeing);
+    const again = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    again.findComponent(PatchDiagram).vm.$emit('connect', ends);
+    await flushPromises();
+    expect(toastState.items).toHaveLength(0);
   });
 });
 

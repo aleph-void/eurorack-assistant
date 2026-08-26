@@ -34,6 +34,21 @@ describe('toast', () => {
     expect(toastState.items).toHaveLength(0);
   });
 
+  // A warning is advice about something that worked anyway — a cable the
+  // rules allow but the hardware will mishear — so nothing prompts a second
+  // look later: it stands until the user takes it down.
+  it('keeps a warning up until it is dismissed by hand', () => {
+    toast.warning('EOR is a unipolar output patched into the bipolar input 1V/OCT', {
+      title: 'Polarity mismatch',
+    });
+
+    vi.advanceTimersByTime(600000);
+    expect(toastState.items.map((item) => item.kind)).toEqual(['warning']);
+
+    dismissToast(toastState.items[0].id);
+    expect(toastState.items).toHaveLength(0);
+  });
+
   // A rack import finishes a job per module; twenty of the same line would
   // otherwise be twenty toasts.
   it('counts a repeat up on the toast already on screen', () => {
