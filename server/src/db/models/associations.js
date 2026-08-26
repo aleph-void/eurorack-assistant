@@ -57,6 +57,7 @@ export function associate(m) {
     QuestionAnswer,
     QuestionNote,
     QuestionCapture,
+    QuestionAudio,
     QuestionPatch,
     DeviceAuthorization,
     DeviceToken,
@@ -65,6 +66,8 @@ export function associate(m) {
     CaptureChannel,
     ScopeClip,
     ScopeClipChannel,
+    AudioRecording,
+    ResourceLink,
     Share,
     LlmUsage,
     Job,
@@ -244,6 +247,10 @@ export function associate(m) {
   QuestionCapture.belongsTo(Question, { foreignKey: 'question_id' });
   QuestionCapture.belongsTo(Capture, { foreignKey: 'capture_id' });
 
+  Question.hasMany(QuestionAudio, { foreignKey: 'question_id' });
+  QuestionAudio.belongsTo(Question, { foreignKey: 'question_id' });
+  QuestionAudio.belongsTo(AudioRecording, { foreignKey: 'audio_id' });
+
   Question.hasMany(QuestionPatch, { foreignKey: 'question_id' });
   QuestionPatch.belongsTo(Question, { foreignKey: 'question_id' });
   QuestionPatch.belongsTo(Patch, { foreignKey: 'patch_id' });
@@ -267,6 +274,18 @@ export function associate(m) {
   ScopeClip.belongsTo(Patch, { foreignKey: 'patch_id' });
   ScopeClip.hasMany(ScopeClipChannel, { foreignKey: 'clip_id' });
   ScopeClipChannel.belongsTo(ScopeClip, { foreignKey: 'clip_id' });
+
+  AudioRecording.belongsTo(User, { foreignKey: 'user_id' });
+  AudioRecording.belongsTo(Module, { foreignKey: 'module_id' });
+  AudioRecording.belongsTo(Patch, { foreignKey: 'patch_id' });
+
+  // A link hangs off exactly one of the four (the CHECK in migration 044),
+  // so all four belong-tos are declared and at most one ever resolves.
+  ResourceLink.belongsTo(User, { foreignKey: 'user_id' });
+  ResourceLink.belongsTo(Module, { foreignKey: 'module_id' });
+  ResourceLink.belongsTo(Patch, { foreignKey: 'patch_id' });
+  ResourceLink.belongsTo(Rack, { foreignKey: 'rack_id' });
+  ResourceLink.belongsTo(System, { foreignKey: 'system_id' });
 
   Share.belongsTo(User, { foreignKey: 'owner_id', as: 'Owner' });
   Share.belongsTo(User, { foreignKey: 'user_id', as: 'Recipient' });

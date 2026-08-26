@@ -243,6 +243,7 @@ describe('QuestionDetailView', () => {
       answer_ids: [7],
       note_ids: [5],
       capture_ids: [],
+      audio_ids: [],
       patch_ids: [],
     });
     expect(wrapper.find('[data-test="answer-pending"]').exists()).toBe(true);
@@ -292,6 +293,7 @@ describe('QuestionDetailView', () => {
       answer_ids: [],
       note_ids: [],
       capture_ids: [],
+      audio_ids: [],
       patch_ids: [6],
     });
     wrapper.unmount();

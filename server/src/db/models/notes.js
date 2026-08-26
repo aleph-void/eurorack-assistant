@@ -115,6 +115,18 @@ export function defineNotesModels(define) {
     { tableName: 'question_captures', timestamps: false }
   );
 
+  // A recording a question is about (migration 043): the waveform picture
+  // rendered from it and the levels measured off it ride along with the
+  // question, since no backend can listen to the file itself.
+  const QuestionAudio = define(
+    'QuestionAudio',
+    {
+      question_id: { type: DataTypes.INTEGER, primaryKey: true },
+      audio_id: { type: DataTypes.INTEGER, primaryKey: true },
+    },
+    { tableName: 'question_audio', timestamps: false }
+  );
+
   // A patch a question is about: it brings the patch's modules into scope and
   // rides along as a document describing the whole patch.
   const QuestionPatch = define(
@@ -126,5 +138,5 @@ export function defineNotesModels(define) {
     { tableName: 'question_patches', timestamps: false }
   );
 
-  return { Note, NoteModule, NoteComponent, NotePatch, Question, QuestionModule, QuestionComponent, QuestionManual, QuestionAnswer, QuestionNote, QuestionCapture, QuestionPatch };
+  return { Note, NoteModule, NoteComponent, NotePatch, Question, QuestionModule, QuestionComponent, QuestionManual, QuestionAnswer, QuestionNote, QuestionCapture, QuestionAudio, QuestionPatch };
 }

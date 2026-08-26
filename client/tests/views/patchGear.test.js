@@ -14,13 +14,13 @@ vi.mock('vue-router', async (importOriginal) => {
   return {
     ...actual,
     useRouter: () => ({ push: routerPush, replace: routerReplace }),
-    useRoute: () => ({ query: currentRouteQuery, path: '/patches/7/links' }),
+    useRoute: () => ({ query: currentRouteQuery, path: '/patches/7/gear' }),
   };
 });
 
 import { api } from '../../src/api.js';
 import { dialog } from '../../src/dialog.js';
-import PatchLinksView from '../../src/views/PatchLinksView.vue';
+import PatchGearView from '../../src/views/PatchGearView.vue';
 import { richPatch } from '../patchFixtures.js';
 
 beforeEach(() => {
@@ -28,10 +28,10 @@ beforeEach(() => {
   currentRouteQuery = {};
 });
 
-describe('PatchLinksView', () => {
+describe('PatchGearView', () => {
   it('shows bridged links and the connection points of off-rack gear', async () => {
     api.get.mockResolvedValue(richPatch);
-    const wrapper = mount(PatchLinksView, { props: { id: '7' }, global: testGlobal() });
+    const wrapper = mount(PatchGearView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
     await openPanels(wrapper);
 
@@ -45,7 +45,7 @@ describe('PatchLinksView', () => {
   it('corrects an instance\'s manufacturer and module name, refusing an empty one', async () => {
     api.get.mockResolvedValue(richPatch);
     api.put.mockResolvedValue({});
-    const wrapper = mount(PatchLinksView, { props: { id: '7' }, global: testGlobal() });
+    const wrapper = mount(PatchGearView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
     await openPanels(wrapper);
 
@@ -77,7 +77,7 @@ describe('PatchLinksView', () => {
     api.get.mockResolvedValue(richPatch);
     api.post.mockResolvedValue({ id: 99 });
     api.put.mockResolvedValue({});
-    const wrapper = mount(PatchLinksView, { props: { id: '7' }, global: testGlobal() });
+    const wrapper = mount(PatchGearView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
     await openPanels(wrapper);
 
@@ -106,7 +106,7 @@ describe('PatchLinksView', () => {
   it('declares a connection point on gear the patch invented', async () => {
     api.get.mockResolvedValue(richPatch);
     api.post.mockResolvedValue({ id: 91 });
-    const wrapper = mount(PatchLinksView, { props: { id: '7' }, global: testGlobal() });
+    const wrapper = mount(PatchGearView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
     await openPanels(wrapper);
 
@@ -126,7 +126,7 @@ describe('PatchLinksView', () => {
   it('links two instances and reloads the patch', async () => {
     api.get.mockResolvedValue(richPatch);
     api.post.mockResolvedValue({ id: 82 });
-    const wrapper = mount(PatchLinksView, { props: { id: '7' }, global: testGlobal() });
+    const wrapper = mount(PatchGearView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
     await openPanels(wrapper);
 
@@ -146,7 +146,7 @@ describe('PatchLinksView', () => {
   it('shows why two instances could not be linked', async () => {
     api.get.mockResolvedValue(richPatch);
     api.post.mockRejectedValue(new Error('those two are already linked'));
-    const wrapper = mount(PatchLinksView, { props: { id: '7' }, global: testGlobal() });
+    const wrapper = mount(PatchGearView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
     await openPanels(wrapper);
 
@@ -162,7 +162,7 @@ describe('PatchLinksView', () => {
     const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     api.get.mockResolvedValue(richPatch);
     api.delete.mockResolvedValue({ ok: true });
-    const wrapper = mount(PatchLinksView, { props: { id: '7' }, global: testGlobal() });
+    const wrapper = mount(PatchGearView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
     await openPanels(wrapper);
 
@@ -178,7 +178,7 @@ describe('PatchLinksView', () => {
   it('keeps the link when the confirm is declined', async () => {
     vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
     api.get.mockResolvedValue(richPatch);
-    const wrapper = mount(PatchLinksView, { props: { id: '7' }, global: testGlobal() });
+    const wrapper = mount(PatchGearView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
     await openPanels(wrapper);
 
@@ -192,7 +192,7 @@ describe('PatchLinksView', () => {
     vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
     api.get.mockResolvedValue(richPatch);
     api.delete.mockRejectedValue(new Error('link is gone already'));
-    const wrapper = mount(PatchLinksView, { props: { id: '7' }, global: testGlobal() });
+    const wrapper = mount(PatchGearView, { props: { id: '7' }, global: testGlobal() });
     await flushPromises();
     await openPanels(wrapper);
 

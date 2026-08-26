@@ -20,6 +20,7 @@ const selectedManuals = ref([]);
 const selectedAnswers = ref([]);
 const selectedNotes = ref([]);
 const selectedCaptures = ref([]);
+const selectedAudio = ref([]);
 const selectedPatches = ref([]);
 const moduleFilter = ref('');
 let pollTimer = null;
@@ -83,6 +84,18 @@ const visibleCaptures = computed(
 const chosenCaptureIds = computed(() =>
   visibleCaptures.value.filter((c) => selectedCaptures.value.includes(c.id)).map((c) => c.id)
 );
+// Recordings of the selected modules — or of a patch that uses them. What
+// travels to the model is the waveform and spectrogram drawn from each take
+// plus its measured levels, since no backend can listen to the file.
+const visibleAudio = computed(
+  () =>
+    options.value?.audio?.filter((a) =>
+      a.module_ids.some((id) => selectedModules.value.includes(id))
+    ) ?? []
+);
+const chosenAudioIds = computed(() =>
+  visibleAudio.value.filter((a) => selectedAudio.value.includes(a.id)).map((a) => a.id)
+);
 // Patches are offered whatever the module selection: attaching one is what
 // makes this a question about that patch, and it brings its own modules with
 // it rather than being narrowed to the ones already picked.
@@ -96,6 +109,7 @@ const attachmentCount = computed(
     chosenAnswerIds.value.length +
     chosenNoteIds.value.length +
     chosenCaptureIds.value.length +
+    chosenAudioIds.value.length +
     chosenPatchIds.value.length
 );
 
@@ -156,6 +170,7 @@ async function loadOptions() {
   selectedAnswers.value = [];
   selectedNotes.value = [];
   selectedCaptures.value = [];
+  selectedAudio.value = [];
   // A patch named when the question was asked stays attached through review.
   selectedPatches.value = (options.value.patches ?? [])
     .filter((p) => p.attached)
@@ -192,6 +207,7 @@ async function requestAnswer() {
       answer_ids: chosenAnswerIds.value,
       note_ids: chosenNoteIds.value,
       capture_ids: chosenCaptureIds.value,
+      audio_ids: chosenAudioIds.value,
       patch_ids: chosenPatchIds.value,
     });
     options.value = null;
@@ -448,6 +464,43 @@ onUnmounted(() => clearTimeout(pollTimer));
           </div>
         </details>
 
+        <details v-if="visibleAudio.length > 0" class="expander">
+          <summary>
+            <h3>Recordings</h3>
+            <span class="summary-count">
+              {{ chosenAudioIds.length }} of {{ visibleAudio.length }}
+            </span>
+          </summary>
+          <div class="expander-body">
+            <p class="muted">
+              A recording travels as the waveform and spectrogram drawn from it, plus its measured
+              duration and levels. The assistant reads those — it cannot hear the audio.
+            </p>
+            <ul class="check-list">
+              <li v-for="a in visibleAudio" :key="a.id">
+                <label>
+                  <input
+                    v-model="selectedAudio"
+                    type="checkbox"
+                    :value="a.id"
+                    data-test="audio-option"
+                  />
+                  <span>
+                    {{ a.title || a.original_name || `Recording #${a.id}` }}
+                    <span class="muted">
+                      —
+                      <template v-if="a.duration_seconds != null">
+                        {{ a.duration_seconds.toFixed(1) }}s,
+                      </template>
+                      {{ new Date(a.recorded_at).toLocaleString() }}
+                    </span>
+                  </span>
+                </label>
+              </li>
+            </ul>
+          </div>
+        </details>
+
         <details v-if="patchOptions.length > 0" class="expander">
           <summary>
             <h3>Patches</h3>
@@ -535,6 +588,7 @@ onUnmounted(() => clearTimeout(pollTimer));
           question.answers?.length ||
           question.notes?.length ||
           question.captures?.length ||
+          question.audio?.length ||
           question.patches?.length
         "
         class="panel"
@@ -560,6 +614,10 @@ onUnmounted(() => clearTimeout(pollTimer));
             <li v-for="c in question.captures" :key="`capture-${c.id}`">
               {{ c.title || `Capture ${c.id}` }}
               <span class="badge">waveform</span>
+            </li>
+            <li v-for="a in question.audio" :key="`audio-${a.id}`">
+              {{ a.title || a.original_name || `Recording ${a.id}` }}
+              <span class="badge">recording</span>
             </li>
             <li v-for="p in question.patches" :key="`patch-${p.id}`">
               <RouterLink :to="`/patches/${p.id}`">{{ p.name }}</RouterLink>

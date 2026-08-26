@@ -641,7 +641,7 @@ describe('CodexBackend', () => {
     const asked = run.calls[3].input;
     expect(asked).toContain('Why is it quiet?');
     expect(asked).toContain('module manuals');
-    expect(asked).toContain('oscilloscope images');
+    expect(asked).toContain('oscilloscope captures');
     expect(asked).toContain('--- Previous answer document: Earlier answer ---');
     expect(asked).toContain('because of the VCA');
 
@@ -737,7 +737,7 @@ describe('ClaudeBackend images', () => {
     expect(asked).toContain('Why is it quiet?');
     expect(asked).toContain('maths.md');
     expect(asked).toContain('capture-1.png');
-    expect(asked).toContain('Each pane is one');
+    expect(asked).toContain('An oscilloscope capture is one pane per');
     expect(asked).toContain('--- Previous answer document: Earlier answer ---');
     fs.rmSync(store, { recursive: true, force: true });
   });

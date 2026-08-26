@@ -58,6 +58,30 @@ export async function captureLinks(db, captures) {
   return byCapture;
 }
 
+// Which modules a set of recordings is about: the module a bench take hangs
+// off, and the modules of the patch a patch take was made from. There are no
+// per-jack channels on a recording — a patch's sound is one sound — so
+// unlike a capture it narrows to modules only.
+export async function audioLinks(db, recordings) {
+  const { PatchModule } = db.models;
+  const patchIds = [...new Set(recordings.map((a) => a.patch_id).filter(Boolean))];
+  const patchModules =
+    patchIds.length === 0 ? [] : await PatchModule.findAll({ where: { patch_id: patchIds } });
+  const modulesOfPatch = new Map();
+  for (const pm of patchModules) {
+    if (!pm.module_id) continue;
+    if (!modulesOfPatch.has(pm.patch_id)) modulesOfPatch.set(pm.patch_id, new Set());
+    modulesOfPatch.get(pm.patch_id).add(pm.module_id);
+  }
+  const byRecording = new Map();
+  for (const recording of recordings) {
+    const modules = new Set(modulesOfPatch.get(recording.patch_id) ?? []);
+    if (Number.isInteger(recording.module_id)) modules.add(recording.module_id);
+    byRecording.set(recording.id, { module_ids: [...modules] });
+  }
+  return byRecording;
+}
+
 // The modules each patch uses, keyed by patch id — the same "actually in
 // play" rule the signal flow and the patch document use.
 export async function patchModulesByPatch(db, patchIds) {

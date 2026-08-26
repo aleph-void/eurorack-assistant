@@ -23,10 +23,20 @@ import {
   saveCaptureImage,
 } from '../services/captures.js';
 import { clampClipDuration, clipJson, parseClipResult, saveClipVideo } from '../services/clips.js';
+import {
+  analyzeRecording,
+  audioJson,
+  clampRecordDuration,
+  parseAudioResult,
+  saveAudioFile,
+} from '../services/audio.js';
 import { requireOwnedModule, userModule } from './modules/helpers.js';
 import { asyncHandler } from './asyncHandler.js';
 
-export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES_DIR || '/data/captures' } = {}) {
+export function scopeRoutes(
+  db,
+  { hub = null, capturesDir = process.env.CAPTURES_DIR || '/data/captures', runImpl = undefined } = {}
+) {
   const {
     Patch,
     PatchScopeChannel,
@@ -39,8 +49,12 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
     ModuleComponent,
     ScopeClip,
     ScopeClipChannel,
+    AudioRecording,
   } = db.models;
   const clipsDir = path.join(capturesDir, 'clips');
+  // ffmpeg measures and draws every recording as it arrives; tests hand in
+  // their own runner so nothing shells out.
+  const analyzeOptions = runImpl ? { run: runImpl } : {};
   const router = Router();
   router.use(requireAuth(db));
 
@@ -72,6 +86,64 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
   // The device this request is about: the one named, or the only one
   // connected. Returns null when the user has no scope on the line.
   const pickDevice = (userId, connectionId) => (hub ? hub.pick(userId, connectionId) : null);
+
+  // What the panes were on, as a sentence — the caption a recording gets
+  // when the user typed none. A recording of "CH1, CH2" says nothing a week
+  // later; "CH1: Maths — Ch 1 out" is the whole point of having a map.
+  const recordedPanesCaption = (indices, byIndex) => {
+    const named = indices
+      .map((index) => {
+        const channel = byIndex.get(index);
+        const label = channel?.label || channel?.component_name;
+        return label ? `CH${index + 1}: ${label}` : `CH${index + 1}`;
+      })
+      .join(', ');
+    return named ? `Recorded from ${named}` : null;
+  };
+
+  // The device round trip every audio recording makes, and the bytes it
+  // leaves behind. Writes the error response itself and answers null when it
+  // did, so both callers stay a straight line.
+  async function requestRecording(res, device, indices, byIndex, duration) {
+    let payload;
+    try {
+      payload = await hub.request(
+        device,
+        'record_audio',
+        {
+          channels: indices.map((index) => {
+            const channel = byIndex.get(index);
+            return {
+              index,
+              label: channel?.label ?? undefined,
+              signal_type: channel?.signal_type ?? undefined,
+            };
+          }),
+          duration_seconds: duration,
+        },
+        // The device cannot answer before the recording ends, so the usual
+        // timeout starts counting after the requested duration.
+        { timeoutMs: duration * 1000 + 30000 }
+      );
+    } catch (e) {
+      res.status(504).json({ error: e.message });
+      return null;
+    }
+
+    let parsed;
+    try {
+      parsed = parseAudioResult(payload);
+    } catch (e) {
+      res.status(502).json({ error: `The oscilloscope sent an unusable recording: ${e.message}` });
+      return null;
+    }
+
+    // The file lands first: bytes with no row are reaped, but a row pointing
+    // at a missing file is a broken recording forever.
+    const hash = saveAudioFile(capturesDir, parsed.buffer, parsed.format);
+    const measured = await analyzeRecording(capturesDir, hash, parsed.format, analyzeOptions);
+    return { parsed, hash, measured };
+  }
 
   // What the scope should call each pane, in the device's own message shape.
   const labelPayload = (channels) => ({
@@ -601,6 +673,70 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
     res.status(201).json(clipJson(clip, channels));
   }));
 
+  // Ask the scope's audio interface to RECORD what it is hearing, and file
+  // it on the patch. The panes tell the device which inputs to open; what
+  // comes back is one recording of them, because a patch's sound is one
+  // sound however many jacks it took to make it.
+  //
+  // Body: { connection_id?, channels?, duration_seconds?, title?, caption? }
+  router.post('/patches/:id/audio', asyncHandler(async (req, res) => {
+    const patch = await ownPatch(req.user.id, req.params.id);
+    if (!patch) return res.status(404).json({ error: 'Patch not found' });
+    const device = pickDevice(req.user.id, req.body?.connection_id);
+    if (!device) return res.status(409).json({ error: 'No oscilloscope is connected' });
+    const state = hub.summarize(device);
+    // A device that announced its capabilities and left audio recording out
+    // gets a clear refusal now, not a silent timeout two minutes from now.
+    if (Array.isArray(state.capabilities) && !state.capabilities.includes('record_audio')) {
+      return res
+        .status(409)
+        .json({ error: 'The connected oscilloscope does not support recording audio' });
+    }
+
+    const mapped = await storedChannels(patch.id);
+    const byIndex = new Map(mapped.map((c) => [c.channel_index, c]));
+    const requested = Array.isArray(req.body?.channels)
+      ? req.body.channels.map(Number).filter((n) => Number.isInteger(n) && n >= 0)
+      : null;
+    const indices =
+      requested && requested.length > 0
+        ? requested
+        : (mapped.length > 0 ? mapped : state.channels).map((c) =>
+            c.channel_index === undefined ? c.index : c.channel_index
+          );
+
+    const duration = clampRecordDuration(req.body?.duration_seconds);
+    const recorded = await requestRecording(res, device, indices, byIndex, duration);
+    if (!recorded) return undefined;
+
+    const recording = await AudioRecording.create({
+      user_id: req.user.id,
+      module_id: null,
+      patch_id: patch.id,
+      patch_name: patch.name,
+      source: 'device',
+      device_token_id: device.tokenId,
+      device_name: device.name,
+      audio_device_id: state.audio_device?.id ?? null,
+      audio_device_name: state.audio_device?.name ?? null,
+      title: req.body?.title ? String(req.body.title).slice(0, 200) : `Recording — ${patch.name}`,
+      caption:
+        (req.body?.caption ? String(req.body.caption).slice(0, 2000) : null) ??
+        recordedPanesCaption(indices, byIndex),
+      audio_hash: recorded.hash,
+      audio_format: recorded.parsed.format,
+      audio_bytes: recorded.parsed.buffer.length,
+      recorded_at: recorded.parsed.recorded_at,
+      ...recorded.measured,
+      // What the device said about itself wins where ffmpeg measured nothing.
+      duration_seconds: recorded.measured.duration_seconds ?? recorded.parsed.duration_seconds ?? duration,
+      sample_rate:
+        recorded.measured.sample_rate ?? recorded.parsed.sample_rate ?? state.audio_device?.sample_rate ?? null,
+      channel_count: recorded.measured.channel_count ?? recorded.parsed.channel_count ?? null,
+    });
+    res.status(201).json(audioJson(recording));
+  }));
+
   // ---- the bench: one module, no patch ----
   //
   // A patch's scope page has a topology to reason about; a module's has a
@@ -977,6 +1113,68 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
         order: [['channel_index', 'ASC']],
       });
       res.status(201).json(clipJson(clip, channels));
+    })
+  );
+
+  // The same at the bench: one module, a cable into the interface, and no
+  // patch to reason about. The panes are named from the module's own jacks
+  // (benchChannels), exactly as a bench capture's are.
+  //
+  // Body: { connection_id?, channels?, duration_seconds?, title?, caption? }
+  router.post(
+    '/modules/:id/audio',
+    requireOwnedModule(db),
+    asyncHandler(async (req, res) => {
+      const module = req.module;
+      const device = pickDevice(req.user.id, req.body?.connection_id);
+      if (!device) return res.status(409).json({ error: 'No oscilloscope is connected' });
+      const state = hub.summarize(device);
+      if (Array.isArray(state.capabilities) && !state.capabilities.includes('record_audio')) {
+        return res
+          .status(409)
+          .json({ error: 'The connected oscilloscope does not support recording audio' });
+      }
+
+      const picked = benchChannels(req.body, module, await moduleJacks(module.id), state);
+      if (picked.error) return res.status(400).json({ error: picked.error });
+      const byIndex = new Map(picked.rows.map((c) => [c.channel_index, c]));
+      const indices = picked.rows.map((c) => c.channel_index);
+
+      const duration = clampRecordDuration(req.body?.duration_seconds);
+      const recorded = await requestRecording(res, device, indices, byIndex, duration);
+      if (!recorded) return undefined;
+
+      const recording = await AudioRecording.create({
+        user_id: req.user.id,
+        module_id: module.id,
+        patch_id: null,
+        patch_name: null,
+        source: 'device',
+        device_token_id: device.tokenId,
+        device_name: device.name,
+        audio_device_id: state.audio_device?.id ?? null,
+        audio_device_name: state.audio_device?.name ?? null,
+        title: req.body?.title
+          ? String(req.body.title).slice(0, 200)
+          : `Recording — ${moduleLabelOf(module)}`,
+        caption:
+          (req.body?.caption ? String(req.body.caption).slice(0, 2000) : null) ??
+          recordedPanesCaption(indices, byIndex),
+        audio_hash: recorded.hash,
+        audio_format: recorded.parsed.format,
+        audio_bytes: recorded.parsed.buffer.length,
+        recorded_at: recorded.parsed.recorded_at,
+        ...recorded.measured,
+        duration_seconds:
+          recorded.measured.duration_seconds ?? recorded.parsed.duration_seconds ?? duration,
+        sample_rate:
+          recorded.measured.sample_rate ??
+          recorded.parsed.sample_rate ??
+          state.audio_device?.sample_rate ??
+          null,
+        channel_count: recorded.measured.channel_count ?? recorded.parsed.channel_count ?? null,
+      });
+      res.status(201).json(audioJson(recording));
     })
   );
 

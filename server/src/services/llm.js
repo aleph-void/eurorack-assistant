@@ -96,8 +96,10 @@ export class ClaudeBackend {
       }
       if (images.length > 0) {
         fullPrompt +=
-          `\nAlso look at these captured oscilloscope images. Each pane is one ` +
-          `channel, in the order described in the capture document below:\n` +
+          `\nAlso look at these images. An oscilloscope capture is one pane per ` +
+          `channel, in the order described in the capture document below; a ` +
+          `recording's image is the waveform of the take above its spectrogram. ` +
+          `Each is described in the matching document:\n` +
           `${images.map((p) => `- ${p}`).join('\n')}\n`;
       }
       for (const doc of textDocs) {
@@ -243,8 +245,9 @@ export class CodexBackend {
         // text document, so an agent that cannot open a PNG still has the
         // readings.
         fullPrompt +=
-          `\nCaptured oscilloscope images (view them if you can; their readings ` +
-          `are also written out below):\n${images.map((p) => `- ${p}`).join('\n')}\n`;
+          `\nImages — oscilloscope captures and the waveform/spectrogram of any ` +
+          `attached recording (view them if you can; what they show is also written ` +
+          `out below):\n${images.map((p) => `- ${p}`).join('\n')}\n`;
       }
       for (const doc of textDocs) {
         fullPrompt += `\n--- Previous answer document: ${doc.name} ---\n\n${doc.text}\n`;
