@@ -122,13 +122,25 @@ export function tuningLabel(channel = {}) {
   return parts.length === 0 ? 'no pitch detected' : parts.join(', ');
 }
 
+// Where a capture was taken, as one phrase: the patch it was taken on, or —
+// for a bench capture — the module it is of.
+const takenOn = ({ patchName, moduleName }) => {
+  if (patchName) return ` on patch **${patchName}**`;
+  if (moduleName) return ` of **${moduleName}**`;
+  return '';
+};
+
 // The markdown body of the note a capture is filed under. This is what the
 // user reads in the patch, and (via question_notes / question_captures) part
 // of what the LLM is given.
-export function captureNoteBody(capture, channels, { patchName = null } = {}) {
+export function captureNoteBody(
+  capture,
+  channels,
+  { patchName = null, moduleName = null } = {}
+) {
   const lines = [];
   lines.push(
-    `Waveform captured${patchName ? ` on patch **${patchName}**` : ''} at ${new Date(
+    `Waveform captured${takenOn({ patchName, moduleName })} at ${new Date(
       capture.captured_at
     ).toISOString()}${capture.device_name ? ` from ${capture.device_name}` : ''}.`
   );
@@ -149,10 +161,15 @@ export function captureNoteBody(capture, channels, { patchName = null } = {}) {
 // The same information as a plain-text document for the LLM, which gets the
 // PNG as well but should never have to depend on reading it: everything the
 // image shows in numbers is written out here.
-export function captureTextDocument(capture, channels, { patchName = null } = {}) {
+export function captureTextDocument(
+  capture,
+  channels,
+  { patchName = null, moduleName = null } = {}
+) {
   const lines = [];
   lines.push(`Oscilloscope capture #${capture.id}${capture.title ? ` — ${capture.title}` : ''}`);
   if (patchName) lines.push(`Patch: ${patchName}`);
+  if (moduleName) lines.push(`Module: ${moduleName}`);
   lines.push(`Captured at: ${new Date(capture.captured_at).toISOString()}`);
   if (capture.audio_device_name) lines.push(`Audio interface: ${capture.audio_device_name}`);
   if (capture.sample_rate) lines.push(`Sample rate: ${capture.sample_rate} Hz`);

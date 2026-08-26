@@ -10,7 +10,8 @@ export function uniqueIds(value) {
 }
 
 // Which modules and components a set of captures is about: the jacks its
-// channels were watching, and the modules of the patch it was taken on.
+// channels were watching, the modules of the patch it was taken on, and —
+// for a bench capture — the module it is of.
 // Used both to offer captures in the review step and to check that the ones
 // submitted belong to the question's scope.
 export async function captureLinks(db, captures) {
@@ -47,6 +48,7 @@ export async function captureLinks(db, captures) {
       components.map((id) => moduleOfComponent.get(id)).filter((id) => Number.isInteger(id))
     );
     for (const id of modulesOfPatch.get(capture.patch_id) ?? []) modules.add(id);
+    if (Number.isInteger(capture.module_id)) modules.add(capture.module_id);
     byCapture.set(capture.id, {
       module_ids: [...modules],
       component_ids: components,

@@ -84,6 +84,9 @@ describe('detail sub-pages', () => {
       'parameters',
       'questions',
       'routes',
+      // The bench: capturing a still or a clip of this module from the
+      // linked oscilloscope, with no patch involved.
+      'scope',
       'switches',
       'values',
       'videos',

@@ -99,6 +99,7 @@ const MODULE_PAGES = [
   { path: '/bridges', label: 'Dual panels' },
   { path: '/documents', label: 'Documents' },
   { path: '/videos', label: 'Videos' },
+  { path: '/scope', label: 'Oscilloscope' },
   { path: '/notes', label: 'Your notes' },
   { path: '/questions', label: 'Questions' },
 ];

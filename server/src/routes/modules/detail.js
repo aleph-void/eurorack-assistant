@@ -38,6 +38,8 @@ export function moduleDetailRoutes(db) {
     ModuleVideo,
     ScopeClip,
     ScopeClipChannel,
+    Capture,
+    CaptureChannel,
     Note,
     NoteModule,
     NoteComponent,
@@ -323,6 +325,20 @@ export function moduleDetailRoutes(db) {
             where: { clip_id: clipRows.map((c) => c.id) },
             order: [['channel_index', 'ASC']],
           });
+    // The waveform captures the user took of this module at the bench
+    // (migration 042) — the still image beside the moving one, private the
+    // same way.
+    const captureRows = await Capture.findAll({
+      where: { module_id: module.id, user_id: req.user.id },
+      order: [['id', 'DESC']],
+    });
+    const captureChannels =
+      captureRows.length === 0
+        ? []
+        : await CaptureChannel.findAll({
+            where: { capture_id: captureRows.map((c) => c.id) },
+            order: [['channel_index', 'ASC']],
+          });
     // The requesting user's notes attached to this module (component_id NULL)
     // or to one of its components. Notes are strictly private per user.
     const moduleNotes = await NoteModule.findAll({
@@ -373,6 +389,12 @@ export function moduleDetailRoutes(db) {
           clipChannels.filter((c) => c.clip_id === clip.id)
         )
       ),
+      captures: captureRows.map((capture) => ({
+        ...capture.get({ plain: true }),
+        channels: captureChannels
+          .filter((c) => c.capture_id === capture.id)
+          .map((c) => c.get({ plain: true })),
+      })),
       notes: [
         ...moduleNotes.map((nm) => noteJson(nm.Note, null)),
         ...componentNotes.map((nc) => noteJson(nc.Note, nc.component_id)),

@@ -449,13 +449,19 @@ export async function answerQuestion(
       where: { capture_id: capture.id },
       order: [['channel_index', 'ASC']],
     });
+    // A capture is of a patch or of one module at the bench; whichever it
+    // is, the document says so.
     const patch = capture.patch_id ? await Patch.findByPk(capture.patch_id) : null;
+    const module = capture.module_id ? await Module.findByPk(capture.module_id) : null;
     captures.push({
       name: `capture-${capture.id}.txt`,
       text: captureTextDocument(
         capture.get({ plain: true }),
         channels.map((c) => c.get({ plain: true })),
-        { patchName: patch?.name ?? null }
+        {
+          patchName: patch?.name ?? null,
+          moduleName: module ? `${module.manufacturer} ${module.name}` : null,
+        }
       ),
     });
     if (capture.image_hash) {

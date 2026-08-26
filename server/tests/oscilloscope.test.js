@@ -1623,3 +1623,262 @@ describe('captures in the question flow', () => {
     expect(captureDoc.text).toContain('Patch: Krell');
   }, 20000);
 });
+
+// The bench: the same scope pointed at one module, with no patch to derive a
+// mapping from. The page names each pane with one of the module's own jacks.
+describe('scope at the bench (a module on its own)', () => {
+  it('captures a waveform of a module and files it under a note on that module', async () => {
+    const fixture = await withScopeFixture();
+    const { sent } = await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { capture: captureAnswer },
+    });
+
+    const captured = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/captures`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({
+        title: 'EOR at rest',
+        channels: [{ index: 1, component_id: fixture.mathsOut.id, signal_type: 'cv' }],
+      });
+    expect(captured.status).toBe(201);
+    expect(captured.body.module_id).toBe(fixture.maths.id);
+    expect(captured.body.patch_id).toBeNull();
+    expect(captured.body.channels).toHaveLength(1);
+    // The pane is named from the jack the request put it on.
+    expect(captured.body.channels[0].component_id).toBe(fixture.mathsOut.id);
+    expect(captured.body.channels[0].component_name).toBe('EOR');
+    expect(captured.body.channels[0].label).toBe('Make Noise Maths — EOR');
+    expect(captured.body.channels[0].signal_type).toBe('cv');
+    // ...and the tuner reading the device took with it is kept.
+    expect(captured.body.channels[0].voltage).toBeCloseTo(1.75);
+
+    // The device was asked for exactly that pane, under that name.
+    const ask = sent.find((m) => m.action === 'capture');
+    expect(ask.params.channels).toEqual([
+      { index: 1, label: 'Make Noise Maths — EOR', signal_type: 'cv' },
+    ]);
+
+    // A note was made for it, hung off the module and off the jack.
+    const note = await fixture.db.models.Note.findByPk(captured.body.note_id);
+    expect(note.title).toBe('EOR at rest');
+    expect(note.body).toContain('of **Make Noise Maths**');
+    expect(note.body).toContain('1.750 V');
+    expect(
+      await fixture.db.models.NoteModule.findOne({
+        where: { note_id: note.id, module_id: fixture.maths.id },
+      })
+    ).toBeTruthy();
+    expect(
+      await fixture.db.models.NoteComponent.findOne({
+        where: { note_id: note.id, component_id: fixture.mathsOut.id },
+      })
+    ).toBeTruthy();
+    // No patch was invented to hold the picture.
+    expect(
+      await fixture.db.models.NotePatch.findOne({ where: { note_id: note.id } })
+    ).toBeNull();
+
+    // The module page carries it, and the list filters by module.
+    const module = await request(fixture.app)
+      .get(`/api/modules/${fixture.maths.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(module.body.captures).toHaveLength(1);
+    expect(module.body.captures[0].id).toBe(captured.body.id);
+    const byModule = await request(fixture.app)
+      .get(`/api/captures?module_id=${fixture.maths.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(byModule.body).toHaveLength(1);
+    const byOther = await request(fixture.app)
+      .get(`/api/captures?module_id=${fixture.es9.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(byOther.body).toHaveLength(0);
+  });
+
+  it('records a clip of a module with no patch behind it', async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { record: recordAnswer },
+    });
+
+    const recorded = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({
+        duration_seconds: 6,
+        channels: [{ index: 0, component_id: fixture.mathsOut.id }],
+      });
+    expect(recorded.status).toBe(201);
+    expect(recorded.body.module_id).toBe(fixture.maths.id);
+    expect(recorded.body.patch_id).toBeNull();
+    expect(recorded.body.patch_name).toBeNull();
+    expect(recorded.body.duration_seconds).toBe(6);
+    expect(recorded.body.channels[0].component_name).toBe('EOR');
+
+    const video = await request(fixture.app)
+      .get(`/api/clips/${recorded.body.id}/video`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(video.status).toBe(200);
+    // It lands on the module's videos page like any other clip.
+    const module = await request(fixture.app)
+      .get(`/api/modules/${fixture.maths.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(module.body.clips.map((c) => c.id)).toContain(recorded.body.id);
+  });
+
+  it('offers the last take as the naming to start from', async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { capture: captureAnswer },
+    });
+
+    const before = await request(fixture.app)
+      .get(`/api/scope/modules/${fixture.maths.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(before.status).toBe(200);
+    expect(before.body.channels).toEqual([]);
+    expect(before.body.devices).toHaveLength(1);
+
+    await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/captures`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [{ index: 1, component_id: fixture.mathsOut.id, signal_type: 'cv' }] });
+
+    const after = await request(fixture.app)
+      .get(`/api/scope/modules/${fixture.maths.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(after.body.channels).toEqual([
+      {
+        channel_index: 1,
+        component_id: fixture.mathsOut.id,
+        component_name: 'EOR',
+        label: 'Make Noise Maths — EOR',
+        signal_type: 'cv',
+      },
+    ]);
+  });
+
+  it('refuses a jack that is not on the module, and a module the user has not racked', async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { capture: captureAnswer, record: recordAnswer },
+    });
+
+    // The ES-9's Input 2 is a real jack — on another module.
+    const wrongJack = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/captures`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({
+        channels: [
+          {
+            index: 0,
+            component_id: fixture.es9Components.find((c) => c.name === 'Input 2').id,
+          },
+        ],
+      });
+    expect(wrongJack.status).toBe(400);
+    expect(wrongJack.body.error).toMatch(/not on this module/);
+
+    const wrongClipJack = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [{ index: 0, component_id: 999999 }] });
+    expect(wrongClipJack.status).toBe(400);
+
+    // Nor a connector no cable goes in: the ribbon header an expander plugs
+    // into is on the module and is still not somewhere a scope can look.
+    const { rows: headers } = await fixture.db.query(
+      `INSERT INTO module_components (module_id, type, name, port_kind)
+       VALUES ($1, 'output_jack', 'Expander', 'ribbon') RETURNING *`,
+      [fixture.maths.id],
+    );
+    const header = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/captures`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [{ index: 0, component_id: headers[0].id }] });
+    expect(header.status).toBe(400);
+    expect(header.body.error).toMatch(/not on this module/);
+
+    // Bob's module is not alice's to point a scope at.
+    const bob = await createUser(fixture.db, { username: 'bob' });
+    const bobModule = await insertModule(fixture.db, bob.id, {
+      manufacturer: 'Mutable',
+      name: 'Plaits',
+    });
+    const notMine = await request(fixture.app)
+      .post(`/api/scope/modules/${bobModule.id}/captures`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [{ index: 0 }] });
+    expect(notMine.status).toBe(404);
+  });
+
+  it('needs a connected scope, and one that can record for a clip', async () => {
+    const fixture = await withScopeFixture();
+    const offline = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/captures`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [{ index: 0 }] });
+    expect(offline.status).toBe(409);
+    expect(offline.body.error).toMatch(/No oscilloscope is connected/);
+
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: { ...DEVICE_STATE, capabilities: ['capture'] },
+      answers: { capture: captureAnswer },
+    });
+    const cannotRecord = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [{ index: 0 }] });
+    expect(cannotRecord.status).toBe(409);
+    expect(cannotRecord.body.error).toMatch(/does not support recording/);
+  });
+
+  it('falls back to the panes the device announced when the request names none', async () => {
+    const fixture = await withScopeFixture();
+    const { sent } = await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { capture: captureAnswer },
+    });
+
+    const captured = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/captures`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({});
+    expect(captured.status).toBe(201);
+    expect(captured.body.channels).toHaveLength(DEVICE_STATE.channels.length);
+    const ask = sent.find((m) => m.action === 'capture');
+    expect(ask.params.channels).toHaveLength(DEVICE_STATE.channels.length);
+    // No jack was guessed at: an unnamed pane stays unnamed.
+    expect(captured.body.channels[0].component_id).toBeNull();
+    expect(captured.body.channels[0].label).toBeNull();
+  });
+
+  it('lets a scope that announced no panes show whatever it is showing', async () => {
+    const fixture = await withScopeFixture();
+    const { sent } = await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      // No channel list and no count: the device has not said what it has.
+      state: { app: 'CVOsc', version: '1.0' },
+      answers: { capture: () => captureAnswer({ channels: [{ index: 0 }] }) },
+    });
+
+    const captured = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/captures`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({});
+    expect(captured.status).toBe(201);
+    expect(sent.find((m) => m.action === 'capture').params.channels).toEqual([]);
+    // What the device answered about is what the capture is of.
+    expect(captured.body.channels).toHaveLength(1);
+    expect(captured.body.channels[0].channel_index).toBe(0);
+  });
+});

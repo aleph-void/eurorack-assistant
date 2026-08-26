@@ -22,6 +22,7 @@ const ModuleExpandersView = () => import('./views/ModuleExpandersView.vue');
 const ModuleBridgesView = () => import('./views/ModuleBridgesView.vue');
 const ModuleDocumentsView = () => import('./views/ModuleDocumentsView.vue');
 const ModuleVideosView = () => import('./views/ModuleVideosView.vue');
+const ModuleScopeView = () => import('./views/ModuleScopeView.vue');
 const ModuleNotesView = () => import('./views/ModuleNotesView.vue');
 const ModuleQuestionsView = () => import('./views/ModuleQuestionsView.vue');
 const RacksView = () => import('./views/RacksView.vue');
@@ -136,6 +137,9 @@ export const routes = [
     props: true,
   },
   { path: '/modules/:id/videos', name: 'module-videos', component: ModuleVideosView, props: true },
+  // The bench: capturing a still or a clip of this module from the linked
+  // oscilloscope, with no patch involved.
+  { path: '/modules/:id/scope', name: 'module-scope', component: ModuleScopeView, props: true },
   { path: '/modules/:id/notes', name: 'module-notes', component: ModuleNotesView, props: true },
   // Asking the assistant about THIS module: the questions already asked about
   // it, and the box that asks the next one with it already in scope.

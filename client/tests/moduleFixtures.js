@@ -217,3 +217,68 @@ export const videosModule = {
     },
   ],
 };
+
+// A module with a scope history: one bench capture and one clip, plus the
+// jacks a pane can be put on (including a ribbon header, which is not a
+// patch point and must not be offered).
+export const scopeModule = {
+  id: 1,
+  manufacturer: 'Make Noise',
+  name: 'Maths',
+  manual_status: 'found',
+  analysis_status: 'complete',
+  summary: 'x',
+  quantity: 1,
+  racks: [{ id: 1, name: 'main rack', quantity: 1 }],
+  manuals: [],
+  components: [
+    { id: 21, type: 'output_jack', name: 'EOR' },
+    { id: 22, type: 'input_jack', name: 'Signal In' },
+    { id: 23, type: 'knob', name: 'Rise' },
+    { id: 24, type: 'input_jack', name: 'Expander', port_kind: 'ribbon' },
+  ],
+  videos: [],
+  captures: [
+    {
+      id: 30,
+      module_id: 1,
+      patch_id: null,
+      note_id: 44,
+      device_name: 'Bench scope',
+      audio_device_name: 'ES-9',
+      title: 'EOR at rest',
+      caption: null,
+      image_hash: 'abc123',
+      captured_at: '2026-08-12T18:00:00Z',
+      channels: [
+        {
+          id: 1,
+          channel_index: 1,
+          label: 'Make Noise Maths — EOR',
+          signal_type: 'cv',
+          component_id: 21,
+          component_name: 'EOR',
+          voltage: 1.75,
+          note_name: null,
+          frequency: null,
+          cents: null,
+        },
+      ],
+    },
+  ],
+  clips: [
+    {
+      id: 12,
+      module_id: 1,
+      patch_id: null,
+      patch_name: null,
+      device_name: 'Bench scope',
+      title: 'EOR rising',
+      caption: null,
+      video_format: 'webm',
+      duration_seconds: 10,
+      captured_at: '2026-08-12T18:05:00Z',
+      channels: [],
+    },
+  ],
+};

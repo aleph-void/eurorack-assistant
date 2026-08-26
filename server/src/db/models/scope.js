@@ -28,13 +28,17 @@ export function defineScopeModels(define) {
     { tableName: 'patch_scope_channels', createdAt: 'created_at', updatedAt: 'updated_at' }
   );
 
-  // A waveform image plus the tuner reading taken with it.
+  // A waveform image plus the tuner reading taken with it, filed under a
+  // note on the patch it was taken from or on the module it is of.
   const Capture = define(
     'Capture',
     {
       id,
       user_id: { type: DataTypes.INTEGER, allowNull: false },
+      // At most one of these: patch_id for a capture taken while patching,
+      // module_id for one taken at the bench (migration 042).
       patch_id: { type: DataTypes.INTEGER },
+      module_id: { type: DataTypes.INTEGER },
       note_id: { type: DataTypes.INTEGER },
       device_token_id: { type: DataTypes.INTEGER },
       device_name: { type: DataTypes.TEXT },
