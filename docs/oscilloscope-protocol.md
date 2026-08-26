@@ -355,6 +355,14 @@ the encoded video:
 
 - `format` must be `webm` or `mp4`, and the bytes must really be that
   container — the server sniffs the magic and refuses a mismatch.
+- The clip must play **the right way up**, with the panes in the order they
+  were asked for: a clip is the capture of the same channels, moving. Nothing
+  downstream corrects it — the browser plays the bytes as they were encoded.
+  Frame buffers are the usual way this goes wrong: an encoder handed
+  uncompressed RGB with no stride declared (Media Foundation's
+  `MF_MT_DEFAULT_STRIDE`) or a GPU readback assumed top-down encodes every
+  frame mirrored, which reads as pane labels upside down along the bottom of
+  each pane and the first pane at the bottom of the picture.
 - Keep the file small: the whole answer has to fit in one WebSocket frame, so
   the video is capped at 8 MB. A 1280×720 clip of waveforms at a modest
   bitrate is well under that for 30 seconds.

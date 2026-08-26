@@ -99,6 +99,23 @@ describe('App', () => {
     wrapper.unmount();
   });
 
+  // The feed carries CHANGES, so a socket that has just come up knows nothing
+  // about the scope that was already connected — or about one that went while
+  // it was down. The shell reads the device list on every open.
+  it('reads the connected scopes whenever the socket comes up', async () => {
+    const { wrapper, devices } = mountApp();
+    await flushPromises();
+    api.get.mockResolvedValue([{ id: 1, connections: [{ id: 3, token_id: 1, name: 'Bench' }] }]);
+
+    const { onOpen } = createProgressSocket.mock.calls[0][0];
+    onOpen();
+    await flushPromises();
+
+    expect(api.get).toHaveBeenCalledWith('/api/devices', { quiet: true });
+    expect(devices.connectionCount).toBe(1);
+    wrapper.unmount();
+  });
+
   it('opens the drawer from the hamburger and closes it on Escape or navigation', async () => {
     const { wrapper } = mountApp();
     await flushPromises();

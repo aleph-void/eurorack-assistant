@@ -327,7 +327,15 @@ function reading(channel) {
   return parts.length === 0 ? '—' : parts.join(', ');
 }
 
-onMounted(load);
+onMounted(() => {
+  load();
+  // Whether a scope is on the line is presence the live feed only reports
+  // when it CHANGES: a scope that was already connected when this page was
+  // opened announces nothing, and read no other way it would show as "no
+  // scope" until it happened to reconnect. So the page reads the list itself
+  // — once a session; the events keep it current after that.
+  devices.ensureLoaded();
+});
 // Reconnecting a scope makes the suggestion meaningful again.
 watch(connected, (isConnected) => {
   if (isConnected) load();

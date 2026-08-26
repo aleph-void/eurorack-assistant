@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { flushPromises } from '@vue/test-utils';
+import { useDevicesStore } from '../src/stores/devices.js';
 
 // Some of what a click starts finishes on a TASK rather than a microtask —
 // the FileReader behind an upload, a debounce — and `flushPromises()` cannot
@@ -59,4 +60,15 @@ export async function openRackRows(wrapper) {
     if (toggle.attributes('aria-expanded') === 'true') continue;
     await toggle.trigger('click');
   }
+}
+
+// A scope on the line, as a test that is about something else needs it: the
+// connection AND the fact that the session has already read the device list,
+// since a scope page that has not reads it on mount (stores/devices.js) and
+// the answer would replace whatever the test put there.
+export function connectScope(connections) {
+  const devices = useDevicesStore();
+  devices.connections = Array.isArray(connections) ? connections : [connections];
+  devices.loaded = true;
+  return devices;
 }

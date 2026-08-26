@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { openPanels, testGlobal } from './setup.js';
+import { connectScope, openPanels, testGlobal } from './setup.js';
 
 vi.mock('../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -154,12 +154,13 @@ describe('DevicesView', () => {
 });
 
 describe('ScopePanel', () => {
-  const mountPanel = () => {
-    const wrapper = mount(ScopePanel, {
-      props: { patchId: '7', modules: PATCH_MODULES },
-      global: testGlobal(),
-    });
-    return wrapper;
+  // The scope has to be on the line BEFORE the panel is mounted: the panel
+  // reads the device list as it mounts, and that answer replaces whatever a
+  // test set afterwards.
+  const mountPanel = (connections) => {
+    const global_ = testGlobal();
+    if (connections) connectScope(connections);
+    return mount(ScopePanel, { props: { patchId: '7', modules: PATCH_MODULES }, global: global_ });
   };
 
   it('says nothing is connected when no scope is on the line', async () => {
@@ -169,6 +170,24 @@ describe('ScopePanel', () => {
     await openPanels(wrapper);
     expect(wrapper.find('[data-test="scope-disconnected"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="scope-automap"]').attributes('disabled')).toBeDefined();
+  });
+
+  // The live feed announces a scope CONNECTING; one that was already on the
+  // line when the patch page was opened announces nothing, so the panel reads
+  // the device list itself.
+  it('finds a scope that connected before the page was opened', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path.startsWith('/api/scope')) return { patch_id: 7, channels: [], devices: [] };
+      if (path === '/api/devices') return [{ id: 1, name: 'CVOsc', connections: [CONNECTION] }];
+      return [];
+    });
+
+    const wrapper = mountPanel();
+    await flushPromises();
+    await openPanels(wrapper);
+
+    expect(wrapper.find('[data-test="scope-disconnected"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="scope-automap"]').attributes('disabled')).toBeUndefined();
   });
 
   it('maps channels automatically and shows what each pane is watching', async () => {
@@ -182,8 +201,7 @@ describe('ScopePanel', () => {
       channels: CHANNELS,
     });
 
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [CONNECTION];
+    const wrapper = mountPanel([CONNECTION]);
     await flushPromises();
     await openPanels(wrapper);
 
@@ -202,8 +220,7 @@ describe('ScopePanel', () => {
     );
     api.put.mockResolvedValue({ ...CHANNELS[0], component_name: 'Input 2', source: 'manual' });
 
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [CONNECTION];
+    const wrapper = mountPanel([CONNECTION]);
     await flushPromises();
     await openPanels(wrapper);
 
@@ -246,8 +263,7 @@ describe('ScopePanel', () => {
       ],
     });
 
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [CONNECTION];
+    const wrapper = mountPanel([CONNECTION]);
     await flushPromises();
     await openPanels(wrapper);
 
@@ -274,8 +290,7 @@ describe('ScopePanel', () => {
     );
     api.post.mockResolvedValue({ id: 6, captured_at: '2026-08-12T18:00:00Z', channels: [] });
 
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [CONNECTION];
+    const wrapper = mountPanel([CONNECTION]);
     await flushPromises();
     await openPanels(wrapper);
 
@@ -298,8 +313,7 @@ describe('ScopePanel', () => {
       path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
     );
 
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [CONNECTION];
+    const wrapper = mountPanel([CONNECTION]);
     await flushPromises();
     await openPanels(wrapper);
 
@@ -316,8 +330,7 @@ describe('ScopePanel', () => {
     );
     api.post.mockRejectedValue(new Error('device did not answer capture within 30000ms'));
 
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [CONNECTION];
+    const wrapper = mountPanel([CONNECTION]);
     await flushPromises();
     await openPanels(wrapper);
     await wrapper.find('[data-test="scope-capture"]').trigger('click');
@@ -340,8 +353,7 @@ describe('ScopePanel', () => {
       channels: [],
     });
 
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [CONNECTION];
+    const wrapper = mountPanel([CONNECTION]);
     await flushPromises();
     await openPanels(wrapper);
 
@@ -374,8 +386,7 @@ describe('ScopePanel', () => {
       channels: [],
     });
 
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [CONNECTION];
+    const wrapper = mountPanel([CONNECTION]);
     await flushPromises();
     await openPanels(wrapper);
 
@@ -398,8 +409,7 @@ describe('ScopePanel', () => {
       path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
     );
 
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [CONNECTION];
+    const wrapper = mountPanel([CONNECTION]);
     await flushPromises();
     await openPanels(wrapper);
 
@@ -423,10 +433,9 @@ describe('ScopePanel', () => {
       channels: [],
     });
 
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [
+    const wrapper = mountPanel([
       { ...CONNECTION, audio_device: { ...CONNECTION.audio_device, channel_count: 0 }, channels: [] },
-    ];
+    ]);
     await flushPromises();
     await openPanels(wrapper);
 
@@ -453,8 +462,7 @@ describe('ScopePanel', () => {
     );
     api.post.mockRejectedValue(new Error('a recording is already in progress'));
 
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [CONNECTION];
+    const wrapper = mountPanel([CONNECTION]);
     await flushPromises();
     await openPanels(wrapper);
     await wrapper.find('[data-test="scope-record"]').trigger('click');
@@ -502,8 +510,7 @@ describe('ScopePanel', () => {
     api.get.mockImplementation(async (path) =>
       path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
     );
-    const wrapper = mountPanel();
-    useDevicesStore().connections = [{ ...CONNECTION, capabilities: ['capture', 'tuner'] }];
+    const wrapper = mountPanel([{ ...CONNECTION, capabilities: ['capture', 'tuner'] }]);
     await flushPromises();
     await openPanels(wrapper);
     expect(wrapper.find('[data-test="clip-unsupported"]').exists()).toBe(true);
@@ -686,5 +693,34 @@ describe('devices store', () => {
     devices.applyEvent({ kind: 'device', event: 'disconnected', device: { id: 1 } });
     expect(devices.connectionCount).toBe(0);
     expect(devices.current).toBeNull();
+  });
+
+  it('reads the list once a session, and again whenever the feed comes up', async () => {
+    testGlobal();
+    const devices = useDevicesStore();
+    api.get.mockResolvedValue([{ id: 1, connections: [{ id: 'conn-1', name: 'CVOsc' }] }]);
+
+    await devices.ensureLoaded();
+    expect(devices.connectionCount).toBe(1);
+    expect(api.get).toHaveBeenCalledWith('/api/devices', { quiet: true });
+
+    // Already read: a second page asking costs nothing.
+    await devices.ensureLoaded();
+    expect(api.get).toHaveBeenCalledTimes(1);
+
+    // A socket that has just come up may have missed a disconnect.
+    api.get.mockResolvedValue([{ id: 1, connections: [] }]);
+    await devices.reload();
+    expect(devices.connectionCount).toBe(0);
+  });
+
+  it('leaves the page saying what it knows when the list cannot be read', async () => {
+    testGlobal();
+    const devices = useDevicesStore();
+    api.get.mockRejectedValue(new Error('offline'));
+
+    await expect(devices.ensureLoaded()).resolves.toEqual([]);
+    expect(devices.loaded).toBe(false);
+    expect(devices.connectionCount).toBe(0);
   });
 });

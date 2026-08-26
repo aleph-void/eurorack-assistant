@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { openPanels, testGlobal } from '../setup.js';
+import { connectScope, openPanels, testGlobal } from '../setup.js';
 
 vi.mock('../../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -33,11 +33,14 @@ const CONNECTION = {
   ],
 };
 
-// The module payload, plus whatever the scope page asks for on top of it.
-function mockApi({ remembered = [] } = {}) {
+// The module payload, plus whatever the scope page asks for on top of it —
+// including the linked devices, since the page reads those itself rather than
+// waiting for a scope to connect while it is watching.
+function mockApi({ remembered = [], linked = [] } = {}) {
   api.get.mockImplementation(async (path) => {
     if (path === '/api/modules/1') return structuredClone(scopeModule);
     if (path === '/api/scope/modules/1') return { module_id: 1, devices: [], channels: remembered };
+    if (path === '/api/devices') return linked;
     return [];
   });
 }
@@ -45,8 +48,7 @@ function mockApi({ remembered = [] } = {}) {
 async function mountScope({ connected = true, remembered = [] } = {}) {
   mockApi({ remembered });
   const global_ = testGlobal();
-  const devices = useDevicesStore();
-  if (connected) devices.connections = [CONNECTION];
+  if (connected) connectScope([CONNECTION]);
   const wrapper = mount(ModuleScopeView, { props: { id: '1' }, global: global_ });
   await flushPromises();
   await openPanels(wrapper);
@@ -171,6 +173,22 @@ describe('ModuleScopeView', () => {
     expect(wrapper.find('[data-test="module-scope-error"]').text()).toContain(
       'Pick at least one channel'
     );
+  });
+
+  // The live feed announces a scope CONNECTING; one that was already on the
+  // line when the page was opened announces nothing, so the page has to read
+  // the list to find it.
+  it('finds a scope that connected before the page was opened', async () => {
+    mockApi({ linked: [{ id: 1, name: 'CVOsc', connections: [CONNECTION] }] });
+    const wrapper = mount(ModuleScopeView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+    await flushPromises();
+
+    expect(useDevicesStore().connectionCount).toBe(1);
+    expect(wrapper.find('[data-test="module-scope-connected"]').text()).toContain('ES-9');
+    expect(wrapper.find('[data-test="module-pane-0"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="module-scope-record"]').attributes('disabled')).toBeUndefined();
   });
 
   it('shows the clips recorded of this module too', async () => {
