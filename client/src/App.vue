@@ -33,7 +33,7 @@ function dispatch(event) {
 
 function ensureSocket() {
   if (auth.isLoggedIn && !socket) {
-    socket = createProgressSocket({ onEvent: dispatch });
+    socket = createProgressSocket({ onEvent: dispatch, onOpen: () => devices.reload() });
   } else if (!auth.isLoggedIn && socket) {
     socket.close();
     socket = null;

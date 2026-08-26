@@ -38,6 +38,24 @@ describe('progress socket', () => {
     expect(events[0].event).toBe('progress');
   });
 
+  // Presence is announced by CHANGES only, so whoever cares reads the state
+  // again on every socket that comes up — the first one included.
+  it('says when a socket has come up, on the first connection and on a retry', () => {
+    vi.useFakeTimers();
+    const opens = [];
+    createProgressSocket({
+      onEvent: () => {},
+      onOpen: () => opens.push(FakeWebSocket.instances.length),
+      WebSocketImpl: FakeWebSocket,
+      urlBase: 'ws://t',
+    });
+    FakeWebSocket.instances[0].onopen();
+    FakeWebSocket.instances[0].onclose();
+    vi.advanceTimersByTime(1100);
+    FakeWebSocket.instances[1].onopen();
+    expect(opens).toEqual([1, 2]);
+  });
+
   it('reconnects with backoff after close', () => {
     vi.useFakeTimers();
     createProgressSocket({ onEvent: () => {}, WebSocketImpl: FakeWebSocket, urlBase: 'ws://t' });

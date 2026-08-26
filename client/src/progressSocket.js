@@ -4,6 +4,7 @@
 
 export function createProgressSocket({
   onEvent,
+  onOpen,
   WebSocketImpl = typeof WebSocket !== 'undefined' ? WebSocket : null,
   urlBase = typeof location !== 'undefined'
     ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`
@@ -19,6 +20,11 @@ export function createProgressSocket({
     ws = new WebSocketImpl(`${urlBase}/api/ws`);
     ws.onopen = () => {
       retryMs = 1000;
+      // A socket that has just come up may have missed changes while it was
+      // down — and the very first one has never been told what is already
+      // connected, since the feed carries changes only. Whoever cares reads
+      // the state again here.
+      onOpen?.();
     };
     ws.onmessage = (msg) => {
       try {
