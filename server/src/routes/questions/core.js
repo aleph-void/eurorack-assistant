@@ -15,6 +15,7 @@ import { userModuleIds } from '../../services/racks.js';
 import { requireBudget } from '../../services/budgets.js';
 import { requireLlmAccount } from '../../services/llmAccounts.js';
 import { readableResource, removeShares } from '../../services/sharing.js';
+import { audioJson } from '../../services/audio.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { uniqueIds } from './helpers.js';
 
@@ -27,6 +28,7 @@ export function questionCoreRoutes(db) {
     QuestionAnswer,
     QuestionNote,
     QuestionCapture,
+    QuestionAudio,
     QuestionPatch,
     Patch,
     Module,
@@ -34,6 +36,7 @@ export function questionCoreRoutes(db) {
     Manual,
     Note,
     Capture,
+    AudioRecording,
     User,
     Job,
   } = db.models;
@@ -130,6 +133,13 @@ export function questionCoreRoutes(db) {
           order: [['capture_id', 'ASC']],
         })
       : [];
+    const audioLinkRows = includePrivate
+      ? await QuestionAudio.findAll({
+          where: { question_id: question.id },
+          include: AudioRecording,
+          order: [['audio_id', 'ASC']],
+        })
+      : [];
     const patchLinkRows = includePrivate
       ? await QuestionPatch.findAll({
           where: { question_id: question.id },
@@ -178,6 +188,9 @@ export function questionCoreRoutes(db) {
           captured_at: c.captured_at,
           image_hash: c.image_hash,
         })),
+      audio: audioLinkRows
+        .filter((l) => l.AudioRecording)
+        .map(({ AudioRecording: a }) => audioJson(a)),
       patches: patchLinkRows
         .filter((l) => l.Patch)
         .map(({ Patch: p }) => ({ id: p.id, name: p.name, rack_name: p.rack_name })),

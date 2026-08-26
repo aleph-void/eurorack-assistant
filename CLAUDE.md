@@ -18,6 +18,13 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
     shared `helpers.js`
   - `routes/racks/` — core, layout, videos (channel scan + import), modules
     (moving between racks, quantities) + shared `helpers.js`
+- `routes/audio.js` + `routes/links.js` — the two attachments that are not
+  facts about the hardware: a recording of what a module or a patch SOUNDS
+  like, and the addresses kept beside a module, patch, rack or system. One
+  router each over ALL their owners, because the row and its four operations
+  are the same whichever record it hangs off — the owner is named in the
+  query to list and in the body to create, and checked against what the user
+  actually has.
 - `routes/systems.js` — systems: collections of racks patched together as
   one instrument. A rack joins/leaves via `PUT /api/racks/:id/system`; the
   system's own routes arrange the racks on a floor plan.
@@ -66,8 +73,8 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   emitting `reload`), and every section is a route of its own.
   `/modules/:id` is the front plate and the summary; `/components`,
   `/values`, `/parameters`, `/normalizations`, `/switches`, `/routes`,
-  `/pairs`, `/expanders`, `/bridges`, `/documents`, `/videos`, `/scope`,
-  `/notes` and `/questions` are the rest. EVERY COMPONENT TYPE ALSO HAS A PAGE OF ITS OWN — the list of
+  `/pairs`, `/expanders`, `/bridges`, `/documents`, `/videos`, `/audio`,
+  `/links`, `/scope`, `/notes` and `/questions` are the rest. EVERY COMPONENT TYPE ALSO HAS A PAGE OF ITS OWN — the list of
   all of a module's components is a page you scroll rather than read, while
   "the knobs" is a page you can take in: `/jacks/input`, `/jacks/output`,
   `/jacks/bidirectional` for the things a cable goes in, `/parts/<type>`
@@ -84,9 +91,13 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   'not a mult' is only half an answer. The same difference is what the cable
   pickers say: `jackLabel()` takes the role from `switchRoleOf` and names a
   section's jacks '(switch common)' / '(switch step)' rather than '(mult)'. `/patches/:id` is the picture of the case and the drag that patches a
-  cable on it; `/cables`, `/settings`, `/flow`, `/links`, `/scope`,
-  `/notes`, `/modules` and `/questions` are the rest (`/patches/:id/config`,
-  the one page that used to hold all of those, redirects to `/settings`). Every page reads
+  cable on it; `/cables`, `/settings`, `/flow`, `/gear`, `/links`, `/audio`,
+  `/scope`, `/notes`, `/modules` and `/questions` are the rest
+  (`/patches/:id/config`, the one page that used to hold all of those,
+  redirects to `/settings`). `/patches/:id/gear` is the patch's own MODULE
+  links (the ribbon and bridge cables joining two panels), its buses and the
+  gear it invented — it was `/links` until that word came to mean, here as on
+  every other record, the addresses kept beside it. Every page reads
   the SAME `GET /api/modules/:id` / `GET /api/patches/:id` and reloads it
   after every write — `useModuleRecord.js` / `usePatchRecord.js` — with ONE
   exception: plugging and unplugging a cable ON THE PICTURE puts the row the
@@ -139,7 +150,8 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
 - Schema: the migrations in `server/migrations/` are the source of truth
   (never `sequelize.sync()`); models in `server/src/db/models.js`, which is
   only the composer — the tables live one domain per file under `db/models/`
-  (accounts, modules, racks, patches, notes, scope, jobs, security) and the association
+  (accounts, modules, racks, patches, notes, scope, attachments, jobs,
+  security) and the association
   graph, which has to be read whole, is `db/models/associations.js`. Each
   migration is a module exporting `up`/`down` against the helpers in
   `src/db/migrationContext.js`; `src/db/migrate.js` applies, reverts and
@@ -430,6 +442,32 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   made that list unreadable on a phone in the first place. Above that width a
   table still scrolls, and says so: `.table-wrap` carries a shadow at whichever
   edge still has columns behind it.
+- A SYNTH IS A THING YOU LISTEN TO, and until migration 043 nothing here held
+  the sound. A RECORDING hangs off exactly one module or one patch
+  (`audio_recordings`), arrives three ways — an uploaded file, a take recorded
+  in the browser (`MediaRecorder`, webm/opus), or one asked of the linked
+  oscilloscope's audio interface (`record_audio`, docs/oscilloscope-protocol.md)
+  — and is stored content-addressed at `CAPTURES_DIR/audio/<sha256>.<format>`
+  with the FORMAT DECIDED BY THE BYTES (`sniffAudioFormat`), never by what the
+  file was called. NO BACKEND CAN LISTEN TO A WAV, which is the whole design of
+  `services/audio.js`: every recording is measured once with ffmpeg (duration,
+  sample rate, channel count, peak and RMS dBFS) and drawn once as a PNG of its
+  waveform above its spectrogram, and THOSE are what an attached recording
+  sends to the model — the same bargain an oscilloscope capture strikes, where
+  the image is looked at and every reading is also written out in words. Every
+  measurement is best-effort: an install without ffmpeg still stores, plays and
+  attaches recordings, with each number null and no picture, and the answer
+  document says so rather than implying the model heard anything.
+- A LINK IS AN ADDRESS, NOT A DOCUMENT. `resource_links` hangs one off exactly
+  one module, patch, rack or system (a CHECK, not a habit), private to the user
+  the way a note or an uploaded document is — a module record is shared by
+  everyone who racked it, the thread you found is yours. Only `http` and
+  `https` are stored (`normalizeUrl`), because every other scheme a browser
+  follows at a link is a script, a document pretending to be an address, or a
+  path on the reader's own machine; a bare host is read as `https`. NOTHING
+  FETCHES A LINK: no request leaves the server when one is saved, so a link is
+  never a way to make the server knock on an address somebody chose for it.
+  Every rendered link carries `target="_blank" rel="noopener noreferrer"`.
 - Failures are said twice: inline where the work is, and as a toast over the
   page (`client/src/toast.js` + `components/ToastStack.vue`, mounted once in
   `App.vue`, styled in `style.css`). `api.js` raises the red one itself for
@@ -578,7 +616,8 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
 
 Everything slow is a DB-backed job (`jobs` table): import → find_manual (per
 module) → analyze_manual → panel_image + find_parameters; extract_manual runs
-alongside; questions run scope_question → user review → answer_question (a
+alongside; questions run scope_question → user review (where manuals, notes, previous
+answers, captures, RECORDINGS and patches are attached) → answer_question (a
 question asked from a module's page skips scope_question — see below); attached
 YouTube videos run download_video (yt-dlp + ffmpeg frames/transcript, no
 LLM) → analyze_video (techniques summary onto `module_videos`, then the
@@ -632,7 +671,7 @@ own overlay mode, which is how a gate is read against the envelope it opens
 rather than beside it — and which one it was is baked into the video the
 moment it is encoded. So `display_mode` ('panes' by default, or 'overlay') is
 part of the `record` request both clip routes send, and is stored on the row
-(`scope_clips.display_mode`, migration 043) as the device says it DREW it,
+(`scope_clips.display_mode`, migration 045) as the device says it DREW it,
 falling back to what was asked for when it says nothing: the row describes the
 file, the same rule the container sniff follows. Overlaying is its own device
 capability, so a scope that lists its capabilities without `overlay` is

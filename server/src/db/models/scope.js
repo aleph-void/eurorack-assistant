@@ -107,7 +107,7 @@ export function defineScopeModels(define) {
       duration_seconds: { type: DataTypes.REAL },
       sample_rate: { type: DataTypes.REAL },
       // 'panes' (a strip per channel) or 'overlay' (every trace on one
-      // grid), migration 043.
+      // grid), migration 045.
       display_mode: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'panes' },
       captured_at: { type: DataTypes.DATE },
     },

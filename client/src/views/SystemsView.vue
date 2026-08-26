@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import { panelCropStyle, panelThumbUrl } from '../panelLayout.js';
+import ResourceLinks from '../components/ResourceLinks.vue';
 
 // A system is a group of racks patched together as one instrument. This page
 // lists them, assigns racks in and out, and arranges the racks of one system
@@ -20,6 +21,10 @@ const renameValue = ref('');
 // The system currently open for arranging, as returned by GET /api/systems/:id
 const plan = ref(null);
 const openId = ref(null);
+// Which system's links are open. A system has no page of its own either, so
+// the plan it was built from and the thread it came out of open from its row.
+const linksSystemId = ref(null);
+const linksSystem = computed(() => systems.value.find((s) => s.id === linksSystemId.value) ?? null);
 const planBusy = ref(false);
 const dragged = ref(null);
 
@@ -478,14 +483,24 @@ async function assign(rackId, systemId) {
             <td data-label="Racks">{{ system.rack_count }}</td>
             <td data-label="Modules">{{ system.module_count }}</td>
             <td data-label="Layout">
-              <button
-                class="secondary"
-                style="margin: 0"
-                :data-test="`arrange-${system.id}`"
-                @click="openPlan(system)"
-              >
-                {{ openId === system.id ? 'Close plan' : 'Arrange racks' }}
-              </button>
+              <div class="actions nowrap">
+                <button
+                  class="secondary"
+                  style="margin: 0"
+                  :data-test="`arrange-${system.id}`"
+                  @click="openPlan(system)"
+                >
+                  {{ openId === system.id ? 'Close plan' : 'Arrange racks' }}
+                </button>
+                <button
+                  class="secondary"
+                  style="margin: 0"
+                  :data-test="`links-${system.id}`"
+                  @click="linksSystemId = linksSystemId === system.id ? null : system.id"
+                >
+                  {{ linksSystemId === system.id ? 'Close links' : 'Links' }}
+                </button>
+              </div>
             </td>
             <td class="actions-cell">
               <div class="actions nowrap">
@@ -552,6 +567,11 @@ async function assign(rackId, systemId) {
         </div>
       </div>
     </form>
+
+    <section v-if="linksSystem" class="system-links" data-test="system-links">
+      <h2>{{ linksSystem.name }}</h2>
+      <ResourceLinks kind="system" :record-id="linksSystem.id" />
+    </section>
 
     <section v-if="plan" class="system-plan" data-test="system-plan">
       <h2>Arrange {{ plan.name }}</h2>

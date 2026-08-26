@@ -23,6 +23,8 @@ import { deviceRoutes } from './routes/devices.js';
 import { scopeRoutes } from './routes/scope.js';
 import { captureRoutes } from './routes/captures.js';
 import { clipRoutes } from './routes/clips.js';
+import { audioRoutes } from './routes/audio.js';
+import { linkRoutes } from './routes/links.js';
 import { panelRoutes } from './routes/panels.js';
 import { shareRoutes } from './routes/shares.js';
 import { cspReportRoutes } from './routes/cspReports.js';
@@ -127,9 +129,12 @@ export function createApp(
   // flow (unauthenticated by necessity), everything else is the user's.
   app.use('/api/oauth', oauthRoutes(db));
   app.use('/api/devices', deviceRoutes(db, { hub }));
-  app.use('/api/scope', scopeRoutes(db, { hub, capturesDir }));
+  app.use('/api/scope', scopeRoutes(db, { hub, capturesDir, runImpl }));
   app.use('/api/captures', captureRoutes(db, { capturesDir }));
   app.use('/api/clips', clipRoutes(db, { capturesDir }));
+  // Recordings of a module or a patch, and the links kept beside a record.
+  app.use('/api/audio', audioRoutes(db, { capturesDir, runImpl }));
+  app.use('/api/links', linkRoutes(db));
 
   app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

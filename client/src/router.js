@@ -22,6 +22,8 @@ const ModuleExpandersView = () => import('./views/ModuleExpandersView.vue');
 const ModuleBridgesView = () => import('./views/ModuleBridgesView.vue');
 const ModuleDocumentsView = () => import('./views/ModuleDocumentsView.vue');
 const ModuleVideosView = () => import('./views/ModuleVideosView.vue');
+const ModuleAudioView = () => import('./views/ModuleAudioView.vue');
+const ModuleLinksView = () => import('./views/ModuleLinksView.vue');
 const ModuleScopeView = () => import('./views/ModuleScopeView.vue');
 const ModuleNotesView = () => import('./views/ModuleNotesView.vue');
 const ModuleQuestionsView = () => import('./views/ModuleQuestionsView.vue');
@@ -32,7 +34,12 @@ const PatchDetailView = () => import('./views/PatchDetailView.vue');
 const PatchCablesView = () => import('./views/PatchCablesView.vue');
 const PatchSettingsView = () => import('./views/PatchSettingsView.vue');
 const PatchFlowView = () => import('./views/PatchFlowView.vue');
-const PatchLinksView = () => import('./views/PatchLinksView.vue');
+// The patch's own module links, buses and invented gear. It used to be at
+// /links; that word now means what it means everywhere else in the app — the
+// addresses kept beside a record — so this page is the Gear page.
+const PatchGearView = () => import('./views/PatchGearView.vue');
+const PatchWebLinksView = () => import('./views/PatchWebLinksView.vue');
+const PatchAudioView = () => import('./views/PatchAudioView.vue');
 const PatchScopeView = () => import('./views/PatchScopeView.vue');
 const PatchNotesView = () => import('./views/PatchNotesView.vue');
 const PatchModulesView = () => import('./views/PatchModulesView.vue');
@@ -137,6 +144,9 @@ export const routes = [
     props: true,
   },
   { path: '/modules/:id/videos', name: 'module-videos', component: ModuleVideosView, props: true },
+  // What it sounds like, and the rest of its story elsewhere on the internet.
+  { path: '/modules/:id/audio', name: 'module-audio', component: ModuleAudioView, props: true },
+  { path: '/modules/:id/links', name: 'module-links', component: ModuleLinksView, props: true },
   // The bench: capturing a still or a clip of this module from the linked
   // oscilloscope, with no patch involved.
   { path: '/modules/:id/scope', name: 'module-scope', component: ModuleScopeView, props: true },
@@ -166,7 +176,9 @@ export const routes = [
     props: true,
   },
   { path: '/patches/:id/flow', name: 'patch-flow', component: PatchFlowView, props: true },
-  { path: '/patches/:id/links', name: 'patch-links', component: PatchLinksView, props: true },
+  { path: '/patches/:id/gear', name: 'patch-gear', component: PatchGearView, props: true },
+  { path: '/patches/:id/links', name: 'patch-links', component: PatchWebLinksView, props: true },
+  { path: '/patches/:id/audio', name: 'patch-audio', component: PatchAudioView, props: true },
   { path: '/patches/:id/scope', name: 'patch-scope', component: PatchScopeView, props: true },
   { path: '/patches/:id/notes', name: 'patch-notes', component: PatchNotesView, props: true },
   {

@@ -13,7 +13,8 @@ import { userModuleIds } from '../../services/racks.js';
 import { requireBudget } from '../../services/budgets.js';
 import { requireLlmAccount } from '../../services/llmAccounts.js';
 import { asyncHandler } from '../asyncHandler.js';
-import { captureLinks, patchModulesByPatch, uniqueIds } from './helpers.js';
+import { audioJson } from '../../services/audio.js';
+import { audioLinks, captureLinks, patchModulesByPatch, uniqueIds } from './helpers.js';
 
 export function questionReviewRoutes(db) {
   const {
@@ -24,6 +25,7 @@ export function questionReviewRoutes(db) {
     QuestionAnswer,
     QuestionNote,
     QuestionCapture,
+    QuestionAudio,
     QuestionPatch,
     Patch,
     Module,
@@ -33,6 +35,7 @@ export function questionReviewRoutes(db) {
     NoteModule,
     NoteComponent,
     Capture,
+    AudioRecording,
     Job,
   } = db.models;
   const router = Router();
@@ -191,6 +194,22 @@ export function questionReviewRoutes(db) {
           c.component_ids.some((id) => componentIdSet.has(id))
       );
 
+    // Recordings of the selected modules, or of a patch that uses them.
+    // A recording is offered on the same terms as a capture — it is about a
+    // module, so it is offered where that module is — and it travels to the
+    // model as the picture drawn from it plus the levels measured off it.
+    const audioRows = await AudioRecording.findAll({
+      where: { user_id: req.user.id },
+      order: [['id', 'DESC']],
+    });
+    const audioLinkMap = await audioLinks(db, audioRows);
+    const audio = audioRows
+      .map((row) => {
+        const links = audioLinkMap.get(row.id) ?? { module_ids: [] };
+        return { ...audioJson(row), module_ids: links.module_ids };
+      })
+      .filter((a) => a.module_ids.some((id) => rackIds.includes(id)));
+
     // The user's patches, each carrying the modules it uses so the client
     // can show which of them the current scope covers. They are all offered
     // whatever the scope: a patch is attached deliberately, and attaching
@@ -236,6 +255,7 @@ export function questionReviewRoutes(db) {
       answers,
       notes,
       captures,
+      audio,
     });
   }));
 
@@ -368,6 +388,26 @@ export function questionReviewRoutes(db) {
       }
     }
 
+    const audioIds = uniqueIds(req.body?.audio_ids);
+    if (audioIds.length > 0) {
+      const rows = await AudioRecording.findAll({
+        where: { id: audioIds, user_id: req.user.id },
+      });
+      if (rows.length !== audioIds.length) {
+        return res.status(400).json({ error: 'audio_ids must be your recordings' });
+      }
+      const links = await audioLinks(db, rows);
+      const selectedModules = new Set(moduleIds);
+      const unrelated = rows.find(
+        (row) => !links.get(row.id).module_ids.some((id) => selectedModules.has(id))
+      );
+      if (unrelated) {
+        return res
+          .status(400)
+          .json({ error: 'audio_ids must be recordings of the selected modules' });
+      }
+    }
+
     // Patches are the user's own; unlike notes and captures they are not
     // narrowed to the selected modules — attaching a patch is what makes
     // the question a question about that patch.
@@ -380,11 +420,17 @@ export function questionReviewRoutes(db) {
     }
 
     if (
-      manualIds.length + answerIds.length + noteIds.length + captureIds.length + patchIds.length ===
+      manualIds.length +
+        answerIds.length +
+        noteIds.length +
+        captureIds.length +
+        audioIds.length +
+        patchIds.length ===
       0
     ) {
       return res.status(400).json({
-        error: 'Attach at least one document (manual, previous answer, note, capture, or patch)',
+        error:
+          'Attach at least one document (manual, previous answer, note, capture, recording, or patch)',
       });
     }
 
@@ -426,6 +472,13 @@ export function questionReviewRoutes(db) {
       if (captureIds.length > 0) {
         await QuestionCapture.bulkCreate(
           captureIds.map((id) => ({ question_id: question.id, capture_id: id })),
+          { transaction }
+        );
+      }
+      await QuestionAudio.destroy({ where: { question_id: question.id }, transaction });
+      if (audioIds.length > 0) {
+        await QuestionAudio.bulkCreate(
+          audioIds.map((id) => ({ question_id: question.id, audio_id: id })),
           { transaction }
         );
       }

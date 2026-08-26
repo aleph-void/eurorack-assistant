@@ -13,6 +13,7 @@ import { defineRacksModels } from './models/racks.js';
 import { definePatchesModels } from './models/patches.js';
 import { defineNotesModels } from './models/notes.js';
 import { defineScopeModels } from './models/scope.js';
+import { defineAttachmentsModels } from './models/attachments.js';
 import { defineJobsModels } from './models/jobs.js';
 import { defineSecurityModels } from './models/security.js';
 import { associate } from './models/associations.js';
@@ -28,6 +29,7 @@ export function defineModels(sequelize) {
     ...definePatchesModels(define),
     ...defineNotesModels(define),
     ...defineScopeModels(define),
+    ...defineAttachmentsModels(define),
     ...defineJobsModels(define),
     ...defineSecurityModels(define),
   });
