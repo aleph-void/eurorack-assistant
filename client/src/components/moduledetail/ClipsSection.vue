@@ -4,9 +4,10 @@ import { api } from '../../api.js';
 import { dialog } from '../../dialog.js';
 import { useLazyPanel } from '../../lazyPanel.js';
 
-// Short oscilloscope recordings attached to this module. A clip is made on a
-// patch's Scope page — the scope records the chosen panes for a few seconds
-// and the video lands here, next to the module's YouTube videos.
+// Short oscilloscope recordings attached to this module. A clip is made on
+// this module's own Oscilloscope page or on a patch's Scope page — the scope
+// records the chosen panes for a few seconds and the video lands here, next
+// to the module's YouTube videos.
 defineProps({
   module: { type: Object, required: true },
   moduleId: { type: String, required: true },
@@ -64,7 +65,9 @@ const paneLabel = (c) => c.label || c.component_name || `Channel ${c.channel_ind
     <div v-if="opened" class="panel-body">
       <p class="muted">
         Short recordings from the linked oscilloscope of what this module's signals look like.
-        Record one from a patch's Scope page while the module is playing.
+        Record one on
+        <RouterLink :to="`/modules/${moduleId}/scope`">this module's Oscilloscope page</RouterLink>,
+        or from a patch's Scope page while the module is playing.
       </p>
       <p v-if="error" class="error" data-test="clip-error">{{ error }}</p>
       <p v-if="!module.clips?.length" class="muted" data-test="no-clips">No clips yet.</p>

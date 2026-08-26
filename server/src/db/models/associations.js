@@ -257,6 +257,7 @@ export function associate(m) {
 
   Capture.belongsTo(User, { foreignKey: 'user_id' });
   Capture.belongsTo(Patch, { foreignKey: 'patch_id' });
+  Capture.belongsTo(Module, { foreignKey: 'module_id' });
   Capture.belongsTo(Note, { foreignKey: 'note_id' });
   Capture.hasMany(CaptureChannel, { foreignKey: 'capture_id' });
   CaptureChannel.belongsTo(Capture, { foreignKey: 'capture_id' });

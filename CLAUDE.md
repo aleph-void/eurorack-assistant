@@ -66,8 +66,8 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   emitting `reload`), and every section is a route of its own.
   `/modules/:id` is the front plate and the summary; `/components`,
   `/values`, `/parameters`, `/normalizations`, `/switches`, `/routes`,
-  `/pairs`, `/expanders`, `/bridges`, `/documents`, `/videos`, `/notes` and
-  `/questions` are the rest. EVERY COMPONENT TYPE ALSO HAS A PAGE OF ITS OWN — the list of
+  `/pairs`, `/expanders`, `/bridges`, `/documents`, `/videos`, `/scope`,
+  `/notes` and `/questions` are the rest. EVERY COMPONENT TYPE ALSO HAS A PAGE OF ITS OWN — the list of
   all of a module's components is a page you scroll rather than read, while
   "the knobs" is a page you can take in: `/jacks/input`, `/jacks/output`,
   `/jacks/bidirectional` for the things a cable goes in, `/parts/<type>`
@@ -605,6 +605,26 @@ kind of record, only the word and the query key differ. Asking there sends
 scope before anything else looks at it: a question asked from a module's page
 is about that module even when the wording never names it ("why is this so
 quiet?").
+
+THE OSCILLOSCOPE IS A PAGE OF A PATCH AND A PAGE OF A MODULE, because most
+scope work is BENCH work: one module on the rails, a cable into the
+interface, "what does this output actually look like". `/patches/:id/scope`
+has a topology to reason about — `services/scopeMapping.js` derives what each
+pane is watching from the patch, stores it in `patch_scope_channels`, and a
+capture is filed under a note on the patch. `/modules/:id/scope` has nothing
+to derive: the page names each pane with one of the MODULE'S OWN jacks
+(`POST /api/scope/modules/:id/captures` and `.../clips` take
+`channels: [{ index, component_id?, signal_type? }]`, refusing a jack that is
+not on that module), and nothing is stored between takes but the takes
+themselves — `GET /api/scope/modules/:id` answers with the naming of the last
+one, which is what the page starts from, because a bench session is one cable
+that stays where it is. A bench capture hangs off the module
+(`captures.module_id`, migration 042) with its note linked through
+`note_modules` rather than `note_patches`; a bench clip is an ordinary
+`scope_clips` row with no patch behind it, so it appears on the module's
+Videos page beside the ones recorded while patching. `captureLinks()` counts
+a bench capture's own module as one of the modules it is about, so it can be
+attached to a question scoped to that module.
 
 A MODULE'S PAGE NAMES ITS OWN SCOPE, SO NOTHING SCOPES IT. There is nothing
 for a model to work out — the module is the scope, and which of its jacks,

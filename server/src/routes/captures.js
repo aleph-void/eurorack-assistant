@@ -36,10 +36,11 @@ export function captureRoutes(
     }));
   }
 
-  // Optional filters: ?patch_id= / ?note_id=
+  // Optional filters: ?patch_id= / ?module_id= / ?note_id=
   router.get('/', asyncHandler(async (req, res) => {
     const where = { user_id: req.user.id };
     if (req.query.patch_id) where.patch_id = Number(req.query.patch_id) || 0;
+    if (req.query.module_id) where.module_id = Number(req.query.module_id) || 0;
     if (req.query.note_id) where.note_id = Number(req.query.note_id) || 0;
     const captures = await Capture.findAll({ where, order: [['id', 'DESC']] });
     res.json(await withChannels(captures));
