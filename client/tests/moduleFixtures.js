@@ -203,6 +203,7 @@ export const videosModule = {
       caption: null,
       video_format: 'webm',
       duration_seconds: 10,
+      display_mode: 'panes',
       captured_at: '2026-08-12T18:00:00Z',
       channels: [
         {

@@ -27,6 +27,7 @@ import { parseCaptureResult, tuningLabel } from '../src/services/captures.js';
 import {
   MAX_VIDEO_BYTES,
   clampClipDuration,
+  parseClipDisplayMode,
   parseClipResult,
 } from '../src/services/clips.js';
 import { answerQuestion } from '../src/services/ask.js';
@@ -138,6 +139,7 @@ const recordAnswer = (params) => ({
     width: 640,
     height: 360,
     duration_seconds: params.duration_seconds,
+    display_mode: params.display_mode,
   },
   captured_at: '2026-08-12T18:00:00Z',
   sample_rate: 48000,
@@ -725,6 +727,30 @@ describe('clip parsing', () => {
     ]);
     const mp4 = parseClipResult({ video: { data: mp4Bytes.toString('base64') } });
     expect(mp4.format).toBe('mp4');
+  });
+
+  it('takes the display mode the device says it drew, and refuses a made-up one', () => {
+    // Nothing said means "as asked" — the route falls back to the request.
+    expect(parseClipResult({ video: { data: WEBM_BASE64 } }).display_mode).toBeNull();
+    expect(
+      parseClipResult({ video: { data: WEBM_BASE64, display_mode: 'overlay' } }).display_mode,
+    ).toBe('overlay');
+    // A device that was asked to overlay and drew panes anyway says so, and
+    // the clip is stored as what the file really is.
+    expect(
+      parseClipResult({ video: { data: WEBM_BASE64, display_mode: 'PANES' } }).display_mode,
+    ).toBe('panes');
+    expect(() =>
+      parseClipResult({ video: { data: WEBM_BASE64, display_mode: 'split' } }),
+    ).toThrow(/unknown display mode/);
+  });
+
+  it('reads a display mode a request asked for, and rejects one it did not', () => {
+    expect(parseClipDisplayMode(undefined)).toBe('panes');
+    expect(parseClipDisplayMode('')).toBe('panes');
+    expect(parseClipDisplayMode('overlay')).toBe('overlay');
+    expect(parseClipDisplayMode('Overlay')).toBe('overlay');
+    expect(parseClipDisplayMode('stacked')).toBeNull();
   });
 
   it('clamps the requested duration into the short-clip range', () => {
@@ -1402,6 +1428,99 @@ describe('scope clips', () => {
     expect(sent.find((m) => m.action === 'record').params.duration_seconds).toBe(30);
   });
 
+  it('records the channels overlaid on one grid when asked, and panes by default', async () => {
+    const fixture = await withScopeFixture();
+    const { sent } = await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { record: recordAnswer },
+    });
+
+    const panes = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1] });
+    expect(panes.status).toBe(201);
+    expect(panes.body.display_mode).toBe('panes');
+    expect(sent.find((m) => m.action === 'record').params.display_mode).toBe('panes');
+
+    const overlaid = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [0, 1], display_mode: 'overlay', title: 'Gate against envelope' });
+    expect(overlaid.status).toBe(201);
+    expect(overlaid.body.display_mode).toBe('overlay');
+    // The mode is asked of the device, not applied to the file afterwards.
+    const asks = sent.filter((m) => m.action === 'record');
+    expect(asks[asks.length - 1].params.display_mode).toBe('overlay');
+    // Both traces are still named — overlaid, they are what the key reads.
+    expect(overlaid.body.channels).toHaveLength(2);
+
+    // And it is the stored mode everywhere the clip is served.
+    const listed = await request(fixture.app)
+      .get(`/api/clips?patch_id=${fixture.patch.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(listed.body.find((c) => c.id === overlaid.body.id).display_mode).toBe('overlay');
+    const one = await request(fixture.app)
+      .get(`/api/clips/${overlaid.body.id}`)
+      .set('Cookie', fixture.aliceCookie);
+    expect(one.body.display_mode).toBe('overlay');
+  });
+
+  it('stores what the device drew when it overlays nothing it was asked to', async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      // No capability list at all, so overlaying is allowed — but this scope
+      // answers with panes anyway, and the row describes the file.
+      state: { ...DEVICE_STATE, capabilities: null },
+      answers: {
+        record: (params) => ({
+          ...recordAnswer(params),
+          video: { ...recordAnswer(params).video, display_mode: 'panes' },
+        }),
+      },
+    });
+    const res = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1], display_mode: 'overlay' });
+    expect(res.status).toBe(201);
+    expect(res.body.display_mode).toBe('panes');
+  });
+
+  it('refuses an unknown display mode and a scope that cannot overlay', async () => {
+    const fixture = await withScopeFixture();
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: { ...DEVICE_STATE, capabilities: ['capture', 'tuner', 'record'] },
+      answers: { record: recordAnswer },
+    });
+
+    const nonsense = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1], display_mode: 'stacked' });
+    expect(nonsense.status).toBe(400);
+    expect(nonsense.body.error).toMatch(/panes.*overlay/);
+
+    // A scope that lists its capabilities without 'overlay' is refused
+    // rather than left to record panes for a request that asked for one grid.
+    const refused = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1], display_mode: 'overlay' });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/does not support overlaying/);
+
+    // Panes are still recorded on the same scope.
+    const panes = await request(fixture.app)
+      .post(`/api/scope/patches/${fixture.patch.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ channels: [1] });
+    expect(panes.status).toBe(201);
+  });
+
   it('refuses cleanly when the scope does not list the record capability', async () => {
     const fixture = await withScopeFixture();
     await connectFakeDevice(fixture.hub, fixture.db, {
@@ -1727,6 +1846,46 @@ describe('scope at the bench (a module on its own)', () => {
       .get(`/api/modules/${fixture.maths.id}`)
       .set('Cookie', fixture.aliceCookie);
     expect(module.body.clips.map((c) => c.id)).toContain(recorded.body.id);
+  });
+
+  it('overlays two of the module’s own jacks on one grid at the bench', async () => {
+    const fixture = await withScopeFixture();
+    const { sent } = await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: DEVICE_STATE,
+      answers: { record: recordAnswer },
+    });
+
+    const recorded = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({
+        display_mode: 'overlay',
+        channels: [{ index: 0, component_id: fixture.mathsOut.id }],
+      });
+    expect(recorded.status).toBe(201);
+    expect(recorded.body.display_mode).toBe('overlay');
+    expect(sent.find((m) => m.action === 'record').params.display_mode).toBe('overlay');
+
+    // The same two refusals as on a patch: a mode that is not one, and a
+    // scope that says it cannot overlay.
+    const nonsense = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ display_mode: 'stacked', channels: [{ index: 0 }] });
+    expect(nonsense.status).toBe(400);
+
+    await connectFakeDevice(fixture.hub, fixture.db, {
+      userId: fixture.alice.id,
+      state: { ...DEVICE_STATE, capabilities: ['capture', 'record'] },
+      answers: { record: recordAnswer },
+    });
+    const refused = await request(fixture.app)
+      .post(`/api/scope/modules/${fixture.maths.id}/clips`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ display_mode: 'overlay', channels: [{ index: 0 }] });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/does not support overlaying/);
   });
 
   it('offers the last take as the naming to start from', async () => {

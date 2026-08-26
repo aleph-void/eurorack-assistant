@@ -117,8 +117,37 @@ describe('ModuleScopeView', () => {
       connection_id: 'conn-1',
       title: 'EOR rising',
       duration_seconds: 6,
+      display_mode: 'panes',
       channels: [{ index: 0, component_id: undefined, signal_type: 'audio' }],
     });
+  });
+
+  it('records the bench panes overlaid on one grid when asked', async () => {
+    const wrapper = await mountScope();
+    api.post.mockResolvedValue({ id: 14 });
+
+    await wrapper.find('[data-test="module-clip-mode"]').setValue('overlay');
+    await wrapper.find('[data-test="module-scope-record"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/scope/modules/1/clips',
+      expect.objectContaining({ display_mode: 'overlay' })
+    );
+
+    // A scope that says it cannot overlay takes the option away, and the mode
+    // chosen for the last one with it.
+    useDevicesStore().connections = [
+      { ...CONNECTION, id: 'conn-2', capabilities: ['capture', 'record'] },
+    ];
+    await flushPromises();
+    expect(wrapper.find('[data-test="module-clip-mode"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('[data-test="module-clip-overlay-unsupported"]').exists()).toBe(true);
+    await wrapper.find('[data-test="module-scope-record"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenLastCalledWith(
+      '/api/scope/modules/1/clips',
+      expect.objectContaining({ display_mode: 'panes' })
+    );
   });
 
   it('starts from how the panes were named last time', async () => {

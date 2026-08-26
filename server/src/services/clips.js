@@ -22,6 +22,25 @@ export const MAX_VIDEO_BYTES = 8 * 1024 * 1024;
 export const MAX_CLIP_SECONDS = 30;
 export const DEFAULT_CLIP_SECONDS = 10;
 
+// How the device draws the channels it was asked for. 'panes' is a strip per
+// channel, one under the other — what a clip has always been. 'overlay' is
+// the scope's own overlay mode: every trace drawn on ONE grid, superimposed,
+// which is the only way to see that the envelope opens exactly where the gate
+// goes high. It is a property of the recording, not of the player, so it is
+// asked for at record time and stored on the row: a clip whose channels were
+// overlaid has no pane 1 and pane 2 to list.
+export const CLIP_DISPLAY_MODES = ['panes', 'overlay'];
+export const DEFAULT_CLIP_DISPLAY_MODE = 'panes';
+
+// The requested display mode, or null when it is not one we know — the
+// routes turn that into a 400 rather than silently recording panes for a
+// request that asked for something else.
+export function parseClipDisplayMode(value) {
+  if (value === undefined || value === null || value === '') return DEFAULT_CLIP_DISPLAY_MODE;
+  const mode = String(value).toLowerCase();
+  return CLIP_DISPLAY_MODES.includes(mode) ? mode : null;
+}
+
 // webm is an EBML document; mp4 puts 'ftyp' at byte 4. Both are containers
 // a <video> tag plays, and both are formats a scope app can plausibly
 // encode to, so both are accepted.
@@ -108,9 +127,19 @@ export function parseClipResult(payload = {}) {
   }
 
   const channels = Array.isArray(payload.channels) ? payload.channels : [];
+  // What the device says it actually drew. A scope that cannot overlay is
+  // free to answer with panes instead, and the row has to describe the file
+  // rather than the request — the same rule the format sniff follows. Absent
+  // means "as asked".
+  const claimedMode = video.display_mode ?? payload.display_mode ?? null;
+  const displayMode = claimedMode ? parseClipDisplayMode(claimedMode) : null;
+  if (claimedMode && !displayMode) {
+    throw new Error(`unknown display mode '${claimedMode}' (expected panes or overlay)`);
+  }
   return {
     buffer,
     format,
+    display_mode: displayMode,
     width: Number.isFinite(Number(video.width)) ? Number(video.width) : null,
     height: Number.isFinite(Number(video.height)) ? Number(video.height) : null,
     duration_seconds: number(video.duration_seconds ?? payload.duration_seconds),
@@ -142,6 +171,7 @@ export function clipJson(clip, channels = []) {
     video_height: plain.video_height,
     video_bytes: plain.video_bytes,
     duration_seconds: plain.duration_seconds,
+    display_mode: plain.display_mode || DEFAULT_CLIP_DISPLAY_MODE,
     sample_rate: plain.sample_rate,
     captured_at: plain.captured_at,
     created_at: plain.created_at,

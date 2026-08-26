@@ -364,6 +364,7 @@ describe('ScopePanel', () => {
       connection_id: 3,
       channels: [1],
       duration_seconds: 10,
+      display_mode: 'panes',
       module_id: undefined,
       title: undefined,
     });
@@ -399,6 +400,7 @@ describe('ScopePanel', () => {
       connection_id: 3,
       channels: [0, 1],
       duration_seconds: 5,
+      display_mode: 'panes',
       module_id: 101,
       title: 'EOR rising',
     });
@@ -448,6 +450,7 @@ describe('ScopePanel', () => {
       connection_id: 3,
       channels: undefined,
       duration_seconds: undefined,
+      display_mode: 'panes',
       module_id: undefined,
       title: undefined,
     });
@@ -504,6 +507,67 @@ describe('ScopePanel', () => {
     await flushPromises();
     expect(wrapper.find('[data-test="clip-4"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="scope-error"]').text()).toContain('Clip not found');
+  });
+
+  it('records the panes overlaid on one grid when the mode says so', async () => {
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
+    );
+    api.post.mockResolvedValue({
+      id: 11,
+      module_id: 102,
+      captured_at: '2026-08-12T18:00:00Z',
+      duration_seconds: 10,
+      display_mode: 'overlay',
+      channels: [],
+    });
+
+    const wrapper = mountPanel([CONNECTION]);
+    await flushPromises();
+    await openPanels(wrapper);
+
+    await wrapper.find('[data-test="clip-mode"]').setValue('overlay');
+    await wrapper.find('[data-test="scope-record"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/scope/patches/7/clips', {
+      connection_id: 3,
+      channels: [0, 1],
+      duration_seconds: 10,
+      display_mode: 'overlay',
+      module_id: undefined,
+      title: undefined,
+    });
+    // The clip says which it is: a video of one grid is not a video of panes.
+    expect(wrapper.find('[data-test="clip-mode-11"]').text()).toContain('overlaid');
+  });
+
+  it('offers panes only to a scope that cannot overlay, whatever was chosen', async () => {
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/scope') ? { patch_id: 7, channels: CHANNELS, devices: [] } : []
+    );
+    api.post.mockResolvedValue({ id: 12, module_id: 102, captured_at: '2026-08-12T18:00:00Z' });
+
+    const wrapper = mountPanel([CONNECTION]);
+    await flushPromises();
+    await openPanels(wrapper);
+    await wrapper.find('[data-test="clip-mode"]').setValue('overlay');
+
+    // A scope that lists its capabilities without 'overlay' takes the option
+    // away — and with it the mode chosen for the last one, or the record
+    // would be refused with nothing on screen to explain it.
+    useDevicesStore().connections = [
+      { ...CONNECTION, id: 4, capabilities: ['capture', 'record'] },
+    ];
+    await flushPromises();
+    expect(wrapper.find('[data-test="clip-mode"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('[data-test="clip-overlay-unsupported"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="scope-record"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/scope/patches/7/clips',
+      expect.objectContaining({ display_mode: 'panes' })
+    );
   });
 
   it('hides the record controls from a scope that cannot record', async () => {

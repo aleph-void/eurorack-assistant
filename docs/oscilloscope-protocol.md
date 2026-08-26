@@ -217,7 +217,7 @@ the channel list, or the channel names/types change. The two have the same body.
   "device_name": "CVOsc on STUDIO-PC",
   "app": "CVOsc",
   "version": "1.0.0",
-  "capabilities": ["capture", "tuner", "set_labels", "record"],
+  "capabilities": ["capture", "tuner", "set_labels", "record", "overlay"],
   "audio_device": {
     "id": "wasapi:{0.0.1.00000000}.{…}",
     "name": "ES-9 (Expert Sleepers)",
@@ -331,12 +331,23 @@ that announce no capability list at all).
   "channels": [
     { "index": 0, "label": "Make Noise Maths — EOR", "signal_type": "cv" }
   ],
-  "duration_seconds": 10
+  "duration_seconds": 10,
+  "display_mode": "panes"
 }
 ```
 
 `duration_seconds` is between 1 and 30 — record for that long, then answer with
-the encoded video:
+the encoded video.
+
+`display_mode` is `"panes"` (the default, and what every clip was before it
+existed) or `"overlay"` — the app's own overlay mode, every requested channel
+drawn on ONE graticule instead of a strip each, which is how two signals are
+read against each other in time rather than side by side. Overlaid, the traces
+have to be told apart some other way: draw them in the per-channel colours the
+app already uses and key them, since there is no pane to label. Announce
+`"overlay"` in `capabilities` if the mode is supported — a device that lists
+its capabilities without it is refused cleanly instead of silently recording
+panes for a request that asked for one grid.
 
 ```json
 {
@@ -345,7 +356,8 @@ the encoded video:
     "data": "<base64>",
     "width": 1280,
     "height": 720,
-    "duration_seconds": 10.0
+    "duration_seconds": 10.0,
+    "display_mode": "panes"
   },
   "captured_at": "2026-08-12T18:00:00Z",
   "sample_rate": 48000,
@@ -367,7 +379,12 @@ the encoded video:
   the video is capped at 8 MB. A 1280×720 clip of waveforms at a modest
   bitrate is well under that for 30 seconds.
 - `channels` is optional; when present it labels the panes the same way a
-  capture answer does.
+  capture answer does. It is sent for an overlaid clip too — the channels are
+  then the traces on the one grid, in the order they were asked for.
+- `video.display_mode` is optional and says what was actually drawn. It is
+  what the clip is stored as, so a device that was asked to overlay and drew
+  panes anyway should say `"panes"` rather than let the recording be filed as
+  something it is not. Left out, the clip is stored as the mode requested.
 
 The server waits `duration_seconds` plus the usual request timeout for the
 answer, so there is no need to stream progress — but do answer with an `error`
@@ -477,4 +494,6 @@ entitlement"). It is shown verbatim in the browser.
       requested duration, and announce `"record"` in `capabilities`. A device
       that lists its capabilities without `record` is refused cleanly instead
       of timed out.
+- [ ] Optionally honour `display_mode: "overlay"` in `record` — one grid with
+      every channel superimposed — and announce `"overlay"` in `capabilities`.
 - [ ] Answer *every* request, with `error` when it cannot be done.

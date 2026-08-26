@@ -22,7 +22,13 @@ import {
   parseCaptureResult,
   saveCaptureImage,
 } from '../services/captures.js';
-import { clampClipDuration, clipJson, parseClipResult, saveClipVideo } from '../services/clips.js';
+import {
+  clampClipDuration,
+  clipJson,
+  parseClipDisplayMode,
+  parseClipResult,
+  saveClipVideo,
+} from '../services/clips.js';
 import { requireOwnedModule, userModule } from './modules/helpers.js';
 import { asyncHandler } from './asyncHandler.js';
 
@@ -72,6 +78,29 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
   // The device this request is about: the one named, or the only one
   // connected. Returns null when the user has no scope on the line.
   const pickDevice = (userId, connectionId) => (hub ? hub.pick(userId, connectionId) : null);
+
+  // How a recording should draw its channels, checked against both the
+  // request and the device. A scope that announced its capabilities and left
+  // overlaying out gets a clear refusal now rather than quietly recording
+  // panes for a request that asked for one grid. Returns { mode } or
+  // { status, error } for the route to answer with.
+  const clipDisplayMode = (body, state) => {
+    const mode = parseClipDisplayMode(body?.display_mode);
+    if (!mode) {
+      return { status: 400, error: "display_mode must be 'panes' or 'overlay'" };
+    }
+    if (
+      mode === 'overlay' &&
+      Array.isArray(state.capabilities) &&
+      !state.capabilities.includes('overlay')
+    ) {
+      return {
+        status: 409,
+        error: 'The connected oscilloscope does not support overlaying the channels',
+      };
+    }
+    return { mode };
+  };
 
   // What the scope should call each pane, in the device's own message shape.
   const labelPayload = (channels) => ({
@@ -448,8 +477,12 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
   // than in the patch's notes: what a module's output looks like moving is
   // a fact about the module, whatever patch it was recorded during.
   //
-  // Body: { connection_id?, channels?, duration_seconds?, module_id?,
-  //         title?, caption? }
+  // `display_mode: 'overlay'` records the scope's overlay mode instead — the
+  // chosen channels superimposed on ONE grid rather than a strip each, which
+  // is how two signals are compared in time rather than side by side.
+  //
+  // Body: { connection_id?, channels?, duration_seconds?, display_mode?,
+  //         module_id?, title?, caption? }
   router.post('/patches/:id/clips', asyncHandler(async (req, res) => {
     const patch = await ownPatch(req.user.id, req.params.id);
     if (!patch) return res.status(404).json({ error: 'Patch not found' });
@@ -462,6 +495,11 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
       return res
         .status(409)
         .json({ error: 'The connected oscilloscope does not support recording clips' });
+    }
+
+    const displayMode = clipDisplayMode(req.body, state);
+    if (displayMode.error) {
+      return res.status(displayMode.status).json({ error: displayMode.error });
     }
 
     const mapped = await storedChannels(patch.id);
@@ -522,6 +560,7 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
             };
           }),
           duration_seconds: duration,
+          display_mode: displayMode.mode,
         },
         // The device cannot answer before the recording ends, so the usual
         // timeout starts counting after the requested duration.
@@ -584,6 +623,9 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
           video_bytes: parsed.buffer.length,
           duration_seconds: parsed.duration_seconds ?? duration,
           sample_rate: parsed.sample_rate ?? state.audio_device?.sample_rate ?? null,
+          // What the device says it drew, or what it was asked for when it
+          // said nothing: the row describes the file, not the request.
+          display_mode: parsed.display_mode ?? displayMode.mode,
           captured_at: parsed.captured_at,
         },
         { transaction }
@@ -879,7 +921,8 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
   // Record a short clip of this module at the bench. The module is the page,
   // so there is nothing to work out about where the signal came from.
   //
-  // Body: { connection_id?, channels?, duration_seconds?, title?, caption? }
+  // Body: { connection_id?, channels?, duration_seconds?, display_mode?,
+  //         title?, caption? }
   router.post(
     '/modules/:id/clips',
     requireOwnedModule(db),
@@ -894,6 +937,11 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
         return res
           .status(409)
           .json({ error: 'The connected oscilloscope does not support recording clips' });
+      }
+
+      const displayMode = clipDisplayMode(req.body, state);
+      if (displayMode.error) {
+        return res.status(displayMode.status).json({ error: displayMode.error });
       }
 
       const picked = benchChannels(req.body, module, await moduleJacks(module.id), state);
@@ -912,6 +960,7 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
               signal_type: c.signal_type ?? undefined,
             })),
             duration_seconds: duration,
+            display_mode: displayMode.mode,
           },
           // The device cannot answer before the recording ends, so the usual
           // timeout starts counting after the requested duration.
@@ -962,6 +1011,9 @@ export function scopeRoutes(db, { hub = null, capturesDir = process.env.CAPTURES
             video_bytes: parsed.buffer.length,
             duration_seconds: parsed.duration_seconds ?? duration,
             sample_rate: parsed.sample_rate ?? state.audio_device?.sample_rate ?? null,
+            // What the device says it drew, or what it was asked for when it
+            // said nothing: the row describes the file, not the request.
+            display_mode: parsed.display_mode ?? displayMode.mode,
             captured_at: parsed.captured_at,
           },
           { transaction }

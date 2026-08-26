@@ -134,6 +134,22 @@ describe('ModuleVideosView', () => {
     expect(api.delete).toHaveBeenCalledWith('/api/clips/12');
   });
 
+  it('calls an overlaid clip’s channels traces, not panes', async () => {
+    const overlaid = structuredClone(moduleResponse);
+    overlaid.clips[0].display_mode = 'overlay';
+    api.get.mockResolvedValue(overlaid);
+    const wrapper = mount(ModuleVideosView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+
+    const clip = wrapper.find('[data-test="clip-12"]');
+    expect(clip.find('[data-test="clip-mode-12"]').text()).toContain('overlaid on one grid');
+    // There is one grid, so there is no pane 1 and pane 2 to list.
+    expect(clip.find('thead').text()).toContain('Trace');
+    expect(clip.find('thead').text()).not.toContain('Pane');
+    expect(clip.find('tbody td').attributes('data-label')).toBe('Trace');
+  });
+
   it('says so when there are no clips yet', async () => {
     const noClips = structuredClone(moduleResponse);
     delete noClips.clips;

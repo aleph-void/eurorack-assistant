@@ -626,6 +626,21 @@ Videos page beside the ones recorded while patching. `captureLinks()` counts
 a bench capture's own module as one of the modules it is about, so it can be
 attached to a question scoped to that module.
 
+A CLIP IS RECORDED IN A MODE, NOT PLAYED IN ONE. The scope draws the channels
+it is asked for either as a strip each or with every trace on ONE grid — its
+own overlay mode, which is how a gate is read against the envelope it opens
+rather than beside it — and which one it was is baked into the video the
+moment it is encoded. So `display_mode` ('panes' by default, or 'overlay') is
+part of the `record` request both clip routes send, and is stored on the row
+(`scope_clips.display_mode`, migration 043) as the device says it DREW it,
+falling back to what was asked for when it says nothing: the row describes the
+file, the same rule the container sniff follows. Overlaying is its own device
+capability, so a scope that lists its capabilities without `overlay` is
+refused (409) rather than left to record panes for a request that asked for
+one grid, and the pages take the option away for it. An overlaid clip's
+channels are TRACES, not panes — there is no pane 1 and pane 2 to number, so
+the clip lists them as such.
+
 A MODULE'S PAGE NAMES ITS OWN SCOPE, SO NOTHING SCOPES IT. There is nothing
 for a model to work out — the module is the scope, and which of its jacks,
 knobs and switches the question is about is a thing the asker knows and the
