@@ -68,9 +68,12 @@ describe('detail sub-pages', () => {
   it('gives every part of a module its own route', () => {
     const paths = under('/modules/:id/').map((r) => r.path.split('/').pop());
     expect(paths.sort()).toEqual([
+      // What it sounds like, and the addresses kept beside it.
+      'audio',
       'bridges',
       'components',
       'documents',
+      'links',
       'expanders',
       // The three kinds of jack are three pages over one view, so the kind is
       // in the path rather than in three near-identical route definitions —
@@ -101,8 +104,13 @@ describe('detail sub-pages', () => {
   it('gives every part of a patch its own route', () => {
     const pages = under('/patches/:id/').filter((r) => r.component);
     expect(pages.map((r) => r.path.split('/').pop()).sort()).toEqual([
+      'audio',
       'cables',
       'flow',
+      // The patch's own module links, buses and invented gear. It was at
+      // /links until 'links' came to mean, here as everywhere else, the
+      // addresses kept beside a record.
+      'gear',
       'links',
       'modules',
       'notes',

@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { extractJsonArray } from './json.js';
 import { capturePath, captureTextDocument } from './captures.js';
+import { audioTextDocument, waveformPath } from './audio.js';
 import { loadPatchDetail } from './patchDetail.js';
 import { patchTextDocument } from './patchDocument.js';
 import { engagedPatchModuleIds } from './patchTopology.js';
@@ -366,9 +367,11 @@ export async function answerQuestion(
     QuestionAnswer,
     QuestionNote,
     QuestionCapture,
+    QuestionAudio,
     QuestionPatch,
     Capture,
     CaptureChannel,
+    AudioRecording,
   } = db.models;
 
   const links = await QuestionModule.findAll({
@@ -471,6 +474,37 @@ export async function answerQuestion(
     }
   }
 
+  // Attached recordings contribute the same two ways a capture does, for the
+  // same reason: no backend can listen to a wav, so what travels is the
+  // picture rendered from it (waveform over spectrogram) and a document
+  // stating everything measured off it. A recording whose picture could not
+  // be drawn still goes as the document — the levels and the duration are
+  // worth having on their own.
+  const audioLinkRows = await QuestionAudio.findAll({
+    where: { question_id: question.id },
+    include: AudioRecording,
+    order: [['audio_id', 'ASC']],
+  });
+  const recordings = [];
+  for (const link of audioLinkRows) {
+    const recording = link.AudioRecording;
+    if (!recording) continue;
+    const module = recording.module_id ? await Module.findByPk(recording.module_id) : null;
+    const patch = recording.patch_id ? await Patch.findByPk(recording.patch_id) : null;
+    recordings.push({
+      name: `recording-${recording.id}.md`,
+      text: audioTextDocument(recording.get({ plain: true }), {
+        moduleName: module ? `${module.manufacturer} ${module.name}` : null,
+        patchName: patch?.name ?? recording.patch_name ?? null,
+      }),
+    });
+    if (recording.waveform_hash) {
+      const image = waveformPath(capturesDir, recording.waveform_hash);
+      if (fs.existsSync(image)) imagePaths.push(image);
+      else log(`recording ${recording.id}: the waveform image file is missing`);
+    }
+  }
+
   // The patches the question is about: what is plugged into what, how the
   // controls are set, which defaults survive and where the signal goes.
   const patchLinks = await QuestionPatch.findAll({
@@ -491,11 +525,11 @@ export async function answerQuestion(
     });
   }
 
-  const textDocs = [...previous, ...notes, ...captures, ...patches];
+  const textDocs = [...previous, ...notes, ...captures, ...recordings, ...patches];
   if (manualPaths.length === 0 && textDocs.length === 0) {
     if (scratchDir) fs.rmSync(scratchDir, { recursive: true, force: true });
     throw new Error(
-      'No readable manuals, previous answers, notes, captures, or patches are attached to this question.'
+      'No readable manuals, previous answers, notes, captures, recordings, or patches are attached to this question.'
     );
   }
   const manuals = manualPaths.slice(0, MAX_MANUALS);
@@ -505,6 +539,7 @@ export async function answerQuestion(
   if (previous.length > 0) kinds.push('previous question-and-answer documents');
   if (notes.length > 0) kinds.push("the user's own notes");
   if (captures.length > 0) kinds.push('oscilloscope captures of the live patch');
+  if (recordings.length > 0) kinds.push('recordings of what it actually sounds like');
   if (patches.length > 0) kinds.push('a description of the patch itself');
   const moduleNames = scoped.map((m) => `${m.manufacturer} ${m.name}`).join(', ');
   let answerPrompt =
@@ -517,6 +552,14 @@ export async function answerQuestion(
       `settings it records, the normalled connections it leaves intact or cancels, and the signal flow those add ` +
       `up to. Answer from that patch as it actually is — do not assume connections it does not list, and say so ` +
       `when what is recorded is not enough to be sure. `;
+  }
+  if (recordings.length > 0) {
+    answerPrompt +=
+      `${recordings.length === 1 ? 'A recording is' : 'Recordings are'} attached: for each one there is a ` +
+      `document giving its duration, sample rate, channel count and its measured peak and RMS level in ` +
+      `dBFS, and — where it could be drawn — an image of the waveform above the spectrogram of the same ` +
+      `take. Judge the sound from those. Do not claim to have listened to the audio itself, and say when ` +
+      `the picture and the numbers are not enough to be sure. `;
   }
   if (components.length > 0) {
     const componentNames = components

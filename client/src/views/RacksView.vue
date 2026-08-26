@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import ComponentLegend from '../components/ComponentLegend.vue';
 import ShareButton from '../components/ShareButton.vue';
+import ResourceLinks from '../components/ResourceLinks.vue';
 import { panelCropStyle } from '../panelLayout.js';
 import { usePanelChips } from '../components/racks/usePanelChips.js';
 import { useRackDrag } from '../components/racks/useRackDrag.js';
@@ -21,6 +22,11 @@ const renamingId = ref(null);
 const renameValue = ref('');
 const organizer = ref(null);
 const organizingRackId = ref(null);
+// Which rack's links are open, if any. A rack has no page of its own, so the
+// links it keeps — the build thread, the case's manual — are a panel opened
+// from its row, the way the organizer is.
+const linksRackId = ref(null);
+const linksRack = computed(() => racks.value.find((r) => r.id === linksRackId.value) ?? null);
 const layoutBusy = ref(false);
 const dragged = ref(null);
 // A layout failure is shown INSIDE the organizer: `error` is drawn at the top
@@ -451,14 +457,24 @@ async function nudge(rowIndex, index, delta) {
               </select>
             </td>
             <td data-label="Layout">
-              <button
-                class="secondary"
-                style="margin: 0"
-                :data-test="`organize-${rack.id}`"
-                @click="openOrganizer(rack)"
-              >
-                {{ organizingRackId === rack.id ? 'Close organizer' : 'Organize rack' }}
-              </button>
+              <div class="actions nowrap">
+                <button
+                  class="secondary"
+                  style="margin: 0"
+                  :data-test="`organize-${rack.id}`"
+                  @click="openOrganizer(rack)"
+                >
+                  {{ organizingRackId === rack.id ? 'Close organizer' : 'Organize rack' }}
+                </button>
+                <button
+                  class="secondary"
+                  style="margin: 0"
+                  :data-test="`links-${rack.id}`"
+                  @click="linksRackId = linksRackId === rack.id ? null : rack.id"
+                >
+                  {{ linksRackId === rack.id ? 'Close links' : 'Links' }}
+                </button>
+              </div>
             </td>
             <td class="actions-cell">
               <div class="actions nowrap">
@@ -502,6 +518,11 @@ async function nudge(rowIndex, index, delta) {
         </div>
       </div>
     </form>
+
+    <section v-if="linksRack" class="rack-links" data-test="rack-links">
+      <h2>{{ linksRack.name }}</h2>
+      <ResourceLinks kind="rack" :record-id="linksRack.id" />
+    </section>
 
     <section v-if="organizer" class="rack-organizer" data-test="rack-organizer">
       <h2>Organize {{ organizer.name }}</h2>

@@ -92,6 +92,25 @@ describe('SystemsView', () => {
     });
   });
 
+  // A system has no page of its own either: its links open from its row.
+  it('opens a system s links from its row and closes them again', async () => {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/systems' ? systemsResponse : [])
+    );
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="system-links"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="links-1"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="system-links"]').text()).toContain('studio');
+    expect(api.get).toHaveBeenCalledWith('/api/links?system_id=1');
+
+    await wrapper.find('[data-test="links-1"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="system-links"]').exists()).toBe(false);
+  });
+
   it('renames a system', async () => {
     api.get.mockResolvedValue(systemsResponse);
     api.put.mockResolvedValue({ id: 1, name: 'the desk' });

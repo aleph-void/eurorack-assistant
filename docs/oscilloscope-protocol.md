@@ -373,7 +373,54 @@ The server waits `duration_seconds` plus the usual request timeout for the
 answer, so there is no need to stream progress — but do answer with an `error`
 frame immediately if recording cannot start.
 
-### 3.3 `tuner`
+### 3.3 `record_audio`
+
+Record what the interface is HEARING, rather than what the scope is drawing.
+Only sent to devices whose `capabilities` include `"record_audio"` (or that
+announce no capability list at all).
+
+```json
+{
+  "channels": [
+    { "index": 0, "label": "Make Noise Maths — Ch 1", "signal_type": "audio" }
+  ],
+  "duration_seconds": 15
+}
+```
+
+`channels` says which inputs to open; the answer is ONE recording of them,
+because a patch's sound is one sound however many jacks it took to make it.
+`duration_seconds` is between 1 and 120 — record for that long, then answer
+with the encoded audio:
+
+```json
+{
+  "audio": {
+    "format": "wav",
+    "data": "<base64>",
+    "duration_seconds": 15.0,
+    "sample_rate": 48000,
+    "channels": 2
+  },
+  "captured_at": "2026-08-12T18:00:00Z"
+}
+```
+
+- `format` must be one of `wav`, `mp3`, `flac`, `ogg`, `m4a` or `webm`, and the
+  bytes must really be that container — the server sniffs the magic and refuses
+  a mismatch.
+- The whole answer has to fit in one WebSocket frame, so the audio is capped at
+  8 MB. That is about a minute and a half of 48 kHz stereo 16-bit WAV; encode
+  (or record mono) for anything longer.
+- Everything but `data` is optional. The server measures the file with ffmpeg
+  anyway and prefers what it measured, using the device's numbers only where
+  the measurement found none.
+
+The server waits `duration_seconds` plus the usual request timeout for the
+answer, so there is no need to stream progress — but do answer with an `error`
+frame immediately if recording cannot start.
+
+### 3.4 `tuner`
 
 A live reading with no image, for the "Read tuner now" button.
 
@@ -383,7 +430,7 @@ A live reading with no image, for the "Read tuner now" button.
 
 Answer with `{ "channels": [ { "index": 0, "tuning": { … } }, … ] }`.
 
-### 3.4 `set_labels`
+### 3.5 `set_labels`
 
 Sent after a channel mapping is worked out, so the panes on the bench read the
 same as the ones on screen.
@@ -431,6 +478,13 @@ what can be attached to a question afterwards — at which point the LLM gets th
 image *and* a text document spelling out every reading in it, so an answer never
 depends on the model being able to open a PNG.
 
+A `record_audio` recording is stored the same way (sha256 of the audio, under
+`CAPTURES_DIR/audio/`) and attached to the **patch** or the **module** whose
+page asked for it. It is measured with ffmpeg as it arrives — duration, sample
+rate, channel count, peak and RMS level — and drawn once as a waveform above a
+spectrogram, which is what an attached recording shows an LLM: no backend can
+listen to the file itself.
+
 A `record` clip is stored the same way (sha256 of the video, under
 `CAPTURES_DIR/clips/`) but is attached to a **module** rather than filed under a
 patch note: the clip shows what that module's output looks like moving, so it
@@ -447,7 +501,9 @@ the one feeding the recorded panes, or whichever one the user picked.
 | Capture image                | 8 MB       | HTTP 502 to the browser, capture discarded    |
 | Clip video                   | 8 MB       | HTTP 502 to the browser, clip discarded       |
 | Clip duration                | 30 s       | The request is clamped before it is sent      |
-| Request answer               | 30 s (+ the clip duration for `record`) | HTTP 504 to the browser, late answer ignored |
+| Audio recording              | 8 MB       | HTTP 502 to the browser, recording discarded  |
+| Audio recording duration     | 120 s      | The request is clamped before it is sent      |
+| Request answer               | 30 s (+ the recording duration for `record`/`record_audio`) | HTTP 504 to the browser, late answer ignored |
 | Device code lifetime         | 10 min     | `expired_token`                               |
 | Access token lifetime        | 24 h       | Refresh                                       |
 
@@ -477,4 +533,8 @@ entitlement"). It is shown verbatim in the browser.
       requested duration, and announce `"record"` in `capabilities`. A device
       that lists its capabilities without `record` is refused cleanly instead
       of timed out.
+- [ ] Optionally `record_audio`: record the named inputs for the requested
+      duration and answer with the encoded audio, announcing `"record_audio"`
+      in `capabilities`. A device that lists its capabilities without it is
+      refused cleanly instead of timed out.
 - [ ] Answer *every* request, with `error` when it cannot be done.

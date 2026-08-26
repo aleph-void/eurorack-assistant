@@ -61,6 +61,24 @@ describe('RacksView', () => {
     expect(api.post).toHaveBeenCalledWith('/api/racks', { name: 'studio' });
   });
 
+  // A rack has no page of its own, so the links it keeps open from its row.
+  it('opens a rack s links from its row and closes them again', async () => {
+    mockLists();
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="rack-links"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="links-1"]').trigger('click');
+    await flushPromises();
+    const panel = wrapper.find('[data-test="rack-links"]');
+    expect(panel.text()).toContain('main rack');
+    expect(api.get).toHaveBeenCalledWith('/api/links?rack_id=1');
+
+    await wrapper.find('[data-test="links-1"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="rack-links"]').exists()).toBe(false);
+  });
+
   it('renders placed modules as panel images inside an organized rack row', async () => {
     api.get.mockImplementation((path) => {
       if (path === '/api/racks') return Promise.resolve(racksResponse);

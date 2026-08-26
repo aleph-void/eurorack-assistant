@@ -288,6 +288,21 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
 - **Private notes**: attach notes to modules, to specific components and to
   patches; a note can be reused across any number of them and is private to
   you until you share it.
+- **Recordings**: what the rack actually sounds like, attached to a module (the
+  bench take of one output) or to a patch (what the patch does). Three ways in:
+  upload a file, record straight from the browser's audio input, or ask the
+  connected oscilloscope to record what its interface is hearing. Every
+  recording is measured with ffmpeg as it arrives — duration, sample rate,
+  channel count, peak and RMS level in dBFS — and drawn once as its waveform
+  above its spectrogram. That picture and those numbers are what a recording
+  sends to the LLM when you attach one to a question: no model can listen to a
+  wav, so the answer is given the measurement rather than a claim of having
+  heard it.
+- **Links**: the rest of the story lives elsewhere — the forum thread about the
+  firmware, the maker's page, the video of the patch you are rebuilding, the
+  build thread for the case. A link can be kept beside a module, a patch, a
+  rack or a system, titled, annotated and ordered by hand. Links are private to
+  you, `http`/`https` only, and nothing on the server ever fetches one.
 - **Sharing**: a note, a patch, a question and its answer, a whole rack, or a
   document you uploaded can be shown to one other user, to several, or to
   everyone (including users added later). Sharing grants reading and nothing
@@ -305,7 +320,9 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   after whatever the patch cables into them — and you can ask the scope for a
   waveform image and the tuner reading taken with it. Captures are filed under
   the patch's notes and can be attached to a question, so the LLM sees the
-  measurement alongside the manuals. See
+  measurement alongside the manuals. A device that supports `record_audio` can
+  also be asked to record the sound itself, which lands as a recording on the
+  patch or the module that asked. See
   [docs/oscilloscope-protocol.md](docs/oscilloscope-protocol.md).
 - **Job privacy**: background jobs (and their live progress) are visible only
   to the user who triggered them (admins see all jobs). Shared module state
