@@ -106,6 +106,9 @@ export function defineScopeModels(define) {
       video_bytes: { type: DataTypes.INTEGER },
       duration_seconds: { type: DataTypes.REAL },
       sample_rate: { type: DataTypes.REAL },
+      // 'panes' (a strip per channel) or 'overlay' (every trace on one
+      // grid), migration 045.
+      display_mode: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'panes' },
       captured_at: { type: DataTypes.DATE },
     },
     { tableName: 'scope_clips', createdAt: 'created_at', updatedAt: false }

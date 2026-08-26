@@ -51,6 +51,10 @@ async function removeClip(clip) {
 }
 
 const paneLabel = (c) => c.label || c.component_name || `Channel ${c.channel_index + 1}`;
+
+// An overlaid clip has one grid with every trace on it, so its channels are
+// traces rather than panes and there is no pane to number.
+const overlaid = (clip) => clip.display_mode === 'overlay';
 </script>
 
 <template>
@@ -88,6 +92,9 @@ const paneLabel = (c) => c.label || c.component_name || `Channel ${c.channel_ind
           <p class="muted">
             <span v-if="clip.device_name">{{ clip.device_name }}</span>
             <span v-if="clip.duration_seconds"> · {{ Math.round(clip.duration_seconds) }}s</span>
+            <span :data-test="`clip-mode-${clip.id}`">
+              · {{ overlaid(clip) ? 'overlaid on one grid' : 'one pane per channel' }}
+            </span>
             <span v-if="clip.patch_name"> · recorded on patch “{{ clip.patch_name }}”</span>
           </p>
           <video
@@ -100,11 +107,16 @@ const paneLabel = (c) => c.label || c.component_name || `Channel ${c.channel_ind
           <div v-if="clip.channels?.length" class="table-wrap">
             <table>
               <thead>
-                <tr><th>Pane</th><th>Showing</th></tr>
+                <tr>
+                  <th>{{ overlaid(clip) ? 'Trace' : 'Pane' }}</th>
+                  <th>Showing</th>
+                </tr>
               </thead>
               <tbody>
                 <tr v-for="channel in clip.channels" :key="channel.id">
-                  <td data-label="Pane">{{ channel.channel_index + 1 }}</td>
+                  <td :data-label="overlaid(clip) ? 'Trace' : 'Pane'">
+                    {{ channel.channel_index + 1 }}
+                  </td>
                   <td data-label="Showing">
                     {{ paneLabel(channel) }}
                     <span v-if="channel.source_description" class="muted">

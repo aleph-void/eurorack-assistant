@@ -30,6 +30,10 @@ const recording = ref(false);
 const captureTitle = ref('');
 const clipTitle = ref('');
 const clipDuration = ref(10);
+// 'panes' (a strip per pane) or 'overlay' (every trace on one grid) — the
+// scope's own overlay mode, asked for at record time because it is how the
+// video was drawn rather than how it is played.
+const clipDisplayMode = ref('panes');
 // Per channel index: the jack it is on, and whether it is CV.
 const paneJack = ref({});
 const paneCv = ref({});
@@ -44,6 +48,13 @@ const connected = computed(() => Boolean(connection.value));
 const canRecord = computed(() => {
   const caps = connection.value?.capabilities;
   return !Array.isArray(caps) || caps.includes('record');
+});
+
+// Overlaying is its own capability: a scope that records only panes says so,
+// and the server refuses the mode rather than quietly recording panes.
+const canOverlay = computed(() => {
+  const caps = connection.value?.capabilities;
+  return !Array.isArray(caps) || caps.includes('overlay');
 });
 
 const moduleLabel = computed(() =>
@@ -175,6 +186,7 @@ async function record() {
       connection_id: connection.value?.id,
       title: clipTitle.value.trim() || undefined,
       duration_seconds: Number(clipDuration.value) || undefined,
+      display_mode: clipDisplayMode.value,
       channels: channelPayload(),
     });
     clipTitle.value = '';
@@ -245,6 +257,11 @@ onMounted(() => {
 // Reconnecting a scope makes the remembered naming meaningful again.
 watch(connected, (isConnected) => {
   if (isConnected) load();
+});
+// A scope that cannot overlay must not be left with 'overlay' chosen from
+// the last one — the record would be refused with the option out of sight.
+watch(canOverlay, (can) => {
+  if (!can) clipDisplayMode.value = 'panes';
 });
 </script>
 
@@ -383,6 +400,18 @@ watch(connected, (isConnected) => {
                 data-test="module-clip-duration"
               />
             </div>
+            <div class="shrink">
+              <label for="module-clip-mode">Panes</label>
+              <select
+                id="module-clip-mode"
+                v-model="clipDisplayMode"
+                :disabled="!canOverlay"
+                data-test="module-clip-mode"
+              >
+                <option value="panes">One pane each</option>
+                <option value="overlay">Overlaid on one grid</option>
+              </select>
+            </div>
             <input v-model="clipTitle" placeholder="Title (optional)" data-test="module-clip-title" />
             <button
               class="shrink"
@@ -393,6 +422,15 @@ watch(connected, (isConnected) => {
               {{ recording ? 'Recording…' : 'Record clip' }}
             </button>
           </div>
+          <p class="muted">
+            <span v-if="!canOverlay" data-test="module-clip-overlay-unsupported">
+              This scope records one pane per channel; it does not overlay them.
+            </span>
+            <span v-else-if="clipDisplayMode === 'overlay'">
+              Overlaid, every ticked pane is drawn on one grid, so two of this module’s outputs
+              can be read against each other in time.
+            </span>
+          </p>
         </template>
       </div>
 
