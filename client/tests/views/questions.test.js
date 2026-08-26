@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { testGlobal } from '../setup.js';
+import { openPanels, testGlobal } from '../setup.js';
 
 vi.mock('../../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -247,6 +247,103 @@ describe('QuestionDetailView', () => {
       patch_ids: [],
     });
     expect(wrapper.find('[data-test="answer-pending"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  // A recording is offered where its module is in scope, and travels as the
+  // picture drawn from it — which is why the review step says so rather than
+  // implying the assistant will listen to it.
+  it('offers recordings of the modules in scope and attaches the picked ones', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path === '/api/questions/1')
+        return { id: 1, prompt: 'Why does it buzz?', status: 'scoped', modules: [], components: [] };
+      if (path === '/api/questions/1/options')
+        return {
+          modules: [
+            { id: 3, manufacturer: 'Make Noise', name: 'Maths', in_scope: true },
+            { id: 4, manufacturer: '2hp', name: 'Pluck', in_scope: false },
+          ],
+          components: [],
+          manuals: [{ id: 11, module_id: 3, name: 'manual', original_name: null, source: 'found' }],
+          answers: [],
+          notes: [],
+          patches: [],
+          audio: [
+            {
+              id: 21,
+              title: 'Sub out',
+              original_name: null,
+              duration_seconds: 12.5,
+              recorded_at: '2026-02-03T10:00:00.000Z',
+              module_ids: [3],
+            },
+            // Of a module nobody put in scope: not offered.
+            {
+              id: 22,
+              title: 'Pluck',
+              original_name: null,
+              duration_seconds: null,
+              recorded_at: '2026-02-03T10:00:00.000Z',
+              module_ids: [4],
+            },
+          ],
+        };
+      throw new Error(`unexpected ${path}`);
+    });
+    api.post.mockResolvedValue({ id: 1, status: 'pending', modules: [], components: [] });
+
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const boxes = wrapper.findAll('[data-test="audio-option"]');
+    expect(boxes).toHaveLength(1);
+    expect(wrapper.find('[data-test="review"]').text()).toContain('Sub out');
+    expect(wrapper.find('[data-test="review"]').text()).toContain('12.5s');
+    expect(wrapper.find('[data-test="review"]').text()).toContain('cannot hear the audio');
+
+    await boxes[0].setValue(true);
+    await wrapper.find('[data-test="request-answer"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/questions/1/answer', {
+      module_ids: [3],
+      component_ids: [],
+      manual_ids: [11],
+      answer_ids: [],
+      note_ids: [],
+      capture_ids: [],
+      audio_ids: [21],
+      patch_ids: [],
+    });
+    wrapper.unmount();
+  });
+
+  it('lists an attached recording with the rest of the context', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path === '/api/questions/1')
+        return {
+          id: 1,
+          prompt: 'Why does it buzz?',
+          status: 'answered',
+          answer: 'Because of the gain.',
+          modules: [],
+          components: [],
+          manuals: [],
+          answers: [],
+          notes: [],
+          captures: [],
+          audio: [{ id: 21, title: 'Sub out', original_name: null }],
+          patches: [],
+        };
+      throw new Error(`unexpected ${path}`);
+    });
+
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+
+    const attached = wrapper.find('[data-test="attachments"]');
+    expect(attached.text()).toContain('Sub out');
+    expect(attached.text()).toContain('recording');
     wrapper.unmount();
   });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { testGlobal, waitFor } from '../setup.js';
 
@@ -172,6 +172,45 @@ describe('AudioRecordings', () => {
     expect(wrapper.find('[data-test="no-audio"]').exists()).toBe(true);
   });
 
+  it('backs out of a rename without writing anything', async () => {
+    mockLoad();
+    const wrapper = mount(AudioRecordings, {
+      props: { kind: 'module', recordId: '1' },
+      global: testGlobal(),
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-test="audio-edit"]').trigger('click');
+    await wrapper.find('[data-test="audio-title-input"]').setValue('half a thought');
+    await wrapper.find('[data-test="audio-caption-input"]').setValue('and half a note');
+    await wrapper.findAll('[data-test="audio-5"] button')[1].trigger('click');
+    await flushPromises();
+    expect(api.put).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="audio-5"]').text()).toContain('Sub out');
+  });
+
+  // What a take IS cannot be edited — only what it is called and what the
+  // person who made it says about it.
+  it('saves a new caption with the title', async () => {
+    mockLoad();
+    api.put.mockResolvedValue({ ...recording, caption: 'the buzz starts at 0:04' });
+    const wrapper = mount(AudioRecordings, {
+      props: { kind: 'module', recordId: '1' },
+      global: testGlobal(),
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-test="audio-edit"]').trigger('click');
+    await wrapper.find('[data-test="audio-caption-input"]').setValue('the buzz starts at 0:04');
+    await wrapper.find('[data-test="audio-save"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/audio/5', {
+      title: 'Sub out',
+      caption: 'the buzz starts at 0:04',
+    });
+    expect(wrapper.find('[data-test="audio-5"]').text()).toContain('the buzz starts at 0:04');
+  });
+
   it('says what went wrong instead of losing the failure', async () => {
     mockLoad({ recordings: [] });
     api.post.mockRejectedValue(new Error('recordings are limited to 25MB'));
@@ -190,5 +229,199 @@ describe('AudioRecordings', () => {
       'the failure to be said'
     );
     expect(wrapper.find('[data-test="audio-error"]').text()).toContain('25MB');
+  });
+});
+
+// A stand-in for the browser's own recorder: `stop()` hands over one chunk
+// and ends the take, which is the whole of what the panel drives.
+class FakeRecorder {
+  constructor(stream, options) {
+    this.stream = stream;
+    this.mimeType = options?.mimeType ?? 'audio/webm';
+    this.state = 'inactive';
+    FakeRecorder.last = this;
+  }
+
+  start() {
+    this.state = 'recording';
+  }
+
+  stop() {
+    this.state = 'inactive';
+    this.ondataavailable?.({ data: new Blob([new Uint8Array([26, 69, 223, 163])]) });
+    this.onstop?.();
+  }
+}
+
+// Puts a recorder and an input on the window, and answers with the tracks the
+// panel is expected to release when the take ends.
+function fakeMicrophone({ refused = false } = {}) {
+  const track = { stop: vi.fn() };
+  window.MediaRecorder = FakeRecorder;
+  Object.defineProperty(window.navigator, 'mediaDevices', {
+    configurable: true,
+    value: {
+      getUserMedia: refused
+        ? vi.fn().mockRejectedValue(new Error('Permission denied'))
+        : vi.fn().mockResolvedValue({ getTracks: () => [track] }),
+    },
+  });
+  return { track };
+}
+
+function forgetMicrophone() {
+  delete window.MediaRecorder;
+  delete FakeRecorder.last;
+  Reflect.deleteProperty(window.navigator, 'mediaDevices');
+}
+
+describe('recording in the browser', () => {
+  afterEach(forgetMicrophone);
+
+  it('records a take, stores it as one, and lets go of the input', async () => {
+    const { track } = fakeMicrophone();
+    mockLoad({ recordings: [] });
+    api.post.mockResolvedValue({ ...recording, id: 12, source: 'browser', title: null });
+    const wrapper = mount(AudioRecordings, {
+      props: { kind: 'patch', recordId: '7' },
+      global: testGlobal(),
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-test="record-here"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="recording-now"]').exists()).toBe(true);
+    // While a take is running there is nothing to start, only something to stop.
+    expect(wrapper.find('[data-test="record-here"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="stop-recording"]').trigger('click');
+    await waitFor(() => api.post.mock.calls.length > 0, 'the take to be stored');
+
+    const [path, body] = api.post.mock.calls[0];
+    expect(path).toBe('/api/audio');
+    expect(body).toMatchObject({ patch_id: 7, source: 'browser', filename: null });
+    expect(body.data_base64.length).toBeGreaterThan(0);
+    // A page still holding the input open is a page nothing else can record
+    // through.
+    expect(track.stop).toHaveBeenCalled();
+    await flushPromises();
+    expect(wrapper.find('[data-test="recording-now"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="audio-12"]').exists()).toBe(true);
+  });
+
+  it('says so when the microphone is refused, and stays ready to try again', async () => {
+    fakeMicrophone({ refused: true });
+    mockLoad({ recordings: [] });
+    const wrapper = mount(AudioRecordings, {
+      props: { kind: 'module', recordId: '1' },
+      global: testGlobal(),
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-test="record-here"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="record-error"]').text()).toContain('Permission denied');
+    expect(wrapper.find('[data-test="recording-now"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="record-here"]').exists()).toBe(true);
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  // A take still running when the page goes would hold the input open for
+  // good, so leaving the page ends it.
+  it('ends a running take when the page is left', async () => {
+    const { track } = fakeMicrophone();
+    mockLoad({ recordings: [] });
+    api.post.mockResolvedValue({ ...recording, id: 13, source: 'browser' });
+    const wrapper = mount(AudioRecordings, {
+      props: { kind: 'module', recordId: '1' },
+      global: testGlobal(),
+    });
+    await flushPromises();
+    await wrapper.find('[data-test="record-here"]').trigger('click');
+    await flushPromises();
+
+    wrapper.unmount();
+    await waitFor(() => track.stop.mock.calls.length > 0, 'the input to be released');
+  });
+
+  // Without a recorder on the window there is nothing to offer; the other two
+  // ways in are still there.
+  it('offers no take at all where the browser cannot record', async () => {
+    mockLoad({ recordings: [] });
+    const wrapper = mount(AudioRecordings, {
+      props: { kind: 'module', recordId: '1' },
+      global: testGlobal(),
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-test="record-here"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="audio-file"]').exists()).toBe(true);
+  });
+});
+
+describe('when something goes wrong', () => {
+  it('says why the list could not be read', async () => {
+    api.get.mockImplementation((path) =>
+      path.startsWith('/api/audio')
+        ? Promise.reject(new Error('Request failed (500)'))
+        : Promise.resolve({ devices: [] })
+    );
+    const wrapper = mount(AudioRecordings, {
+      props: { kind: 'module', recordId: '1' },
+      global: testGlobal(),
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-test="audio-list-error"]').text()).toContain('500');
+  });
+
+  // Whether a scope is connected is a secondary question: a page whose list
+  // loaded is not broken because that one failed.
+  it('offers no oscilloscope when it cannot tell whether one is there', async () => {
+    api.get.mockImplementation((path) =>
+      path.startsWith('/api/audio')
+        ? Promise.resolve([])
+        : Promise.reject(new Error('Request failed (503)'))
+    );
+    const wrapper = mount(AudioRecordings, {
+      props: { kind: 'patch', recordId: '7' },
+      global: testGlobal(),
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-test="record-from-scope"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="no-audio"]').exists()).toBe(true);
+  });
+
+  it('says what the oscilloscope refused', async () => {
+    mockLoad({
+      recordings: [],
+      devices: [{ id: 3, name: 'CVOsc', capabilities: ['record_audio'] }],
+    });
+    api.post.mockRejectedValue(new Error('No oscilloscope is connected'));
+    const wrapper = mount(AudioRecordings, {
+      props: { kind: 'patch', recordId: '7' },
+      global: testGlobal(),
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-test="record-from-scope"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="audio-error"]').text()).toContain('No oscilloscope');
+  });
+
+  it('reads the new record when the page is pointed at another one', async () => {
+    mockLoad();
+    const wrapper = mount(AudioRecordings, {
+      props: { kind: 'module', recordId: '1' },
+      global: testGlobal(),
+    });
+    await flushPromises();
+    await wrapper.find('[data-test="audio-waveform-toggle"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="audio-waveform"]').exists()).toBe(true);
+
+    await wrapper.setProps({ recordId: '2' });
+    await flushPromises();
+    expect(api.get).toHaveBeenCalledWith('/api/audio?module_id=2');
+    // The picture that was open belonged to the record being left.
+    expect(wrapper.find('[data-test="audio-waveform"]').exists()).toBe(false);
   });
 });

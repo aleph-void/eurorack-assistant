@@ -107,12 +107,13 @@ describe('ResourceLinks', () => {
 
     await wrapper.find('[data-test="link-edit"]').trigger('click');
     await wrapper.find('[data-test="link-edit-title"]').setValue('Firmware 2.1');
+    await wrapper.find('[data-test="link-edit-description"]').setValue('what 2.1 changed');
     await wrapper.find('[data-test="link-save"]').trigger('click');
     await flushPromises();
     expect(api.put).toHaveBeenCalledWith('/api/links/2', {
       url: thread.url,
       title: 'Firmware 2.1',
-      description: 'the 2.1 changes',
+      description: 'what 2.1 changed',
     });
     expect(wrapper.find('[data-test="link-2"]').text()).toContain('Firmware 2.1');
   });
@@ -142,5 +143,81 @@ describe('ResourceLinks', () => {
     await flushPromises();
     expect(api.delete).toHaveBeenCalledWith('/api/links/2');
     expect(wrapper.find('[data-test="no-links"]').exists()).toBe(true);
+  });
+});
+
+describe('ResourceLinks, when things go wrong or move', () => {
+  it('says why the list could not be read', async () => {
+    api.get.mockRejectedValue(new Error('Record not found'));
+    const wrapper = mountFor('rack', '9');
+    await flushPromises();
+    expect(wrapper.find('[data-test="links-list-error"]').text()).toContain('Record not found');
+  });
+
+  it('says what an edit was refused for and keeps the row open', async () => {
+    api.get.mockResolvedValue([thread]);
+    api.put.mockRejectedValue(new Error('That is not a URL'));
+    const wrapper = mountFor('module');
+    await flushPromises();
+
+    await wrapper.find('[data-test="link-edit"]').trigger('click');
+    await wrapper.find('[data-test="link-edit-url"]').setValue('not a url');
+    await wrapper.find('[data-test="link-save"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="link-error"]').text()).toContain('not a URL');
+    expect(wrapper.find('[data-test="link-edit-url"]').exists()).toBe(true);
+  });
+
+  it('backs out of an edit without writing anything', async () => {
+    api.get.mockResolvedValue([thread]);
+    const wrapper = mountFor('module');
+    await flushPromises();
+
+    await wrapper.find('[data-test="link-edit"]').trigger('click');
+    await wrapper.find('[data-test="link-edit-title"]').setValue('half a thought');
+    await wrapper.findAll('[data-test="link-2"] button')[1].trigger('click');
+    await flushPromises();
+    expect(api.put).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="link-2"]').text()).toContain('Firmware thread');
+  });
+
+  it('moves a link up, and will not move the ends off the list', async () => {
+    api.get.mockResolvedValue([thread, manual]);
+    api.put.mockResolvedValue({});
+    const wrapper = mountFor('module');
+    await flushPromises();
+
+    // The first row cannot go up and the last cannot go down.
+    expect(wrapper.findAll('[data-test="link-up"]')[0].attributes('disabled')).toBeDefined();
+    expect(wrapper.findAll('[data-test="link-down"]')[1].attributes('disabled')).toBeDefined();
+
+    await wrapper.findAll('[data-test="link-up"]')[1].trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/links/3', { position: 0 });
+    expect(wrapper.findAll('tbody tr')[0].text()).toContain('example.org/manual');
+  });
+
+  // An order the server refused is not the order: the list is read back
+  // rather than left showing a move that did not happen.
+  it('re-reads the list when the new order could not be saved', async () => {
+    api.get.mockResolvedValue([thread, manual]);
+    api.put.mockRejectedValue(new Error('Request failed (500)'));
+    const wrapper = mountFor('module');
+    await flushPromises();
+    api.get.mockClear();
+
+    await wrapper.findAll('[data-test="link-down"]')[0].trigger('click');
+    await flushPromises();
+    expect(api.get).toHaveBeenCalledWith('/api/links?module_id=1');
+    expect(wrapper.findAll('tbody tr')[0].text()).toContain('Firmware thread');
+  });
+
+  it('reads the new record when the panel is pointed at another one', async () => {
+    api.get.mockResolvedValue([]);
+    const wrapper = mountFor('rack', '4');
+    await flushPromises();
+    await wrapper.setProps({ recordId: '5' });
+    await flushPromises();
+    expect(api.get).toHaveBeenCalledWith('/api/links?rack_id=5');
   });
 });
