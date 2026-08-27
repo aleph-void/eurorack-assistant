@@ -83,6 +83,7 @@
   --accent-2: #a78bfa;
   --accent-glow: rgba(139, 92, 246, 0.15);
   --danger: #f87171;
+  --warn: #fbbf24;
   --ok: #4ade80;
   --topbar-height: 3.5rem;
 
@@ -665,6 +666,9 @@ details.expander > .expander-body {
 .toast-error {
   border-left-color: var(--danger);
 }
+.toast-warning {
+  border-left-color: var(--warn);
+}
 /* The heading carries the colour; the message underneath stays plain, so the
    words that matter are read at full contrast. */
 .toast-success .toast-title {
@@ -672,6 +676,9 @@ details.expander > .expander-body {
 }
 .toast-error .toast-title {
   color: var(--danger);
+}
+.toast-warning .toast-title {
+  color: var(--warn);
 }
 .toast-info .toast-title {
   color: var(--accent-2);
@@ -694,6 +701,9 @@ details.expander > .expander-body {
 }
 .toast-error .toast-icon {
   background: var(--danger);
+}
+.toast-warning .toast-icon {
+  background: var(--warn);
 }
 
 .toast-body {

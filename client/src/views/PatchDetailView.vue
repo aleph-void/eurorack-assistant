@@ -11,6 +11,7 @@
 import { onBeforeUnmount, ref, toRef, watch } from 'vue';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
+import { toast } from '../toast.js';
 import PatchDiagram from '../components/PatchDiagram.vue';
 import PatchDetailHeader from '../components/patchdetail/PatchDetailHeader.vue';
 import {
@@ -24,7 +25,8 @@ import { clearVoicePatch, setVoicePatch } from '../voicePatchTarget.js';
 const props = defineProps({ id: { type: String, required: true } });
 
 const { patch, error, load, setCables } = usePatchRecord(toRef(props, 'id'));
-const { modules, modulesById, moduleLabel, cables, jackCandidates } = usePatchFacts(patch);
+const { modules, modulesById, moduleLabel, cables, cablePolarityWarning, jackCandidates } =
+  usePatchFacts(patch);
 
 // What voice patching needs to know about this patch. Every list is a
 // FUNCTION: they are every jack and every cable in the patch — thousands of
@@ -73,6 +75,19 @@ onBeforeUnmount(() => clearVoicePatch(voiceClaim));
 // row of it.
 const cableError = ref('');
 
+// A cable joining a unipolar jack to a bipolar one was plugged, not refused —
+// but it is usually a patch that sounds wrong, and the person who made it is
+// looking at the picture, not at the two modules' voltage ranges. Said as an
+// amber toast that stays until dismissed: advice about a working cable is
+// easy to miss while patching, and there is no later moment it comes back.
+function warnAboutPolarity(...plugged) {
+  for (const cable of plugged) {
+    if (!cable) continue;
+    const warning = cablePolarityWarning(cable);
+    if (warning) toast.warning(warning, { title: 'Polarity mismatch' });
+  }
+}
+
 async function connectDiagramCable(ends) {
   cableError.value = '';
   try {
@@ -81,6 +96,7 @@ async function connectDiagramCable(ends) {
       ends
     );
     setCables([...patch.value.cables, cable, ...(paired ? [paired] : [])]);
+    warnAboutPolarity(cable, paired);
   } catch (e) {
     cableError.value = e.message;
   }
@@ -96,6 +112,7 @@ async function moveDiagramCable({ cable, ...ends }) {
   try {
     const moved = await api.post(`/api/patches/${props.id}/cables/${cable.id}/move`, ends);
     setCables([...patch.value.cables.filter((c) => c.id !== cable.id), moved]);
+    warnAboutPolarity(moved);
   } catch (e) {
     cableError.value = e.message;
   }
