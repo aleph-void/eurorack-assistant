@@ -19,11 +19,31 @@ const emit = defineEmits(['reload']);
 const router = useRouter();
 const detail = useDetailStore();
 
+// How many rows each of the patch's pages has, for the drawer's badges and
+// its folded-away empty pages. Pages whose rows are not in this payload
+// (recordings, links, notes, questions, the scope) are left out: absent
+// means unknown, not empty.
+function patchCounts(p) {
+  if (!p) return {};
+  return {
+    // The cables page also lists the normalled connections still active, so
+    // a patch with no cables yet is not showing an empty page there.
+    cables: (p.cables || []).length + (p.normalizations || []).length,
+    settings: (p.settings || []).length,
+    modules: (p.modules || []).length,
+    // The gear page is the module links, the buses and the invented gear.
+    gear:
+      (p.links || []).length +
+      (p.groups || []).length +
+      (p.modules || []).filter((m) => m.external).length,
+  };
+}
+
 let claim = 0;
 watch(
-  () => [props.patchId, props.patch?.name],
+  () => [props.patchId, props.patch],
   () => {
-    claim = detail.set('patch', props.patchId, props.patch?.name || '');
+    claim = detail.set('patch', props.patchId, props.patch?.name || '', patchCounts(props.patch));
   },
   { immediate: true }
 );

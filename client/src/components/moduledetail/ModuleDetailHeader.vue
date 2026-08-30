@@ -19,13 +19,41 @@ const emit = defineEmits(['reload']);
 const route = useRoute();
 const detail = useDetailStore();
 
-// The drawer says the module by name while any of its pages is open.
+// How many rows each of the module's pages has, keyed by the page keys the
+// nav drawer uses, so it can badge the full pages and fold the empty ones
+// away. Pages whose rows are not in this payload (recordings, links,
+// questions) are left out: absent means unknown, not empty. The scope page
+// is left out on purpose — it is a bench to take captures at, not a list.
+function moduleCounts(m) {
+  if (!m) return {};
+  const components = m.components || [];
+  const counts = { components: components.length };
+  for (const c of components) counts[c.type] = (counts[c.type] || 0) + 1;
+  counts.values = components.reduce((n, c) => n + (c.values?.length || 0), 0);
+  counts.parameters = (m.parameters || []).length;
+  counts.normalizations = (m.normalizations || []).length;
+  counts.routing_switches = (m.switches || []).length;
+  counts.routes = (m.routes || []).length;
+  counts.pairs = (m.pairs || []).length;
+  // A suggested-but-unlinked expander is still something the page shows.
+  counts.expanders = (m.expanders || []).length + (m.expander_suggestions || []).length;
+  counts.bridges = (m.bridges || []).length;
+  counts.documents = (m.manuals || []).length;
+  // Bench clips appear on the videos page beside the imported videos.
+  counts.videos = (m.videos || []).length + (m.clips || []).length;
+  counts.notes = (m.notes || []).length;
+  return counts;
+}
+
+// The drawer says the module by name while any of its pages is open. The
+// payload rides in the watch because a reload replaces it wholesale, and the
+// counts have to follow the row that was just added or removed.
 let claim = 0;
 watch(
-  () => [props.moduleId, props.module?.manufacturer, props.module?.name],
+  () => [props.moduleId, props.module],
   () => {
     const label = props.module ? `${props.module.manufacturer} ${props.module.name}` : '';
-    claim = detail.set('module', props.moduleId, label);
+    claim = detail.set('module', props.moduleId, label, moduleCounts(props.module));
   },
   { immediate: true }
 );

@@ -72,56 +72,127 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 // ---- the record the reader is inside ----
 // A module and a patch are each a dozen routes over one record. Whichever of
 // them is open says so (stores/detail.js), and the drawer answers with that
-// record's own pages, at the top, above the rest of the app.
+// record's own pages, at the top, above the rest of the app — GROUPED, with
+// the count of rows on each page beside its name and the empty pages folded
+// behind one line per group, because a module is twenty-seven pages and for
+// most modules half of them are blank. `countKey` names the entry in
+// detail.counts the header derived from the payload; a page with no
+// countKey (or none reported) is neither badged nor folded.
 // Every kind of thing on a panel is a page of its own — the jacks by what a
 // cable does at them, the rest by their type. The list of ALL of a module's
 // components is still there; it is just not where you go to find the knobs.
 const MODULE_PAGES = [
   { path: '', label: 'Front panel & summary', exact: true },
-  { path: '/jacks/input', label: 'Input jacks' },
-  { path: '/jacks/output', label: 'Output jacks' },
-  { path: '/jacks/bidirectional', label: 'Bidirectional jacks' },
-  { path: '/parts/knob', label: 'Knobs' },
-  { path: '/parts/slider', label: 'Sliders' },
-  { path: '/parts/button', label: 'Buttons' },
-  { path: '/parts/toggle', label: 'Toggles' },
-  { path: '/parts/switch', label: 'Switches' },
-  { path: '/parts/display', label: 'Displays' },
-  { path: '/parts/other', label: 'Other components' },
-  { path: '/components', label: 'Components' },
-  { path: '/values', label: 'Component values' },
-  { path: '/parameters', label: 'Menu parameters' },
-  { path: '/normalizations', label: 'Normalled connections' },
-  { path: '/switches', label: 'Routing switches' },
-  { path: '/routes', label: 'Internal signal paths' },
-  { path: '/pairs', label: 'Stereo pairs' },
-  { path: '/expanders', label: 'Expander panels' },
-  { path: '/bridges', label: 'Dual panels' },
-  { path: '/documents', label: 'Documents' },
-  { path: '/videos', label: 'Videos' },
-  { path: '/audio', label: 'Recordings' },
-  { path: '/links', label: 'Links' },
-  { path: '/scope', label: 'Oscilloscope' },
-  { path: '/notes', label: 'Your notes' },
-  { path: '/questions', label: 'Questions' },
+  { path: '/jacks/input', label: 'Input jacks', group: 'panel', countKey: 'input_jack' },
+  { path: '/jacks/output', label: 'Output jacks', group: 'panel', countKey: 'output_jack' },
+  {
+    path: '/jacks/bidirectional',
+    label: 'Bidirectional jacks',
+    group: 'panel',
+    countKey: 'bidirectional_jack',
+  },
+  { path: '/parts/knob', label: 'Knobs', group: 'panel', countKey: 'knob' },
+  { path: '/parts/slider', label: 'Sliders', group: 'panel', countKey: 'slider' },
+  { path: '/parts/button', label: 'Buttons', group: 'panel', countKey: 'button' },
+  { path: '/parts/toggle', label: 'Toggles', group: 'panel', countKey: 'toggle' },
+  { path: '/parts/switch', label: 'Switches', group: 'panel', countKey: 'switch' },
+  { path: '/parts/display', label: 'Displays', group: 'panel', countKey: 'display' },
+  { path: '/parts/other', label: 'Other components', group: 'panel', countKey: 'other' },
+  { path: '/components', label: 'All components', group: 'panel', countKey: 'components' },
+  { path: '/values', label: 'Component values', group: 'panel', countKey: 'values' },
+  { path: '/parameters', label: 'Menu parameters', group: 'panel', countKey: 'parameters' },
+  {
+    path: '/normalizations',
+    label: 'Normalled connections',
+    group: 'signal',
+    countKey: 'normalizations',
+  },
+  { path: '/switches', label: 'Routing switches', group: 'signal', countKey: 'routing_switches' },
+  { path: '/routes', label: 'Internal signal paths', group: 'signal', countKey: 'routes' },
+  { path: '/pairs', label: 'Stereo pairs', group: 'signal', countKey: 'pairs' },
+  { path: '/expanders', label: 'Expander panels', group: 'signal', countKey: 'expanders' },
+  { path: '/bridges', label: 'Dual panels', group: 'signal', countKey: 'bridges' },
+  { path: '/documents', label: 'Documents', group: 'reference', countKey: 'documents' },
+  { path: '/videos', label: 'Videos', group: 'reference', countKey: 'videos' },
+  { path: '/audio', label: 'Recordings', group: 'reference' },
+  { path: '/links', label: 'Links', group: 'reference' },
+  { path: '/scope', label: 'Oscilloscope', group: 'work' },
+  { path: '/notes', label: 'Your notes', group: 'work', countKey: 'notes' },
+  { path: '/questions', label: 'Questions', group: 'work' },
+];
+
+// The group headings. "Switches" and "Routing switches" stop colliding here:
+// one sits under the panel heading with the other controls, the other under
+// signal behavior with the rest of what the manual says happens inside.
+const MODULE_GROUPS = [
+  { key: 'panel', label: 'On the panel' },
+  { key: 'signal', label: 'Signal behavior' },
+  { key: 'reference', label: 'Reference' },
+  { key: 'work', label: 'Your work' },
 ];
 
 const PATCH_PAGES = [
   { path: '', label: 'Diagram', exact: true },
-  { path: '/cables', label: 'Cables' },
-  { path: '/settings', label: 'Control settings' },
-  { path: '/flow', label: 'Signal flow' },
-  { path: '/gear', label: 'Module links, buses & gear' },
-  { path: '/links', label: 'Links' },
-  { path: '/audio', label: 'Recordings' },
-  { path: '/scope', label: 'Oscilloscope' },
-  { path: '/notes', label: 'Notes' },
-  { path: '/modules', label: 'Modules in this patch' },
-  { path: '/questions', label: 'Questions' },
+  { path: '/cables', label: 'Cables', group: 'patch', countKey: 'cables' },
+  { path: '/settings', label: 'Control settings', group: 'patch', countKey: 'settings' },
+  { path: '/flow', label: 'Signal flow', group: 'patch' },
+  { path: '/modules', label: 'Modules in this patch', group: 'patch', countKey: 'modules' },
+  { path: '/gear', label: 'Module links, buses & gear', group: 'patch', countKey: 'gear' },
+  { path: '/audio', label: 'Recordings', group: 'reference' },
+  { path: '/links', label: 'Links', group: 'reference' },
+  { path: '/scope', label: 'Oscilloscope', group: 'work' },
+  { path: '/notes', label: 'Notes', group: 'work' },
+  { path: '/questions', label: 'Questions', group: 'work' },
+];
+
+const PATCH_GROUPS = [
+  { key: 'patch', label: 'Connections & setup' },
+  { key: 'reference', label: 'Reference' },
+  { key: 'work', label: 'Your work' },
 ];
 
 const detailPages = computed(() => (detail.kind === 'patch' ? PATCH_PAGES : MODULE_PAGES));
 const detailHeading = computed(() => detail.label || (detail.kind === 'patch' ? 'This patch' : 'This module'));
+
+// The record's front page stands alone under its name; every other page
+// stands in its group.
+const detailIndexPage = computed(() => detailPages.value.find((page) => page.exact));
+
+// What the header reported for a page: a number, or null for "not known",
+// which is how a page whose rows are not in the payload stays visible.
+function pageCount(page) {
+  if (!page.countKey) return null;
+  const count = detail.counts?.[page.countKey];
+  return typeof count === 'number' ? count : null;
+}
+
+// A page the reader is ON is never folded away, empty or not: hiding the
+// link that is lit is how a drawer stops making sense.
+const isCurrentPage = (page) => route.path === `${detailBase.value}${page.path}`;
+
+const detailGroups = computed(() => {
+  const groups = detail.kind === 'patch' ? PATCH_GROUPS : MODULE_GROUPS;
+  return groups
+    .map((group) => {
+      const members = detailPages.value.filter((page) => page.group === group.key);
+      const empty = members.filter((page) => pageCount(page) === 0 && !isCurrentPage(page));
+      return { ...group, shown: members.filter((page) => !empty.includes(page)), empty };
+    })
+    .filter((group) => group.shown.length || group.empty.length);
+});
+
+// The folded-away empty pages, opened per group; and the record's whole
+// block, folded by its own heading so the rest of the app is one tap away.
+// Both start over when the drawer moves to another record.
+const emptyOpen = ref({});
+const recordOpen = ref(true);
+watch(
+  () => [detail.kind, detail.id],
+  () => {
+    emptyOpen.value = {};
+    recordOpen.value = true;
+  }
+);
 
 // Previous/next stay in the rack the reader came from, so the sub-page links
 // have to carry it as well or the walk through a rack ends at the first jump.
@@ -176,17 +247,60 @@ async function logout() {
     :aria-hidden="menuOpen ? 'false' : 'true'"
   >
     <template v-if="detailBase">
-      <p class="nav-heading" data-test="nav-detail-heading">{{ detailHeading }}</p>
-      <RouterLink
-        v-for="page in detailPages"
-        :key="page.path"
-        :to="detailHref(page)"
-        class="nav-sub"
-        :active-class="page.exact ? '' : 'router-link-active'"
-        :data-test="`nav-detail-${page.path.slice(1) || 'index'}`"
+      <button
+        class="nav-heading nav-record-toggle"
+        type="button"
+        :aria-expanded="recordOpen ? 'true' : 'false'"
+        data-test="nav-detail-heading"
+        @click="recordOpen = !recordOpen"
       >
-        {{ page.label }}
-      </RouterLink>
+        {{ detailHeading }}
+      </button>
+      <template v-if="recordOpen">
+        <RouterLink
+          :to="detailHref(detailIndexPage)"
+          class="nav-sub"
+          active-class=""
+          data-test="nav-detail-index"
+        >
+          {{ detailIndexPage.label }}
+        </RouterLink>
+        <template v-for="group in detailGroups" :key="group.key">
+          <p class="nav-subheading" :data-test="`nav-group-${group.key}`">{{ group.label }}</p>
+          <RouterLink
+            v-for="page in group.shown"
+            :key="page.path"
+            :to="detailHref(page)"
+            class="nav-sub"
+            :data-test="`nav-detail-${page.path.slice(1)}`"
+          >
+            {{ page.label }}
+            <span v-if="pageCount(page)" class="nav-count">{{ pageCount(page) }}</span>
+          </RouterLink>
+          <template v-if="group.empty.length">
+            <button
+              class="nav-empty-toggle"
+              type="button"
+              :aria-expanded="emptyOpen[group.key] ? 'true' : 'false'"
+              :data-test="`nav-empty-${group.key}`"
+              @click="emptyOpen[group.key] = !emptyOpen[group.key]"
+            >
+              {{ emptyOpen[group.key] ? 'Hide empty pages' : `Empty pages (${group.empty.length})` }}
+            </button>
+            <template v-if="emptyOpen[group.key]">
+              <RouterLink
+                v-for="page in group.empty"
+                :key="page.path"
+                :to="detailHref(page)"
+                class="nav-sub nav-empty"
+                :data-test="`nav-detail-${page.path.slice(1)}`"
+              >
+                {{ page.label }}
+              </RouterLink>
+            </template>
+          </template>
+        </template>
+      </template>
     </template>
 
     <p class="nav-heading">Your system</p>
