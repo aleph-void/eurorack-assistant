@@ -6,12 +6,13 @@ vi.mock('../../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
+const route = { query: {}, path: '/modules/1/jacks/input' };
 vi.mock('vue-router', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
-    useRoute: () => ({ query: {}, path: '/modules/1/jacks/input' }),
+    useRoute: () => route,
   };
 });
 
@@ -116,6 +117,7 @@ beforeEach(() => {
   // page (useModuleRecord.js), so each test starts without the last one's.
   refreshRackModules();
   vi.clearAllMocks();
+  route.query = {};
 });
 
 // A jack is what a cable goes in, so where it sits on the picture is the fact
@@ -141,6 +143,44 @@ describe('ModuleComponentTypeView', () => {
     const wrapper = await open('bidirectional');
     expect(wrapper.find('[data-test="jacks"] h2').text()).toBe('Bidirectional jacks (mults)');
     expect(wrapper.find('[data-test="panel-jacks"]').text()).toContain('M1');
+  });
+
+  // Getting from one kind's page to another is a press on the chip row, not
+  // a trip through the drawer — which lists only the jacks.
+  it('offers every kind the module has as a chip, the current one lit', async () => {
+    const wrapper = await open('input');
+    expect(wrapper.find('[data-test="type-nav-all"]').attributes('to')).toBe(
+      '/modules/1/components'
+    );
+    const input = wrapper.find('[data-test="type-nav-input_jack"]');
+    expect(input.attributes('aria-current')).toBe('page');
+    expect(input.text()).toContain('1');
+    expect(wrapper.find('[data-test="type-nav-knob"]').attributes('to')).toBe(
+      '/modules/1/parts/knob'
+    );
+    expect(wrapper.find('[data-test="type-nav-bidirectional_jack"]').attributes('to')).toBe(
+      '/modules/1/jacks/bidirectional'
+    );
+    // A kind the module has none of gets no chip…
+    expect(wrapper.find('[data-test="type-nav-slider"]').exists()).toBe(false);
+
+    // …except the kind of the page being read, or nothing would say where
+    // you are.
+    const displays = await openType('display');
+    const chip = displays.find('[data-test="type-nav-display"]');
+    expect(chip.attributes('aria-current')).toBe('page');
+    expect(chip.text()).toContain('0');
+  });
+
+  it('carries the rack the reader is walking on every chip', async () => {
+    route.query = { rack: '2' };
+    const wrapper = await open('input');
+    expect(wrapper.find('[data-test="type-nav-all"]').attributes('to')).toBe(
+      '/modules/1/components?rack=2'
+    );
+    expect(wrapper.find('[data-test="type-nav-knob"]').attributes('to')).toBe(
+      '/modules/1/parts/knob?rack=2'
+    );
   });
 
   // The point of the page: the picture and the thing to drag onto it are one

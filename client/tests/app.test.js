@@ -177,6 +177,10 @@ describe('App', () => {
       '/modules/4/components'
     );
     expect(wrapper.find('[data-test="nav-detail-bridges"]').text()).toBe('Dual panels');
+    // Of the ten component types only the jacks are drawer entries; the rest
+    // are one press away on the chip row every component page carries.
+    expect(wrapper.find('[data-test="nav-detail-jacks/input"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="nav-detail-parts/knob"]').exists()).toBe(false);
     // The pages come grouped, which is also what keeps the two kinds of
     // switch apart: one under the panel heading, one under signal behavior.
     expect(wrapper.find('[data-test="nav-group-panel"]').text()).toBe('On the panel');
@@ -244,13 +248,6 @@ describe('App', () => {
       components: 6,
       input_jack: 2,
       output_jack: 2,
-      knob: 2,
-      slider: 0,
-      button: 0,
-      toggle: 0,
-      switch: 0,
-      display: 0,
-      other: 0,
       values: 3,
       parameters: 0,
       normalizations: 1,
@@ -266,17 +263,17 @@ describe('App', () => {
     await nextTick();
 
     // A page with rows carries its count beside its name…
-    const knobs = wrapper.find('[data-test="nav-detail-parts/knob"]');
-    expect(knobs.text()).toContain('Knobs');
-    expect(knobs.find('.nav-count').text()).toBe('2');
+    const outputs = wrapper.find('[data-test="nav-detail-jacks/output"]');
+    expect(outputs.text()).toContain('Output jacks');
+    expect(outputs.find('.nav-count').text()).toBe('2');
 
     // …a page with none is folded behind the group's one line…
     expect(wrapper.find('[data-test="nav-detail-parameters"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="nav-detail-pairs"]').exists()).toBe(false);
-    // The jack pages the counts never mentioned count as unknown, not empty.
+    // The jack page the counts never mentioned counts as unknown, not empty.
     expect(wrapper.find('[data-test="nav-detail-jacks/bidirectional"]').exists()).toBe(true);
     const fold = wrapper.find('[data-test="nav-empty-panel"]');
-    expect(fold.text()).toBe('Empty pages (7)');
+    expect(fold.text()).toBe('Empty pages (1)');
     await fold.trigger('click');
     expect(wrapper.find('[data-test="nav-detail-parameters"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="nav-empty-panel"]').text()).toBe('Hide empty pages');

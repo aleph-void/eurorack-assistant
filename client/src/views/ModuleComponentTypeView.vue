@@ -13,6 +13,7 @@
 // things a cable goes in, /parts/<type> for everything else.
 
 import { computed, toRef } from 'vue';
+import ComponentTypeNav from '../components/moduledetail/ComponentTypeNav.vue';
 import ModuleDetailHeader from '../components/moduledetail/ModuleDetailHeader.vue';
 import MultGroupsSection from '../components/moduledetail/MultGroupsSection.vue';
 import PanelJacksSection from '../components/moduledetail/PanelJacksSection.vue';
@@ -66,6 +67,8 @@ const count = computed(
     @reload="load"
   />
   <template v-if="module">
+    <!-- The other kinds of thing on this panel, one tap away. -->
+    <ComponentTypeNav :module="module" :module-id="id" :current="type" />
     <details open class="panel" data-test="jacks">
       <summary>
         <h2>{{ title }}</h2>

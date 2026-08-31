@@ -27,8 +27,14 @@ const detail = useDetailStore();
 function moduleCounts(m) {
   if (!m) return {};
   const components = m.components || [];
+  const ofType = (type) => components.filter((c) => c.type === type).length;
   const counts = { components: components.length };
-  for (const c of components) counts[c.type] = (counts[c.type] || 0) + 1;
+  // Of the ten component types, only the three kinds of jack are drawer
+  // entries; the rest are reached through the chip row on the component
+  // pages, which counts them off the payload itself.
+  counts.input_jack = ofType('input_jack');
+  counts.output_jack = ofType('output_jack');
+  counts.bidirectional_jack = ofType('bidirectional_jack');
   counts.values = components.reduce((n, c) => n + (c.values?.length || 0), 0);
   counts.parameters = (m.parameters || []).length;
   counts.normalizations = (m.normalizations || []).length;

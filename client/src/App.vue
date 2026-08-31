@@ -78,9 +78,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 // most modules half of them are blank. `countKey` names the entry in
 // detail.counts the header derived from the payload; a page with no
 // countKey (or none reported) is neither badged nor folded.
-// Every kind of thing on a panel is a page of its own — the jacks by what a
-// cable does at them, the rest by their type. The list of ALL of a module's
-// components is still there; it is just not where you go to find the knobs.
+// Every kind of thing on a panel is still a page of its own — the jacks by
+// what a cable does at them, the rest by their type — but only the jacks are
+// drawer entries: the three kinds a cable goes in are what a patcher opens a
+// module for. The rest are one press away on every component page, where a
+// chip row (moduledetail/ComponentTypeNav.vue) lists each kind the module
+// has, in its own colour, with its count.
 const MODULE_PAGES = [
   { path: '', label: 'Front panel & summary', exact: true },
   { path: '/jacks/input', label: 'Input jacks', group: 'panel', countKey: 'input_jack' },
@@ -91,14 +94,7 @@ const MODULE_PAGES = [
     group: 'panel',
     countKey: 'bidirectional_jack',
   },
-  { path: '/parts/knob', label: 'Knobs', group: 'panel', countKey: 'knob' },
-  { path: '/parts/slider', label: 'Sliders', group: 'panel', countKey: 'slider' },
-  { path: '/parts/button', label: 'Buttons', group: 'panel', countKey: 'button' },
-  { path: '/parts/toggle', label: 'Toggles', group: 'panel', countKey: 'toggle' },
-  { path: '/parts/switch', label: 'Switches', group: 'panel', countKey: 'switch' },
-  { path: '/parts/display', label: 'Displays', group: 'panel', countKey: 'display' },
-  { path: '/parts/other', label: 'Other components', group: 'panel', countKey: 'other' },
-  { path: '/components', label: 'All components', group: 'panel', countKey: 'components' },
+  { path: '/components', label: 'Controls & components', group: 'panel', countKey: 'components' },
   { path: '/values', label: 'Component values', group: 'panel', countKey: 'values' },
   { path: '/parameters', label: 'Menu parameters', group: 'panel', countKey: 'parameters' },
   {
