@@ -338,6 +338,65 @@ pre {
   padding-left: 1.35rem;
   font-size: 0.9rem;
 }
+/* The record's name is also the fold for its whole block of pages, so the
+   rest of the app is one tap away instead of a scroll past thirty links. */
+.nav-drawer button.nav-record-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  margin: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+.nav-drawer button.nav-record-toggle::after {
+  content: '▾';
+  color: var(--muted);
+}
+.nav-drawer button.nav-record-toggle[aria-expanded='false']::after {
+  content: '▸';
+}
+/* The record's pages come grouped: a lighter heading per group, the count of
+   rows beside every page that has any, and the empty pages folded behind one
+   line so a module that is mostly blank reads as the pages that aren't. */
+.nav-drawer .nav-subheading {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding: 0.6rem 0.6rem 0.2rem 1.35rem;
+}
+.nav-drawer .nav-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.nav-drawer a.router-link-active .nav-count {
+  color: var(--text);
+}
+.nav-drawer button.nav-empty-toggle {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.3rem 0.6rem 0.3rem 1.35rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.nav-drawer button.nav-empty-toggle:hover {
+  color: var(--text);
+}
+.nav-drawer a.nav-empty {
+  opacity: 0.7;
+}
 
 .nav-drawer .nav-foot {
   margin-top: auto;

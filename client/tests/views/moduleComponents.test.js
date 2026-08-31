@@ -34,6 +34,28 @@ beforeEach(() => {
 describe('ModuleComponentsView', () => {
   const moduleResponse = mathsModule;
 
+  // The chip row is how the reader gets from here to any one kind's page
+  // without a trip through the drawer — which no longer lists the kinds.
+  it("offers each kind's own page as a chip row, with the rack riding along", async () => {
+    api.get.mockResolvedValue(moduleResponse);
+    currentRouteQuery = { rack: '2' };
+    const wrapper = mount(ModuleComponentsView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    // This page is every kind at once, so its own chip is the lit one.
+    expect(wrapper.find('[data-test="type-nav-all"]').attributes('aria-current')).toBe('page');
+    expect(wrapper.find('[data-test="type-nav-knob"]').attributes('to')).toBe(
+      '/modules/1/parts/knob?rack=2'
+    );
+    expect(wrapper.find('[data-test="type-nav-input_jack"]').attributes('to')).toBe(
+      '/modules/1/jacks/input?rack=2'
+    );
+    // A kind the module has none of gets no chip; its section below is still
+    // where one is added by hand.
+    expect(wrapper.find('[data-test="type-nav-slider"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="group-slider"]').exists()).toBe(true);
+  });
+
   it('groups components by type and shows voltage ranges', async () => {
     api.get.mockResolvedValue(moduleResponse);
     const wrapper = mount(ModuleComponentsView, { props: { id: '1' }, global: testGlobal() });

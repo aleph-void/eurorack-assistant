@@ -10,6 +10,7 @@ import { api } from '../api.js';
 import { COMPONENT_TYPES, TYPE_LABELS, componentColor } from '../componentTypes.js';
 import { dialog } from '../dialog.js';
 import ModulePanel from '../components/ModulePanel.vue';
+import ComponentTypeNav from '../components/moduledetail/ComponentTypeNav.vue';
 import ModuleDetailHeader from '../components/moduledetail/ModuleDetailHeader.vue';
 import { useModuleFacts } from '../components/moduledetail/useModuleFacts.js';
 import { useModuleRecord } from '../components/moduledetail/useModuleRecord.js';
@@ -270,6 +271,9 @@ watch(id, () => {
     @reload="load"
   />
   <template v-if="module">
+    <!-- Each kind's own page, one tap away — this page is every kind at
+         once, which is what makes it the place to rename, retype and add. -->
+    <ComponentTypeNav :module="module" :module-id="id" current="all" />
     <!-- The plate, for as long as a marker is being put right on it. -->
     <div
       v-if="arrangedComponent && module.panel"

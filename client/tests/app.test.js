@@ -177,6 +177,17 @@ describe('App', () => {
       '/modules/4/components'
     );
     expect(wrapper.find('[data-test="nav-detail-bridges"]').text()).toBe('Dual panels');
+    // Of the ten component types only the jacks are drawer entries; the rest
+    // are one press away on the chip row every component page carries.
+    expect(wrapper.find('[data-test="nav-detail-jacks/input"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="nav-detail-parts/knob"]').exists()).toBe(false);
+    // The pages come grouped, which is also what keeps the two kinds of
+    // switch apart: one under the panel heading, one under signal behavior.
+    expect(wrapper.find('[data-test="nav-group-panel"]').text()).toBe('On the panel');
+    expect(wrapper.find('[data-test="nav-group-signal"]').text()).toBe('Signal behavior');
+    // No counts reported means nothing is badged and nothing is folded.
+    expect(wrapper.find('.nav-count').exists()).toBe(false);
+    expect(wrapper.find('[data-test="nav-empty-panel"]').exists()).toBe(false);
     // A patch's pages are not on offer while a module is open.
     expect(wrapper.find('[data-test="nav-detail-cables"]').exists()).toBe(false);
 
@@ -214,6 +225,7 @@ describe('App', () => {
       '/patches/7/cables'
     );
     expect(wrapper.find('[data-test="nav-detail-scope"]').text()).toBe('Oscilloscope');
+    expect(wrapper.find('[data-test="nav-group-patch"]').text()).toBe('Connections & setup');
     // A patch has no rack query to carry.
     route.query = { rack: '2' };
     await nextTick();
@@ -221,6 +233,91 @@ describe('App', () => {
       '/patches/7/notes'
     );
     route.query = {};
+    wrapper.unmount();
+  });
+
+  // The header reports how many rows each page has, and the drawer answers
+  // with a count beside the full pages and the empty ones folded behind one
+  // line per group — a module is twenty-seven pages and for most modules
+  // half of them are blank.
+  it('badges the full pages and folds the empty ones away', async () => {
+    const { wrapper, detail } = mountApp();
+    await flushPromises();
+
+    detail.set('module', '4', 'Make Noise Maths', {
+      components: 6,
+      input_jack: 2,
+      output_jack: 2,
+      values: 3,
+      parameters: 0,
+      normalizations: 1,
+      routing_switches: 0,
+      routes: 2,
+      pairs: 0,
+      expanders: 0,
+      bridges: 0,
+      documents: 1,
+      videos: 0,
+      notes: 0,
+    });
+    await nextTick();
+
+    // A page with rows carries its count beside its name…
+    const outputs = wrapper.find('[data-test="nav-detail-jacks/output"]');
+    expect(outputs.text()).toContain('Output jacks');
+    expect(outputs.find('.nav-count').text()).toBe('2');
+
+    // …a page with none is folded behind the group's one line…
+    expect(wrapper.find('[data-test="nav-detail-parameters"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="nav-detail-pairs"]').exists()).toBe(false);
+    // The jack page the counts never mentioned counts as unknown, not empty.
+    expect(wrapper.find('[data-test="nav-detail-jacks/bidirectional"]').exists()).toBe(true);
+    const fold = wrapper.find('[data-test="nav-empty-panel"]');
+    expect(fold.text()).toBe('Empty pages (1)');
+    await fold.trigger('click');
+    expect(wrapper.find('[data-test="nav-detail-parameters"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="nav-empty-panel"]').text()).toBe('Hide empty pages');
+    expect(wrapper.find('[data-test="nav-empty-signal"]').text()).toBe('Empty pages (4)');
+
+    // …and a page whose rows are not in the payload is neither badged nor
+    // folded: absent means unknown, not empty.
+    const audio = wrapper.find('[data-test="nav-detail-audio"]');
+    expect(audio.exists()).toBe(true);
+    expect(audio.find('.nav-count').exists()).toBe(false);
+
+    // The page the reader is ON is never folded, empty or not.
+    route.path = '/modules/4/pairs';
+    await nextTick();
+    expect(wrapper.find('[data-test="nav-detail-pairs"]').exists()).toBe(true);
+    route.path = undefined;
+    wrapper.unmount();
+  });
+
+  // The record's name is also the fold for its whole block of pages, so the
+  // rest of the app is one tap away instead of a scroll past thirty links.
+  it('folds the whole record block behind its heading, and opens it for the next record', async () => {
+    const { wrapper, detail } = mountApp();
+    await flushPromises();
+
+    detail.set('module', '4', 'Make Noise Maths');
+    await nextTick();
+    expect(wrapper.find('[data-test="nav-detail-index"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="nav-detail-heading"]').trigger('click');
+    expect(wrapper.find('[data-test="nav-detail-index"]').exists()).toBe(false);
+    // The heading itself, and the rest of the app, stay where they were.
+    expect(wrapper.find('[data-test="nav-detail-heading"]').text()).toBe('Make Noise Maths');
+    expect(wrapper.text()).toContain('Your system');
+
+    await wrapper.find('[data-test="nav-detail-heading"]').trigger('click');
+    expect(wrapper.find('[data-test="nav-detail-index"]').exists()).toBe(true);
+
+    // Folding is a way of reading this record's drawer, not a setting: the
+    // next record opens open.
+    await wrapper.find('[data-test="nav-detail-heading"]').trigger('click');
+    detail.set('patch', '7', 'Krell');
+    await nextTick();
+    expect(wrapper.find('[data-test="nav-detail-index"]').exists()).toBe(true);
     wrapper.unmount();
   });
 

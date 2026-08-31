@@ -11,13 +11,19 @@ import { defineStore } from 'pinia';
 // have the page being left blank out the page being arrived at. A header only
 // ever gives up the claim it was granted.
 export const useDetailStore = defineStore('detail', {
-  state: () => ({ kind: null, id: null, label: '', claim: 0 }),
+  state: () => ({ kind: null, id: null, label: '', counts: {}, claim: 0 }),
   actions: {
-    set(kind, id, label) {
+    // `counts` says how many rows each of the record's pages has, keyed the
+    // way the drawer's page lists name them, so the drawer can badge the full
+    // pages and fold the empty ones away. A key that is absent means the
+    // header does not know (the page reads something outside the payload) and
+    // the drawer treats the page as neither full nor empty.
+    set(kind, id, label, counts) {
       this.claim += 1;
       this.kind = kind;
       this.id = id == null ? null : String(id);
       this.label = label || '';
+      this.counts = counts || {};
       return this.claim;
     },
     clear(claim) {
@@ -25,6 +31,7 @@ export const useDetailStore = defineStore('detail', {
       this.kind = null;
       this.id = null;
       this.label = '';
+      this.counts = {};
     },
   },
 });
