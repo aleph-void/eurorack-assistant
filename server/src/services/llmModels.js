@@ -8,7 +8,13 @@
 export const PROVIDERS = ['claude', 'codex'];
 
 export const KNOWN_MODELS = {
-  claude: ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
+  claude: [
+    'claude-fable-5-1',
+    'claude-fable-5',
+    'claude-opus-5',
+    'claude-sonnet-5',
+    'claude-haiku-4-5',
+  ],
   codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini', 'gpt-5.1', 'gpt-5-codex', 'gpt-5'],
 };
 

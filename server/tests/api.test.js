@@ -1102,6 +1102,7 @@ describe('config API', () => {
     expect(res.body.llm_provider).toBe('claude');
     expect(res.body.import_workers).toBe('4');
     expect(res.body.providers).toEqual(['claude', 'codex']);
+    expect(res.body.known_models.claude).toContain('claude-fable-5-1');
     expect(res.body.known_models.claude).toContain('claude-fable-5');
     // Per-job-type models are each user's own (/api/llm), not admin config.
     expect(res.body.llm_model_find_manual).toBeUndefined();
