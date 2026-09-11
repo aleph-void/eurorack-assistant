@@ -16,6 +16,7 @@ import { defineScopeModels } from './models/scope.js';
 import { defineAttachmentsModels } from './models/attachments.js';
 import { defineJobsModels } from './models/jobs.js';
 import { defineSecurityModels } from './models/security.js';
+import { defineCompositionsModels } from './models/compositions.js';
 import { associate } from './models/associations.js';
 
 export function defineModels(sequelize) {
@@ -32,5 +33,6 @@ export function defineModels(sequelize) {
     ...defineAttachmentsModels(define),
     ...defineJobsModels(define),
     ...defineSecurityModels(define),
+    ...defineCompositionsModels(define),
   });
 }

@@ -25,6 +25,12 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   are the same whichever record it hangs off — the owner is named in the
   query to list and in the body to create, and checked against what the user
   actually has.
+- `routes/compositions/` — core (the record), storyboard (scenes, elements,
+  cells, ordering), mappings (a composition paired with a patch, and the
+  bindings under the pair) + shared `helpers.js`. `services/compositions.js`
+  holds the vocabulary, the serializers, the loaders and the one function that
+  checks a binding against a patch and names it. `docs/compositions.md` is
+  the design.
 - `routes/systems.js` — systems: collections of racks patched together as
   one instrument. A rack joins/leaves via `PUT /api/racks/:id/system`; the
   system's own routes arrange the racks on a floor plan.
@@ -458,6 +464,32 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   measurement is best-effort: an install without ffmpeg still stores, plays and
   attaches recordings, with each number null and no picture, and the answer
   document says so rather than implying the model heard anything.
+- A COMPOSITION IS THE PIECE, NOT THE PATCH THAT PLAYS IT (migration 046,
+  `docs/compositions.md`). It is storyboarded as a GRID: scenes across in
+  playing order, elements (the parts — a voice, a rhythm, a modulation, an
+  effect, a texture, a control you ride) down the side, and in each cell what
+  that part does in that scene (enter | hold | change | exit, with a note
+  saying how); a cell that does not exist is a part that is not playing then.
+  The storyboard NAMES NO HARDWARE, so it can be written before the patch
+  exists and outlives the case being rebuilt. MAPPING it onto a patch is
+  where the hardware comes in, and the pair is a record of its own
+  (`composition_patches` — a piece can be played on more than one patch, and
+  each way of playing it has notes); under the pair each element is bound to
+  ONE of an instance, one control or jack of an instance, a bus or a cable
+  (`composition_mappings`, a CHECK for the one-of), as many bindings as the
+  part needs. The targets are SOFT references with `target_label` snapshotted
+  beside them, like a cable's ends: a binding whose target left the patch is
+  kept, served with `live: false` (resolved at read time in
+  `loadRealization`), and struck through on the page rather than dropped.
+  Reordering scenes or elements is a REPLACEMENT of every position under the
+  composition's row lock (`PUT .../order`, the whole list, each id once). The
+  vocabulary in `services/compositions.js` is mirrored by
+  `client/src/compositionVocabulary.js`; the server validates. Pages:
+  `/compositions`, `/compositions/:id` (the storyboard, everything edited in
+  place), `/compositions/:id/patches/:patchId` (the bindings, the notes and
+  the PERFORMANCE SHEET — the grid with each part headed by what plays it
+  here) and `/patches/:id/compositions` (the same pairs from the patch's
+  side, in its nav drawer).
 - A LINK IS AN ADDRESS, NOT A DOCUMENT. `resource_links` hangs one off exactly
   one module, patch, rack or system (a CHECK, not a habit), private to the user
   the way a note or an uploaded document is — a module record is shared by

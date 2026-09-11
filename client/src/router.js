@@ -44,6 +44,12 @@ const PatchScopeView = () => import('./views/PatchScopeView.vue');
 const PatchNotesView = () => import('./views/PatchNotesView.vue');
 const PatchModulesView = () => import('./views/PatchModulesView.vue');
 const PatchQuestionsView = () => import('./views/PatchQuestionsView.vue');
+const PatchCompositionsView = () => import('./views/PatchCompositionsView.vue');
+// A composition is the piece, as distinct from the patch that plays it: a
+// storyboard of scenes and parts, mapped onto one or more patches.
+const CompositionsView = () => import('./views/CompositionsView.vue');
+const CompositionStoryboardView = () => import('./views/CompositionStoryboardView.vue');
+const CompositionMappingView = () => import('./views/CompositionMappingView.vue');
 const ImportView = () => import('./views/ImportView.vue');
 const SearchView = () => import('./views/SearchView.vue');
 const ManualTextView = () => import('./views/ManualTextView.vue');
@@ -195,11 +201,34 @@ export const routes = [
     component: PatchQuestionsView,
     props: true,
   },
+  // The compositions this patch performs, and the picker that maps another
+  // onto it.
+  {
+    path: '/patches/:id/compositions',
+    name: 'patch-compositions',
+    component: PatchCompositionsView,
+    props: true,
+  },
   // Where the one page that held all of the above used to be.
   { path: '/patches/:id/config', redirect: (to) => `/patches/${to.params.id}/settings` },
   // Voice patching used to be a page of each patch. It is an account setting
   // now, and the patch it works on is whichever one is on screen.
   { path: '/patches/:id/voice', redirect: '/account/voice' },
+  // Compositions: the storyboard of a piece, and the piece mapped onto one
+  // patch at a time.
+  { path: '/compositions', name: 'compositions', component: CompositionsView },
+  {
+    path: '/compositions/:id',
+    name: 'composition-storyboard',
+    component: CompositionStoryboardView,
+    props: true,
+  },
+  {
+    path: '/compositions/:id/patches/:patchId',
+    name: 'composition-mapping',
+    component: CompositionMappingView,
+    props: true,
+  },
   { path: '/import', name: 'import', component: ImportView },
   { path: '/search', name: 'search', component: SearchView },
   // A manual read as text, addressed by the document's content hash.

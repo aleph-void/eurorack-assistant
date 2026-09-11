@@ -139,6 +139,7 @@ const PATCH_PAGES = [
   { path: '/scope', label: 'Oscilloscope', group: 'work' },
   { path: '/notes', label: 'Notes', group: 'work' },
   { path: '/questions', label: 'Questions', group: 'work' },
+  { path: '/compositions', label: 'Compositions', group: 'work' },
 ];
 
 const PATCH_GROUPS = [
@@ -304,6 +305,7 @@ async function logout() {
     <RouterLink to="/racks">Racks</RouterLink>
     <RouterLink to="/systems" data-test="nav-systems">Systems</RouterLink>
     <RouterLink to="/patches">Patches</RouterLink>
+    <RouterLink to="/compositions" data-test="nav-compositions">Compositions</RouterLink>
     <RouterLink to="/import">Import</RouterLink>
     <RouterLink to="/search" data-test="nav-search">Search manuals</RouterLink>
     <RouterLink to="/shared" data-test="nav-shared">Shared</RouterLink>

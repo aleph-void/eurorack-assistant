@@ -106,6 +106,8 @@ describe('detail sub-pages', () => {
     expect(pages.map((r) => r.path.split('/').pop()).sort()).toEqual([
       'audio',
       'cables',
+      // The compositions this patch performs.
+      'compositions',
       'flow',
       // The patch's own module links, buses and invented gear. It was at
       // /links until 'links' came to mean, here as everywhere else, the
