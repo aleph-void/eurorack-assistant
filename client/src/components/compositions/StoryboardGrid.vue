@@ -427,7 +427,10 @@ async function clearCell(scene, element) {
                     {{ cellOf(scene, element).note }}
                   </span>
                 </template>
-                <span v-else class="cell-empty">·</span>
+                <span v-else class="cell-empty">
+                  <span class="cell-empty-dot">·</span>
+                  <span class="cell-empty-text">not playing</span>
+                </span>
               </button>
             </td>
           </tr>
@@ -492,6 +495,26 @@ async function clearCell(scene, element) {
   display: block;
   font-size: 0.8rem;
   font-weight: 400;
+}
+/* A heading is set in small capitals; a scene's caption is a sentence. */
+.scene-caption {
+  text-transform: none;
+  letter-spacing: normal;
+  max-width: 16rem;
+  white-space: normal;
+}
+/* On a desk an empty cell is a dot in a row of cells; on a phone it stands
+   alone under the scene's name and has to say what it is. */
+.cell-empty-text {
+  display: none;
+}
+@media (max-width: 768px) {
+  .cell-empty-dot {
+    display: none;
+  }
+  .cell-empty-text {
+    display: inline;
+  }
 }
 .scene-actions,
 .element-actions {
