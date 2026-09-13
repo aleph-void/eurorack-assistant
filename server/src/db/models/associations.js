@@ -71,6 +71,12 @@ export function associate(m) {
     Share,
     LlmUsage,
     Job,
+    Composition,
+    CompositionScene,
+    CompositionElement,
+    CompositionSceneElement,
+    CompositionPatch,
+    CompositionMapping,
   } = m;
 
   // Associations. pg-mem (the test database) cannot parse the parenthesized
@@ -296,6 +302,29 @@ export function associate(m) {
   Job.belongsTo(User, { foreignKey: 'user_id' });
   Job.belongsTo(Module, { foreignKey: 'module_id' });
   Job.belongsTo(Question, { foreignKey: 'question_id' });
+
+  // A composition's storyboard is its scenes and elements, joined by the
+  // cells; a mapping onto a patch is the pair and the bindings under it. The
+  // targets of a binding are soft (no association): they are resolved
+  // against the patch's current rows at read time, like a cable's ends.
+  Composition.belongsTo(User, { foreignKey: 'user_id' });
+  User.hasMany(Composition, { foreignKey: 'user_id' });
+  Composition.hasMany(CompositionScene, { foreignKey: 'composition_id' });
+  CompositionScene.belongsTo(Composition, { foreignKey: 'composition_id' });
+  Composition.hasMany(CompositionElement, { foreignKey: 'composition_id' });
+  CompositionElement.belongsTo(Composition, { foreignKey: 'composition_id' });
+  CompositionScene.hasMany(CompositionSceneElement, { foreignKey: 'scene_id' });
+  CompositionSceneElement.belongsTo(CompositionScene, { foreignKey: 'scene_id' });
+  CompositionElement.hasMany(CompositionSceneElement, { foreignKey: 'element_id' });
+  CompositionSceneElement.belongsTo(CompositionElement, { foreignKey: 'element_id' });
+  Composition.hasMany(CompositionPatch, { foreignKey: 'composition_id' });
+  CompositionPatch.belongsTo(Composition, { foreignKey: 'composition_id' });
+  Patch.hasMany(CompositionPatch, { foreignKey: 'patch_id' });
+  CompositionPatch.belongsTo(Patch, { foreignKey: 'patch_id' });
+  CompositionPatch.hasMany(CompositionMapping, { foreignKey: 'composition_patch_id' });
+  CompositionMapping.belongsTo(CompositionPatch, { foreignKey: 'composition_patch_id' });
+  CompositionElement.hasMany(CompositionMapping, { foreignKey: 'element_id' });
+  CompositionMapping.belongsTo(CompositionElement, { foreignKey: 'element_id' });
 
   return m;
 }

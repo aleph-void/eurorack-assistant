@@ -18,6 +18,7 @@ import { jobRoutes } from './routes/jobs.js';
 import { noteRoutes } from './routes/notes.js';
 import { exportRoutes } from './routes/exports.js';
 import { patchRoutes } from './routes/patches/index.js';
+import { compositionRoutes } from './routes/compositions/index.js';
 import { oauthRoutes } from './routes/oauth.js';
 import { deviceRoutes } from './routes/devices.js';
 import { scopeRoutes } from './routes/scope.js';
@@ -125,6 +126,7 @@ export function createApp(
   app.use(CSP_REPORT_PATH, cspReportRoutes(db));
   app.use('/api/exports', exportRoutes(db, { exportsDir }));
   app.use('/api/patches', patchRoutes(db));
+  app.use('/api/compositions', compositionRoutes(db));
   // Oscilloscope integration: /api/oauth is the device's half of the linking
   // flow (unauthenticated by necessity), everything else is the user's.
   app.use('/api/oauth', oauthRoutes(db));
