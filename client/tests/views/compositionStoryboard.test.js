@@ -177,6 +177,66 @@ describe('CompositionStoryboardView', () => {
     });
   });
 
+  it('calls a row a part, and an empty cell the way to add one', async () => {
+    answerGets();
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="storyboard-grid"] thead th').text()).toBe('Part');
+    expect(wrapper.find('[data-test="element-row-21"] td').attributes('data-label')).toBe('Part');
+    const empty = wrapper.find('[data-test="cell-10-21"] .cell-button');
+    expect(empty.attributes('title')).toContain('press to add it');
+    expect(empty.find('.cell-empty-add').text()).toBe('+ add');
+  });
+
+  it('counts the parts in each scene and adds one from the heading', async () => {
+    answerGets();
+    api.put.mockResolvedValue({ id: 33 });
+    const wrapper = mountView();
+    await flushPromises();
+
+    // The intro holds the bass alone; the build holds both, so it offers nothing.
+    expect(wrapper.find('[data-test="scene-parts-10"]').text()).toBe('1 of 2 parts');
+    expect(wrapper.find('[data-test="scene-parts-11"]').text()).toBe('2 of 2 parts');
+    expect(wrapper.find('[data-test="scene-add-part-11"]').exists()).toBe(false);
+    const picker = wrapper.find('[data-test="scene-add-part-10"]');
+    expect(picker.findAll('option').map((o) => o.text())).toEqual(['Add a part…', 'Kick']);
+
+    await picker.setValue('21');
+    await flushPromises();
+    // The kick was not playing before the intro, so it enters there.
+    expect(api.put).toHaveBeenCalledWith('/api/compositions/3/scenes/10/elements/21', {
+      action: 'enter',
+      note: '',
+    });
+    expect(api.get).toHaveBeenCalledTimes(3);
+  });
+
+  it('hides the parts not in any scene, and moves past them', async () => {
+    const wash = { id: 22, name: 'Wash', kind: 'texture', description: null, position: 1 };
+    const kick = { ...tide.elements[1], position: 2 };
+    const withWash = { ...tide, elements: [tide.elements[0], wash, kick] };
+    api.get.mockImplementation(async (path) =>
+      path.startsWith('/api/compositions/3') ? withWash : { patches: [] }
+    );
+    api.put.mockResolvedValue([]);
+    const wrapper = mountView();
+    await flushPromises();
+
+    const filter = wrapper.find('[data-test="unused-filter"]');
+    expect(filter.text()).toContain('Hide the 1 part not in any scene');
+    expect(wrapper.find('[data-test="element-row-22"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="hide-unused"]').setValue(true);
+    expect(wrapper.find('[data-test="element-row-22"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="element-row-20"]').exists()).toBe(true);
+
+    // Moving the kick up puts it above the bass, not merely above the hidden wash.
+    await wrapper.find('[data-test="element-row-21"] [data-test="element-up"]').trigger('click');
+    await flushPromises();
+    expect(api.put).toHaveBeenCalledWith('/api/compositions/3/elements/order', { element_ids: [21, 20, 22] });
+  });
+
   it('deletes a part once confirmed, and not otherwise', async () => {
     answerGets();
     api.delete.mockResolvedValue({ ok: true });

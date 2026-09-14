@@ -158,11 +158,20 @@ the CHECK would refuse it with a constraint name.
   and the form that makes one. A new composition opens on its storyboard.
 - `/compositions/:id`: the STORYBOARD. Everything is edited in place. A
   scene's name, length and caption in its column heading, with arrows to move
-  it earlier or later. An element's name, kind and description in its row,
-  with arrows to move it up or down. A cell by pressing it: pick what the part
+  it earlier or later. A part's name, kind and description in its row, with
+  arrows to move it up or down. A cell by pressing it: pick what the part
   does, say how, save, or say it is not playing. A new cell opens as an
   entrance when the part was not playing in the previous scene and as a hold
-  when it was. A scene's length is typed as a person would ("1:30", "90",
+  when it was. The page says PART where the API says element: the parts are
+  defined once, for the whole piece, and a scene contains whichever of them
+  have a cell in its column, so a part is put into a scene from either side.
+  An empty cell says "+ add" under the pointer, and each scene's heading
+  counts the parts in it ("2 of 5 parts") and offers the ones that are not in
+  a picker, which writes the same cell the press would. A part in no scene at
+  all is a part that has only been defined so far, and a checkbox under the
+  grid hides those while the rest is worked on; moving a part up or down then
+  moves it past the hidden ones rather than swapping with one nobody can see.
+  A scene's length is typed as a person would ("1:30", "90",
   "2m") and the whole piece's length is added up in the heading. Under the
   grid, "Patches that perform it": each mapping with its coverage ("3 of 5
   parts mapped"), and the picker that maps the piece onto another patch, which

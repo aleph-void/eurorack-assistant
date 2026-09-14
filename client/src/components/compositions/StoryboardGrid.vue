@@ -8,6 +8,12 @@
 // A cell that does not exist is an element that is not playing then, so the
 // grid draws every (scene, element) pair whether or not the server holds a
 // row for it: the empty ones are where the next press goes.
+//
+// The page calls an element a PART. The parts are defined once, for the
+// whole piece, and a scene contains whichever of them have a cell in its
+// column — so a part is put into a scene from either side: by pressing its
+// empty cell, or from the scene's own heading, which counts the parts in it
+// and offers the ones that are not.
 import { computed, ref } from 'vue';
 import { api } from '../../api.js';
 import { dialog } from '../../dialog.js';
@@ -37,6 +43,21 @@ const cellByPair = computed(() => {
   return map;
 });
 const cellOf = (scene, element) => cellByPair.value.get(`${scene.id}:${element.id}`) ?? null;
+
+// A part that plays in NO scene is a part that has only been defined so far.
+// A piece may have a dozen of those and a two-part intro, so they can be
+// hidden while the grid is worked on; the adder still puts a new one in.
+const hideUnused = ref(false);
+const playsSomewhere = (element) => scenes.value.some((scene) => cellOf(scene, element));
+const unusedCount = computed(() => elements.value.filter((e) => !playsSomewhere(e)).length);
+const visibleElements = computed(() =>
+  hideUnused.value ? elements.value.filter(playsSomewhere) : elements.value
+);
+
+// What each scene contains: the parts with a cell in its column, and the
+// ones its heading may still add.
+const partsIn = (scene) => elements.value.filter((element) => cellOf(scene, element));
+const partsNotIn = (scene) => elements.value.filter((element) => !cellOf(scene, element));
 
 // The whole piece's length, when its scenes are timed.
 const totalDuration = computed(() =>
@@ -115,7 +136,7 @@ async function saveScene(scene) {
 async function removeScene(scene) {
   const ok = await dialog.confirm({
     title: 'Delete scene',
-    message: `Delete scene '${scene.name}'? What every element does in it is lost.`,
+    message: `Delete scene '${scene.name}'? What every part does in it is lost.`,
     confirmLabel: 'Delete',
     danger: true,
   });
@@ -164,7 +185,7 @@ async function saveElement(element) {
 
 async function removeElement(element) {
   const ok = await dialog.confirm({
-    title: 'Delete element',
+    title: 'Delete part',
     message: `Delete '${element.name}'? Its cells, and every mapping of it onto a patch, are lost.`,
     confirmLabel: 'Delete',
     danger: true,
@@ -173,11 +194,18 @@ async function removeElement(element) {
   await write(() => api.delete(`${base.value}/elements/${element.id}`));
 }
 
+// Up and down are over the parts ON SCREEN: with the unused ones hidden,
+// moving a part up puts it before the visible part above it, not before a
+// hidden one nobody can see it pass.
+const isFirstShown = (element) => visibleElements.value[0]?.id === element.id;
+const isLastShown = (element) => visibleElements.value.at(-1)?.id === element.id;
+
 async function moveElement(element, delta) {
-  const ids = elements.value.map((e) => e.id);
-  const index = ids.indexOf(element.id);
-  if (index + delta < 0 || index + delta >= ids.length) return;
-  [ids[index], ids[index + delta]] = [ids[index + delta], ids[index]];
+  const shown = visibleElements.value;
+  const neighbour = shown[shown.indexOf(element) + delta];
+  if (!neighbour) return;
+  const ids = elements.value.map((e) => e.id).filter((id) => id !== element.id);
+  ids.splice(ids.indexOf(neighbour.id) + (delta > 0 ? 1 : 0), 0, element.id);
   await write(() => api.put(`${base.value}/elements/order`, { element_ids: ids }));
 }
 
@@ -189,17 +217,39 @@ const cellNote = ref('');
 const isEditingCell = (scene, element) =>
   editingCell.value?.sceneId === scene.id && editingCell.value?.elementId === element.id;
 
+// A new cell starts as an entrance if the element was not playing in the
+// scene before, else as a hold: what the previous column says is the
+// likeliest answer.
+function firstAction(scene, element) {
+  const previous = scenes.value[scenes.value.indexOf(scene) - 1];
+  const before = previous ? cellOf(previous, element) : null;
+  return before && before.action !== 'exit' ? 'hold' : 'enter';
+}
+
 function startCell(scene, element) {
   const cell = cellOf(scene, element);
   editingCell.value = { sceneId: scene.id, elementId: element.id };
-  // A new cell starts as an entrance if the element was not playing in the
-  // scene before, else as a hold: what the previous column says is the
-  // likeliest answer.
-  const previous = scenes.value[scenes.value.indexOf(scene) - 1];
-  const before = previous ? cellOf(previous, element) : null;
-  cellAction.value = cell?.action ?? (before && before.action !== 'exit' ? 'hold' : 'enter');
+  cellAction.value = cell?.action ?? firstAction(scene, element);
   cellNote.value = cell?.note ?? '';
   error.value = '';
+}
+
+// The scene's own way in: picking a part in its heading writes the same
+// cell the press would, with the same first guess at what the part does,
+// and the note is a second press away.
+const pickedPart = ref({});
+
+async function addPartToScene(scene) {
+  const elementId = Number(pickedPart.value[scene.id]);
+  const element = elements.value.find((e) => e.id === elementId);
+  pickedPart.value = { ...pickedPart.value, [scene.id]: '' };
+  if (!element) return;
+  await write(() =>
+    api.put(`${base.value}/scenes/${scene.id}/elements/${element.id}`, {
+      action: firstAction(scene, element),
+      note: '',
+    })
+  );
 }
 
 async function saveCell(scene, element) {
@@ -235,7 +285,7 @@ async function clearCell(scene, element) {
       <table class="storyboard" data-test="storyboard-grid">
         <thead>
           <tr>
-            <th>Element</th>
+            <th>Part</th>
             <th
               v-for="(scene, index) in scenes"
               :key="scene.id"
@@ -271,6 +321,23 @@ async function clearCell(scene, element) {
                   {{ formatDuration(scene.duration_seconds) }}
                 </span>
                 <span v-if="scene.description" class="muted scene-caption">{{ scene.description }}</span>
+                <span v-if="elements.length" class="muted scene-parts" :data-test="`scene-parts-${scene.id}`">
+                  {{ partsIn(scene).length }} of {{ elements.length }} parts
+                </span>
+                <select
+                  v-if="partsNotIn(scene).length"
+                  v-model="pickedPart[scene.id]"
+                  class="scene-add-part"
+                  :disabled="busy"
+                  :aria-label="`Add a part to ${scene.name}`"
+                  :data-test="`scene-add-part-${scene.id}`"
+                  @change="addPartToScene(scene)"
+                >
+                  <option value="">Add a part…</option>
+                  <option v-for="element in partsNotIn(scene)" :key="element.id" :value="element.id">
+                    {{ element.name }}
+                  </option>
+                </select>
                 <div class="actions scene-actions">
                   <button
                     type="button"
@@ -304,15 +371,15 @@ async function clearCell(scene, element) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(element, index) in elements" :key="element.id" :data-test="`element-row-${element.id}`">
-            <td data-label="Element" class="element-cell">
+          <tr v-for="element in visibleElements" :key="element.id" :data-test="`element-row-${element.id}`">
+            <td data-label="Part" class="element-cell">
               <form
                 v-if="editingElement === element.id"
                 class="element-edit"
                 @submit.prevent="saveElement(element)"
               >
-                <input v-model="elementDraft.name" data-test="element-name-input" aria-label="Element name" />
-                <select v-model="elementDraft.kind" data-test="element-kind-input" aria-label="Element kind">
+                <input v-model="elementDraft.name" data-test="element-name-input" aria-label="Part name" />
+                <select v-model="elementDraft.kind" data-test="element-kind-input" aria-label="Part kind">
                   <option v-for="kind in ELEMENT_KINDS" :key="kind.key" :value="kind.key">
                     {{ kind.label }}
                   </option>
@@ -343,7 +410,7 @@ async function clearCell(scene, element) {
                   <button
                     type="button"
                     class="secondary"
-                    :disabled="index === 0 || busy"
+                    :disabled="isFirstShown(element) || busy"
                     title="Move up"
                     data-test="element-up"
                     @click="moveElement(element, -1)"
@@ -353,7 +420,7 @@ async function clearCell(scene, element) {
                   <button
                     type="button"
                     class="secondary"
-                    :disabled="index === elements.length - 1 || busy"
+                    :disabled="isLastShown(element) || busy"
                     title="Move down"
                     data-test="element-down"
                     @click="moveElement(element, 1)"
@@ -415,7 +482,7 @@ async function clearCell(scene, element) {
                 :title="
                   cellOf(scene, element)
                     ? `${element.name} ${actionLabel(cellOf(scene, element).action).toLowerCase()} in ${scene.name}`
-                    : `${element.name} is not playing in ${scene.name}`
+                    : `${element.name} is not playing in ${scene.name} — press to add it`
                 "
                 data-test="cell-button"
                 @click="startCell(scene, element)"
@@ -430,6 +497,7 @@ async function clearCell(scene, element) {
                 <span v-else class="cell-empty">
                   <span class="cell-empty-dot">·</span>
                   <span class="cell-empty-text">not playing</span>
+                  <span class="cell-empty-add">+ add</span>
                 </span>
               </button>
             </td>
@@ -437,6 +505,11 @@ async function clearCell(scene, element) {
         </tbody>
       </table>
     </div>
+
+    <label v-if="unusedCount" class="muted unused-filter" data-test="unused-filter">
+      <input v-model="hideUnused" type="checkbox" data-test="hide-unused" />
+      Hide the {{ unusedCount }} {{ unusedCount === 1 ? 'part' : 'parts' }} not in any scene
+    </label>
 
     <div class="adders">
       <form class="adder" data-test="add-element-form" @submit.prevent="addElement">
@@ -503,18 +576,54 @@ async function clearCell(scene, element) {
   max-width: 16rem;
   white-space: normal;
 }
-/* On a desk an empty cell is a dot in a row of cells; on a phone it stands
-   alone under the scene's name and has to say what it is. */
-.cell-empty-text {
+/* On a desk an empty cell is a dot in a row of cells, and under the pointer
+   it says what a press there does; on a phone it stands alone under the
+   scene's name and has to say what it is. */
+.cell-empty-text,
+.cell-empty-add {
   display: none;
 }
+.cell-button.is-empty:hover .cell-empty-dot,
+.cell-button.is-empty:focus-visible .cell-empty-dot {
+  display: none;
+}
+.cell-button.is-empty:hover .cell-empty-add,
+.cell-button.is-empty:focus-visible .cell-empty-add {
+  display: inline;
+}
 @media (max-width: 768px) {
-  .cell-empty-dot {
+  .cell-button.is-empty .cell-empty-dot,
+  .cell-button.is-empty .cell-empty-add,
+  .cell-button.is-empty:hover .cell-empty-add,
+  .cell-button.is-empty:focus-visible .cell-empty-add {
     display: none;
   }
   .cell-empty-text {
     display: inline;
   }
+}
+.scene-parts {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.scene-add-part {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.8rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  max-width: 11rem;
+}
+.unused-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
 }
 .scene-actions,
 .element-actions {
