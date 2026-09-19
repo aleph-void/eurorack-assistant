@@ -396,6 +396,94 @@ describe('QuestionDetailView', () => {
     wrapper.unmount();
   });
 
+  it('selects all or none of each review list, under the filter where there is one', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path === '/api/questions/1')
+        return { id: 1, prompt: 'How?', status: 'scoped', modules: [], components: [] };
+      if (path === '/api/questions/1/options')
+        return {
+          modules: [
+            { id: 3, manufacturer: 'Make Noise', name: 'Maths', in_scope: true },
+            { id: 4, manufacturer: '2hp', name: 'Pluck', in_scope: false },
+            { id: 5, manufacturer: 'Mutable', name: 'Plaits', in_scope: false },
+          ],
+          components: [
+            { id: 9, module_id: 3, name: 'EOR', type: 'output_jack', in_scope: true },
+            { id: 10, module_id: 3, name: 'EOC', type: 'output_jack', in_scope: false },
+          ],
+          manuals: [
+            { id: 11, module_id: 3, name: 'manual', original_name: null, source: 'found' },
+            { id: 12, module_id: 3, name: 'my notes', original_name: 'n.pdf', source: 'upload' },
+          ],
+          answers: [],
+          notes: [],
+          patches: [
+            { id: 6, name: 'Krell patch', rack_name: 'main rack', attached: false, module_ids: [4] },
+            { id: 7, name: 'Drone', rack_name: 'main rack', attached: false, module_ids: [5] },
+          ],
+        };
+      throw new Error(`unexpected ${path}`);
+    });
+
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    const checked = (name) =>
+      wrapper.findAll(`[data-test="${name}"]`).map((b) => b.element.checked);
+    // Ticked modules move to the top of their list, so read them by name.
+    const modulesChecked = () =>
+      Object.fromEntries(
+        wrapper.findAll('[data-test="module-option"]').map((b) => {
+          const text = b.element.closest('label').textContent;
+          return [['Maths', 'Pluck', 'Plaits'].find((n) => text.includes(n)), b.element.checked];
+        })
+      );
+
+    // The scoping pass ticked one module; 'Select none' clears it.
+    expect(modulesChecked()).toEqual({ Maths: true, Pluck: false, Plaits: false });
+    await wrapper.find('[data-test="modules-none"]').trigger('click');
+    expect(modulesChecked()).toEqual({ Maths: false, Pluck: false, Plaits: false });
+    expect(wrapper.find('[data-test="modules-none"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('[data-test="review"]').text()).toContain('No modules selected yet.');
+
+    // Under a filter the buttons act on what the filter shows and nothing else.
+    await wrapper.find('[data-test="module-filter"]').setValue('pl');
+    await wrapper.find('[data-test="modules-all"]').trigger('click');
+    await wrapper.find('[data-test="clear-module-filter"]').trigger('click');
+    expect(modulesChecked()).toEqual({ Maths: false, Pluck: true, Plaits: true });
+    await wrapper.find('[data-test="module-filter"]').setValue('pluck');
+    await wrapper.find('[data-test="modules-none"]').trigger('click');
+    await wrapper.find('[data-test="clear-module-filter"]').trigger('click');
+    expect(modulesChecked()).toEqual({ Maths: false, Pluck: false, Plaits: true });
+
+    await wrapper.find('[data-test="modules-all"]').trigger('click');
+    expect(modulesChecked()).toEqual({ Maths: true, Pluck: true, Plaits: true });
+    expect(wrapper.find('[data-test="modules-all"]').attributes('disabled')).toBeDefined();
+
+    // Every attachment list has the same pair.
+    expect(checked('component-option')).toEqual([true, false]);
+    await wrapper.find('[data-test="components-all"]').trigger('click');
+    expect(checked('component-option')).toEqual([true, true]);
+    await wrapper.find('[data-test="components-none"]').trigger('click');
+    expect(checked('component-option')).toEqual([false, false]);
+
+    expect(checked('manual-option')).toEqual([true, false]);
+    await wrapper.find('[data-test="manuals-none"]').trigger('click');
+    expect(checked('manual-option')).toEqual([false, false]);
+    await wrapper.find('[data-test="manuals-all"]').trigger('click');
+    expect(checked('manual-option')).toEqual([true, true]);
+
+    // Selecting every patch pulls each one's modules into scope, like
+    // ticking one does; selecting none leaves those modules where they are.
+    await wrapper.find('[data-test="modules-none"]').trigger('click');
+    await wrapper.find('[data-test="patches-all"]').trigger('click');
+    expect(checked('patch-option')).toEqual([true, true]);
+    expect(modulesChecked()).toEqual({ Maths: false, Pluck: true, Plaits: true });
+    await wrapper.find('[data-test="patches-none"]').trigger('click');
+    expect(checked('patch-option')).toEqual([false, false]);
+    expect(modulesChecked()).toEqual({ Maths: false, Pluck: true, Plaits: true });
+    wrapper.unmount();
+  });
+
   it('deselecting the primary manual is allowed and unchecking a module hides its attachments', async () => {
     api.get.mockImplementation(async (path) => {
       if (path === '/api/questions/1')

@@ -19,6 +19,7 @@ import { useRouter } from 'vue-router';
 import { api } from '../api.js';
 import { COMPONENT_TYPES, TYPE_LABELS } from '../componentTypes.js';
 import { useLazyPanel } from '../lazyPanel.js';
+import SelectionButtons from './SelectionButtons.vue';
 
 const props = defineProps({
   // 'module' or 'patch' — the query key, the payload key and the wording.
@@ -80,10 +81,6 @@ watch(
 const chosenComponentIds = computed(() =>
   props.components.filter((c) => selectedComponents.value.includes(c.id)).map((c) => c.id)
 );
-
-function selectAllComponents() {
-  selectedComponents.value = props.components.map((c) => c.id);
-}
 
 async function ask() {
   askError.value = '';
@@ -147,25 +144,11 @@ function formatDate(value) {
               Optional. Tick the jacks, knobs and switches the question is about and they go
               into its scope with the module.
             </p>
-            <div class="actions">
-              <button
-                type="button"
-                class="secondary"
-                data-test="components-all"
-                @click="selectAllComponents"
-              >
-                Select all
-              </button>
-              <button
-                type="button"
-                class="secondary"
-                data-test="components-none"
-                :disabled="selectedComponents.length === 0"
-                @click="selectedComponents = []"
-              >
-                Clear
-              </button>
-            </div>
+            <SelectionButtons
+              v-model="selectedComponents"
+              :ids="components.map((c) => c.id)"
+              name="components"
+            />
             <div v-for="group in componentGroups" :key="group.type" class="component-group">
               <h4>{{ group.label }}</h4>
               <ul class="check-list">

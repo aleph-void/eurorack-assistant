@@ -6,6 +6,7 @@ import DOMPurify from 'dompurify';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import ShareButton from '../components/ShareButton.vue';
+import SelectionButtons from '../components/SelectionButtons.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -115,11 +116,19 @@ const attachmentCount = computed(
 
 // Adding a patch pulls the modules it uses into the scope, so the question is
 // answered with their manuals rather than the patch text alone.
-function onPatchToggled(patch) {
-  if (!selectedPatches.value.includes(patch.id)) return;
+function scopePatchModules(patch) {
   for (const id of patch.module_ids ?? []) {
     if (!selectedModules.value.includes(id)) selectedModules.value.push(id);
   }
+}
+function onPatchToggled(patch) {
+  if (selectedPatches.value.includes(patch.id)) scopePatchModules(patch);
+}
+// 'Select all' over the patches ticks several at once and pulls in the modules
+// of each the way ticking one does. It reads the ids it is handed rather than
+// the selection, which v-model may not have written yet.
+function onPatchesChanged(ids) {
+  for (const patch of patchOptions.value) if (ids.includes(patch.id)) scopePatchModules(patch);
 }
 
 // The module list runs to a whole rack, so the ones actually in scope sit at
@@ -146,6 +155,11 @@ const otherModules = computed(() =>
   )
 );
 const hiddenScopedCount = computed(() => selectedModules.value.length - scopedModules.value.length);
+// What 'Select all' / 'Select none' act on: every module the filter shows,
+// whichever of the two lists it is in.
+const shownModuleIds = computed(() =>
+  (options.value?.modules ?? []).filter(moduleMatchesFilter).map((m) => m.id)
+);
 
 function moduleLabel(moduleId) {
   const m = options.value?.modules.find((mod) => mod.id === moduleId);
@@ -303,6 +317,7 @@ onUnmounted(() => clearTimeout(pollTimer));
                 </button>
               </div>
             </div>
+            <SelectionButtons v-model="selectedModules" :ids="shownModuleIds" name="modules" />
 
             <h4>In scope</h4>
             <p v-if="selectedModules.length === 0" class="muted">No modules selected yet.</p>
@@ -352,6 +367,11 @@ onUnmounted(() => clearTimeout(pollTimer));
             </span>
           </summary>
           <div class="expander-body">
+            <SelectionButtons
+              v-model="selectedComponents"
+              :ids="visibleComponents.map((c) => c.id)"
+              name="components"
+            />
             <ul class="check-list">
               <li v-for="c in visibleComponents" :key="c.id">
                 <label>
@@ -383,7 +403,13 @@ onUnmounted(() => clearTimeout(pollTimer));
             <p v-if="visibleManuals.length === 0" class="muted">
               No manual documents for the selected modules.
             </p>
-            <ul v-else class="check-list">
+            <SelectionButtons
+              v-else
+              v-model="selectedManuals"
+              :ids="visibleManuals.map((m) => m.id)"
+              name="manuals"
+            />
+            <ul v-if="visibleManuals.length > 0" class="check-list">
               <li v-for="m in visibleManuals" :key="m.id">
                 <label>
                   <input v-model="selectedManuals" type="checkbox" :value="m.id" data-test="manual-option" />
@@ -405,6 +431,11 @@ onUnmounted(() => clearTimeout(pollTimer));
             </span>
           </summary>
           <div class="expander-body">
+            <SelectionButtons
+              v-model="selectedAnswers"
+              :ids="visibleAnswers.map((a) => a.id)"
+              name="answers"
+            />
             <ul class="check-list">
               <li v-for="a in visibleAnswers" :key="a.id">
                 <label>
@@ -424,6 +455,11 @@ onUnmounted(() => clearTimeout(pollTimer));
             </span>
           </summary>
           <div class="expander-body">
+            <SelectionButtons
+              v-model="selectedNotes"
+              :ids="visibleNotes.map((n) => n.id)"
+              name="notes"
+            />
             <ul class="check-list">
               <li v-for="n in visibleNotes" :key="n.id">
                 <label>
@@ -443,6 +479,11 @@ onUnmounted(() => clearTimeout(pollTimer));
             </span>
           </summary>
           <div class="expander-body">
+            <SelectionButtons
+              v-model="selectedCaptures"
+              :ids="visibleCaptures.map((c) => c.id)"
+              name="captures"
+            />
             <ul class="check-list">
               <li v-for="c in visibleCaptures" :key="c.id">
                 <label>
@@ -476,6 +517,11 @@ onUnmounted(() => clearTimeout(pollTimer));
               A recording travels as the waveform and spectrogram drawn from it, plus its measured
               duration and levels. The assistant reads those — it cannot hear the audio.
             </p>
+            <SelectionButtons
+              v-model="selectedAudio"
+              :ids="visibleAudio.map((a) => a.id)"
+              name="audio"
+            />
             <ul class="check-list">
               <li v-for="a in visibleAudio" :key="a.id">
                 <label>
@@ -514,6 +560,12 @@ onUnmounted(() => clearTimeout(pollTimer));
               records, the normalled connections it leaves intact and the signal flow they add up to.
               The modules the patch uses are added to the scope above.
             </p>
+            <SelectionButtons
+              v-model="selectedPatches"
+              :ids="patchOptions.map((p) => p.id)"
+              name="patches"
+              @update:model-value="onPatchesChanged"
+            />
             <ul class="check-list">
               <li v-for="p in patchOptions" :key="p.id">
                 <label>
