@@ -73,6 +73,94 @@ describe('rack outputs', () => {
   });
 });
 
+describe('system outputs', () => {
+  // Alice's rack, joined to a system — the rack's own exit marked first, so
+  // joining can be seen to carry it over.
+  async function withSystem({ markRackFirst = false } = {}) {
+    const fixture = await withRack();
+    if (markRackFirst) {
+      await post(fixture, `/api/racks/${fixture.rackId}/outputs`, {
+        module_id: fixture.out.id,
+        component_id: fixture.audioIn.id,
+      });
+    }
+    fixture.system = (await post(fixture, '/api/systems', { name: 'Studio' })).body;
+    await request(fixture.app)
+      .put(`/api/racks/${fixture.rackId}/system`)
+      .set('Cookie', fixture.aliceCookie)
+      .send({ system_id: fixture.system.id });
+    return fixture;
+  }
+
+  it('marks the jacks sound leaves the system at, naming the rack each stands in', async () => {
+    const fixture = await withSystem();
+    const { app, aliceCookie, adminCookie, rackId } = fixture;
+    const url = `/api/systems/${fixture.system.id}/outputs`;
+    const body = { rack_id: rackId, module_id: fixture.out.id, component_id: fixture.audioIn.id };
+    // Not a jack, not a rack of this system, not a module of that rack.
+    expect((await post(fixture, url, { ...body, component_id: fixture.level.id })).status).toBe(400);
+    expect((await post(fixture, url, { ...body, rack_id: 999999 })).status).toBe(400);
+    expect((await post(fixture, url, { ...body, module_id: 999999 })).status).toBe(400);
+    // Somebody else's system is not there.
+    expect((await post(fixture, url, body, adminCookie)).status).toBe(404);
+
+    const added = await post(fixture, url, body);
+    expect(added.status).toBe(201);
+    expect(added.body.outputs).toEqual([
+      expect.objectContaining({
+        rack_id: rackId,
+        rack_name: expect.any(String),
+        module_name: 'Outs',
+        component_name: 'Audio In',
+        component_type: 'input_jack',
+      }),
+    ]);
+    expect((await post(fixture, url, body)).status).toBe(409);
+    const detail = await request(app).get(`/api/systems/${fixture.system.id}`).set('Cookie', aliceCookie);
+    expect(detail.body.outputs).toHaveLength(1);
+
+    const removed = await request(app)
+      .delete(`${url}/${added.body.outputs[0].id}`)
+      .set('Cookie', aliceCookie);
+    expect(removed.body.outputs).toEqual([]);
+    expect((await request(app).delete(`${url}/999`).set('Cookie', aliceCookie)).status).toBe(404);
+  });
+
+  it("is what a patch of the system copies, and a rack in a system is not edited on its own", async () => {
+    const fixture = await withSystem();
+    const { app, aliceCookie, rackId } = fixture;
+    // The rack's own list is closed while it stands in the system.
+    const onRack = await post(fixture, `/api/racks/${rackId}/outputs`, {
+      module_id: fixture.out.id,
+      component_id: fixture.audioIn.id,
+    });
+    expect(onRack.status).toBe(409);
+    await post(fixture, `/api/systems/${fixture.system.id}/outputs`, {
+      rack_id: rackId,
+      module_id: fixture.out.id,
+      component_id: fixture.audioIn.id,
+    });
+    const patch = (await post(fixture, '/api/patches', { system_id: fixture.system.id, name: 'Room' })).body;
+    const detail = (await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie)).body;
+    expect(detail.outputs.map((o) => o.component_name)).toEqual(['Audio In']);
+  });
+
+  it('carries a rack\'s exits in when it joins, and takes them out again when it leaves', async () => {
+    const fixture = await withSystem({ markRackFirst: true });
+    const { app, aliceCookie, rackId } = fixture;
+    const url = `/api/systems/${fixture.system.id}/outputs`;
+    let listed = (await request(app).get(url).set('Cookie', aliceCookie)).body;
+    expect(listed.outputs.map((o) => o.component_name)).toEqual(['Audio In']);
+
+    await request(app).put(`/api/racks/${rackId}/system`).set('Cookie', aliceCookie).send({ system_id: null });
+    listed = (await request(app).get(url).set('Cookie', aliceCookie)).body;
+    expect(listed.outputs).toEqual([]);
+    // Standing alone again, the rack still has the exit it was marked with.
+    const rack = (await request(app).get(`/api/racks/${rackId}`).set('Cookie', aliceCookie)).body;
+    expect(rack.outputs.map((o) => o.component_name)).toEqual(['Audio In']);
+  });
+});
+
 describe('patch outputs', () => {
   async function markedAndPatched(fixture) {
     await post(fixture, `/api/racks/${fixture.rackId}/outputs`, {

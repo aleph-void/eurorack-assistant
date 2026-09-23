@@ -2,7 +2,12 @@
 // joining a system, deleting, and taking one away as a zip.
 
 import { Router } from 'express';
-import { findRackByName, freePlacement, rackFootprints } from '../../services/racks.js';
+import {
+  carryRackOutputs,
+  findRackByName,
+  freePlacement,
+  rackFootprints,
+} from '../../services/racks.js';
 import { rackDetailJson, rackJson } from '../../services/rackJson.js';
 import { readableResource, removeShares } from '../../services/sharing.js';
 import { enqueueJob } from '../../jobs/worker.js';
@@ -11,7 +16,7 @@ import { asyncHandler } from '../asyncHandler.js';
 import { ownRack } from './helpers.js';
 
 export function rackCoreRoutes(db) {
-  const { Rack, RackModule, System, User, Job } = db.models;
+  const { Rack, RackModule, System, SystemOutput, User, Job } = db.models;
   const router = Router();
 
   router.get('/', asyncHandler(async (req, res) => {
@@ -85,12 +90,17 @@ export function rackCoreRoutes(db) {
 
   // Put this rack into one of the user's systems, or take it out of the one
   // it is in. Racks own their modules either way; a system only groups them.
-  // Body: { system_id } — null or empty takes the rack out.
+  // Body: { system_id } — null or empty takes the rack out. Where sound
+  // leaves goes with it both ways: a rack joining brings the exits marked on
+  // it into the system's, and one leaving takes the system's exits on it
+  // away, since the system can no longer patch to them.
   router.put('/:id/system', asyncHandler(async (req, res) => {
     const rack = await ownRack(db, req.user.id, req.params.id);
     if (!rack) return res.status(404).json({ error: 'Rack not found' });
     const raw = req.body?.system_id;
+    const leaving = rack.system_id;
     if (raw === null || raw === undefined || raw === '') {
+      if (leaving !== null) await SystemOutput.destroy({ where: { system_id: leaving, rack_id: rack.id } });
       await rack.update({ system_id: null, system_x: 0, system_y: 0, system_position: 0 });
       return res.json(rackJson(rack, await RackModule.count({ where: { rack_id: rack.id } })));
     }
@@ -116,7 +126,11 @@ export function rackCoreRoutes(db) {
       updates.system_x = spot.x;
       updates.system_y = spot.y;
     }
+    if (joining && leaving !== null) {
+      await SystemOutput.destroy({ where: { system_id: leaving, rack_id: rack.id } });
+    }
     await rack.update(updates);
+    if (joining) await carryRackOutputs(db, rack, system.id);
     res.json(rackJson(rack, await RackModule.count({ where: { rack_id: rack.id } })));
   }));
 

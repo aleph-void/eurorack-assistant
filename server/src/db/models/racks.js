@@ -93,5 +93,22 @@ export function defineRacksModels(define) {
     { tableName: 'rack_outputs', createdAt: 'created_at', updatedAt: false }
   );
 
-  return { System, Rack, RackModule, RackRow, RackRowModule, RackOutput };
+  // The same, for a whole system (migration 048): a studio of several cases
+  // has one set of exits, and a patch of the system builds towards those.
+  // `rack_id` says which case the marked module stands in, since the same
+  // module may be racked in two of them.
+  const SystemOutput = define(
+    'SystemOutput',
+    {
+      id,
+      system_id: { type: DataTypes.INTEGER, allowNull: false },
+      rack_id: { type: DataTypes.INTEGER, allowNull: false },
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      component_id: { type: DataTypes.INTEGER, allowNull: false },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'system_outputs', createdAt: 'created_at', updatedAt: false }
+  );
+
+  return { System, Rack, RackModule, RackRow, RackRowModule, RackOutput, SystemOutput };
 }

@@ -103,6 +103,40 @@ export async function rackOutputsJson(db, rackId) {
     }));
 }
 
+// Where sound leaves a system (migration 048): the same shape as a rack's,
+// with the case each marked module stands in, since a system may hold the
+// same module in two of them.
+export async function systemOutputsJson(db, systemId) {
+  const { SystemOutput, Rack, Module, ModuleComponent } = db.models;
+  const rows = await SystemOutput.findAll({
+    where: { system_id: systemId },
+    include: [
+      { model: Rack, attributes: ['id', 'name'] },
+      { model: Module, attributes: ['id', 'manufacturer', 'name'] },
+      { model: ModuleComponent, attributes: ['id', 'name', 'type', 'port_kind'] },
+    ],
+    order: [
+      ['position', 'ASC'],
+      ['id', 'ASC'],
+    ],
+  });
+  return rows
+    .filter((r) => r.Rack && r.Module && r.ModuleComponent)
+    .map((r) => ({
+      id: r.id,
+      rack_id: r.rack_id,
+      rack_name: r.Rack.name,
+      module_id: r.module_id,
+      manufacturer: r.Module.manufacturer,
+      module_name: r.Module.name,
+      component_id: r.component_id,
+      component_name: r.ModuleComponent.name,
+      component_type: r.ModuleComponent.type,
+      port_kind: r.ModuleComponent.port_kind ?? null,
+      position: r.position,
+    }));
+}
+
 export async function rackDetailJson(db, rack, { panels = null } = {}) {
   const { RackModule, Module } = db.models;
   const mappings = await RackModule.findAll({
