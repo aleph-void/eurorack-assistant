@@ -18,15 +18,17 @@ export async function exportPatchDocument(db, patch) {
     PatchModulePort,
     PatchModuleLink,
     PatchModuleLinkJack,
+    PatchOutput,
     ModuleComponent,
   } = db.models;
   const where = { patch_id: patch.id };
-  const [modules, cables, settings, groups, links] = await Promise.all([
+  const [modules, cables, settings, groups, links, outputs] = await Promise.all([
     PatchModule.findAll({ where, order: [['id', 'ASC']] }),
     PatchCable.findAll({ where, order: [['id', 'ASC']] }),
     PatchSetting.findAll({ where, order: [['id', 'ASC']] }),
     PatchGroup.findAll({ where, order: [['position', 'ASC'], ['id', 'ASC']] }),
     PatchModuleLink.findAll({ where, order: [['id', 'ASC']] }),
+    PatchOutput.findAll({ where, order: [['position', 'ASC'], ['id', 'ASC']] }),
   ]);
   const ports = modules.length
     ? await PatchModulePort.findAll({
@@ -44,6 +46,7 @@ export async function exportPatchDocument(db, patch) {
     ...cables.flatMap((c) => [c.from_component_id, c.to_component_id]),
     ...settings.map((s) => s.component_id),
     ...jacks.flatMap((j) => [j.a_component_id, j.b_component_id]),
+    ...outputs.map((o) => o.component_id),
   ].filter((id) => id != null);
   const components = componentIds.length
     ? await ModuleComponent.findAll({
@@ -132,6 +135,12 @@ export async function exportPatchDocument(db, patch) {
             b: j.b_component_name,
             b_type: componentType.get(j.b_component_id) ?? null,
           })),
+      })),
+      // Where sound leaves the system, by instance and jack name.
+      outputs: outputs.map((o) => ({
+        module: refs.get(o.patch_module_id) ?? null,
+        jack: o.component_name,
+        type: componentType.get(o.component_id) ?? null,
       })),
     },
   };

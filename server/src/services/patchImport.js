@@ -96,6 +96,7 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
     PatchModulePort,
     PatchModuleLink,
     PatchModuleLinkJack,
+    PatchOutput,
   } = db.models;
 
   const resolved = await resolveModules(db, userId, document.modules);
@@ -231,6 +232,19 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
       );
     }
 
+    for (const [at, o] of document.outputs.entries()) {
+      await PatchOutput.create(
+        {
+          patch_id: patch.id,
+          patch_module_id: rowIds.get(o.module),
+          component_id: jackId(o.module, o.jack, o.type),
+          component_name: o.jack,
+          position: at + 1,
+        },
+        { transaction }
+      );
+    }
+
     for (const l of document.links) {
       const created = await PatchModuleLink.create(
         {
@@ -271,6 +285,7 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
       settings: document.settings.length,
       groups: document.groups.length,
       links: document.links.length,
+      outputs: document.outputs.length,
     },
     unresolved_modules: [...new Set(unresolved)],
   };

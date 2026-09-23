@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
@@ -42,6 +42,41 @@ const genMaxCables = ref(DEFAULT_MAX_CABLES);
 const genBrief = ref('');
 const generating = ref(false);
 const genNotice = ref('');
+// The modules to use, as module ids of the chosen rack or system — either
+// ones that must take part, or with `genOnly` the only ones allowed. The
+// module list is read the first time the picker is opened, not on every
+// visit to the page.
+const genModuleIds = ref([]);
+const genOnly = ref(false);
+const allModules = ref(null);
+const modulesLoading = ref(false);
+async function openModulePicker(event) {
+  if (!event.target.open || allModules.value !== null || modulesLoading.value) return;
+  modulesLoading.value = true;
+  try {
+    const list = await api.get('/api/modules', { quiet: true });
+    allModules.value = Array.isArray(list) ? list : [];
+  } catch {
+    allModules.value = [];
+  } finally {
+    modulesLoading.value = false;
+  }
+}
+// The modules of whichever rack or system the generator is pointed at.
+const sourceModules = computed(() => {
+  if (!allModules.value) return [];
+  const [kind, id] = String(genSource.value).split(':');
+  const rackIds = new Set(
+    kind === 'system'
+      ? racks.value.filter((r) => String(r.system_id) === id).map((r) => r.id)
+      : [Number(id)]
+  );
+  return allModules.value.filter((m) => (m.racks || []).some((r) => rackIds.has(r.id)));
+});
+// A different source is a different set of modules: nothing chosen carries over.
+watch(genSource, () => {
+  genModuleIds.value = [];
+});
 
 // One page of the list as the server sends it.
 function applyPage(page, { append = false } = {}) {
@@ -137,12 +172,16 @@ async function generate() {
       name: genName.value,
       max_cables: Number(genMaxCables.value) || DEFAULT_MAX_CABLES,
       prompt: genBrief.value.trim() || undefined,
+      ...(genModuleIds.value.length
+        ? { module_ids: genModuleIds.value.slice(), only_modules: genOnly.value }
+        : {}),
     });
     genNotice.value =
       `Building '${made.name}' — the model is wiring it up in the background ` +
       '(progress is on the Jobs page); the cables appear here when it finishes.';
     genName.value = '';
     genBrief.value = '';
+    genModuleIds.value = [];
     await load();
   } catch (e) {
     error.value = e.message;
@@ -422,6 +461,34 @@ onMounted(load);
           />
         </div>
       </div>
+      <details class="module-picker" data-test="generate-modules" @toggle="openModulePicker">
+        <summary>
+          Choose modules
+          <span v-if="genModuleIds.length" class="muted" data-test="generate-modules-count">
+            — {{ genModuleIds.length }} chosen{{ genOnly ? ', and only those' : '' }}
+          </span>
+          <span v-else class="muted">(optional — the whole case otherwise)</span>
+        </summary>
+        <p v-if="modulesLoading" class="muted">Loading modules…</p>
+        <template v-else-if="allModules">
+          <p v-if="sourceModules.length === 0" class="muted">No modules in the chosen rack or system.</p>
+          <div v-else class="module-choices">
+            <label v-for="module in sourceModules" :key="module.id" class="module-choice">
+              <input
+                v-model="genModuleIds"
+                type="checkbox"
+                :value="module.id"
+                :data-test="`generate-module-${module.id}`"
+              />
+              {{ module.manufacturer }} {{ module.name }}
+            </label>
+          </div>
+          <label class="module-choice only-choice">
+            <input v-model="genOnly" type="checkbox" data-test="generate-only" :disabled="!genModuleIds.length" />
+            Use only these modules (the outputs stay available, so the patch can still be heard)
+          </label>
+        </template>
+      </details>
       <div class="row">
         <textarea
           v-model="genBrief"
@@ -474,6 +541,33 @@ onMounted(load);
 .export-link {
   font-size: 0.85rem;
   margin-right: 0.4rem;
+}
+
+/* The module picker: a fold of checkboxes, several to a line. */
+.module-picker {
+  margin: 0.25rem 0 0.75rem;
+}
+
+.module-picker summary {
+  cursor: pointer;
+}
+
+.module-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.module-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: normal;
+}
+
+.only-choice {
+  margin-top: 0.25rem;
 }
 
 /* The cable budget is a small number beside its label, not a text field the

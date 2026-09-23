@@ -37,6 +37,20 @@
 //      closed, a clock at the wrong division or an attenuverter at zero is a
 //      patch that does not work, whatever the cables say.
 //
+// WHERE THE PATCH IS BUILT TOWARDS is the patch's own list of OUTPUTS (the
+// jacks sound leaves the system at, copied from the racks — migration 047),
+// or, when none is marked, the inputs of the gear declared inside the
+// patch. They are named in every prompt, and once the cable rounds are done
+// the traced flow is checked against them: a patch that reaches none gets
+// one more round asking for exactly that, budget allowing, and the job says
+// either way.
+//
+// The user may also name MODULES: instances the patch must make use of, or
+// — with `only` — the only instances it may use at all, in which case every
+// other instance is left out of the inventory and a cable to one is refused
+// like any other illegal cable. The output instances stay allowed under
+// `only`, since a patch nobody can hear is not a patch.
+//
 // Each round is written as it lands, so the patch fills in while the job
 // runs and an attempt that dies mid-way leaves a patch the next one carries
 // on from (cables already there count towards the budget).
@@ -45,7 +59,7 @@
 // parse — are pure functions, tested without one (like patchDocument.js).
 
 import { extractJsonObject } from './json.js';
-import { loadPatchDetail } from './patchDetail.js';
+import { loadPatchDetail, reachedJacks } from './patchDetail.js';
 import { patchTextDocument } from './patchDocument.js';
 import { normalizationSummary } from './ask.js';
 import {
@@ -135,18 +149,53 @@ const valuesText = (values = []) => {
 // patch, naming every connection point, control and menu setting by the id
 // the answer must use. `patch` is the loadPatchDetail json plus the record's
 // own fields; `summaries` maps module_id to the analysis summary.
-export function patchInventoryDocument(patch, { summaries = new Map(), normalizationLines = [] } = {}) {
-  const modules = patch.modules ?? [];
-  const modulesById = new Map(modules.map((m) => [m.id, m]));
-  const spansRacks = new Set(modules.map((m) => m.rack_name).filter(Boolean)).size > 1;
+export function patchInventoryDocument(
+  patch,
+  { summaries = new Map(), normalizationLines = [], sinks = [], focus = null } = {}
+) {
+  const all = patch.modules ?? [];
+  const modulesById = new Map(all.map((m) => [m.id, m]));
+  const spansRacks = new Set(all.map((m) => m.rack_name).filter(Boolean)).size > 1;
+  const allowed = allowedInstances(all, sinks, focus);
+  // Under `only` the rest of the case is not offered at all: what the model
+  // cannot see it cannot ask for.
+  const modules = allowed ? all.filter((pm) => allowed.has(pm.id)) : all;
+  const requested = new Set(focus?.patchModuleIds ?? []);
   const lines = [];
   lines.push(`# ${patch.system_name ? 'System' : 'Rack'}: ${patch.system_name || patch.rack_name || patch.name}`);
-  lines.push('', `${modules.length} module instance(s). Ids are what the answer refers to.`);
+  lines.push(
+    '',
+    `${modules.length} module instance(s)${allowed ? ` offered (of ${all.length} in the case)` : ''}. Ids are what the answer refers to.`
+  );
+
+  if (sinks.length > 0) {
+    lines.push('', '## Where sound leaves the system (build towards these)');
+    for (const sink of sinks) {
+      const pm = modulesById.get(sink.patch_module_id);
+      lines.push(
+        `- ${pm ? instanceLabel(pm) : '?'} "${sink.component_name}" (instance ${sink.patch_module_id}, jack ${sink.component_id})` +
+          (sink.assumed ? ' — assumed: gear outside the rack, no output is marked' : '')
+      );
+    }
+  }
+  if (requested.size > 0) {
+    lines.push(
+      '',
+      focus.only
+        ? '## The user chose these modules and no others (the outputs above stay available)'
+        : '## The user asked for these modules to take part'
+    );
+    for (const id of requested) {
+      const pm = modulesById.get(id);
+      if (pm) lines.push(`- instance ${pm.id}: ${instanceLabel(pm)}`);
+    }
+  }
 
   for (const pm of modules) {
     const where = [];
     if (pm.external) where.push('gear outside the rack');
     if (spansRacks && pm.rack_name) where.push(`in rack "${pm.rack_name}"`);
+    if (requested.has(pm.id)) where.push('REQUESTED by the user');
     lines.push('', `## Instance ${pm.id}: ${instanceLabel(pm)}${where.length ? ` (${where.join(', ')})` : ''}`);
     const summary = pm.module_id ? summaries.get(pm.module_id) : null;
     if (summary) lines.push(clip(summary, SUMMARY_CHARS));
@@ -223,6 +272,46 @@ export function patchInventoryDocument(patch, { summaries = new Map(), normaliza
   return lines.join('\n');
 }
 
+// The instances a patch under `only` may use: the ones the user chose plus
+// the ones sound leaves through. null when every instance is allowed.
+export function allowedInstances(modules, sinks = [], focus = null) {
+  if (!focus?.only || !focus.patchModuleIds?.length) return null;
+  const allowed = new Set(focus.patchModuleIds);
+  for (const sink of sinks) allowed.add(sink.patch_module_id);
+  return allowed;
+}
+
+// Where the patch is built towards: the patch's own outputs, live ones only
+// (a jack a re-analysis took away is not somewhere to build towards), or —
+// when none is marked — the inputs of the gear declared inside the patch,
+// which is what the cables page has always taken the end of a patch to be.
+export function sinkJacks(patch) {
+  const marked = (patch.outputs ?? []).filter((o) => o.live !== false);
+  if (marked.length > 0) {
+    return marked.map((o) => ({
+      patch_module_id: o.patch_module_id,
+      component_id: o.component_id,
+      component_name: o.component_name,
+      assumed: false,
+    }));
+  }
+  const assumed = [];
+  for (const pm of patch.modules ?? []) {
+    if (!pm.external) continue;
+    for (const c of pm.components ?? []) {
+      if (c.type === 'input_jack' && isPatchable(c)) {
+        assumed.push({
+          patch_module_id: pm.id,
+          component_id: c.id,
+          component_name: c.name,
+          assumed: true,
+        });
+      }
+    }
+  }
+  return assumed;
+}
+
 // A connector a cable cannot reach: an expansion header behind the panel, a
 // USB socket, a memory card slot. The same rule the diagram and the cable
 // pickers apply (client/src/panelLayout.js isPatchPoint).
@@ -249,18 +338,37 @@ const ANSWER_SHAPE = `Respond with ONLY a JSON object of this shape (no prose ar
   ]
 }`;
 
-const goalText = (brief) =>
-  brief
-    ? `The user's brief for this patch:\n\n${brief}\n\nDesign the patch to that brief as closely as the hardware allows.`
-    : 'No brief was given: design a complete, playable patch that shows off what this system does best — a sound source shaped and modulated on its way to wherever audio leaves the system.';
+const goalText = (brief, { sinks = 0, focus = null } = {}) => {
+  const parts = [
+    brief
+      ? `The user's brief for this patch:\n\n${brief}\n\nDesign the patch to that brief as closely as the hardware allows.`
+      : 'No brief was given: design a complete, playable patch that shows off what this system does best — a sound source shaped and modulated on its way to wherever audio leaves the system.',
+  ];
+  if (sinks > 0) {
+    parts.push(
+      'The inventory names the jacks sound leaves the system at. Design BACKWARDS from them: the patch must carry its audio to at least one of those jacks, or nobody will hear it.'
+    );
+  }
+  if (focus?.patchModuleIds?.length) {
+    parts.push(
+      focus.only
+        ? 'The user chose a set of modules and asked that ONLY those be used: the inventory holds nothing else but the output jacks, and a cable to any other module is refused.'
+        : 'The user asked for particular modules to take part (marked REQUESTED in the inventory): make sure each of them does something in the patch, and use the rest of the case as the brief needs.'
+    );
+  }
+  return parts.join('\n\n');
+};
 
 // The first round: the patch, from the inventory.
-export const GENERATE_TEMPLATE = (inventory, { maxCables, brief = '', existingCables = 0 }) => {
+export const GENERATE_TEMPLATE = (
+  inventory,
+  { maxCables, brief = '', existingCables = 0, sinks = 0, focus = null }
+) => {
   const room = Math.max(0, maxCables - existingCables);
   return `You are a eurorack modular synthesizer expert designing a patch for a user's own system.
 Below is every module instance in it, with the id of every jack, control and menu setting.
 
-${goalText(brief)}
+${goalText(brief, { sinks, focus })}
 
 You may add AT MOST ${room} new patch cable(s)${existingCables > 0 ? ` (${existingCables} are already plugged and count towards the user's limit of ${maxCables})` : ''}. Fewer is fine when fewer does the job; never more.
 
@@ -281,17 +389,33 @@ ${inventory}
 // may unplug a cable IT plugged in this job, by id), or says it is done.
 export const REFINE_TEMPLATE = (
   inventory,
-  { maxCables, brief = '', kept = [], refused = [], room = 0, round = 2 }
+  {
+    maxCables,
+    brief = '',
+    kept = [],
+    refused = [],
+    room = 0,
+    round = 2,
+    sinks = 0,
+    focus = null,
+    unreached = [],
+  }
 ) => `You are a eurorack modular synthesizer expert designing a patch for a user's own system, and this is round ${round} of building it.
 
-${goalText(brief)}
+${goalText(brief, { sinks, focus })}
 
 The cables you proposed were checked against the hardware. These were plugged (each with the cable id it now has):
 ${kept.length > 0 ? kept.map((c) => `- cable ${c.id}: ${c.text}`).join('\n') : '- none'}
 
 These were REFUSED, for the reason given:
 ${refused.length > 0 ? refused.map((r) => `- ${r.text}: ${r.reason}`).join('\n') : '- none'}
-
+${
+  unreached.length > 0
+    ? `\nTRACED, the patch's audio reaches NONE of the jacks sound leaves the system at:\n${unreached
+        .map((u) => `- ${u.text}`)
+        .join('\n')}\nThis round is for exactly that: add the cable(s) that carry the patch's audio to one of them (through a mixer or output module if that is how the system is wired), taking back a cable of your own if the budget needs it.\n`
+    : ''
+}
 You may add AT MOST ${room} more cable(s) (the user's limit is ${maxCables} in all). Fill what the refusals left undone — re-routing where a jack turned out to be taken or wrong — or, if the patch is complete as it stands, answer {"done": true}. To take back a cable you plugged in an earlier round, list its id under "unplug"; unplugging frees its input and its place in the budget.
 
 ${CABLE_RULES}
@@ -304,9 +428,21 @@ ${inventory}
 
 // The last word: the patch as it stands, traced, and every control and menu
 // setting it depends on dialed in.
-export const SETTINGS_TEMPLATE = (inventory, patchDocument, { brief = '' } = {}) => `You are a eurorack modular synthesizer expert. The cables of a patch on a user's own system are plugged; what remains is to set it up so it works and sounds as intended. A patch is more than its connections: a VCA left closed, a clock at the wrong division, a waveform not selected or a modulation attenuator at zero is a patch that makes no sound, whatever the cables say.
+export const SETTINGS_TEMPLATE = (
+  inventory,
+  patchDocument,
+  { brief = '', sinks = 0, focus = null } = {}
+) => `You are a eurorack modular synthesizer expert. The cables of a patch on a user's own system are plugged; what remains is to set it up so it works and sounds as intended. A patch is more than its connections: a VCA left closed, a clock at the wrong division, a waveform not selected or a modulation attenuator at zero is a patch that makes no sound, whatever the cables say.
 
-${brief ? `The user's brief for this patch:\n\n${brief}\n` : ''}
+${brief ? `The user's brief for this patch:\n\n${brief}\n` : ''}${
+  sinks > 0
+    ? 'Start from the output chain — the modules between the sound and the jacks it leaves the system at — and work back: those are the settings that decide whether anything is heard at all.\n'
+    : ''
+}${
+  focus?.only
+    ? 'Only the modules in the inventory may be set.\n'
+    : ''
+}
 Below is the patch as it now stands — its cables, the settings already recorded, the normalled connections that survive and the signal flow those add up to — followed by the inventory of every module with the id of every control and menu setting.
 
 Go through EVERY module the patch uses and dial in each control and menu setting that matters for this patch: levels and VCA openings, envelope shapes, filter cutoff and resonance, oscillator ranges and waveforms, modulation depths and attenuverters, clock divisions and menu selections, mixer and output levels. Use only the positions, ranges and options listed in the inventory. A control that does not matter here is left alone. Where a setting is already recorded and right, do not repeat it; answer a new value only to change one.
@@ -472,7 +608,7 @@ async function resolveSetting(db, patch, setting, jacksByPatchModule) {
 
 // The patch as the model needs to see it: the loadPatchDetail json with the
 // module summaries and the normalled connections beside it.
-async function readPatch(db, patch) {
+async function readPatch(db, patch, focus = null) {
   const { Module, ModuleComponent, ComponentNormalization } = db.models;
   const { json, topology, liveIds } = await loadPatchDetail(db, patch, {
     includeRackLayout: false,
@@ -485,10 +621,24 @@ async function readPatch(db, patch) {
     liveModules.map((m) => m.get({ plain: true }))
   );
   const plain = { ...patch.get({ plain: true }), ...json };
+  const sinks = sinkJacks(json);
+  const arrived = reachedJacks(json.flow);
   return {
     json,
     topology,
-    inventory: patchInventoryDocument(plain, { summaries, normalizationLines }),
+    sinks,
+    allowed: allowedInstances(json.modules, sinks, focus),
+    // The exits nothing reaches yet, as the refine round names them.
+    unreached: sinks
+      .filter((sink) => !arrived.has(`${sink.patch_module_id}:${sink.component_id}`))
+      .map((sink) => {
+        const pm = json.modules.find((m) => m.id === sink.patch_module_id);
+        return {
+          ...sink,
+          text: `${pm ? instanceLabel(pm) : '?'} "${sink.component_name}" (instance ${sink.patch_module_id}, jack ${sink.component_id})`,
+        };
+      }),
+    inventory: patchInventoryDocument(plain, { summaries, normalizationLines, sinks, focus }),
     document: patchTextDocument(plain),
   };
 }
@@ -496,17 +646,25 @@ async function readPatch(db, patch) {
 // Every cable of one round through the rules a hand-plugged one meets, in
 // the order the model ranked them, against the patch as it will be once the
 // ones before it are in. Answers what to write and what was refused.
-async function judgeCables(db, patch, proposed, rows, maxCables, log) {
+async function judgeCables(db, patch, proposed, rows, maxCables, log, allowed = null) {
   const kept = [];
   const refused = [];
   for (const p of proposed) {
     if (rows.length >= maxCables) break;
     const from = await resolveEndpoint(db, patch, p.from_module, p.from_jack);
     const to = from.error ? from : await resolveEndpoint(db, patch, p.to_module, p.to_jack);
+    // "Only these modules" is a rule like any other: a cable to a module the
+    // user left out is refused, and the model is told so.
+    const outside =
+      allowed && !from.error && !to.error
+        ? [from, to].find((end) => !allowed.has(end.pm.id))
+        : null;
     const problem =
       from.error || to.error
         ? { error: from.error ? `from: ${from.error}` : `to: ${to.error}` }
-        : await cableProblem(db, patch, from, to, rows);
+        : outside
+          ? { error: `${instanceLabel(outside.pm)} is not one of the modules the user chose` }
+          : await cableProblem(db, patch, from, to, rows);
     if (problem) {
       refused.push({
         text: `instance ${p.from_module} jack ${p.from_jack} → instance ${p.to_module} jack ${p.to_jack}`,
@@ -545,11 +703,14 @@ async function judgeCables(db, patch, proposed, rows, maxCables, log) {
 
 // The settings of one answer, checked and written (a value already recorded
 // is replaced). Answers how many were written.
-async function writeSettings(db, patch, proposed, jacksByPatchModule, log, transaction) {
+async function writeSettings(db, patch, proposed, jacksByPatchModule, log, transaction, allowed = null) {
   const { PatchSetting } = db.models;
   let written = 0;
   for (const p of proposed) {
-    const resolved = await resolveSetting(db, patch, p, jacksByPatchModule);
+    const resolved =
+      allowed && !allowed.has(p.module)
+        ? { error: `instance ${p.module} is not one of the modules the user chose` }
+        : await resolveSetting(db, patch, p, jacksByPatchModule);
     if (resolved.error) {
       log(`refused a setting: ${resolved.error}`);
       continue;
@@ -572,10 +733,25 @@ export async function generatePatch(
   db,
   backend,
   patch,
-  { maxCables = DEFAULT_MAX_CABLES, brief = '', log = () => {} } = {}
+  { maxCables = DEFAULT_MAX_CABLES, brief = '', focus = null, log = () => {} } = {}
 ) {
   const { PatchCable } = db.models;
-  let state = await readPatch(db, patch);
+  let state = await readPatch(db, patch, focus);
+  if (focus?.patchModuleIds?.length) {
+    const named = state.json.modules.filter((pm) => focus.patchModuleIds.includes(pm.id));
+    log(
+      `${focus.only ? 'only these modules' : 'making sure these modules take part'}: ` +
+        named.map(instanceLabel).join(', ')
+    );
+  }
+  if (state.sinks.length > 0) {
+    log(
+      `building towards ${state.sinks.map((sink) => `"${sink.component_name}"`).join(', ')}` +
+        (state.sinks[0].assumed ? ' (assumed: no output is marked on the rack)' : '')
+    );
+  } else {
+    log('no output is marked on the rack and the patch declares no gear, so where sound leaves the system is a guess');
+  }
   const jackCount = state.json.modules.reduce(
     (n, pm) => n + pm.components.filter((c) => JACK_TYPES.has(c.type)).length,
     0
@@ -613,15 +789,36 @@ export async function generatePatch(
     );
   }
 
-  while (before < maxCables && rounds < MAX_CABLE_ROUNDS) {
+  const aims = { sinks: state.sinks.length, focus };
+  // One more round than the cap allows, spent only on reaching an output.
+  let towardsOutput = false;
+  while (before < maxCables && rounds < MAX_CABLE_ROUNDS + (towardsOutput ? 1 : 0)) {
     rounds += 1;
     const room = maxCables - rows.length;
     if (room <= 0) break;
     const prompt =
       rounds === 1
-        ? GENERATE_TEMPLATE(state.inventory, { maxCables, brief, existingCables: rows.length })
-        : REFINE_TEMPLATE(state.inventory, { ...feedback, maxCables, brief, room, round: rounds });
-    if (rounds > 1) log(`round ${rounds}: ${room} cable(s) of budget left after ${feedback.refused.length} refusal(s)`);
+        ? GENERATE_TEMPLATE(state.inventory, {
+            maxCables,
+            brief,
+            existingCables: rows.length,
+            ...aims,
+          })
+        : REFINE_TEMPLATE(state.inventory, {
+            ...feedback,
+            maxCables,
+            brief,
+            room,
+            round: rounds,
+            ...aims,
+            unreached: towardsOutput ? state.unreached : [],
+          });
+    if (towardsOutput) {
+      log(`round ${rounds}: nothing reaches an output yet; asking for the cable(s) that get there`);
+    } else if (rounds > 1) {
+      log(`round ${rounds}: ${room} cable(s) of budget left after ${feedback.refused.length} refusal(s)`);
+    }
+    towardsOutput = false;
     const proposal = parseGeneratedPatch(await backend.completeText(prompt), { maxCables });
     if (proposal.description) description = proposal.description;
     if (proposal.done && proposal.cables.length === 0 && proposal.unplug.length === 0) {
@@ -642,7 +839,15 @@ export async function generatePatch(
       log(`unplugged cable ${id}: ${mine.get(id)}`);
       mine.delete(id);
     }
-    const { kept, refused } = await judgeCables(db, patch, proposal.cables, rows, maxCables, log);
+    const { kept, refused } = await judgeCables(
+      db,
+      patch,
+      proposal.cables,
+      rows,
+      maxCables,
+      log,
+      state.allowed
+    );
     refusedTotal += refused.length;
     if (kept.length === 0 && unplug.length === 0 && proposal.settings.length === 0) {
       feedback = { kept: [], refused };
@@ -664,13 +869,25 @@ export async function generatePatch(
         proposal.settings,
         state.topology.jacksByPatchModule,
         log,
-        transaction
+        transaction,
+        state.allowed
       );
     });
     feedback = { kept: kept.map((k) => ({ id: k.row.id, text: k.text })), refused };
     // Another round only fills holes a refusal left: a model that used its
-    // allowance, or chose fewer than it, is finished.
-    if (proposal.done || refused.length === 0) break;
+    // allowance, or chose fewer than it, is finished — unless, traced, the
+    // patch reaches no output, which earns one round about exactly that.
+    if (proposal.done || refused.length === 0) {
+      if (rows.length < maxCables && state.sinks.length > 0) {
+        state = await readPatch(db, patch, focus);
+        if (state.unreached.length === state.sinks.length && !feedback.askedForOutput) {
+          feedback.askedForOutput = true;
+          towardsOutput = true;
+          continue;
+        }
+      }
+      break;
+    }
   }
   if (rows.length === 0) {
     throw new Error(
@@ -682,10 +899,23 @@ export async function generatePatch(
 
   // The settings review, over the patch as it now stands and traced — the
   // same document a question about the patch reads.
-  state = await readPatch(db, patch);
+  state = await readPatch(db, patch, focus);
+  const reachesOutput =
+    state.sinks.length === 0 ? null : state.unreached.length < state.sinks.length;
+  if (reachesOutput === true) {
+    const missing = new Set(state.unreached.map((u) => `${u.patch_module_id}:${u.component_id}`));
+    const reached = state.sinks.filter(
+      (sink) => !missing.has(`${sink.patch_module_id}:${sink.component_id}`)
+    );
+    log(`audio reaches ${reached.map((sink) => `"${sink.component_name}"`).join(', ')}`);
+  } else if (reachesOutput === false) {
+    log('audio reaches NONE of the outputs — the patch will need a cable to one by hand');
+  }
   log(`reviewing the settings of the patch as it stands (${rows.length} cable(s))`);
   const review = parseGeneratedPatch(
-    await backend.completeText(SETTINGS_TEMPLATE(state.inventory, state.document, { brief }))
+    await backend.completeText(
+      SETTINGS_TEMPLATE(state.inventory, state.document, { brief, ...aims })
+    )
   );
   if (review.description) description = review.description;
   log(`the model proposed ${review.settings.length} setting(s)`);
@@ -696,7 +926,8 @@ export async function generatePatch(
       review.settings,
       state.topology.jacksByPatchModule,
       log,
-      transaction
+      transaction,
+      state.allowed
     );
     // The model's account of the patch stands as its description when the
     // user gave none — a generated patch nobody has explained yet.
@@ -704,5 +935,11 @@ export async function generatePatch(
       await patch.update({ description }, { transaction });
     }
   });
-  return { cables: rows.length - before, settings: settingsTotal, refused: refusedTotal, rounds };
+  return {
+    cables: rows.length - before,
+    settings: settingsTotal,
+    refused: refusedTotal,
+    rounds,
+    reachesOutput,
+  };
 }

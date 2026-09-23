@@ -35,6 +35,15 @@ watch(cableCount, (n) => {
 const busy = ref(false);
 const error = ref('');
 const notice = ref('');
+// The instances to use: ones that must take part, or with `only` the only
+// ones allowed (the patch's outputs stay available either way).
+const chosen = ref([]);
+const only = ref(false);
+const instanceLabel = (pm) => {
+  const base = `${pm.manufacturer || ''} ${pm.module_name || ''}`.trim() || 'unnamed module';
+  const numbered = pm.instance > 1 ? `${base} #${pm.instance}` : base;
+  return pm.label ? `${numbered} (${pm.label})` : numbered;
+};
 
 const settingsOnly = computed(() => Number(maxCables.value) <= cableCount.value);
 
@@ -46,6 +55,9 @@ async function generate() {
     await api.post(`/api/patches/${props.patchId}/generate`, {
       max_cables: Number(maxCables.value) || cableCount.value + MORE_CABLES,
       prompt: brief.value.trim() || undefined,
+      ...(chosen.value.length
+        ? { patch_module_ids: chosen.value.slice(), only_modules: only.value }
+        : {}),
     });
     notice.value =
       'Queued — the model is working on it in the background (progress is on the Jobs page); ' +
@@ -75,6 +87,30 @@ async function generate() {
       <p v-if="error" class="error" data-test="generate-more-error">{{ error }}</p>
       <p v-if="notice" class="success" data-test="generate-more-notice">{{ notice }}</p>
       <form @submit.prevent="generate">
+        <details class="module-picker" data-test="generate-more-modules">
+          <summary>
+            Choose modules
+            <span v-if="chosen.length" class="muted" data-test="generate-more-modules-count">
+              — {{ chosen.length }} chosen{{ only ? ', and only those' : '' }}
+            </span>
+            <span v-else class="muted">(optional — the whole patch otherwise)</span>
+          </summary>
+          <div class="module-choices">
+            <label v-for="pm in patch.modules || []" :key="pm.id" class="module-choice">
+              <input
+                v-model="chosen"
+                type="checkbox"
+                :value="pm.id"
+                :data-test="`generate-more-module-${pm.id}`"
+              />
+              {{ instanceLabel(pm) }}
+            </label>
+          </div>
+          <label class="module-choice">
+            <input v-model="only" type="checkbox" data-test="generate-more-only" :disabled="!chosen.length" />
+            Use only these modules (the outputs stay available)
+          </label>
+        </details>
         <div class="row">
           <textarea
             v-model="brief"
@@ -116,6 +152,28 @@ async function generate() {
 </template>
 
 <style scoped>
+.module-picker {
+  margin: 0.25rem 0 0.75rem;
+}
+
+.module-picker summary {
+  cursor: pointer;
+}
+
+.module-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.module-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: normal;
+}
+
 .inline-label {
   display: inline-block;
   margin: 0 0.4rem 0 0;

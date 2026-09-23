@@ -210,6 +210,51 @@ describe('PatchesView', () => {
     expect(wrapper.find('[data-test="generate-max-cables"]').element.value).toBe('6');
   });
 
+  it('lets the modules of the chosen source be picked, as a request or as the only ones', async () => {
+    const modules = [
+      { id: 21, manufacturer: 'Make Noise', name: 'Maths', racks: [{ id: 1, name: 'main rack', quantity: 1 }] },
+      { id: 22, manufacturer: 'Intellijel', name: 'Outs', racks: [{ id: 1, name: 'main rack', quantity: 1 }] },
+      { id: 23, manufacturer: 'ALM', name: 'Pam', racks: [{ id: 2, name: 'empty case', quantity: 1 }] },
+    ];
+    api.get.mockImplementation((path) => {
+      if (path === '/api/racks') return Promise.resolve(racksResponse);
+      if (path === '/api/systems') return Promise.resolve([]);
+      if (path === '/api/modules') return Promise.resolve(modules);
+      return Promise.resolve(asPage([]));
+    });
+    api.post.mockResolvedValue({ id: 11, name: 'Auto' });
+    const wrapper = mount(PatchesView, { global: testGlobal() });
+    await flushPromises();
+    // The module list is not read until the picker is opened.
+    expect(api.get).not.toHaveBeenCalledWith('/api/modules', { quiet: true });
+    const picker = wrapper.find('[data-test="generate-modules"]');
+    picker.element.open = true;
+    await picker.trigger('toggle');
+    await flushPromises();
+    expect(api.get).toHaveBeenCalledWith('/api/modules', { quiet: true });
+    // Only the modules of the chosen rack are offered.
+    expect(wrapper.find('[data-test="generate-module-21"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="generate-module-23"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="generate-only"]').attributes('disabled')).toBeDefined();
+
+    await wrapper.find('[data-test="generate-module-21"]').setValue(true);
+    await wrapper.find('[data-test="generate-only"]').setValue(true);
+    expect(wrapper.find('[data-test="generate-modules-count"]').text()).toContain('1 chosen, and only those');
+    await wrapper.find('[data-test="generate-name"]').setValue('Just Maths');
+    await wrapper.find('[data-test="generate-form"]').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/generate', {
+      rack_id: 1,
+      name: 'Just Maths',
+      max_cables: 12,
+      prompt: undefined,
+      module_ids: [21],
+      only_modules: true,
+    });
+    // The picks are cleared with the rest of the form.
+    expect(wrapper.find('[data-test="generate-modules-count"]').exists()).toBe(false);
+  });
+
   it('sends no brief when none was written, and refuses to submit without a name', async () => {
     mockLists([]);
     api.post.mockResolvedValue({ id: 11, name: 'Auto' });

@@ -22,6 +22,7 @@ import { patchGroupRoutes } from './groups.js';
 import { patchLinkRoutes } from './links.js';
 import { patchCableRoutes } from './cables.js';
 import { patchSettingRoutes } from './settings.js';
+import { patchOutputRoutes } from './outputs.js';
 
 // /api/patches, one router per sub-resource. A request falls through the
 // sub-routers in order until one matches; every route sits behind the same
@@ -36,5 +37,6 @@ export function patchRoutes(db) {
   router.use(patchLinkRoutes(db));
   router.use(patchCableRoutes(db));
   router.use(patchSettingRoutes(db));
+  router.use(patchOutputRoutes(db));
   return router;
 }

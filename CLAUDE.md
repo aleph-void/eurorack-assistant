@@ -466,7 +466,35 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   (`generatingPatchIds()`), read by the list and the record; the patches
   page and every patch page re-read themselves on `jobs.finished` only while
   a row says so. `patchdetail/GenerateMoreSection.vue` (on `/cables` and
-  `/settings`) is where a patch is taken further.
+  `/settings`) is where a patch is taken further. Both generate routes also
+  take the MODULES TO USE — `module_ids` (module records; every instance of
+  each) and, on a patch that exists, `patch_module_ids` (instances) — with
+  `only_modules` saying whether those are the only ones allowed. The job
+  payload carries the resolved `patch_module_ids` and the flag; under `only`
+  the inventory offers nothing else but the OUTPUT instances (below), and a
+  cable or setting on any other instance is refused like an illegal cable.
+- WHERE SOUND LEAVES THE SYSTEM is a fact about the studio, not the module
+  (module records are shared; the same Outs feeds a monitor in one room and
+  sits spare in another), so it is recorded on the RACK — `rack_outputs`,
+  migration 047, one row per jack, added and removed one at a time on the
+  racks page (`components/racks/RackOutputs.vue`, `/api/racks/:id/outputs`)
+  — and a patch takes its OWN COPY at creation (`patch_outputs`, written by
+  `snapshotPatch()` onto every instance of the marked module in that rack),
+  soft references with the jack's name beside them like a cable's ends,
+  cloned, exported and imported by name, and edited on the patch's gear page
+  (`patchdetail/OutputsSection.vue`, `/api/patches/:id/outputs`), where gear
+  declared inside the patch can be an exit too. The payload serves them as
+  `outputs`, each with `live` (the jack still exists) and `reached` — whether
+  the traced flow arrives at it (`reachedJacks()` over `flow` in
+  `services/patchDetail.js`). The flow page says so, the cables page's
+  loose-ends list leaves an output holder out, and `patchTextDocument()`
+  tells the model where the sound was meant to come out. The generator
+  (`sinkJacks()`) builds towards the live ones — or, when none is marked,
+  the input jacks of the gear declared inside the patch, flagged as assumed
+  — names them in every prompt, and after the cable rounds checks the traced
+  flow against them: a patch reaching none gets ONE more round about exactly
+  that (`REFINE_TEMPLATE`'s `unreached`), budget allowing, and the job's
+  progress says whether audio reaches an output either way.
 - A patch NAME is one per account (unique `(user_id, name)`, migration 035;
   the rule and its helpers are `services/patchNames.js`). Only live patches
   count — a patch is really deleted, so its name comes free with it — and it

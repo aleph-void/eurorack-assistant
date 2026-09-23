@@ -269,16 +269,19 @@ async function reverseCable(cable) {
 }
 
 // ---- suggestions ----
-// Signal arrives at a module and nothing carries it onward. Off-rack gear is
-// where a patch is supposed to end, so it is not a loose end.
+// Signal arrives at a module and nothing carries it onward. Where sound is
+// meant to leave the system — a marked output, or off-rack gear when none is
+// marked — is where a patch is supposed to end, so it is not a loose end.
 const looseEnds = computed(() => {
   const fed = new Set(cables.value.map((c) => c.to_patch_module_id));
   const sending = new Set(cables.value.map((c) => c.from_patch_module_id));
+  const exits = new Set((props.patch?.outputs || []).map((o) => o.patch_module_id));
   return modules.value.filter(
     (pm) =>
       fed.has(pm.id) &&
       !sending.has(pm.id) &&
       !pm.external &&
+      !exits.has(pm.id) &&
       pm.components.some(canSend)
   );
 });

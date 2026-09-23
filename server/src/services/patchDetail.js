@@ -58,6 +58,34 @@ export const portJson = (p, { describe = true } = {}) => ({
   declared: true,
 });
 
+// Where sound leaves the system, as the patch keeps it: soft references
+// with the jack's name beside them. `reached` is whether the traced flow
+// arrives at the jack — the question a patch that makes no sound is asked
+// first.
+export const outputJson = (o, { reached = false, live = true } = {}) => ({
+  id: o.id,
+  patch_module_id: o.patch_module_id,
+  component_id: o.component_id,
+  component_name: o.component_name,
+  position: o.position,
+  live,
+  reached,
+});
+
+// Every (instance, jack) a signal flow tree passes through.
+export function reachedJacks(flow) {
+  const seen = new Set();
+  const walk = (node) => {
+    if (!node) return;
+    if (node.component_id !== null && node.component_id !== undefined) {
+      seen.add(`${node.patch_module_id}:${node.component_id}`);
+    }
+    for (const child of node.children ?? []) walk(child);
+  };
+  for (const tree of Array.isArray(flow) ? flow : []) walk(tree);
+  return seen;
+}
+
 export const cableJson = (c) => ({
   id: c.id,
   from_patch_module_id: c.from_patch_module_id,
@@ -127,6 +155,7 @@ const {
   PatchModulePort,
   PatchModuleLink,
   PatchModuleLinkJack,
+  PatchOutput,
 } = db.models;
 
   const patchModules = await PatchModule.findAll({
@@ -212,6 +241,13 @@ const {
     order: [['id', 'ASC']],
   });
   const groups = await PatchGroup.findAll({
+    where: { patch_id: patch.id },
+    order: [
+      ['position', 'ASC'],
+      ['id', 'ASC'],
+    ],
+  });
+  const outputRows = await PatchOutput.findAll({
     where: { patch_id: patch.id },
     order: [
       ['position', 'ASC'],
@@ -311,6 +347,16 @@ const {
     cables: cables.map((c) => c.get({ plain: true })),
   });
 
+  const flow = buildSignalFlow(topology);
+  const arrived = reachedJacks(flow);
+  const outputs = outputRows.map((o) => {
+    // Live while the jack is still one of the instance's connection points;
+    // a re-analyzed module leaves a name that no longer resolves.
+    const live = Boolean(
+      (topology.jacksByPatchModule.get(o.patch_module_id) ?? []).find((c) => c.id === o.component_id)
+    );
+    return outputJson(o, { live, reached: arrived.has(`${o.patch_module_id}:${o.component_id}`) });
+  });
   const panels = await loadPanels(db, [...liveIds], { describe });
   // The menu parameters of every module still in the rack, so the patch pages
   // can offer them to dial in. Prose travels with `describe`, exactly as a
@@ -423,7 +469,9 @@ const {
       // module, so a generator output can be followed through cables,
       // mults, normals, switches, expanders and bridges to everywhere it
       // ends up.
-      flow: buildSignalFlow(topology),
+      flow,
+      // Where sound leaves the system, and whether the flow gets there.
+      outputs,
       rack_layout,
     },
   };

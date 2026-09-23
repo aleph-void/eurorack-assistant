@@ -91,6 +91,19 @@ export function patchTextDocument(patch) {
     );
   }
 
+  // Where the sound is meant to come out, and whether anything gets there:
+  // the first thing to check when the question is "why is it silent".
+  const outputs = patch.outputs ?? [];
+  if (outputs.length > 0) {
+    lines.push('', '## Where sound leaves the system');
+    for (const o of outputs) {
+      lines.push(
+        `- ${name(o.patch_module_id)} "${o.component_name}" — ` +
+          (o.reached ? 'signal reaches it' : 'NOTHING reaches it in this patch')
+      );
+    }
+  }
+
   lines.push('', '## Cables');
   if (cables.length === 0) {
     lines.push('No patch cables.');

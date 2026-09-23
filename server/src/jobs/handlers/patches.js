@@ -21,14 +21,19 @@ export function createPatchesHandlers(db) {
       gone.permanent = true;
       throw gone;
     }
-    const { cables, settings, refused } = await generatePatch(db, backend, patch, {
+    const chosen = Array.isArray(payload.patch_module_ids)
+      ? payload.patch_module_ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+      : [];
+    const { cables, settings, refused, reachesOutput } = await generatePatch(db, backend, patch, {
       maxCables: readMaxCables(payload.max_cables).value,
       brief: String(payload.prompt || ''),
+      focus: chosen.length > 0 ? { patchModuleIds: chosen, only: Boolean(payload.only_modules) } : null,
       log: progress,
     });
     progress(
       `patched ${cables} cable(s) and dialed in ${settings} setting(s) on '${patch.name}'` +
-        (refused > 0 ? ` (${refused} proposal(s) broke the cable rules and were left out)` : '')
+        (refused > 0 ? ` (${refused} proposal(s) broke the cable rules and were left out)` : '') +
+        (reachesOutput === false ? ' — audio reaches no output yet' : '')
     );
   }
 

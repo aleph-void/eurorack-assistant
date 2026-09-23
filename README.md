@@ -275,7 +275,18 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   than an hour into the queue — and any patch, generated or hand-made, can be
   taken further from its cables or settings page with a new brief and a new
   budget; at a budget the patch already meets, only the settings are
-  reviewed.
+  reviewed. A set of modules can be named too: ones the patch must make use
+  of, or with "only these" the only ones it may use at all.
+- **Where sound leaves**: a rack's outputs — the jacks that feed the
+  speakers, the interface, the mixer on the desk — are marked on the racks
+  page, and every new patch of the rack takes its own copy (edited on the
+  patch's gear page, where gear declared inside the patch can be an exit
+  too). The generator designs backwards from them and, if a traced patch
+  reaches none, spends a round on exactly that; the flow page says whether a
+  patch reaches one, the loose-ends list stops calling an output a dead end,
+  and a question about a silent patch is told where the sound was meant to
+  come out. Under "only these modules" the outputs stay available, so the
+  patch can still be heard.
 - **What to patch next**: every cable in your other patches is reduced to
   (module, jack) → (module, jack), counted, and offered here when both ends
   are free — a rack is patched in habits. Modules that receive signal and send

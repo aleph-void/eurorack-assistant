@@ -35,6 +35,7 @@ export function patchCoreRoutes(db) {
     PatchModulePort,
     PatchModuleLink,
     PatchModuleLinkJack,
+    PatchOutput,
   } = db.models;
   const router = Router();
 
@@ -150,36 +151,99 @@ export function patchCoreRoutes(db) {
   // there is one) and keeps whatever of the answer the cable rules allow
   // (services/patchGenerator.js). Body:
   // { rack_id | system_id, name, max_cables?, prompt?, description? }
+  // The generator's options, read off a request body: the cable budget, the
+  // brief, and the modules to use (`module_ids`, module records, or on a
+  // patch that exists `patch_module_ids`, its instances) with `only_modules`
+  // saying whether those are the only ones allowed. Answers { error } or
+  // the fields, with the module ids still to be resolved onto instances.
+  const readGenerateOptions = (body) => {
+    const maxCables = readMaxCables(body?.max_cables);
+    if (maxCables.error) return { error: maxCables.error };
+    const brief = String(body?.prompt || '').trim();
+    if (brief.length > MAX_BRIEF_CHARS) {
+      return { error: `prompt must be ${MAX_BRIEF_CHARS} characters or fewer` };
+    }
+    const ids = (raw, label) => {
+      if (raw === undefined || raw === null) return [];
+      if (!Array.isArray(raw)) return { error: `${label} must be a list of ids` };
+      const list = [...new Set(raw.map((v) => Number(v)))];
+      if (list.some((n) => !Number.isInteger(n) || n < 1)) {
+        return { error: `${label} must be a list of ids` };
+      }
+      return list;
+    };
+    const moduleIds = ids(body?.module_ids, 'module_ids');
+    if (moduleIds.error) return moduleIds;
+    const patchModuleIds = ids(body?.patch_module_ids, 'patch_module_ids');
+    if (patchModuleIds.error) return patchModuleIds;
+    return {
+      maxCables: maxCables.value,
+      brief,
+      moduleIds,
+      patchModuleIds,
+      only: Boolean(body?.only_modules),
+    };
+  };
+
+  // The instances of a patch the options name: every instance of each module
+  // named, plus the instances named outright. Answers { error } when one is
+  // not in the patch.
+  const focusInstances = async (patch, options) => {
+    const instances = await PatchModule.findAll({ where: { patch_id: patch.id } });
+    const chosen = new Set();
+    for (const id of options.moduleIds) {
+      const of = instances.filter((pm) => pm.module_id === id);
+      if (of.length === 0) return { error: `module ${id} is not part of this patch` };
+      for (const pm of of) chosen.add(pm.id);
+    }
+    for (const id of options.patchModuleIds) {
+      if (!instances.some((pm) => pm.id === id)) {
+        return { error: `instance ${id} is not part of this patch` };
+      }
+      chosen.add(id);
+    }
+    return { ids: [...chosen] };
+  };
+
+  const generatePayload = (patch, options, focus) => ({
+    patch_id: patch.id,
+    patch_name: patch.name,
+    max_cables: options.maxCables,
+    prompt: options.brief || null,
+    patch_module_ids: focus.ids,
+    only_modules: options.only && focus.ids.length > 0,
+  });
+
   router.post('/generate', asyncHandler(async (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
     if (await patchNamed(db, req.user.id, name)) {
       return res.status(409).json({ error: nameTakenMessage(name) });
     }
-    const maxCables = readMaxCables(req.body?.max_cables);
-    if (maxCables.error) return res.status(400).json({ error: maxCables.error });
-    const brief = String(req.body?.prompt || '').trim();
-    if (brief.length > MAX_BRIEF_CHARS) {
-      return res
-        .status(400)
-        .json({ error: `prompt must be ${MAX_BRIEF_CHARS} characters or fewer` });
-    }
+    const options = readGenerateOptions(req.body);
+    if (options.error) return res.status(400).json({ error: options.error });
     const source = await loadPatchSource(db, req.user.id, req.body);
     if (source.error) return res.status(source.status).json({ error: source.error });
+    // A new patch has no instances yet, so the modules are checked against
+    // the racks before anything is made.
+    const inSource = new Set(source.mappings.map((rm) => rm.module_id));
+    const stray = options.moduleIds.find((id) => !inSource.has(id));
+    if (stray !== undefined) {
+      return res.status(400).json({ error: `module ${stray} is not in the ${source.system ? 'system' : 'rack'}` });
+    }
+    if (options.patchModuleIds.length > 0) {
+      return res.status(400).json({ error: 'a new patch has no instances yet — name modules with module_ids' });
+    }
     const description = String(req.body?.description || '').trim();
     let made;
     const wrote = await takingName(name, res, async () => {
       made = await snapshotPatch(db, { userId: req.user.id, ...source, name, description });
     });
     if (!wrote) return;
+    const focus = await focusInstances(made.patch, options);
     const job = await enqueueJob(db, 'generate_patch', {
       userId: req.user.id,
-      payload: {
-        patch_id: made.patch.id,
-        patch_name: made.patch.name,
-        max_cables: maxCables.value,
-        prompt: brief || null,
-      },
+      payload: generatePayload(made.patch, options, focus),
     });
     res.status(202).json(
       patchJson(made.patch, {
@@ -196,17 +260,13 @@ export function patchCoreRoutes(db) {
   // to add or change and `max_cables` the total the patch may hold once it
   // is done (cables already there count); a patch already at that total gets
   // its settings reviewed and nothing more. One job per patch at a time.
-  // Body: { max_cables?, prompt? }
+  // Body: { max_cables?, prompt?, module_ids?, patch_module_ids?, only_modules? }
   router.post('/:id/generate', requireOwnedPatch(db), asyncHandler(async (req, res) => {
     const patch = req.patch;
-    const maxCables = readMaxCables(req.body?.max_cables);
-    if (maxCables.error) return res.status(400).json({ error: maxCables.error });
-    const brief = String(req.body?.prompt || '').trim();
-    if (brief.length > MAX_BRIEF_CHARS) {
-      return res
-        .status(400)
-        .json({ error: `prompt must be ${MAX_BRIEF_CHARS} characters or fewer` });
-    }
+    const options = readGenerateOptions(req.body);
+    if (options.error) return res.status(400).json({ error: options.error });
+    const focus = await focusInstances(patch, options);
+    if (focus.error) return res.status(400).json({ error: focus.error });
     if ((await generatingPatchIds(db, req.user.id)).has(patch.id)) {
       return res.status(409).json({
         error: `'${patch.name}' is already being generated — wait for that job to finish`,
@@ -214,12 +274,7 @@ export function patchCoreRoutes(db) {
     }
     const job = await enqueueJob(db, 'generate_patch', {
       userId: req.user.id,
-      payload: {
-        patch_id: patch.id,
-        patch_name: patch.name,
-        max_cables: maxCables.value,
-        prompt: brief || null,
-      },
+      payload: generatePayload(patch, options, focus),
     });
     res.status(202).json({ id: patch.id, generating: true, job_id: job.id });
   }));
@@ -429,7 +484,7 @@ export function patchCoreRoutes(db) {
 
     const where = { patch_id: source.id };
     const modules = await PatchModule.findAll({ where, order: [['id', 'ASC']] });
-    const [groups, ports, cables, settings, links] = await Promise.all([
+    const [groups, ports, cables, settings, links, outputs] = await Promise.all([
       PatchGroup.findAll({ where, order: [['id', 'ASC']] }),
       modules.length === 0
         ? []
@@ -440,6 +495,7 @@ export function patchCoreRoutes(db) {
       PatchCable.findAll({ where, order: [['id', 'ASC']] }),
       PatchSetting.findAll({ where, order: [['id', 'ASC']] }),
       PatchModuleLink.findAll({ where, order: [['id', 'ASC']] }),
+      PatchOutput.findAll({ where, order: [['position', 'ASC'], ['id', 'ASC']] }),
     ]);
     const linkJacks =
       links.length === 0
@@ -543,6 +599,19 @@ export function patchCoreRoutes(db) {
               optional: c.optional,
               stacked: c.stacked,
               alt_group: c.alt_group,
+            },
+            { transaction }
+          );
+        }
+
+        for (const o of outputs) {
+          await PatchOutput.create(
+            {
+              patch_id: copy.id,
+              patch_module_id: moduleMap.get(o.patch_module_id),
+              component_id: componentIdIn(o.patch_module_id, o.component_id),
+              component_name: o.component_name,
+              position: o.position,
             },
             { transaction }
           );

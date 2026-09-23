@@ -54,6 +54,24 @@ describe('GenerateMoreSection', () => {
     expect(wrapper.find('[data-test="generate-more-brief"]').element.value).toBe('');
   });
 
+  it('names the instances to use, and whether they are the only ones', async () => {
+    api.post.mockResolvedValue({ id: 7, generating: true, job_id: 3 });
+    const wrapper = await mountIt();
+    expect(wrapper.find('[data-test="generate-more-only"]').attributes('disabled')).toBeDefined();
+    await wrapper.find('[data-test="generate-more-module-11"]').setValue(true);
+    await wrapper.find('[data-test="generate-more-module-13"]').setValue(true);
+    await wrapper.find('[data-test="generate-more-only"]').setValue(true);
+    expect(wrapper.find('[data-test="generate-more-modules-count"]').text()).toContain('2 chosen, and only those');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/generate', {
+      max_cables: krellPatch.cables.length + 6,
+      prompt: undefined,
+      patch_module_ids: [11, 13],
+      only_modules: true,
+    });
+  });
+
   it('offers a settings review when the budget is already met, and waits while a job runs', async () => {
     const wrapper = await mountIt();
     await wrapper.find('[data-test="generate-more-max"]').setValue(String(krellPatch.cables.length));

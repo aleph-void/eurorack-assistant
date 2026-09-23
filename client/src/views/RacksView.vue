@@ -5,6 +5,7 @@ import { dialog } from '../dialog.js';
 import ComponentLegend from '../components/ComponentLegend.vue';
 import ShareButton from '../components/ShareButton.vue';
 import ResourceLinks from '../components/ResourceLinks.vue';
+import RackOutputs from '../components/racks/RackOutputs.vue';
 import { panelCropStyle } from '../panelLayout.js';
 import { usePanelChips } from '../components/racks/usePanelChips.js';
 import { useRackDrag } from '../components/racks/useRackDrag.js';
@@ -26,6 +27,9 @@ const organizingRackId = ref(null);
 // links it keeps — the build thread, the case's manual — are a panel opened
 // from its row, the way the organizer is.
 const linksRackId = ref(null);
+// Which rack's outputs — the jacks sound leaves it at — are open for editing.
+const outputsRackId = ref(null);
+const outputsRack = computed(() => racks.value.find((r) => r.id === outputsRackId.value) ?? null);
 const linksRack = computed(() => racks.value.find((r) => r.id === linksRackId.value) ?? null);
 const layoutBusy = ref(false);
 const dragged = ref(null);
@@ -474,6 +478,16 @@ async function nudge(rowIndex, index, delta) {
                 >
                   {{ linksRackId === rack.id ? 'Close links' : 'Links' }}
                 </button>
+                <button
+                  class="secondary"
+                  style="margin: 0"
+                  :disabled="rack.module_count === 0"
+                  title="The jacks sound leaves this rack at"
+                  :data-test="`outputs-${rack.id}`"
+                  @click="outputsRackId = outputsRackId === rack.id ? null : rack.id"
+                >
+                  {{ outputsRackId === rack.id ? 'Close outputs' : 'Outputs' }}
+                </button>
               </div>
             </td>
             <td class="actions-cell">
@@ -522,6 +536,11 @@ async function nudge(rowIndex, index, delta) {
     <section v-if="linksRack" class="rack-links" data-test="rack-links">
       <h2>{{ linksRack.name }}</h2>
       <ResourceLinks kind="rack" :record-id="linksRack.id" />
+    </section>
+
+    <section v-if="outputsRack" class="rack-links" data-test="rack-outputs">
+      <h2>Where sound leaves {{ outputsRack.name }}</h2>
+      <RackOutputs :rack-id="outputsRack.id" :rack-name="outputsRack.name" />
     </section>
 
     <section v-if="organizer" class="rack-organizer" data-test="rack-organizer">

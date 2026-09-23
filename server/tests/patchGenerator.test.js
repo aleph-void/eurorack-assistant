@@ -318,6 +318,8 @@ describe('POST /api/patches/generate', () => {
       patch_name: 'Auto',
       max_cables: 5,
       prompt: 'a techno voice',
+      patch_module_ids: [],
+      only_modules: false,
     });
 
     // The list and the record both say the model is still at it.
@@ -403,6 +405,8 @@ describe('POST /api/patches/generate', () => {
       patch_name: 'By hand',
       max_cables: 8,
       prompt: 'add modulation',
+      patch_module_ids: [],
+      only_modules: false,
     });
     // While that job is live the patch says so, and a second is refused.
     const detail = await request(app).get(`/api/patches/${created.id}`).set('Cookie', aliceCookie);
@@ -410,6 +414,56 @@ describe('POST /api/patches/generate', () => {
     const again = await refine(aliceCookie, { prompt: 'more' });
     expect(again.status).toBe(409);
     expect(again.body.error).toContain('already being generated');
+  });
+
+  it('takes the modules to use, by module for a new patch and by instance for one that exists', async () => {
+    const fixture = await withVoice();
+    const { app, db, aliceCookie, rackId } = fixture;
+    const post = (body) =>
+      request(app).post('/api/patches/generate').set('Cookie', aliceCookie).send(body);
+    // A module that is not in the rack, a list that is not a list, and
+    // instance ids on a patch that has none yet are all refused up front.
+    expect((await post({ rack_id: rackId, name: 'X', module_ids: [999999] })).status).toBe(400);
+    expect((await post({ rack_id: rackId, name: 'X', module_ids: 'vco' })).status).toBe(400);
+    expect((await post({ rack_id: rackId, name: 'X', patch_module_ids: [1] })).status).toBe(400);
+    expect((await db.query('SELECT id FROM patches')).rows).toHaveLength(0);
+
+    const res = await post({
+      rack_id: rackId,
+      name: 'Two of them',
+      module_ids: [fixture.vco.id, fixture.vcf.id, fixture.vco.id],
+      only_modules: true,
+    });
+    expect(res.status).toBe(202);
+    const at = await instancesOf(db, res.body.id);
+    const { rows: jobs } = await db.query('SELECT payload FROM jobs ORDER BY id');
+    expect(JSON.parse(jobs[0].payload)).toMatchObject({
+      patch_module_ids: [at.get(fixture.vco.id), at.get(fixture.vcf.id)],
+      only_modules: true,
+    });
+
+    // On a patch that exists, instances are named outright — and `only`
+    // with nothing named means nothing.
+    const refine = (body) =>
+      request(app).post(`/api/patches/${res.body.id}/generate`).set('Cookie', aliceCookie).send(body);
+    await db.query(`UPDATE jobs SET status = 'complete'`);
+    expect((await refine({ patch_module_ids: [999999] })).status).toBe(400);
+    const again = await refine({
+      patch_module_ids: [at.get(fixture.out.id)],
+      module_ids: [fixture.vco.id],
+      only_modules: true,
+    });
+    expect(again.status).toBe(202);
+    const { rows: more } = await db.query('SELECT payload FROM jobs ORDER BY id');
+    expect(JSON.parse(more[1].payload)).toMatchObject({
+      patch_module_ids: [at.get(fixture.vco.id), at.get(fixture.out.id)],
+      only_modules: true,
+    });
+    await db.query(`UPDATE jobs SET status = 'complete'`);
+    const bare = await refine({ only_modules: true });
+    expect(bare.status).toBe(202);
+    const { rows: last } = await db.query('SELECT payload FROM jobs ORDER BY id');
+    expect(JSON.parse(last[2].payload)).toMatchObject({ patch_module_ids: [], only_modules: false });
   });
 
   it('is a model job with a per-type model override like the other LLM work', () => {
@@ -665,6 +719,173 @@ describe('generate_patch job', () => {
       created.id,
     ]);
     expect(cables).toHaveLength(0);
+  });
+
+  it('builds towards the marked outputs, and spends a round on reaching one when nothing does', async () => {
+    const fixture = await withVoice();
+    const { app, db, aliceCookie, rackId } = fixture;
+    await request(app)
+      .post(`/api/racks/${rackId}/outputs`)
+      .set('Cookie', aliceCookie)
+      .send({ module_id: fixture.out.id, component_id: fixture.audioIn.id });
+    const created = (
+      await request(app)
+        .post('/api/patches/generate')
+        .set('Cookie', aliceCookie)
+        .send({ rack_id: rackId, name: 'Auto', max_cables: 4 })
+    ).body;
+    const at = await instancesOf(db, created.id);
+    const vco = at.get(fixture.vco.id);
+    const vcf = at.get(fixture.vcf.id);
+    const out = at.get(fixture.out.id);
+    const backend = scripted([
+      // Round 1: a voice that dead-ends in the filter, nothing refused.
+      {
+        cables: [
+          { from_module: vco, from_jack: fixture.sine.id, to_module: vcf, to_jack: fixture.filterIn.id, note: 'audio' },
+        ],
+      },
+      // The output round: get it to the outs.
+      {
+        cables: [
+          { from_module: vcf, from_jack: fixture.filterOut.id, to_module: out, to_jack: fixture.audioIn.id, note: 'out' },
+        ],
+      },
+      { settings: [] },
+    ]);
+    const done = await makeWorker(db, backend).tick();
+    expect(done.status).toBe('complete');
+    expect(backend.prompts).toHaveLength(3);
+    expect(backend.prompts[0]).toContain('Design BACKWARDS from them');
+    expect(backend.prompts[0]).toContain(
+      `## Where sound leaves the system (build towards these)\n- Intellijel Outs "Audio In" (instance ${out}, jack ${fixture.audioIn.id})`
+    );
+    // No refusal, so the second round is about the output alone.
+    expect(backend.prompts[1]).toContain('reaches NONE of the jacks sound leaves the system at');
+    expect(backend.prompts[1]).toContain(`Intellijel Outs "Audio In" (instance ${out}, jack ${fixture.audioIn.id})`);
+    expect(backend.prompts[2]).toContain('Start from the output chain');
+    expect(backend.prompts[2]).toContain('signal reaches it');
+
+    const detail = (
+      await request(app).get(`/api/patches/${created.id}`).set('Cookie', aliceCookie)
+    ).body;
+    expect(detail.cables.map((c) => c.to_component_name)).toEqual(['In', 'Audio In']);
+    expect(detail.outputs).toEqual([
+      expect.objectContaining({ patch_module_id: out, component_name: 'Audio In', reached: true, live: true }),
+    ]);
+  });
+
+  it('says so, once, when the output cannot be reached within the budget', async () => {
+    const fixture = await withVoice();
+    const { app, db, aliceCookie, rackId } = fixture;
+    await request(app)
+      .post(`/api/racks/${rackId}/outputs`)
+      .set('Cookie', aliceCookie)
+      .send({ module_id: fixture.out.id, component_id: fixture.audioIn.id });
+    const created = (
+      await request(app)
+        .post('/api/patches/generate')
+        .set('Cookie', aliceCookie)
+        .send({ rack_id: rackId, name: 'Auto', max_cables: 1 })
+    ).body;
+    const at = await instancesOf(db, created.id);
+    const vco = at.get(fixture.vco.id);
+    const vcf = at.get(fixture.vcf.id);
+    const backend = scripted([
+      {
+        cables: [
+          { from_module: vco, from_jack: fixture.sine.id, to_module: vcf, to_jack: fixture.filterIn.id },
+        ],
+      },
+      { settings: [] },
+    ]);
+    const done = await makeWorker(db, backend).tick();
+    expect(done.status).toBe('complete');
+    // The budget is spent, so no round about the output — the job says so
+    // instead of asking for cables it cannot keep.
+    expect(backend.prompts).toHaveLength(2);
+    const { rows: jobs } = await db.query('SELECT payload FROM jobs');
+    expect(jobs).toHaveLength(1);
+    const detail = (
+      await request(app).get(`/api/patches/${created.id}`).set('Cookie', aliceCookie)
+    ).body;
+    expect(detail.outputs[0].reached).toBe(false);
+  });
+
+  it('offers only the chosen modules (and the outputs) under only_modules, and refuses the rest', async () => {
+    const fixture = await withVoice();
+    const { app, db, aliceCookie, rackId } = fixture;
+    await request(app)
+      .post(`/api/racks/${rackId}/outputs`)
+      .set('Cookie', aliceCookie)
+      .send({ module_id: fixture.out.id, component_id: fixture.audioIn.id });
+    const created = (
+      await request(app)
+        .post('/api/patches/generate')
+        .set('Cookie', aliceCookie)
+        .send({ rack_id: rackId, name: 'Auto', max_cables: 4, module_ids: [fixture.vco.id], only_modules: true })
+    ).body;
+    const at = await instancesOf(db, created.id);
+    const vco = at.get(fixture.vco.id);
+    const vcf = at.get(fixture.vcf.id);
+    const out = at.get(fixture.out.id);
+    const backend = scripted([
+      {
+        cables: [
+          // Straight to the outs: allowed.
+          { from_module: vco, from_jack: fixture.sine.id, to_module: out, to_jack: fixture.audioIn.id },
+          // Through the filter: the filter was not chosen.
+          { from_module: vco, from_jack: fixture.sub.id, to_module: vcf, to_jack: fixture.filterIn.id },
+        ],
+        settings: [{ module: vcf, component: fixture.cutoff.id, value: '3' }],
+      },
+      { done: true },
+      { settings: [{ module: vco, component: fixture.shape.id, value: '5' }] },
+    ]);
+    const done = await makeWorker(db, backend).tick();
+    expect(done.status).toBe('complete');
+    expect(backend.prompts[0]).toContain('ONLY those be used');
+    expect(backend.prompts[0]).toContain(`## Instance ${vco}: Make Noise STO (REQUESTED by the user)`);
+    expect(backend.prompts[0]).toContain(`## Instance ${out}: Intellijel Outs`);
+    expect(backend.prompts[0]).not.toContain('Mutable Ripples');
+    expect(backend.prompts[0]).toContain('2 module instance(s) offered (of 4 in the case)');
+    // The refusal names the module, and earns the usual second round.
+    expect(backend.prompts[1]).toContain('Mutable Ripples is not one of the modules the user chose');
+    const detail = (
+      await request(app).get(`/api/patches/${created.id}`).set('Cookie', aliceCookie)
+    ).body;
+    expect(detail.cables.map((c) => [c.from_component_name, c.to_component_name])).toEqual([
+      ['Sine', 'Audio In'],
+    ]);
+    expect(detail.settings.map((s) => [s.component_name, s.value])).toEqual([['Shape', '5']]);
+  });
+
+  it('asks for the chosen modules to take part when they are a request rather than a limit', async () => {
+    const fixture = await withVoice();
+    const { app, db, aliceCookie, rackId } = fixture;
+    const created = (
+      await request(app)
+        .post('/api/patches/generate')
+        .set('Cookie', aliceCookie)
+        .send({ rack_id: rackId, name: 'Auto', module_ids: [fixture.vcf.id] })
+    ).body;
+    const at = await instancesOf(db, created.id);
+    const vco = at.get(fixture.vco.id);
+    const vcf = at.get(fixture.vcf.id);
+    const backend = scripted([
+      {
+        cables: [
+          { from_module: vco, from_jack: fixture.sine.id, to_module: vcf, to_jack: fixture.filterIn.id },
+        ],
+      },
+      { settings: [] },
+    ]);
+    expect((await makeWorker(db, backend).tick()).status).toBe('complete');
+    expect(backend.prompts[0]).toContain('make sure each of them does something in the patch');
+    expect(backend.prompts[0]).toContain('## The user asked for these modules to take part');
+    expect(backend.prompts[0]).toContain(`## Instance ${vcf}: Mutable Ripples (REQUESTED by the user)`);
+    expect(backend.prompts[0]).toContain('## Instance ' + vco + ': Make Noise STO\n');
+    expect(backend.prompts[0]).toContain('4 module instance(s). Ids are what');
   });
 
   it('gives up for good on a patch that has been deleted', async () => {

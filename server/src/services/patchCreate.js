@@ -68,7 +68,8 @@ export async function snapshotPatch(
   db,
   { userId, system, racks, mappings, name, description = null }
 ) {
-  const { ModuleExpander, Patch, PatchModule, PatchModuleLink } = db.models;
+  const { ModuleExpander, Patch, PatchModule, PatchModuleLink, PatchOutput, RackOutput, ModuleComponent } =
+    db.models;
   const rackById = new Map(racks.map((rack) => [rack.id, rack]));
   const instanceCounts = new Map();
   const snapshot = mappings.flatMap((rm) => {
@@ -96,6 +97,23 @@ export async function snapshotPatch(
       expander_module_id: rackModuleIds,
     },
   });
+  // Where sound leaves each rack, to be copied onto every instance of the
+  // marked module in that rack: two output modules are two exits.
+  const outputRows = await RackOutput.findAll({
+    where: { rack_id: racks.map((rack) => rack.id) },
+    order: [
+      ['position', 'ASC'],
+      ['id', 'ASC'],
+    ],
+  });
+  const outputComponents =
+    outputRows.length === 0
+      ? []
+      : await ModuleComponent.findAll({
+          where: { id: [...new Set(outputRows.map((o) => o.component_id))] },
+          attributes: ['id', 'name'],
+        });
+  const outputName = new Map(outputComponents.map((c) => [c.id, c.name]));
   let patch;
   await db.sequelize.transaction(async (transaction) => {
     patch = await Patch.create(
@@ -143,6 +161,20 @@ export async function snapshotPatch(
       }
     }
     if (linkRows.length > 0) await PatchModuleLink.bulkCreate(linkRows, { transaction });
+    const exitRows = [];
+    for (const o of outputRows) {
+      if (!outputName.has(o.component_id)) continue;
+      for (const pm of created.filter((c) => c.module_id === o.module_id && c.rack_id === o.rack_id)) {
+        exitRows.push({
+          patch_id: patch.id,
+          patch_module_id: pm.id,
+          component_id: o.component_id,
+          component_name: outputName.get(o.component_id),
+          position: exitRows.length + 1,
+        });
+      }
+    }
+    if (exitRows.length > 0) await PatchOutput.bulkCreate(exitRows, { transaction });
     // Dual modules arrive wired together too — their link cable is already
     // plugged in, jack for jack, so the patch records the pair without
     // being asked (services/moduleBridges.js).

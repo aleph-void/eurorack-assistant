@@ -30,6 +30,30 @@ beforeEach(() => {
 describe('PatchFlowView', () => {
   const patchResponse = krellPatch;
 
+  it('says whether the audio reaches where it is meant to leave', async () => {
+    api.get.mockResolvedValue({
+      ...krellPatch,
+      outputs: [{ id: 51, patch_module_id: 11, component_id: 1, component_name: 'Signal In', live: true, reached: true }],
+    });
+    let wrapper = mount(PatchFlowView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="outputs-reached"]').text()).toContain('Audio reaches Make Noise Maths "Signal In"');
+
+    api.get.mockResolvedValue({
+      ...krellPatch,
+      outputs: [{ id: 51, patch_module_id: 11, component_id: 1, component_name: 'Signal In', live: true, reached: false }],
+    });
+    wrapper = mount(PatchFlowView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="outputs-reached"]').text()).toContain('Nothing reaches an output');
+
+    // No outputs marked: nothing to say.
+    api.get.mockResolvedValue(krellPatch);
+    wrapper = mount(PatchFlowView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="outputs-reached"]').exists()).toBe(false);
+  });
+
   it('renders the signal flow as an indented tree with source, merge and cycle badges', async () => {
     api.get.mockResolvedValue(patchResponse);
     const wrapper = mount(PatchFlowView, { props: { id: '7' }, global: testGlobal() });

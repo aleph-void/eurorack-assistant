@@ -1,12 +1,13 @@
 <script setup>
-// The instances that move together, the buses they play in, and the gear the
-// rack does not hold.
+// Where sound leaves the system, the instances that move together, the buses
+// they play in, and the gear the rack does not hold.
 import { onMounted, ref, toRef } from 'vue';
 import { api } from '../api.js';
 import PatchDetailHeader from '../components/patchdetail/PatchDetailHeader.vue';
 import LinksSection from '../components/patchdetail/LinksSection.vue';
 import GroupsSection from '../components/patchdetail/GroupsSection.vue';
 import ExtrasSection from '../components/patchdetail/ExtrasSection.vue';
+import OutputsSection from '../components/patchdetail/OutputsSection.vue';
 import { usePatchRecord } from '../components/patchdetail/usePatchRecord.js';
 
 const props = defineProps({ id: { type: String, required: true } });
@@ -28,6 +29,7 @@ onMounted(async () => {
 <template>
   <PatchDetailHeader :patch="patch" :patch-id="id" :error="error" @reload="load" />
   <template v-if="patch">
+    <OutputsSection :patch="patch" :patch-id="id" @reload="load" />
     <LinksSection :patch="patch" :patch-id="id" @reload="load" />
     <GroupsSection :patch="patch" :patch-id="id" @reload="load" />
     <ExtrasSection :patch="patch" :patch-id="id" :rack-modules="rackModules" @reload="load" />

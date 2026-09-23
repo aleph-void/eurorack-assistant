@@ -197,5 +197,21 @@ export function definePatchesModels(define) {
     { tableName: 'patch_settings', createdAt: 'created_at', updatedAt: 'updated_at' }
   );
 
-  return { Patch, PatchModule, PatchRackRow, PatchRackRowModule, PatchGroup, PatchModulePort, PatchModuleLink, PatchModuleLinkJack, PatchCable, PatchSetting };
+  // The patch's own copy of where sound leaves the system (migration 047):
+  // soft references with the jack's name beside them, like a cable's ends,
+  // taken from the racks at creation and edited on the patch afterwards.
+  const PatchOutput = define(
+    'PatchOutput',
+    {
+      id,
+      patch_id: { type: DataTypes.INTEGER, allowNull: false },
+      patch_module_id: { type: DataTypes.INTEGER, allowNull: false },
+      component_id: { type: DataTypes.INTEGER },
+      component_name: { type: DataTypes.TEXT, allowNull: false },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'patch_outputs', createdAt: 'created_at', updatedAt: false }
+  );
+
+  return { Patch, PatchModule, PatchRackRow, PatchRackRowModule, PatchGroup, PatchModulePort, PatchModuleLink, PatchModuleLinkJack, PatchCable, PatchSetting, PatchOutput };
 }

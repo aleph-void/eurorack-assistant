@@ -14,6 +14,7 @@ export const LIMITS = {
   settings: 4000,
   groups: 200,
   links: 500,
+  outputs: 100,
   jacks: 200,
   text: 500,
   body: 4000,

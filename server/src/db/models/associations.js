@@ -21,6 +21,7 @@ export function associate(m) {
     Rack,
     RackModule,
     RackRow,
+    RackOutput,
     RackRowModule,
     ModuleComponent,
     ComponentNormalization,
@@ -45,6 +46,7 @@ export function associate(m) {
     PatchModuleLink,
     PatchModuleLinkJack,
     PatchCable,
+    PatchOutput,
     PatchSetting,
     Note,
     NoteModule,
@@ -97,6 +99,10 @@ export function associate(m) {
   RackModule.belongsTo(Module, { foreignKey: 'module_id' });
   Rack.hasMany(RackRow, { foreignKey: 'rack_id' });
   RackRow.belongsTo(Rack, { foreignKey: 'rack_id' });
+  Rack.hasMany(RackOutput, { foreignKey: 'rack_id' });
+  RackOutput.belongsTo(Rack, { foreignKey: 'rack_id' });
+  RackOutput.belongsTo(Module, { foreignKey: 'module_id' });
+  RackOutput.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
   RackRow.hasMany(RackRowModule, { foreignKey: 'row_id' });
   RackRowModule.belongsTo(RackRow, { foreignKey: 'row_id' });
   Module.hasMany(RackRowModule, { foreignKey: 'module_id' });
@@ -200,6 +206,9 @@ export function associate(m) {
   PatchModule.belongsTo(Module, { foreignKey: 'module_id' });
   Patch.hasMany(PatchCable, { foreignKey: 'patch_id' });
   PatchCable.belongsTo(Patch, { foreignKey: 'patch_id' });
+  Patch.hasMany(PatchOutput, { foreignKey: 'patch_id' });
+  PatchOutput.belongsTo(Patch, { foreignKey: 'patch_id' });
+  PatchOutput.belongsTo(PatchModule, { foreignKey: 'patch_module_id' });
   Patch.hasMany(PatchSetting, { foreignKey: 'patch_id' });
   PatchSetting.belongsTo(Patch, { foreignKey: 'patch_id' });
   Patch.hasMany(PatchGroup, { foreignKey: 'patch_id' });
