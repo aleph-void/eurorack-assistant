@@ -794,7 +794,16 @@ kind of record, only the word and the query key differ. Asking there sends
 `module_ids`/`patch_ids` with the prompt, so the record is in the question's
 scope before anything else looks at it: a question asked from a module's page
 is about that module even when the wording never names it ("why is this so
-quiet?").
+quiet?"). A RACK and a SYSTEM are the same one level up: the "Questions"
+button on a row of `/racks` or `/systems` opens the same panel (`kind`
+'rack' / 'system', `GET /api/questions?rack_id=` / `?system_id=`), and asking
+there sends `rack_ids` / `system_ids` — EVERY module of the rack (of every
+rack in the system) is written into the question's module scope as it is
+created, the rack or system is recorded beside them (`question_racks` /
+`question_systems`, migration 051), and there is no scoping pass either. The
+Ask page offers the same as a picker. A question about one module of a case
+is that module's, not the rack's: the rack's list is what was asked ABOUT
+the rack.
 
 THE OSCILLOSCOPE IS A PAGE OF A PATCH AND A PAGE OF A MODULE, because most
 scope work is BENCH work: one module on the rails, a cable into the

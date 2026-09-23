@@ -8,7 +8,11 @@
 // from a MODULE's page names its own scope — that module, and the components
 // of it the asker ticked — so there is nothing for a scoping model to work
 // out: the question is created 'scoped' with those links written and NO
-// scope_question job, and lands straight in the review step.
+// scope_question job, and lands straight in the review step. A question asked
+// about a RACK or a SYSTEM is the same thing one level up: its scope is every
+// module of the rack (or of every rack in the system), written as the same
+// module links, with the rack or system itself recorded beside them so its
+// own questions panel can list the question.
 
 import { Router } from 'express';
 import { userModuleIds } from '../../services/racks.js';
@@ -30,7 +34,12 @@ export function questionCoreRoutes(db) {
     QuestionCapture,
     QuestionAudio,
     QuestionPatch,
+    QuestionRack,
+    QuestionSystem,
     Patch,
+    Rack,
+    RackModule,
+    System,
     Module,
     ModuleComponent,
     Manual,
@@ -62,6 +71,19 @@ export function questionCoreRoutes(db) {
     const patchId = Number(req.query.patch_id);
     if (Number.isInteger(patchId) && patchId > 0) {
       const links = await QuestionPatch.findAll({ where: { patch_id: patchId } });
+      narrow([...new Set(links.map((l) => l.question_id))]);
+    }
+    // A rack's questions are the ones asked ABOUT the rack, not every question
+    // touching a module in it: a question about one module of the case is
+    // that module's, and is listed on its page.
+    const rackId = Number(req.query.rack_id);
+    if (Number.isInteger(rackId) && rackId > 0) {
+      const links = await QuestionRack.findAll({ where: { rack_id: rackId } });
+      narrow([...new Set(links.map((l) => l.question_id))]);
+    }
+    const systemId = Number(req.query.system_id);
+    if (Number.isInteger(systemId) && systemId > 0) {
+      const links = await QuestionSystem.findAll({ where: { system_id: systemId } });
       narrow([...new Set(links.map((l) => l.question_id))]);
     }
     if (Array.isArray(where.id) && where.id.length === 0) return res.json([]);
@@ -147,6 +169,22 @@ export function questionCoreRoutes(db) {
           order: [['patch_id', 'ASC']],
         })
       : [];
+    // The rack or system it was asked about, if it was: the owner's inventory,
+    // so, like the patches, not part of what a share carries.
+    const rackLinkRows = includePrivate
+      ? await QuestionRack.findAll({
+          where: { question_id: question.id },
+          include: Rack,
+          order: [['rack_id', 'ASC']],
+        })
+      : [];
+    const systemLinkRows = includePrivate
+      ? await QuestionSystem.findAll({
+          where: { question_id: question.id },
+          include: System,
+          order: [['system_id', 'ASC']],
+        })
+      : [];
     res.json({
       ...question.get({ plain: true }),
       shared: found.shared,
@@ -194,6 +232,10 @@ export function questionCoreRoutes(db) {
       patches: patchLinkRows
         .filter((l) => l.Patch)
         .map(({ Patch: p }) => ({ id: p.id, name: p.name, rack_name: p.rack_name })),
+      racks: rackLinkRows.filter((l) => l.Rack).map(({ Rack: r }) => ({ id: r.id, name: r.name })),
+      systems: systemLinkRows
+        .filter((l) => l.System)
+        .map(({ System: s }) => ({ id: s.id, name: s.name })),
     });
   }));
 
@@ -224,13 +266,59 @@ export function questionCoreRoutes(db) {
     // Asking about a MODULE: the asker has already said what the question is
     // about — a question asked from a module's page is about that module even
     // when its name never appears in the sentence ("why is this so quiet?").
-    const moduleIds = uniqueIds(
+    const namedModuleIds = uniqueIds(
       req.body?.module_ids ?? (req.body?.module_id ? [req.body.module_id] : [])
     );
-    if (moduleIds.length > 0) {
+    if (namedModuleIds.length > 0) {
       const owned = new Set(ownedIds);
-      if (!moduleIds.every((id) => owned.has(id))) {
+      if (!namedModuleIds.every((id) => owned.has(id))) {
         return res.status(400).json({ error: 'module_ids must be modules in your racks' });
+      }
+    }
+
+    // Asking about a RACK, or a SYSTEM: the question is about everything in
+    // it, so every module of the rack — of every rack in the system — goes
+    // into the module scope, and the rack or system is recorded beside them
+    // so its own questions panel can find the question again. A rack the
+    // user does not own is a 400 like a foreign module; a system's racks are
+    // whichever stand in it now, which is what "the system" means today.
+    const systemIds = uniqueIds(
+      req.body?.system_ids ?? (req.body?.system_id ? [req.body.system_id] : [])
+    );
+    if (systemIds.length > 0) {
+      const owned = await System.count({ where: { id: systemIds, user_id: req.user.id } });
+      if (owned !== systemIds.length) {
+        return res.status(400).json({ error: 'system_ids must be your systems' });
+      }
+    }
+    const rackIds = uniqueIds(req.body?.rack_ids ?? (req.body?.rack_id ? [req.body.rack_id] : []));
+    if (rackIds.length > 0) {
+      const owned = await Rack.count({ where: { id: rackIds, user_id: req.user.id } });
+      if (owned !== rackIds.length) {
+        return res.status(400).json({ error: 'rack_ids must be your racks' });
+      }
+    }
+    const scopedRackIds = [...rackIds];
+    if (systemIds.length > 0) {
+      const racks = await Rack.findAll({
+        attributes: ['id'],
+        where: { system_id: systemIds, user_id: req.user.id },
+      });
+      for (const rack of racks) {
+        if (!scopedRackIds.includes(rack.id)) scopedRackIds.push(rack.id);
+      }
+    }
+    const moduleIds = [...namedModuleIds];
+    if (scopedRackIds.length > 0) {
+      const mappings = await RackModule.findAll({
+        attributes: ['module_id'],
+        where: { rack_id: scopedRackIds },
+      });
+      for (const { module_id: id } of mappings) {
+        if (!moduleIds.includes(id)) moduleIds.push(id);
+      }
+      if (moduleIds.length === 0) {
+        return res.status(400).json({ error: 'There are no modules in what you asked about' });
       }
     }
 
@@ -240,13 +328,13 @@ export function questionCoreRoutes(db) {
     // question's component scope and come back ticked in the review step.
     const componentIds = uniqueIds(req.body?.component_ids);
     if (componentIds.length > 0) {
-      if (moduleIds.length === 0) {
+      if (namedModuleIds.length === 0) {
         return res
           .status(400)
           .json({ error: 'component_ids must be components of the modules asked about' });
       }
       const owned = await ModuleComponent.count({
-        where: { id: componentIds, module_id: moduleIds },
+        where: { id: componentIds, module_id: namedModuleIds },
       });
       if (owned !== componentIds.length) {
         return res
@@ -279,6 +367,18 @@ export function questionCoreRoutes(db) {
       if (moduleIds.length > 0) {
         await QuestionModule.bulkCreate(
           moduleIds.map((id) => ({ question_id: created.id, module_id: id })),
+          { transaction }
+        );
+      }
+      if (rackIds.length > 0) {
+        await QuestionRack.bulkCreate(
+          rackIds.map((id) => ({ question_id: created.id, rack_id: id })),
+          { transaction }
+        );
+      }
+      if (systemIds.length > 0) {
+        await QuestionSystem.bulkCreate(
+          systemIds.map((id) => ({ question_id: created.id, system_id: id })),
           { transaction }
         );
       }

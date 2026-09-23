@@ -61,6 +61,37 @@ describe('RacksView', () => {
     expect(api.post).toHaveBeenCalledWith('/api/racks', { name: 'studio' });
   });
 
+  // Asking about a rack opens from its row too: the panel lists the rack's
+  // own questions and asks the next one with the rack as its scope.
+  it('opens a rack s questions from its row and asks with the rack in scope', async () => {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(
+        path === '/api/systems' ? systemsResponse : path.startsWith('/api/questions') ? [] : racksResponse
+      )
+    );
+    api.post.mockResolvedValue({ id: 9 });
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="rack-questions"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="questions-1"]').trigger('click');
+    await flushPromises();
+    const panel = wrapper.find('[data-test="rack-questions"]');
+    expect(panel.text()).toContain('main rack');
+    expect(api.get).toHaveBeenCalledWith('/api/questions?rack_id=1');
+
+    await panel.find('[data-test="ask-prompt"]').setValue('What is this case missing?');
+    await panel.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/questions', {
+      prompt: 'What is this case missing?',
+      rack_ids: [1],
+    });
+
+    await wrapper.find('[data-test="questions-1"]').trigger('click');
+    expect(wrapper.find('[data-test="rack-questions"]').exists()).toBe(false);
+  });
+
   // A rack has no page of its own, so the links it keeps open from its row.
   it('opens a rack s links from its row and closes them again', async () => {
     mockLists();

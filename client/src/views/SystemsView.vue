@@ -5,6 +5,7 @@ import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import { panelCropStyle, panelThumbUrl } from '../panelLayout.js';
 import ResourceLinks from '../components/ResourceLinks.vue';
+import QuestionsPanel from '../components/QuestionsPanel.vue';
 import OutputsEditor from '../components/racks/OutputsEditor.vue';
 
 // A system is a group of racks patched together as one instrument. This page
@@ -33,6 +34,12 @@ const linksSystem = computed(() => systems.value.find((s) => s.id === linksSyste
 const outputsSystemId = ref(null);
 const outputsSystem = computed(
   () => systems.value.find((s) => s.id === outputsSystemId.value) ?? null
+);
+// Which system's questions are open: asked from here, every module of every
+// rack in the system is the question's scope — the whole instrument.
+const questionsSystemId = ref(null);
+const questionsSystem = computed(
+  () => systems.value.find((s) => s.id === questionsSystemId.value) ?? null
 );
 const planBusy = ref(false);
 const dragged = ref(null);
@@ -526,6 +533,16 @@ async function assign(rackId, systemId) {
                 >
                   {{ outputsSystemId === system.id ? 'Close outputs' : 'Outputs' }}
                 </button>
+                <button
+                  class="secondary"
+                  style="margin: 0"
+                  :disabled="system.module_count === 0"
+                  title="Ask the assistant about this system, with every module in it in scope"
+                  :data-test="`questions-${system.id}`"
+                  @click="questionsSystemId = questionsSystemId === system.id ? null : system.id"
+                >
+                  {{ questionsSystemId === system.id ? 'Close questions' : 'Questions' }}
+                </button>
               </div>
             </td>
             <td class="actions-cell">
@@ -610,6 +627,11 @@ async function assign(rackId, systemId) {
     <section v-if="linksSystem" class="system-links" data-test="system-links">
       <h2>{{ linksSystem.name }}</h2>
       <ResourceLinks kind="system" :record-id="linksSystem.id" />
+    </section>
+
+    <section v-if="questionsSystem" class="system-links" data-test="system-questions">
+      <h2>Ask about {{ questionsSystem.name }}</h2>
+      <QuestionsPanel kind="system" :record-id="String(questionsSystem.id)" />
     </section>
 
     <section v-if="outputsSystem" class="system-links" data-test="system-outputs">

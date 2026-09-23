@@ -23,6 +23,15 @@ const patchOptions = computed(() =>
   }))
 );
 
+// ...or about a whole rack or system: then every module of it is the scope
+// from the start and no model reads the wording to pick modules out. One
+// picker for both, since a question is about one thing at a time.
+const racks = ref([]);
+const systems = ref([]);
+const scope = ref('');
+const scopeKind = computed(() => scope.value.split(':')[0] || '');
+const scopeId = computed(() => Number(scope.value.split(':')[1]) || 0);
+
 onMounted(async () => {
   try {
     // Nothing depends on this list arriving; a failure is not worth a toast.
@@ -33,6 +42,17 @@ onMounted(async () => {
     patches.value = Array.isArray(page?.patches) ? page.patches : [];
   } catch {
     patches.value = [];
+  }
+  try {
+    const [rackList, systemList] = await Promise.all([
+      api.get('/api/racks', { quiet: true }),
+      api.get('/api/systems', { quiet: true }),
+    ]);
+    racks.value = Array.isArray(rackList) ? rackList : [];
+    systems.value = Array.isArray(systemList) ? systemList : [];
+  } catch {
+    racks.value = [];
+    systems.value = [];
   }
   // Arrived from a patch page's "Ask about this patch".
   const fromRoute = Number(route.query?.patch);
@@ -46,6 +66,8 @@ async function submit() {
     const question = await api.post('/api/questions', {
       prompt: prompt.value,
       patch_id: patchId.value ? Number(patchId.value) : undefined,
+      rack_id: scopeKind.value === 'rack' ? scopeId.value : undefined,
+      system_id: scopeKind.value === 'system' ? scopeId.value : undefined,
     });
     router.push({ name: 'question-detail', params: { id: question.id } });
   } catch (e) {
@@ -85,12 +107,30 @@ async function submit() {
           </button>
         </div>
       </div>
+      <div v-if="racks.length || systems.length" class="row">
+        <div>
+          <label for="ask-scope">About a whole rack or system (optional)</label>
+          <select id="ask-scope" v-model="scope" data-test="ask-scope">
+            <option value="">Let the assistant pick the modules</option>
+            <optgroup v-if="systems.length" label="Systems">
+              <option v-for="s in systems" :key="`system-${s.id}`" :value="`system:${s.id}`">
+                {{ s.name }}
+              </option>
+            </optgroup>
+            <optgroup v-if="racks.length" label="Racks">
+              <option v-for="r in racks" :key="`rack-${r.id}`" :value="`rack:${r.id}`">
+                {{ r.name }}
+              </option>
+            </optgroup>
+          </select>
+        </div>
+      </div>
       <p class="muted">
         The assistant first figures out which of your modules the question applies to. You then
         review that selection — adding modules, uploaded documents, previous answers, and notes —
         before the answer is generated. Naming a patch attaches its cables, control settings,
         normalled connections and signal flow to the question, and puts the modules it uses in
-        scope.
+        scope. Naming a rack or a system puts every module in it in scope from the start.
       </p>
       <p v-if="error" class="error" data-test="error">{{ error }}</p>
       <button type="submit" :disabled="busy || !prompt.trim()" data-test="submit">Ask</button>

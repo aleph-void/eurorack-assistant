@@ -64,6 +64,8 @@ export function associate(m) {
     QuestionCapture,
     QuestionAudio,
     QuestionPatch,
+    QuestionRack,
+    QuestionSystem,
     DeviceAuthorization,
     DeviceToken,
     PatchScopeChannel,
@@ -281,6 +283,14 @@ export function associate(m) {
   Question.hasMany(QuestionPatch, { foreignKey: 'question_id' });
   QuestionPatch.belongsTo(Question, { foreignKey: 'question_id' });
   QuestionPatch.belongsTo(Patch, { foreignKey: 'patch_id' });
+
+  Question.hasMany(QuestionRack, { foreignKey: 'question_id' });
+  QuestionRack.belongsTo(Question, { foreignKey: 'question_id' });
+  QuestionRack.belongsTo(Rack, { foreignKey: 'rack_id' });
+
+  Question.hasMany(QuestionSystem, { foreignKey: 'question_id' });
+  QuestionSystem.belongsTo(Question, { foreignKey: 'question_id' });
+  QuestionSystem.belongsTo(System, { foreignKey: 'system_id' });
 
   DeviceToken.belongsTo(User, { foreignKey: 'user_id' });
   User.hasMany(DeviceToken, { foreignKey: 'user_id' });

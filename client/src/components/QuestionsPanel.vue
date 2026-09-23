@@ -12,8 +12,13 @@
 // than left to a model — the asker knows which jack or knob they mean, and
 // ticking it (`component_ids`) puts it in scope before the question is saved.
 //
-// Both pages are the same list of the same records, so they are one panel:
-// only the word for the thing and the query key differ.
+// A RACK and a SYSTEM are the same one level up: every module of the rack
+// (of every rack in the system) goes into the scope as the question is
+// created, so "what is this case missing?" is asked with the whole case in
+// front of the model, and there is no scoping pass either.
+//
+// All four pages are the same list of the same records, so they are one
+// panel: only the word for the thing and the query key differ.
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '../api.js';
@@ -21,7 +26,8 @@ import { COMPONENT_TYPES, TYPE_LABELS } from '../componentTypes.js';
 import { useLazyPanel } from '../lazyPanel.js';
 
 const props = defineProps({
-  // 'module' or 'patch' — the query key, the payload key and the wording.
+  // 'module', 'patch', 'rack' or 'system' — the query key, the payload key
+  // and the wording.
   kind: { type: String, required: true },
   recordId: { type: String, required: true },
   // A module's own components, so the asker can say which of them the
@@ -40,7 +46,8 @@ const selectedComponents = ref([]);
 // Built the first time it is opened (lazyPanel.js).
 const { opened: partsOpened, onToggle: onPartsToggle } = useLazyPanel();
 
-const noun = computed(() => (props.kind === 'patch' ? 'patch' : 'module'));
+const NOUNS = ['module', 'patch', 'rack', 'system'];
+const noun = computed(() => (NOUNS.includes(props.kind) ? props.kind : 'module'));
 
 // The module's components in the house order, one group per type, so a jack
 // is picked out of the jacks rather than out of a list of everything.
@@ -126,7 +133,9 @@ function formatDate(value) {
           :placeholder="
             noun === 'patch'
               ? 'e.g. Why is the bass line dropping out every fourth bar?'
-              : 'e.g. How do I get a slow rise and a fast fall out of it?'
+              : noun === 'rack' || noun === 'system'
+                ? 'e.g. What kind of voice is this missing for a generative patch?'
+                : 'e.g. How do I get a slow rise and a fast fall out of it?'
           "
         ></textarea>
 
@@ -190,6 +199,12 @@ function formatDate(value) {
             This patch is in the question's scope from the start, with its cables, control
             settings and signal flow attached. You still review the scope — adding modules,
             documents, notes and previous answers — before the answer is generated.
+          </template>
+          <template v-else-if="noun === 'rack' || noun === 'system'">
+            Every module in this {{ noun }} is the question's scope from the start, so nothing has
+            to guess at it from the wording. You go straight to the review step, where you can
+            untick modules and attach documents, notes and previous answers before the answer is
+            generated.
           </template>
           <template v-else>
             This module — and any parts of it you tick — is the question's scope, so nothing has

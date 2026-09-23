@@ -41,6 +41,43 @@ describe('AskView', () => {
     expect(wrapper.find('[data-test="submit"]').attributes('disabled')).toBeDefined();
   });
 
+  // A rack or a system named here is the scope outright: every module in it,
+  // no scoping pass.
+  it('asks about a whole rack or system picked from the list', async () => {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(
+        path === '/api/racks'
+          ? [{ id: 2, name: 'travel case', module_count: 3 }]
+          : path === '/api/systems'
+            ? [{ id: 5, name: 'studio', module_count: 9 }]
+            : { patches: [] }
+      )
+    );
+    api.post.mockResolvedValue({ id: 12 });
+    const wrapper = mount(AskView, { global: testGlobal() });
+    await flushPromises();
+
+    const scope = wrapper.find('[data-test="ask-scope"]');
+    expect(scope.text()).toContain('studio');
+    expect(scope.text()).toContain('travel case');
+    await scope.setValue('system:5');
+    await wrapper.find('[data-test="prompt"]').setValue('What is missing?');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/questions', {
+      prompt: 'What is missing?',
+      system_id: 5,
+    });
+
+    await scope.setValue('rack:2');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenLastCalledWith('/api/questions', {
+      prompt: 'What is missing?',
+      rack_id: 2,
+    });
+  });
+
   it('asks about the patch named in the URL', async () => {
     currentRouteQuery = { patch: '3' };
     api.get.mockResolvedValue({
