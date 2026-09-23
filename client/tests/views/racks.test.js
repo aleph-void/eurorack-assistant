@@ -83,10 +83,10 @@ describe('RacksView', () => {
     api.get.mockImplementation((path) => {
       if (path === '/api/systems') return Promise.resolve(systemsResponse);
       if (path === '/api/racks') return Promise.resolve(racksResponse);
-      if (path === '/api/racks/1') {
+      if (path === '/api/racks/2') {
         return Promise.resolve({
-          id: 1,
-          name: 'main rack',
+          id: 2,
+          name: 'travel case',
           modules: [
             { id: 3, manufacturer: 'Intellijel', name: 'Outs' },
             { id: 4, manufacturer: 'Make Noise', name: 'Maths' },
@@ -120,17 +120,14 @@ describe('RacksView', () => {
     const wrapper = mount(RacksView, { global: testGlobal() });
     await flushPromises();
     expect(wrapper.find('[data-test="rack-outputs"]').exists()).toBe(false);
-    // An empty rack has nothing to mark.
-    expect(wrapper.find('[data-test="outputs-2"]').attributes('disabled')).toBeUndefined();
-
-    await wrapper.find('[data-test="outputs-1"]').trigger('click');
+    await wrapper.find('[data-test="outputs-2"]').trigger('click');
     await flushPromises();
     const panel = wrapper.find('[data-test="rack-outputs"]');
-    expect(panel.text()).toContain('Where sound leaves main rack');
+    expect(panel.text()).toContain('Where sound leaves travel case');
     expect(panel.find('[data-test="rack-output-9"]').text()).toContain('Intellijel Outs — L');
 
     // Picking a module reads its jacks — and only the ones a cable reaches.
-    await panel.find('[data-test="rack-output-module"]').setValue('3');
+    await panel.find('[data-test="rack-output-module"]').setValue('2:3');
     await flushPromises();
     expect(api.get).toHaveBeenCalledWith('/api/modules/3', { quiet: true });
     const jackOptions = panel.find('[data-test="rack-output-jack"]').findAll('option').map((o) => o.text());
@@ -138,13 +135,44 @@ describe('RacksView', () => {
     await panel.find('[data-test="rack-output-jack"]').setValue('32');
     await panel.find('[data-test="add-rack-output"]').trigger('submit');
     await flushPromises();
-    expect(api.post).toHaveBeenCalledWith('/api/racks/1/outputs', { module_id: 3, component_id: 32 });
+    expect(api.post).toHaveBeenCalledWith('/api/racks/2/outputs', { module_id: 3, component_id: 32 });
     expect(wrapper.find('[data-test="rack-output-10"]').exists()).toBe(true);
 
     await wrapper.find('[data-test="remove-rack-output-9"]').trigger('click');
     await flushPromises();
-    expect(api.delete).toHaveBeenCalledWith('/api/racks/1/outputs/9');
+    expect(api.delete).toHaveBeenCalledWith('/api/racks/2/outputs/9');
     expect(wrapper.find('[data-test="rack-outputs-empty"]').exists()).toBe(true);
+  });
+
+  // A rack in a system is patched towards the system's exits, so its own are
+  // shown for what it goes back to, with no way to edit them here.
+  it('points a rack in a system at the system for its outputs', async () => {
+    api.get.mockImplementation((path) => {
+      if (path === '/api/systems') return Promise.resolve(systemsResponse);
+      if (path === '/api/racks') return Promise.resolve(racksResponse);
+      if (path === '/api/racks/1') {
+        return Promise.resolve({
+          id: 1,
+          name: 'main rack',
+          system_id: 7,
+          modules: [{ id: 3, manufacturer: 'Intellijel', name: 'Outs' }],
+          rows: [],
+          outputs: [
+            { id: 9, module_id: 3, manufacturer: 'Intellijel', module_name: 'Outs', component_id: 31, component_name: 'L', component_type: 'input_jack' },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    await wrapper.find('[data-test="outputs-1"]').trigger('click');
+    await flushPromises();
+    const panel = wrapper.find('[data-test="rack-outputs"]');
+    expect(panel.find('[data-test="outputs-in-system"]').exists()).toBe(true);
+    expect(panel.find('[data-test="rack-output-9"]').exists()).toBe(true);
+    expect(panel.find('[data-test="remove-rack-output-9"]').exists()).toBe(false);
+    expect(panel.find('[data-test="add-rack-output"]').exists()).toBe(false);
   });
 
   it('renders placed modules as panel images inside an organized rack row', async () => {

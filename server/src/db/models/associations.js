@@ -22,6 +22,7 @@ export function associate(m) {
     RackModule,
     RackRow,
     RackOutput,
+    SystemOutput,
     RackRowModule,
     ModuleComponent,
     ComponentNormalization,
@@ -103,6 +104,11 @@ export function associate(m) {
   RackOutput.belongsTo(Rack, { foreignKey: 'rack_id' });
   RackOutput.belongsTo(Module, { foreignKey: 'module_id' });
   RackOutput.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
+  System.hasMany(SystemOutput, { foreignKey: 'system_id' });
+  SystemOutput.belongsTo(System, { foreignKey: 'system_id' });
+  SystemOutput.belongsTo(Rack, { foreignKey: 'rack_id' });
+  SystemOutput.belongsTo(Module, { foreignKey: 'module_id' });
+  SystemOutput.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
   RackRow.hasMany(RackRowModule, { foreignKey: 'row_id' });
   RackRowModule.belongsTo(RackRow, { foreignKey: 'row_id' });
   Module.hasMany(RackRowModule, { foreignKey: 'module_id' });

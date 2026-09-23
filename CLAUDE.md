@@ -475,11 +475,19 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   cable or setting on any other instance is refused like an illegal cable.
 - WHERE SOUND LEAVES THE SYSTEM is a fact about the studio, not the module
   (module records are shared; the same Outs feeds a monitor in one room and
-  sits spare in another), so it is recorded on the RACK — `rack_outputs`,
-  migration 047, one row per jack, added and removed one at a time on the
-  racks page (`components/racks/RackOutputs.vue`, `/api/racks/:id/outputs`)
-  — and a patch takes its OWN COPY at creation (`patch_outputs`, written by
-  `snapshotPatch()` onto every instance of the marked module in that rack),
+  sits spare in another), so it is recorded on the SYSTEM — `system_outputs`,
+  migration 048, one row per jack naming the rack its module stands in (the
+  same module may be racked in two cases of a system), added and removed one
+  at a time on the systems page (`/api/systems/:id/outputs`) — because a
+  studio of several cases has ONE set of exits. A rack standing alone keeps
+  its own (`rack_outputs`, migration 047, `/api/racks/:id/outputs`); a rack
+  in a system shows those read-only and refuses edits (409), since its
+  patches build towards the system's. Joining a system carries the rack's
+  exits into it, leaving takes that rack's rows out of the system's. Both
+  pages draw ONE editor, `components/racks/OutputsEditor.vue` (`kind`). A
+  patch takes its OWN COPY at creation (`patch_outputs`, written by
+  `snapshotPatch()` from the system's list for a system patch and the rack's
+  for a rack patch, onto every instance of the marked module in that rack),
   soft references with the jack's name beside them like a cable's ends,
   cloned, exported and imported by name, and edited on the patch's gear page
   (`patchdetail/OutputsSection.vue`, `/api/patches/:id/outputs`), where gear

@@ -5,7 +5,7 @@ import { dialog } from '../dialog.js';
 import ComponentLegend from '../components/ComponentLegend.vue';
 import ShareButton from '../components/ShareButton.vue';
 import ResourceLinks from '../components/ResourceLinks.vue';
-import RackOutputs from '../components/racks/RackOutputs.vue';
+import OutputsEditor from '../components/racks/OutputsEditor.vue';
 import { panelCropStyle } from '../panelLayout.js';
 import { usePanelChips } from '../components/racks/usePanelChips.js';
 import { useRackDrag } from '../components/racks/useRackDrag.js';
@@ -30,6 +30,10 @@ const linksRackId = ref(null);
 // Which rack's outputs — the jacks sound leaves it at — are open for editing.
 const outputsRackId = ref(null);
 const outputsRack = computed(() => racks.value.find((r) => r.id === outputsRackId.value) ?? null);
+// A rack in a system is patched towards the system's exits, so its own are
+// shown read-only with a pointer to where they are marked now.
+const systemNameOf = (rack) =>
+  !rack.system_id ? '' : systems.value.find((s) => s.id === rack.system_id)?.name ?? 'a system';
 const linksRack = computed(() => racks.value.find((r) => r.id === linksRackId.value) ?? null);
 const layoutBusy = ref(false);
 const dragged = ref(null);
@@ -482,7 +486,11 @@ async function nudge(rowIndex, index, delta) {
                   class="secondary"
                   style="margin: 0"
                   :disabled="rack.module_count === 0"
-                  title="The jacks sound leaves this rack at"
+                  :title="
+                    !rack.system_id
+                      ? 'The jacks sound leaves this rack at'
+                      : 'This rack is part of a system — its outputs are marked on the system'
+                  "
                   :data-test="`outputs-${rack.id}`"
                   @click="outputsRackId = outputsRackId === rack.id ? null : rack.id"
                 >
@@ -540,7 +548,11 @@ async function nudge(rowIndex, index, delta) {
 
     <section v-if="outputsRack" class="rack-links" data-test="rack-outputs">
       <h2>Where sound leaves {{ outputsRack.name }}</h2>
-      <RackOutputs :rack-id="outputsRack.id" :rack-name="outputsRack.name" />
+      <OutputsEditor
+        kind="rack"
+        :record-id="outputsRack.id"
+        :system-name="systemNameOf(outputsRack)"
+      />
     </section>
 
     <section v-if="organizer" class="rack-organizer" data-test="rack-organizer">

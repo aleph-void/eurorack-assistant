@@ -5,6 +5,7 @@ import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import { panelCropStyle, panelThumbUrl } from '../panelLayout.js';
 import ResourceLinks from '../components/ResourceLinks.vue';
+import OutputsEditor from '../components/racks/OutputsEditor.vue';
 
 // A system is a group of racks patched together as one instrument. This page
 // lists them, assigns racks in and out, and arranges the racks of one system
@@ -27,6 +28,12 @@ const openId = ref(null);
 // the plan it was built from and the thread it came out of open from its row.
 const linksSystemId = ref(null);
 const linksSystem = computed(() => systems.value.find((s) => s.id === linksSystemId.value) ?? null);
+// Which system's outputs are open: where sound leaves the studio, marked on
+// the system because a studio of several cases has one set of exits.
+const outputsSystemId = ref(null);
+const outputsSystem = computed(
+  () => systems.value.find((s) => s.id === outputsSystemId.value) ?? null
+);
 const planBusy = ref(false);
 const dragged = ref(null);
 
@@ -509,6 +516,16 @@ async function assign(rackId, systemId) {
                 >
                   {{ linksSystemId === system.id ? 'Close links' : 'Links' }}
                 </button>
+                <button
+                  class="secondary"
+                  style="margin: 0"
+                  :disabled="system.module_count === 0"
+                  title="The jacks sound leaves this system at"
+                  :data-test="`outputs-${system.id}`"
+                  @click="outputsSystemId = outputsSystemId === system.id ? null : system.id"
+                >
+                  {{ outputsSystemId === system.id ? 'Close outputs' : 'Outputs' }}
+                </button>
               </div>
             </td>
             <td class="actions-cell">
@@ -593,6 +610,11 @@ async function assign(rackId, systemId) {
     <section v-if="linksSystem" class="system-links" data-test="system-links">
       <h2>{{ linksSystem.name }}</h2>
       <ResourceLinks kind="system" :record-id="linksSystem.id" />
+    </section>
+
+    <section v-if="outputsSystem" class="system-links" data-test="system-outputs">
+      <h2>Where sound leaves {{ outputsSystem.name }}</h2>
+      <OutputsEditor kind="system" :record-id="outputsSystem.id" />
     </section>
 
     <section v-if="plan" class="system-plan" data-test="system-plan">

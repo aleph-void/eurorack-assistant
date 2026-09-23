@@ -68,8 +68,16 @@ export async function snapshotPatch(
   db,
   { userId, system, racks, mappings, name, description = null }
 ) {
-  const { ModuleExpander, Patch, PatchModule, PatchModuleLink, PatchOutput, RackOutput, ModuleComponent } =
-    db.models;
+  const {
+    ModuleExpander,
+    Patch,
+    PatchModule,
+    PatchModuleLink,
+    PatchOutput,
+    RackOutput,
+    SystemOutput,
+    ModuleComponent,
+  } = db.models;
   const rackById = new Map(racks.map((rack) => [rack.id, rack]));
   const instanceCounts = new Map();
   const snapshot = mappings.flatMap((rm) => {
@@ -97,15 +105,17 @@ export async function snapshotPatch(
       expander_module_id: rackModuleIds,
     },
   });
-  // Where sound leaves each rack, to be copied onto every instance of the
-  // marked module in that rack: two output modules are two exits.
-  const outputRows = await RackOutput.findAll({
-    where: { rack_id: racks.map((rack) => rack.id) },
-    order: [
-      ['position', 'ASC'],
-      ['id', 'ASC'],
-    ],
-  });
+  // Where sound leaves — the SYSTEM's exits for a patch of a system, the
+  // rack's own for a patch of a lone rack — to be copied onto every instance
+  // of the marked module in the rack it was marked in: two output modules
+  // are two exits.
+  const outputOrder = [
+    ['position', 'ASC'],
+    ['id', 'ASC'],
+  ];
+  const outputRows = system
+    ? await SystemOutput.findAll({ where: { system_id: system.id }, order: outputOrder })
+    : await RackOutput.findAll({ where: { rack_id: racks[0].id }, order: outputOrder });
   const outputComponents =
     outputRows.length === 0
       ? []

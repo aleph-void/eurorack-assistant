@@ -112,6 +112,62 @@ describe('SystemsView', () => {
     expect(wrapper.find('[data-test="system-links"]').exists()).toBe(false);
   });
 
+  // Where sound leaves is marked on the system: a studio of several cases has
+  // one set of exits, and the same module may stand in two of its racks.
+  it('marks a system s outputs, naming the rack each module stands in', async () => {
+    const detail = {
+      ...planResponse,
+      racks: [
+        { id: 10, name: 'left case', modules: [{ id: 3, manufacturer: 'Intellijel', name: 'Outs' }] },
+        { id: 11, name: 'right case', modules: [{ id: 3, manufacturer: 'Intellijel', name: 'Outs' }] },
+      ],
+      outputs: [
+        { id: 7, rack_id: 10, rack_name: 'left case', module_id: 3, manufacturer: 'Intellijel', module_name: 'Outs', component_id: 31, component_name: 'L' },
+      ],
+    };
+    api.get.mockImplementation((path) => {
+      if (path === '/api/systems') return Promise.resolve(systemsResponse);
+      if (path === '/api/systems/1') return Promise.resolve(detail);
+      if (path === '/api/modules/3') {
+        return Promise.resolve({
+          components: [
+            { id: 31, type: 'input_jack', name: 'L' },
+            { id: 32, type: 'input_jack', name: 'R' },
+            { id: 33, type: 'knob', name: 'Level' },
+          ],
+        });
+      }
+      return Promise.resolve([]);
+    });
+    api.post.mockResolvedValue({ outputs: [...detail.outputs, { ...detail.outputs[0], id: 8, rack_id: 11, rack_name: 'right case', component_id: 32, component_name: 'R' }] });
+    api.delete.mockResolvedValue({ outputs: [] });
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    // A system with no modules has nothing to mark.
+    expect(wrapper.find('[data-test="outputs-2"]').attributes('disabled')).toBeDefined();
+
+    await wrapper.find('[data-test="outputs-1"]').trigger('click');
+    await flushPromises();
+    const panel = wrapper.find('[data-test="system-outputs"]');
+    expect(panel.text()).toContain('Where sound leaves studio');
+    expect(panel.find('[data-test="rack-output-7"]').text()).toContain('Intellijel Outs — L');
+    expect(panel.find('[data-test="rack-output-7"]').text()).toContain('in left case');
+    const modules = panel.find('[data-test="rack-output-module"]').findAll('option').map((o) => o.text());
+    expect(modules).toEqual(['Module…', 'Intellijel Outs (left case)', 'Intellijel Outs (right case)']);
+
+    await panel.find('[data-test="rack-output-module"]').setValue('11:3');
+    await flushPromises();
+    await panel.find('[data-test="rack-output-jack"]').setValue('32');
+    await panel.find('[data-test="add-rack-output"]').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/systems/1/outputs', { rack_id: 11, module_id: 3, component_id: 32 });
+    expect(wrapper.find('[data-test="rack-output-8"]').text()).toContain('in right case');
+
+    await wrapper.find('[data-test="remove-rack-output-7"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/systems/1/outputs/7');
+  });
+
   it('renames a system', async () => {
     api.get.mockResolvedValue(systemsResponse);
     api.put.mockResolvedValue({ id: 1, name: 'the desk' });
