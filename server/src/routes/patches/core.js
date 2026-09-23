@@ -4,13 +4,14 @@ import {
   loadPatchDetail as loadPatchDetailFor,
   patchJson,
 } from '../../services/patchDetail.js';
+import { copyRackLayout, resyncRackLayout } from '../../services/patchLayout.js';
+import { loadPatchSource, snapshotPatch } from '../../services/patchCreate.js';
 import {
-  copyRackLayout,
-  inFloorOrder,
-  resyncRackLayout,
-  snapshotRackLayout,
-} from '../../services/patchLayout.js';
-import { materializeBridges } from '../../services/moduleBridges.js';
+  MAX_BRIEF_CHARS,
+  generatingPatchIds,
+  readMaxCables,
+} from '../../services/patchGenerator.js';
+import { enqueueJob } from '../../jobs/enqueue.js';
 import {
   freePatchName,
   isNameConflict,
@@ -25,12 +26,7 @@ import { asyncHandler } from '../asyncHandler.js';
 // habit-learned cable suggestions, rename, delete and clone.
 export function patchCoreRoutes(db) {
   const {
-    System,
-    Rack,
-    RackModule,
-    Module,
     ModuleComponent,
-    ModuleExpander,
     Patch,
     PatchModule,
     PatchCable,
@@ -100,6 +96,9 @@ export function patchCoreRoutes(db) {
     };
     const moduleCounts = count(moduleRows);
     const cableCounts = count(cableRows);
+    // The patches the model is still wiring up, so the list can say so
+    // rather than showing an empty patch as finished.
+    const generating = await generatingPatchIds(db, req.user.id);
     res.json({
       total,
       limit,
@@ -110,6 +109,7 @@ export function patchCoreRoutes(db) {
         patchJson(p, {
           module_count: moduleCounts.get(p.id) ?? 0,
           cable_count: cableCounts.get(p.id) ?? 0,
+          generating: generating.has(p.id),
         })
       ),
     });
@@ -118,8 +118,8 @@ export function patchCoreRoutes(db) {
   // Create a patch from one of the user's racks, or from a whole system —
   // every rack in it at once, so a cable can run from any jack on any of
   // those racks to any jack on any other. Either way the contents are
-  // snapshotted as they stand. Body: { rack_id | system_id, name,
-  // description? }
+  // snapshotted as they stand (services/patchCreate.js). Body:
+  // { rack_id | system_id, name, description? }
   router.post('/', asyncHandler(async (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
@@ -128,136 +128,67 @@ export function patchCoreRoutes(db) {
     if (await patchNamed(db, req.user.id, name)) {
       return res.status(409).json({ error: nameTakenMessage(name) });
     }
-    const wantsSystem =
-      req.body?.system_id !== undefined &&
-      req.body?.system_id !== null &&
-      req.body?.system_id !== '';
-    let system = null;
-    let racks;
-    if (wantsSystem) {
-      system = await System.findOne({
-        where: { id: Number(req.body.system_id) || 0, user_id: req.user.id },
-      });
-      if (!system) return res.status(404).json({ error: 'System not found' });
-      // In the order the studio reads — how the racks stand on the system's
-      // floor plan — so the instances of a system patch are numbered, and its
-      // panels drawn, the way the racks are actually arranged.
-      racks = inFloorOrder(
-        await Rack.findAll({ where: { system_id: system.id }, order: [['id', 'ASC']] })
-      );
-      if (racks.length === 0) {
-        return res.status(400).json({ error: 'this system has no racks to patch' });
-      }
-    } else {
-      const rack = await Rack.findOne({
-        where: { id: Number(req.body?.rack_id) || 0, user_id: req.user.id },
-      });
-      if (!rack) return res.status(404).json({ error: 'Rack not found' });
-      racks = [rack];
-    }
-    const rackById = new Map(racks.map((rack) => [rack.id, rack]));
-    const mappings = await RackModule.findAll({
-      where: { rack_id: racks.map((rack) => rack.id) },
-      include: [Module],
-      order: [
-        [Module, 'manufacturer', 'ASC'],
-        [Module, 'name', 'ASC'],
-      ],
-    });
-    if (mappings.length === 0) {
-      return res.status(400).json({
-        error: system ? 'this system has no modules to patch' : 'this rack has no modules to patch',
-      });
-    }
+    const source = await loadPatchSource(db, req.user.id, req.body);
+    if (source.error) return res.status(source.status).json({ error: source.error });
     const description = String(req.body?.description || '').trim();
-    // One patch_modules row per module INSTANCE: quantity 2 becomes
-    // instance 1 and instance 2 so cables can tell them apart. Across a
-    // system the numbering keeps running, so the same module in two racks
-    // still gets distinct instance numbers — the rack columns say which
-    // copy stands where.
-    const instanceCounts = new Map();
-    const snapshot = mappings.flatMap((rm) => {
-      const rack = rackById.get(rm.rack_id);
-      return Array.from({ length: Math.max(1, rm.quantity) }, () => {
-        const instance = (instanceCounts.get(rm.Module.id) ?? 0) + 1;
-        instanceCounts.set(rm.Module.id, instance);
-        return {
-          module_id: rm.Module.id,
-          manufacturer: rm.Module.manufacturer,
-          module_name: rm.Module.name,
-          instance,
-          rack_id: rack?.id ?? null,
-          rack_name: rack?.name ?? null,
-        };
-      });
+    let made;
+    const wrote = await takingName(name, res, async () => {
+      made = await snapshotPatch(db, { userId: req.user.id, ...source, name, description });
     });
-    // Hosts and expanders in the same rack arrive already wired together —
-    // that is what the ribbon cable does — so the patch links them without
-    // being asked, instance by instance.
-    const rackModuleIds = [...new Set(snapshot.map((s) => s.module_id))];
-    const expanderPairs = await ModuleExpander.findAll({
-      where: {
-        host_module_id: rackModuleIds,
-        expander_module_id: rackModuleIds,
+    if (!wrote) return;
+    res
+      .status(201)
+      .json(patchJson(made.patch, { module_count: made.moduleCount, cable_count: 0 }));
+  }));
+
+  // Have the model build a patch of a rack or a system. The patch is made
+  // here, empty, exactly as POST / makes one — so a name that cannot be had
+  // is refused now rather than an hour into the queue, and the patch is on
+  // the list while the job runs — and the wiring is a `generate_patch` job on
+  // the queue: it reads every module in the snapshot, asks for a patch of at
+  // most `max_cables` cables (steered by `prompt`, the user's brief, when
+  // there is one) and keeps whatever of the answer the cable rules allow
+  // (services/patchGenerator.js). Body:
+  // { rack_id | system_id, name, max_cables?, prompt?, description? }
+  router.post('/generate', asyncHandler(async (req, res) => {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    if (await patchNamed(db, req.user.id, name)) {
+      return res.status(409).json({ error: nameTakenMessage(name) });
+    }
+    const maxCables = readMaxCables(req.body?.max_cables);
+    if (maxCables.error) return res.status(400).json({ error: maxCables.error });
+    const brief = String(req.body?.prompt || '').trim();
+    if (brief.length > MAX_BRIEF_CHARS) {
+      return res
+        .status(400)
+        .json({ error: `prompt must be ${MAX_BRIEF_CHARS} characters or fewer` });
+    }
+    const source = await loadPatchSource(db, req.user.id, req.body);
+    if (source.error) return res.status(source.status).json({ error: source.error });
+    const description = String(req.body?.description || '').trim();
+    let made;
+    const wrote = await takingName(name, res, async () => {
+      made = await snapshotPatch(db, { userId: req.user.id, ...source, name, description });
+    });
+    if (!wrote) return;
+    const job = await enqueueJob(db, 'generate_patch', {
+      userId: req.user.id,
+      payload: {
+        patch_id: made.patch.id,
+        patch_name: made.patch.name,
+        max_cables: maxCables.value,
+        prompt: brief || null,
       },
     });
-    let patch;
-    let created = [];
-    const wrote = await takingName(name, res, () =>
-      db.sequelize.transaction(async (transaction) => {
-        patch = await Patch.create(
-          {
-            user_id: req.user.id,
-            // A system patch is not filed under any one rack; rack_name is
-            // NOT NULL and reads as the thing the patch was built from, so
-            // the system's name stands in it as well as in system_name.
-            rack_id: system ? null : racks[0].id,
-            rack_name: system ? system.name : racks[0].name,
-            system_id: system?.id ?? null,
-            system_name: system?.name ?? null,
-            name,
-            description: description || null,
-          },
-          { transaction }
-        );
-        await PatchModule.bulkCreate(
-          snapshot.map((m) => ({ ...m, patch_id: patch.id })),
-          { transaction }
-        );
-        created = await PatchModule.findAll({
-          where: { patch_id: patch.id },
-          order: [['id', 'ASC']],
-          transaction,
-        });
-        // The patch takes its own copy of how these racks are laid out right
-        // now, so the diagram keeps drawing the studio as it stood today
-        // however the cases are rebuilt afterwards.
-        await snapshotRackLayout(db, patch, racks, { transaction });
-        const instancesOf = (moduleId) => created.filter((pm) => pm.module_id === moduleId);
-        const linkRows = [];
-        for (const pair of expanderPairs) {
-          const hosts = instancesOf(pair.host_module_id);
-          const expanders = instancesOf(pair.expander_module_id);
-          // Pair them off in order; a spare panel on either side is left
-          // unlinked for the user to wire up by hand.
-          for (let i = 0; i < Math.min(hosts.length, expanders.length); i += 1) {
-            linkRows.push({
-              patch_id: patch.id,
-              a_patch_module_id: hosts[i].id,
-              b_patch_module_id: expanders[i].id,
-              kind: 'expander',
-            });
-          }
-        }
-        if (linkRows.length > 0) await PatchModuleLink.bulkCreate(linkRows, { transaction });
-        // Dual modules arrive wired together too — their link cable is already
-        // plugged in, jack for jack, so the patch records the pair without
-        // being asked (services/moduleBridges.js).
-        await materializeBridges(db, patch, { transaction });
+    res.status(202).json(
+      patchJson(made.patch, {
+        module_count: made.moduleCount,
+        cable_count: 0,
+        generating: true,
+        job_id: job.id,
       })
     );
-    if (!wrote) return;
-    res.status(201).json(patchJson(patch, { module_count: snapshot.length, cable_count: 0 }));
   }));
 
   // Full detail: the snapshot instances (with each live module's components
@@ -280,9 +211,15 @@ export function patchCoreRoutes(db) {
       describe: false,
     });
     const owner = found.shared ? await db.models.User.findByPk(patch.user_id) : null;
+    // Still being wired up by a generate_patch job of its owner's: the pages
+    // say so, and re-read themselves when the job lands.
+    const generating = found.shared
+      ? false
+      : (await generatingPatchIds(db, req.user.id)).has(patch.id);
     res.json(
       patchJson(patch, {
         ...json,
+        generating,
         shared: found.shared,
         owner_username: owner?.username ?? req.user.username,
       })

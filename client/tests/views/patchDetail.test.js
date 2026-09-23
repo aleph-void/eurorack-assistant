@@ -21,6 +21,7 @@ vi.mock('vue-router', async (importOriginal) => {
 import { api } from '../../src/api.js';
 import { dialog } from '../../src/dialog.js';
 import { clearToasts, toastState } from '../../src/toast.js';
+import { useJobsStore } from '../../src/stores/jobs.js';
 import PatchDetailView from '../../src/views/PatchDetailView.vue';
 import PatchDiagram from '../../src/components/PatchDiagram.vue';
 import { componentColor } from '../../src/componentTypes.js';
@@ -48,6 +49,26 @@ describe('PatchDetailView', () => {
     expect(wrapper.find('[data-test="cable-21"]').exists()).toBe(false);
     // The patch can be taken straight to the assistant.
     expect(wrapper.find('[data-test="ask-about-patch"]').attributes('to')).toBe('/patches/7/questions');
+  });
+
+  it('says the model is still building the patch, and re-reads it when a job ends', async () => {
+    api.get.mockResolvedValue({ ...patchResponse, cables: [], generating: true });
+    const wrapper = mount(PatchDetailView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="generating"]').exists()).toBe(true);
+
+    // The generate_patch job lands: the page reads the finished patch.
+    api.get.mockResolvedValue({ ...patchResponse, generating: false });
+    const jobs = useJobsStore();
+    jobs.finished += 1;
+    await flushPromises();
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[data-test="generating"]').exists()).toBe(false);
+
+    // A finished patch is not re-read for every job that ends elsewhere.
+    jobs.finished += 1;
+    await flushPromises();
+    expect(api.get).toHaveBeenCalledTimes(2);
   });
 
   it('asks before matching the patch to the rack as it is organised now', async () => {

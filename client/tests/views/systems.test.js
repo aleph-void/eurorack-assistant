@@ -6,9 +6,10 @@ vi.mock('../../src/api.js', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
+const routerPush = vi.fn();
 vi.mock('vue-router', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, useRouter: () => ({ push: vi.fn() }), useRoute: () => ({ query: {} }) };
+  return { ...actual, useRouter: () => ({ push: routerPush }), useRoute: () => ({ query: {} }) };
 });
 
 import { api } from '../../src/api.js';
@@ -200,6 +201,16 @@ describe('SystemsView', () => {
     await wrapper.find('[data-test="fill-gaps-1"]').trigger('click');
     await flushPromises();
     expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it('sends a system to the patches page to have the model build a patch of it', async () => {
+    api.get.mockResolvedValue(systemsResponse);
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    // A system with no modules has nothing to patch.
+    expect(wrapper.find('[data-test="generate-patch-2"]').attributes('disabled')).toBeDefined();
+    await wrapper.find('[data-test="generate-patch-1"]').trigger('click');
+    expect(routerPush).toHaveBeenCalledWith({ path: '/patches', query: { generate: 'system:1' } });
   });
 
   it('leaves the panels alone when the trim is not confirmed', async () => {

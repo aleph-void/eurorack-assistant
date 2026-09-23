@@ -254,6 +254,18 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   by name and the import says which, rather than dropping it. Buses, labels,
   off-rack gear with its declared connection points, and expander/bridge links
   all survive the round trip.
+- **Generated patches**: name a rack or a whole system, say how many cables
+  you are willing to plug and — optionally — what the patch should be ("a
+  slow evolving drone", "techno kick and acid line"), and a `generate_patch`
+  job has the model wire one up. It reads every module in the snapshot (its
+  jacks, controls, menu settings and normalled connections) and answers with
+  cables and settings; every cable it proposes then goes through the same
+  legality rules as one you plug by hand, in the order the model ranked them,
+  and the first ones within the budget are kept. Each cable carries the
+  model's note on what it is for, and its account of the patch becomes the
+  description. The patch exists (marked "generating") from the moment you
+  ask, so a name that is taken is refused immediately rather than an hour
+  into the queue.
 - **What to patch next**: every cable in your other patches is reduced to
   (module, jack) → (module, jack), counted, and offered here when both ends
   are free — a rack is patched in habits. Modules that receive signal and send
