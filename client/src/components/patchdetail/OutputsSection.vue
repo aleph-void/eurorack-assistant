@@ -27,18 +27,23 @@ const componentId = ref('');
 const error = ref('');
 const jacks = computed(() => {
   const pm = modulesById.value.get(Number(moduleId.value));
-  return (pm?.components ?? []).filter((c) => String(c.type).endsWith('_jack') && isPatchPoint(c));
+  // Sound leaves by a cable INTO a jack: an input, or one that is either.
+  return (pm?.components ?? []).filter(
+    (c) => (c.type === 'input_jack' || c.type === 'bidirectional_jack') && isPatchPoint(c)
+  );
 });
 watch(moduleId, () => {
   componentId.value = '';
 });
 
+// No jack picked is the module as a whole: the output module, whichever of
+// its jacks the sound goes in at.
 async function add() {
   error.value = '';
   try {
     await api.post(`/api/patches/${props.patchId}/outputs`, {
       patch_module_id: Number(moduleId.value),
-      component_id: Number(componentId.value),
+      component_id: componentId.value === '' ? null : Number(componentId.value),
     });
     componentId.value = '';
     emit('reload');
@@ -70,8 +75,8 @@ async function remove(output) {
     </summary>
     <div v-if="opened" class="panel-body">
       <p class="muted">
-        The jacks this patch's sound is meant to come out of, copied from the rack when the patch was
-        made. The model builds a generated patch towards them, and each one says whether the traced
+        The modules this patch's sound is meant to come out of — and, if you say, which of their
+        jacks — copied from the system or rack when the patch was made. The model builds a generated patch towards them, and each one says whether the traced
         signal flow actually gets there. Gear declared on this patch — the interface, the PA — can be
         an exit too.
       </p>
@@ -90,6 +95,7 @@ async function remove(output) {
             <tr v-for="output in outputs" :key="output.id" :data-test="`output-${output.id}`">
               <td data-label="Module">{{ moduleLabel(output.patch_module_id) }}</td>
               <td data-label="Jack">
+                <span v-if="output.component_name == null" class="muted">the whole module</span>
                 {{ output.component_name }}
                 <span v-if="!output.live" class="muted">(no longer on the module)</span>
               </td>
@@ -116,8 +122,8 @@ async function remove(output) {
         </table>
       </div>
       <p v-else class="muted" data-test="outputs-empty">
-        No output is marked on this patch. Mark the rack's outputs on the racks page for every new
-        patch to start with them, or add one here.
+        No output is marked on this patch. Mark the outputs on the systems page (or, for a rack on its
+        own, the racks page) for every new patch to start with them, or add one here.
       </p>
       <form class="row" @submit.prevent="add">
         <div>
@@ -128,12 +134,12 @@ async function remove(output) {
         </div>
         <div>
           <select v-model="componentId" data-test="output-jack" aria-label="Jack" :disabled="!moduleId">
-            <option value="" disabled>Jack…</option>
+            <option value="">Whole module</option>
             <option v-for="jack in jacks" :key="jack.id" :value="jack.id">{{ jack.name }}</option>
           </select>
         </div>
         <div class="shrink">
-          <button type="submit" style="margin: 0" :disabled="!moduleId || !componentId" data-test="add-output">
+          <button type="submit" style="margin: 0" :disabled="!moduleId" data-test="add-output">
             Mark as output
           </button>
         </div>

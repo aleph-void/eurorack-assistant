@@ -199,7 +199,9 @@ export function definePatchesModels(define) {
 
   // The patch's own copy of where sound leaves the system (migration 047):
   // soft references with the jack's name beside them, like a cable's ends,
-  // taken from the racks at creation and edited on the patch afterwards.
+  // taken from the racks at creation and edited on the patch afterwards. A
+  // row naming no jack (both component columns NULL, migration 048) is the
+  // whole instance: the output module, without saying which of its jacks.
   const PatchOutput = define(
     'PatchOutput',
     {
@@ -207,7 +209,7 @@ export function definePatchesModels(define) {
       patch_id: { type: DataTypes.INTEGER, allowNull: false },
       patch_module_id: { type: DataTypes.INTEGER, allowNull: false },
       component_id: { type: DataTypes.INTEGER },
-      component_name: { type: DataTypes.TEXT, allowNull: false },
+      component_name: { type: DataTypes.TEXT },
       position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     },
     { tableName: 'patch_outputs', createdAt: 'created_at', updatedAt: false }

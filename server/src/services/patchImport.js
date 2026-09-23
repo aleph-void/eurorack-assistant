@@ -237,7 +237,7 @@ export async function importPatchDocument(db, { userId, document, rack = null, n
         {
           patch_id: patch.id,
           patch_module_id: rowIds.get(o.module),
-          component_id: jackId(o.module, o.jack, o.type),
+          component_id: o.jack === null ? null : jackId(o.module, o.jack, o.type),
           component_name: o.jack,
           position: at + 1,
         },

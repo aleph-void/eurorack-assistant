@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { outputJson } from '../../services/patchDetail.js';
 import { requireOwnedPatch, resolveEndpoint } from './helpers.js';
+import { EXIT_JACK_ERROR, EXIT_JACK_TYPES } from '../../services/studioOutputs.js';
 import { asyncHandler } from '../asyncHandler.js';
 
 // Where sound leaves the system, as THIS patch keeps it. Copied from the
@@ -9,7 +10,7 @@ import { asyncHandler } from '../asyncHandler.js';
 // studio's, and gear declared inside the patch (the interface, the PA) is
 // an exit no rack knows about.
 export function patchOutputRoutes(db) {
-  const { PatchOutput } = db.models;
+  const { PatchModule, PatchOutput } = db.models;
   const router = Router();
 
   const listJson = async (patch) =>
@@ -23,29 +24,46 @@ export function patchOutputRoutes(db) {
       })
     ).map((o) => outputJson(o));
 
-  // Body: { patch_module_id, component_id } — a jack of one of the patch's
-  // instances, an analyzed module's or one declared on the gear.
+  // Body: { patch_module_id, component_id? } — one of the patch's instances,
+  // and an input or bidirectional jack of it (an analyzed module's or one
+  // declared on the gear). No
+  // jack is the instance as a whole: the output module, whichever of its
+  // jacks the sound goes in at.
   router.post('/:id/outputs', requireOwnedPatch(db), asyncHandler(async (req, res) => {
     const patch = req.patch;
-    const target = await resolveEndpoint(db, patch, req.body?.patch_module_id, req.body?.component_id);
-    if (target.error) return res.status(400).json({ error: target.error });
-    if (!target.component.type.endsWith('_jack')) {
-      return res.status(400).json({ error: 'an output has to be a jack — sound leaves through a cable' });
+    const componentId = req.body?.component_id;
+    const whole = componentId === undefined || componentId === null || componentId === '';
+    let pm;
+    let component = null;
+    if (whole) {
+      pm = await PatchModule.findOne({
+        where: { id: Number(req.body?.patch_module_id) || 0, patch_id: patch.id },
+      });
+      if (!pm) return res.status(400).json({ error: 'that module is not part of this patch' });
+    } else {
+      const target = await resolveEndpoint(db, patch, req.body?.patch_module_id, componentId);
+      if (target.error) return res.status(400).json({ error: target.error });
+      if (!EXIT_JACK_TYPES.includes(target.component.type)) {
+        return res.status(400).json({ error: EXIT_JACK_ERROR });
+      }
+      ({ pm, component } = target);
     }
     const existing = await PatchOutput.findOne({
-      where: { patch_id: patch.id, patch_module_id: target.pm.id, component_id: target.component.id },
+      where: { patch_id: patch.id, patch_module_id: pm.id, component_id: component?.id ?? null },
     });
     if (existing) {
-      return res
-        .status(409)
-        .json({ error: `'${target.component.name}' is already one of this patch's outputs` });
+      return res.status(409).json({
+        error: component
+          ? `'${component.name}' is already one of this patch's outputs`
+          : "that module is already one of this patch's outputs",
+      });
     }
     const last = await PatchOutput.max('position', { where: { patch_id: patch.id } });
     await PatchOutput.create({
       patch_id: patch.id,
-      patch_module_id: target.pm.id,
-      component_id: target.component.id,
-      component_name: target.component.name,
+      patch_module_id: pm.id,
+      component_id: component?.id ?? null,
+      component_name: component?.name ?? null,
       position: (Number(last) || 0) + 1,
     });
     res.status(201).json({ outputs: await listJson(patch) });

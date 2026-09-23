@@ -727,7 +727,7 @@ describe('generate_patch job', () => {
     await request(app)
       .post(`/api/racks/${rackId}/outputs`)
       .set('Cookie', aliceCookie)
-      .send({ module_id: fixture.out.id, component_id: fixture.audioIn.id });
+      .send({ module_id: fixture.out.id, component_ids: [fixture.audioIn.id] });
     const created = (
       await request(app)
         .post('/api/patches/generate')
@@ -781,7 +781,7 @@ describe('generate_patch job', () => {
     await request(app)
       .post(`/api/racks/${rackId}/outputs`)
       .set('Cookie', aliceCookie)
-      .send({ module_id: fixture.out.id, component_id: fixture.audioIn.id });
+      .send({ module_id: fixture.out.id, component_ids: [fixture.audioIn.id] });
     const created = (
       await request(app)
         .post('/api/patches/generate')
@@ -818,7 +818,7 @@ describe('generate_patch job', () => {
     await request(app)
       .post(`/api/racks/${rackId}/outputs`)
       .set('Cookie', aliceCookie)
-      .send({ module_id: fixture.out.id, component_id: fixture.audioIn.id });
+      .send({ module_id: fixture.out.id, component_ids: [fixture.audioIn.id] });
     const created = (
       await request(app)
         .post('/api/patches/generate')

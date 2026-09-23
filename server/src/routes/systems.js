@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
-import { findSystemByName, outputJack, rackFootprints, racksOverlap } from '../services/racks.js';
+import { findSystemByName, rackFootprints, racksOverlap } from '../services/racks.js';
+import { addOutput, outputJackIds, setOutputJacks } from '../services/studioOutputs.js';
 import { rackDetailJson, systemOutputsJson } from '../services/rackJson.js';
 import { loadPanels } from '../services/panelJson.js';
 import { enqueueJob } from '../jobs/enqueue.js';
@@ -23,7 +24,7 @@ export const MIN_FLOOR_HEIGHT = 3;
 export const MAX_FLOOR = 5000;
 
 export function systemRoutes(db) {
-  const { Job, System, Rack, RackModule, SystemOutput } = db.models;
+  const { Job, System, Rack, RackModule, SystemOutput, SystemOutputJack } = db.models;
   const router = Router();
   router.use(requireAuth(db));
 
@@ -141,18 +142,19 @@ export function systemRoutes(db) {
     });
   }));
 
-  // Where sound leaves the system: the jacks that feed the monitors, the
-  // interface, the mixer on the desk. A studio of several cases has one set
-  // of exits, so they are kept on the system rather than on each rack, and
-  // every patch of the system takes its own copy (services/patchCreate.js).
-  // One row per jack, added and removed one at a time.
+  // Where sound leaves the system: the modules that feed the monitors, the
+  // interface, the mixer on the desk, each with the jacks of it in use if the
+  // owner cares to say. A studio of several cases has one set of exits, so
+  // they are kept on the system rather than on each rack, and every patch of
+  // the system takes its own copy (services/patchCreate.js).
   router.get('/:id/outputs', requireOwnedSystem, asyncHandler(async (req, res) => {
     res.json({ outputs: await systemOutputsJson(db, req.system.id) });
   }));
 
-  // Body: { rack_id, module_id, component_id } — a jack of a module standing
-  // in one of the system's racks. The rack is part of the answer because the
-  // same module may be racked in two cases and only one is wired out.
+  // Body: { rack_id, module_id, component_ids? } — a module standing in one
+  // of the system's racks, and the jacks of it in use (none: the module as a
+  // whole). The rack is part of the answer because the same module may be
+  // racked in two cases and only one of them is wired out.
   router.post('/:id/outputs', requireOwnedSystem, asyncHandler(async (req, res) => {
     const system = req.system;
     const rack = await Rack.findOne({
@@ -162,30 +164,42 @@ export function systemRoutes(db) {
     const moduleId = Number(req.body?.module_id) || 0;
     const mapping = await RackModule.findOne({ where: { rack_id: rack.id, module_id: moduleId } });
     if (!mapping) return res.status(400).json({ error: `that module is not in ${rack.name}` });
-    const { component, error } = await outputJack(db, moduleId, req.body?.component_id);
+    const { ids, error } = await outputJackIds(db, moduleId, req.body?.component_ids);
     if (error) return res.status(400).json({ error });
-    const existing = await SystemOutput.findOne({
-      where: { system_id: system.id, rack_id: rack.id, module_id: moduleId, component_id: component.id },
-    });
-    if (existing) {
-      return res.status(409).json({ error: `'${component.name}' is already one of this system's outputs` });
+    const created = await addOutput(
+      db,
+      SystemOutput,
+      SystemOutputJack,
+      { system_id: system.id, rack_id: rack.id, module_id: moduleId },
+      { system_id: system.id },
+      ids
+    );
+    if (!created) {
+      return res.status(409).json({ error: `that module in ${rack.name} is already one of this system's outputs` });
     }
-    const last = await SystemOutput.max('position', { where: { system_id: system.id } });
-    await SystemOutput.create({
-      system_id: system.id,
-      rack_id: rack.id,
-      module_id: moduleId,
-      component_id: component.id,
-      position: (Number(last) || 0) + 1,
-    });
     res.status(201).json({ outputs: await systemOutputsJson(db, system.id) });
   }));
 
+  const ownOutput = (system, outputId) =>
+    SystemOutput.findOne({ where: { id: Number(outputId) || 0, system_id: system.id } });
+
+  // Body: { component_ids } — which of the module's jacks are in use, all of
+  // them at once; an empty list is the module as a whole.
+  router.put('/:id/outputs/:outputId', requireOwnedSystem, asyncHandler(async (req, res) => {
+    const output = await ownOutput(req.system, req.params.outputId);
+    if (!output) return res.status(404).json({ error: 'Output not found' });
+    const { ids, error } = await outputJackIds(db, output.module_id, req.body?.component_ids ?? []);
+    if (error) return res.status(400).json({ error });
+    await db.sequelize.transaction((transaction) =>
+      setOutputJacks(SystemOutputJack, output.id, ids, { transaction })
+    );
+    res.json({ outputs: await systemOutputsJson(db, req.system.id) });
+  }));
+
   router.delete('/:id/outputs/:outputId', requireOwnedSystem, asyncHandler(async (req, res) => {
-    const deleted = await SystemOutput.destroy({
-      where: { id: Number(req.params.outputId) || 0, system_id: req.system.id },
-    });
-    if (deleted === 0) return res.status(404).json({ error: 'Output not found' });
+    const output = await ownOutput(req.system, req.params.outputId);
+    if (!output) return res.status(404).json({ error: 'Output not found' });
+    await output.destroy();
     res.json({ outputs: await systemOutputsJson(db, req.system.id) });
   }));
 

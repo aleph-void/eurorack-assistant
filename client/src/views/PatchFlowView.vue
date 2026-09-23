@@ -21,9 +21,12 @@ const reachedOutputs = computed(() => {
     const base = `${pm.manufacturer || ''} ${pm.module_name || ''}`.trim();
     return pm.instance > 1 ? `${base} #${pm.instance}` : base;
   };
-  return (p.outputs || [])
-    .filter((o) => o.reached)
-    .map((o) => `${label(o.patch_module_id)} "${o.component_name}"`);
+  const named = (o) =>
+    o.component_name == null ? label(o.patch_module_id) : `${label(o.patch_module_id)} "${o.component_name}"`;
+  return {
+    reached: (p.outputs || []).filter((o) => o.reached).map(named),
+    all: (p.outputs || []).map(named),
+  };
 });
 </script>
 
@@ -33,12 +36,12 @@ const reachedOutputs = computed(() => {
     <!-- Whether the traced flow gets to where the sound is meant to come
          out: the first thing to check when a patch is silent. -->
     <p v-if="patch.outputs?.length" data-test="outputs-reached">
-      <template v-if="reachedOutputs.length">
-        Audio reaches {{ reachedOutputs.join(', ') }}.
+      <template v-if="reachedOutputs.reached.length">
+        Audio reaches {{ reachedOutputs.reached.join(', ') }}.
       </template>
       <template v-else>
         <strong>Nothing reaches an output</strong> — the patch ends before
-        {{ (patch.outputs || []).map((o) => o.component_name).join(', ') }}.
+        {{ reachedOutputs.all.join(', ') }}.
       </template>
       <RouterLink :to="`/patches/${id}/gear`" class="muted">Outputs are set on the gear page.</RouterLink>
     </p>

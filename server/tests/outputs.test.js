@@ -3,6 +3,7 @@ import request from 'supertest';
 import { createTestApp, insertModule } from './helpers.js';
 import { patchTextDocument } from '../src/services/patchDocument.js';
 import { reachedJacks } from '../src/services/patchDetail.js';
+import { sinkJacks } from '../src/services/patchGenerator.js';
 
 // Fixture: alice's rack holds an oscillator and an output module.
 async function withRack() {
@@ -17,12 +18,18 @@ async function withRack() {
      ($1, 'output_jack', 'Sine'),
      ($1, 'knob', 'Shape'),
      ($2, 'input_jack', 'Audio In'),
+     ($2, 'input_jack', 'Audio In 2'),
+     ($2, 'output_jack', 'Phones'),
+     ($2, 'bidirectional_jack', 'Link'),
      ($2, 'knob', 'Level') RETURNING *`,
     [fixture.vco.id, fixture.out.id]
   );
   fixture.sine = components.find((c) => c.name === 'Sine');
   fixture.shape = components.find((c) => c.name === 'Shape');
   fixture.audioIn = components.find((c) => c.name === 'Audio In');
+  fixture.audioIn2 = components.find((c) => c.name === 'Audio In 2');
+  fixture.phones = components.find((c) => c.name === 'Phones');
+  fixture.link = components.find((c) => c.name === 'Link');
   fixture.level = components.find((c) => c.name === 'Level');
   const { rows: racks } = await db.query('SELECT id FROM racks WHERE user_id = $1', [fixture.alice.id]);
   fixture.rackId = racks[0].id;
@@ -33,40 +40,47 @@ const post = (fixture, path, body, cookie = fixture.aliceCookie) =>
   request(fixture.app).post(path).set('Cookie', cookie).send(body);
 
 describe('rack outputs', () => {
-  it('marks the jacks sound leaves the rack at, one at a time, and lists them with the rack', async () => {
+  it('marks the modules sound leaves the rack at, with the jacks in use if any', async () => {
     const fixture = await withRack();
     const { app, aliceCookie, adminCookie, rackId } = fixture;
     const url = `/api/racks/${rackId}/outputs`;
-    // Not a jack, not this rack's module, not this module's component.
-    expect((await post(fixture, url, { module_id: fixture.out.id, component_id: fixture.level.id })).status).toBe(400);
-    expect((await post(fixture, url, { module_id: 999999, component_id: fixture.audioIn.id })).status).toBe(400);
-    expect((await post(fixture, url, { module_id: fixture.vco.id, component_id: fixture.audioIn.id })).status).toBe(400);
+    // Not this rack's module; a control, or another module's jack, as a jack.
+    expect((await post(fixture, url, { module_id: 999999 })).status).toBe(400);
+    expect((await post(fixture, url, { module_id: fixture.out.id, component_ids: [fixture.level.id] })).status).toBe(400);
+    expect((await post(fixture, url, { module_id: fixture.out.id, component_ids: [fixture.sine.id] })).status).toBe(400);
+    expect((await post(fixture, url, { module_id: fixture.out.id, component_ids: 'L' })).status).toBe(400);
+    // Nothing is patched into an output jack, so it cannot be where sound leaves.
+    const refused = await post(fixture, url, { module_id: fixture.out.id, component_ids: [fixture.phones.id] });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toMatch(/input or bidirectional/);
     // Somebody else's rack is not there.
-    expect((await post(fixture, url, { module_id: fixture.out.id, component_id: fixture.audioIn.id }, adminCookie)).status).toBe(404);
+    expect((await post(fixture, url, { module_id: fixture.out.id }, adminCookie)).status).toBe(404);
 
-    const added = await post(fixture, url, { module_id: fixture.out.id, component_id: fixture.audioIn.id });
+    // No jack at all: the module as a whole.
+    const added = await post(fixture, url, { module_id: fixture.out.id });
     expect(added.status).toBe(201);
     expect(added.body.outputs).toEqual([
-      expect.objectContaining({
-        module_id: fixture.out.id,
-        manufacturer: 'Intellijel',
-        module_name: 'Outs',
-        component_id: fixture.audioIn.id,
-        component_name: 'Audio In',
-        component_type: 'input_jack',
-      }),
+      expect.objectContaining({ module_id: fixture.out.id, manufacturer: 'Intellijel', module_name: 'Outs', jacks: [] }),
     ]);
-    // Twice is once.
-    expect((await post(fixture, url, { module_id: fixture.out.id, component_id: fixture.audioIn.id })).status).toBe(409);
+    // A module is marked once, however its jacks are named.
+    expect((await post(fixture, url, { module_id: fixture.out.id, component_ids: [fixture.audioIn.id] })).status).toBe(409);
 
-    const listed = await request(app).get(url).set('Cookie', aliceCookie);
-    expect(listed.body.outputs).toHaveLength(1);
+    // The jacks in use are set on the output afterwards, all at once.
+    const id = added.body.outputs[0].id;
+    const named = await request(app)
+      .put(`${url}/${id}`)
+      .set('Cookie', aliceCookie)
+      .send({ component_ids: [fixture.audioIn.id, fixture.audioIn2.id, fixture.link.id] });
+    expect(named.status).toBe(200);
+    expect(named.body.outputs[0].jacks.map((j) => j.component_name)).toEqual(['Audio In', 'Audio In 2', 'Link']);
+    expect((await request(app).put(`${url}/${id}`).set('Cookie', aliceCookie).send({ component_ids: [fixture.phones.id] })).status).toBe(400);
+    expect((await request(app).put(`${url}/${id}`).set('Cookie', aliceCookie).send({ component_ids: [fixture.level.id] })).status).toBe(400);
+    const cleared = await request(app).put(`${url}/${id}`).set('Cookie', aliceCookie).send({ component_ids: [] });
+    expect(cleared.body.outputs[0].jacks).toEqual([]);
+
     const detail = await request(app).get(`/api/racks/${rackId}`).set('Cookie', aliceCookie);
     expect(detail.body.outputs).toHaveLength(1);
-
-    const removed = await request(app)
-      .delete(`${url}/${added.body.outputs[0].id}`)
-      .set('Cookie', aliceCookie);
+    const removed = await request(app).delete(`${url}/${id}`).set('Cookie', aliceCookie);
     expect(removed.status).toBe(200);
     expect(removed.body.outputs).toEqual([]);
     expect((await request(app).delete(`${url}/999`).set('Cookie', aliceCookie)).status).toBe(404);
@@ -81,7 +95,7 @@ describe('system outputs', () => {
     if (markRackFirst) {
       await post(fixture, `/api/racks/${fixture.rackId}/outputs`, {
         module_id: fixture.out.id,
-        component_id: fixture.audioIn.id,
+        component_ids: [fixture.audioIn.id],
       });
     }
     fixture.system = (await post(fixture, '/api/systems', { name: 'Studio' })).body;
@@ -92,72 +106,68 @@ describe('system outputs', () => {
     return fixture;
   }
 
-  it('marks the jacks sound leaves the system at, naming the rack each stands in', async () => {
+  it('marks the modules sound leaves the system at, naming the rack each stands in', async () => {
     const fixture = await withSystem();
     const { app, aliceCookie, adminCookie, rackId } = fixture;
     const url = `/api/systems/${fixture.system.id}/outputs`;
-    const body = { rack_id: rackId, module_id: fixture.out.id, component_id: fixture.audioIn.id };
+    const body = { rack_id: rackId, module_id: fixture.out.id };
     // Not a jack, not a rack of this system, not a module of that rack.
-    expect((await post(fixture, url, { ...body, component_id: fixture.level.id })).status).toBe(400);
+    expect((await post(fixture, url, { ...body, component_ids: [fixture.level.id] })).status).toBe(400);
+    expect((await post(fixture, url, { ...body, component_ids: [fixture.phones.id] })).status).toBe(400);
     expect((await post(fixture, url, { ...body, rack_id: 999999 })).status).toBe(400);
     expect((await post(fixture, url, { ...body, module_id: 999999 })).status).toBe(400);
     // Somebody else's system is not there.
     expect((await post(fixture, url, body, adminCookie)).status).toBe(404);
 
-    const added = await post(fixture, url, body);
+    const added = await post(fixture, url, { ...body, component_ids: [fixture.audioIn.id] });
     expect(added.status).toBe(201);
     expect(added.body.outputs).toEqual([
       expect.objectContaining({
         rack_id: rackId,
         rack_name: expect.any(String),
         module_name: 'Outs',
-        component_name: 'Audio In',
-        component_type: 'input_jack',
+        jacks: [expect.objectContaining({ component_name: 'Audio In', component_type: 'input_jack' })],
       }),
     ]);
     expect((await post(fixture, url, body)).status).toBe(409);
+    const id = added.body.outputs[0].id;
+    const cleared = await request(app).put(`${url}/${id}`).set('Cookie', aliceCookie).send({ component_ids: [] });
+    expect(cleared.body.outputs[0].jacks).toEqual([]);
     const detail = await request(app).get(`/api/systems/${fixture.system.id}`).set('Cookie', aliceCookie);
     expect(detail.body.outputs).toHaveLength(1);
 
-    const removed = await request(app)
-      .delete(`${url}/${added.body.outputs[0].id}`)
-      .set('Cookie', aliceCookie);
+    const removed = await request(app).delete(`${url}/${id}`).set('Cookie', aliceCookie);
     expect(removed.body.outputs).toEqual([]);
     expect((await request(app).delete(`${url}/999`).set('Cookie', aliceCookie)).status).toBe(404);
   });
 
-  it("is what a patch of the system copies, and a rack in a system is not edited on its own", async () => {
+  it('is what a patch of the system copies, and a rack in a system is not edited on its own', async () => {
     const fixture = await withSystem();
     const { app, aliceCookie, rackId } = fixture;
     // The rack's own list is closed while it stands in the system.
-    const onRack = await post(fixture, `/api/racks/${rackId}/outputs`, {
-      module_id: fixture.out.id,
-      component_id: fixture.audioIn.id,
-    });
-    expect(onRack.status).toBe(409);
-    await post(fixture, `/api/systems/${fixture.system.id}/outputs`, {
-      rack_id: rackId,
-      module_id: fixture.out.id,
-      component_id: fixture.audioIn.id,
-    });
+    expect((await post(fixture, `/api/racks/${rackId}/outputs`, { module_id: fixture.out.id })).status).toBe(409);
+    await post(fixture, `/api/systems/${fixture.system.id}/outputs`, { rack_id: rackId, module_id: fixture.out.id });
     const patch = (await post(fixture, '/api/patches', { system_id: fixture.system.id, name: 'Room' })).body;
     const detail = (await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie)).body;
-    expect(detail.outputs.map((o) => o.component_name)).toEqual(['Audio In']);
+    // The module as a whole: one exit naming no jack.
+    expect(detail.outputs).toEqual([
+      expect.objectContaining({ component_id: null, component_name: null, live: true, reached: false }),
+    ]);
   });
 
-  it('carries a rack\'s exits in when it joins, and takes them out again when it leaves', async () => {
+  it("carries a rack's exits in when it joins, and takes them out again when it leaves", async () => {
     const fixture = await withSystem({ markRackFirst: true });
     const { app, aliceCookie, rackId } = fixture;
     const url = `/api/systems/${fixture.system.id}/outputs`;
     let listed = (await request(app).get(url).set('Cookie', aliceCookie)).body;
-    expect(listed.outputs.map((o) => o.component_name)).toEqual(['Audio In']);
+    expect(listed.outputs.map((o) => o.jacks.map((j) => j.component_name))).toEqual([['Audio In']]);
 
     await request(app).put(`/api/racks/${rackId}/system`).set('Cookie', aliceCookie).send({ system_id: null });
     listed = (await request(app).get(url).set('Cookie', aliceCookie)).body;
     expect(listed.outputs).toEqual([]);
     // Standing alone again, the rack still has the exit it was marked with.
     const rack = (await request(app).get(`/api/racks/${rackId}`).set('Cookie', aliceCookie)).body;
-    expect(rack.outputs.map((o) => o.component_name)).toEqual(['Audio In']);
+    expect(rack.outputs.map((o) => o.module_name)).toEqual(['Outs']);
   });
 });
 
@@ -165,7 +175,7 @@ describe('patch outputs', () => {
   async function markedAndPatched(fixture) {
     await post(fixture, `/api/racks/${fixture.rackId}/outputs`, {
       module_id: fixture.out.id,
-      component_id: fixture.audioIn.id,
+      component_ids: [fixture.audioIn.id],
     });
     const patch = (await post(fixture, '/api/patches', { rack_id: fixture.rackId, name: 'Krell' })).body;
     const { rows } = await fixture.db.query(
@@ -205,6 +215,7 @@ describe('patch outputs', () => {
     const { patch, vco, out } = await markedAndPatched(fixture);
     const url = `/api/patches/${patch.id}/outputs`;
     expect((await post(fixture, url, { patch_module_id: out, component_id: fixture.level.id })).status).toBe(400);
+    expect((await post(fixture, url, { patch_module_id: out, component_id: fixture.phones.id })).status).toBe(400);
     expect((await post(fixture, url, { patch_module_id: out, component_id: fixture.audioIn.id })).status).toBe(409);
     // Gear declared inside the patch — the interface — is an exit too.
     const gear = (
@@ -258,6 +269,55 @@ describe('patch outputs', () => {
   });
 });
 
+describe('an output that is a whole module', () => {
+  it('is reached by any signal into the module, and survives a file round trip with no jack', async () => {
+    const fixture = await withRack();
+    const { app, aliceCookie } = fixture;
+    await post(fixture, `/api/racks/${fixture.rackId}/outputs`, { module_id: fixture.out.id });
+    const patch = (await post(fixture, '/api/patches', { rack_id: fixture.rackId, name: 'Whole' })).body;
+    const { rows } = await fixture.db.query('SELECT id, module_id FROM patch_modules WHERE patch_id = $1', [patch.id]);
+    const at = new Map(rows.map((r) => [r.module_id, r.id]));
+    const out = at.get(fixture.out.id);
+    // Named on the patch too: once, with no jack.
+    expect((await post(fixture, `/api/patches/${patch.id}/outputs`, { patch_module_id: out })).status).toBe(409);
+
+    await post(fixture, `/api/patches/${patch.id}/cables`, {
+      from_patch_module_id: at.get(fixture.vco.id),
+      from_component_id: fixture.sine.id,
+      to_patch_module_id: out,
+      to_component_id: fixture.audioIn2.id,
+    });
+    const detail = (await request(app).get(`/api/patches/${patch.id}`).set('Cookie', aliceCookie)).body;
+    expect(detail.outputs).toEqual([expect.objectContaining({ patch_module_id: out, component_id: null, reached: true, live: true })]);
+    expect(patchTextDocument(detail)).toContain('- Intellijel Outs (the module as a whole) — signal reaches it');
+
+    const exported = (await request(app).get(`/api/patches/${patch.id}/export`).set('Cookie', aliceCookie)).body;
+    expect(exported.patch.outputs).toEqual([{ module: expect.any(Number) }]);
+    exported.patch.name = 'Whole again';
+    const imported = (await post(fixture, '/api/patches/import', { document: exported, rack_id: fixture.rackId })).body;
+    const back = (await request(app).get(`/api/patches/${imported.id}`).set('Cookie', aliceCookie)).body;
+    expect(back.outputs).toEqual([expect.objectContaining({ component_id: null, component_name: null })]);
+  });
+
+  it('is built towards at every input it has', () => {
+    const patch = {
+      modules: [
+        {
+          id: 5,
+          components: [
+            { id: 1, type: 'input_jack', name: 'L' },
+            { id: 2, type: 'input_jack', name: 'R' },
+            { id: 3, type: 'output_jack', name: 'Phones' },
+            { id: 4, type: 'input_jack', name: 'Expander', port_kind: 'ribbon' },
+          ],
+        },
+      ],
+      outputs: [{ patch_module_id: 5, component_id: null, component_name: null, live: true }],
+    };
+    expect(sinkJacks(patch).map((s) => s.component_name)).toEqual(['L', 'R']);
+  });
+});
+
 describe('reachedJacks', () => {
   it('collects every instance and jack a flow tree passes through', () => {
     const flow = [
@@ -270,7 +330,7 @@ describe('reachedJacks', () => {
         ],
       },
     ];
-    expect([...reachedJacks(flow)].sort()).toEqual(['1:10', '2:20', '3:30']);
+    expect([...reachedJacks(flow)].sort()).toEqual(['1:*', '1:10', '2:*', '2:20', '3:*', '3:30']);
     expect(reachedJacks(null).size).toBe(0);
   });
 });

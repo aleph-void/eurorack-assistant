@@ -69,74 +69,59 @@ export async function layoutJson(db, rack, mappings, panels = new Map()) {
   }));
 }
 
-// One rack, whole: the record, its module inventory and its rows. Used by the
-// rack detail route and by the system view, which draws every rack it holds.
-// Where sound leaves the rack: each marked jack with the module it is on,
-// in the order they were marked. A row whose component has since been
-// re-analyzed away is gone with it (the foreign keys cascade), so every
-// row here is a jack that exists.
-export async function rackOutputsJson(db, rackId) {
-  const { RackOutput, Module, ModuleComponent } = db.models;
-  const rows = await RackOutput.findAll({
-    where: { rack_id: rackId },
+// Where sound leaves a rack or a system: each marked MODULE, in the order
+// they were marked, with the jacks of it that are in use — none at all is
+// the module as a whole. A system's rows also name the rack the module stands
+// in. A module or jack re-analyzed away is gone with it (the foreign keys
+// cascade), so everything here exists.
+async function outputsJson(db, Output, Jack, where) {
+  const { Rack, Module, ModuleComponent } = db.models;
+  const rows = await Output.findAll({
+    where,
     include: [
+      ...(Output.rawAttributes.system_id ? [{ model: Rack, attributes: ['id', 'name'] }] : []),
       { model: Module, attributes: ['id', 'manufacturer', 'name'] },
-      { model: ModuleComponent, attributes: ['id', 'name', 'type', 'port_kind'] },
+      {
+        model: Jack,
+        include: [{ model: ModuleComponent, attributes: ['id', 'name', 'type', 'port_kind'] }],
+      },
     ],
     order: [
       ['position', 'ASC'],
       ['id', 'ASC'],
     ],
   });
+  const jacksOf = (r) => r[`${Jack.name}s`] ?? [];
   return rows
-    .filter((r) => r.Module && r.ModuleComponent)
-    .map((r) => ({
-      id: r.id,
-      module_id: r.module_id,
-      manufacturer: r.Module.manufacturer,
-      module_name: r.Module.name,
-      component_id: r.component_id,
-      component_name: r.ModuleComponent.name,
-      component_type: r.ModuleComponent.type,
-      port_kind: r.ModuleComponent.port_kind ?? null,
-      position: r.position,
-    }));
-}
-
-// Where sound leaves a system (migration 048): the same shape as a rack's,
-// with the case each marked module stands in, since a system may hold the
-// same module in two of them.
-export async function systemOutputsJson(db, systemId) {
-  const { SystemOutput, Rack, Module, ModuleComponent } = db.models;
-  const rows = await SystemOutput.findAll({
-    where: { system_id: systemId },
-    include: [
-      { model: Rack, attributes: ['id', 'name'] },
-      { model: Module, attributes: ['id', 'manufacturer', 'name'] },
-      { model: ModuleComponent, attributes: ['id', 'name', 'type', 'port_kind'] },
-    ],
-    order: [
-      ['position', 'ASC'],
-      ['id', 'ASC'],
-    ],
-  });
-  return rows
-    .filter((r) => r.Rack && r.Module && r.ModuleComponent)
+    .filter((r) => r.Module)
     .map((r) => ({
       id: r.id,
       rack_id: r.rack_id,
-      rack_name: r.Rack.name,
+      ...(r.Rack ? { rack_name: r.Rack.name } : {}),
       module_id: r.module_id,
       manufacturer: r.Module.manufacturer,
       module_name: r.Module.name,
-      component_id: r.component_id,
-      component_name: r.ModuleComponent.name,
-      component_type: r.ModuleComponent.type,
-      port_kind: r.ModuleComponent.port_kind ?? null,
       position: r.position,
+      jacks: jacksOf(r)
+        .filter((j) => j.ModuleComponent)
+        .sort((a, b) => a.position - b.position || a.id - b.id)
+        .map((j) => ({
+          component_id: j.component_id,
+          component_name: j.ModuleComponent.name,
+          component_type: j.ModuleComponent.type,
+          port_kind: j.ModuleComponent.port_kind ?? null,
+        })),
     }));
 }
 
+export const rackOutputsJson = (db, rackId) =>
+  outputsJson(db, db.models.RackOutput, db.models.RackOutputJack, { rack_id: rackId });
+
+export const systemOutputsJson = (db, systemId) =>
+  outputsJson(db, db.models.SystemOutput, db.models.SystemOutputJack, { system_id: systemId });
+
+// One rack, whole: the record, its module inventory and its rows. Used by the
+// rack detail route and by the system view, which draws every rack it holds.
 export async function rackDetailJson(db, rack, { panels = null } = {}) {
   const { RackModule, Module } = db.models;
   const mappings = await RackModule.findAll({

@@ -2,12 +2,8 @@
 // joining a system, deleting, and taking one away as a zip.
 
 import { Router } from 'express';
-import {
-  carryRackOutputs,
-  findRackByName,
-  freePlacement,
-  rackFootprints,
-} from '../../services/racks.js';
+import { findRackByName, freePlacement, rackFootprints } from '../../services/racks.js';
+import { carryRackOutputs } from '../../services/studioOutputs.js';
 import { rackDetailJson, rackJson } from '../../services/rackJson.js';
 import { readableResource, removeShares } from '../../services/sharing.js';
 import { enqueueJob } from '../../jobs/worker.js';

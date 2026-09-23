@@ -22,7 +22,9 @@ export function associate(m) {
     RackModule,
     RackRow,
     RackOutput,
+    RackOutputJack,
     SystemOutput,
+    SystemOutputJack,
     RackRowModule,
     ModuleComponent,
     ComponentNormalization,
@@ -103,12 +105,16 @@ export function associate(m) {
   Rack.hasMany(RackOutput, { foreignKey: 'rack_id' });
   RackOutput.belongsTo(Rack, { foreignKey: 'rack_id' });
   RackOutput.belongsTo(Module, { foreignKey: 'module_id' });
-  RackOutput.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
+  RackOutput.hasMany(RackOutputJack, { foreignKey: 'output_id' });
+  RackOutputJack.belongsTo(RackOutput, { foreignKey: 'output_id' });
+  RackOutputJack.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
   System.hasMany(SystemOutput, { foreignKey: 'system_id' });
   SystemOutput.belongsTo(System, { foreignKey: 'system_id' });
   SystemOutput.belongsTo(Rack, { foreignKey: 'rack_id' });
   SystemOutput.belongsTo(Module, { foreignKey: 'module_id' });
-  SystemOutput.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
+  SystemOutput.hasMany(SystemOutputJack, { foreignKey: 'output_id' });
+  SystemOutputJack.belongsTo(SystemOutput, { foreignKey: 'output_id' });
+  SystemOutputJack.belongsTo(ModuleComponent, { foreignKey: 'component_id' });
   RackRow.hasMany(RackRowModule, { foreignKey: 'row_id' });
   RackRowModule.belongsTo(RackRow, { foreignKey: 'row_id' });
   Module.hasMany(RackRowModule, { foreignKey: 'module_id' });

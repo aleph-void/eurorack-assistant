@@ -98,7 +98,9 @@ export function patchTextDocument(patch) {
     lines.push('', '## Where sound leaves the system');
     for (const o of outputs) {
       lines.push(
-        `- ${name(o.patch_module_id)} "${o.component_name}" — ` +
+        `- ${name(o.patch_module_id)}` +
+          (o.component_name == null ? ' (the module as a whole)' : ` "${o.component_name}"`) +
+          ' — ' +
           (o.reached ? 'signal reaches it' : 'NOTHING reaches it in this patch')
       );
     }

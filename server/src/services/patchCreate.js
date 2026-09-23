@@ -5,6 +5,7 @@
 
 import { inFloorOrder, snapshotRackLayout } from './patchLayout.js';
 import { materializeBridges } from './moduleBridges.js';
+import { loadOutputs } from './studioOutputs.js';
 
 // Which racks a request wants a patch of, from a body naming either a
 // system (every rack in it at once) or a single rack. Answers
@@ -75,7 +76,9 @@ export async function snapshotPatch(
     PatchModuleLink,
     PatchOutput,
     RackOutput,
+    RackOutputJack,
     SystemOutput,
+    SystemOutputJack,
     ModuleComponent,
   } = db.models;
   const rackById = new Map(racks.map((rack) => [rack.id, rack]));
@@ -109,20 +112,14 @@ export async function snapshotPatch(
   // rack's own for a patch of a lone rack — to be copied onto every instance
   // of the marked module in the rack it was marked in: two output modules
   // are two exits.
-  const outputOrder = [
-    ['position', 'ASC'],
-    ['id', 'ASC'],
-  ];
   const outputRows = system
-    ? await SystemOutput.findAll({ where: { system_id: system.id }, order: outputOrder })
-    : await RackOutput.findAll({ where: { rack_id: racks[0].id }, order: outputOrder });
+    ? await loadOutputs(SystemOutput, SystemOutputJack, { system_id: system.id })
+    : await loadOutputs(RackOutput, RackOutputJack, { rack_id: racks[0].id });
+  const outputJackIds = [...new Set(outputRows.flatMap((o) => o.component_ids))];
   const outputComponents =
-    outputRows.length === 0
+    outputJackIds.length === 0
       ? []
-      : await ModuleComponent.findAll({
-          where: { id: [...new Set(outputRows.map((o) => o.component_id))] },
-          attributes: ['id', 'name'],
-        });
+      : await ModuleComponent.findAll({ where: { id: outputJackIds }, attributes: ['id', 'name'] });
   const outputName = new Map(outputComponents.map((c) => [c.id, c.name]));
   let patch;
   await db.sequelize.transaction(async (transaction) => {
@@ -171,17 +168,22 @@ export async function snapshotPatch(
       }
     }
     if (linkRows.length > 0) await PatchModuleLink.bulkCreate(linkRows, { transaction });
+    // An output naming no jack is the whole instance (both component
+    // columns NULL); one naming jacks is a row per jack.
     const exitRows = [];
     for (const o of outputRows) {
-      if (!outputName.has(o.component_id)) continue;
+      const jacks = o.component_ids.filter((id) => outputName.has(id));
       for (const pm of created.filter((c) => c.module_id === o.module_id && c.rack_id === o.rack_id)) {
-        exitRows.push({
-          patch_id: patch.id,
-          patch_module_id: pm.id,
-          component_id: o.component_id,
-          component_name: outputName.get(o.component_id),
-          position: exitRows.length + 1,
-        });
+        const ends = jacks.length > 0 ? jacks : o.component_ids.length === 0 ? [null] : [];
+        for (const componentId of ends) {
+          exitRows.push({
+            patch_id: patch.id,
+            patch_module_id: pm.id,
+            component_id: componentId,
+            component_name: componentId === null ? null : outputName.get(componentId),
+            position: exitRows.length + 1,
+          });
+        }
       }
     }
     if (exitRows.length > 0) await PatchOutput.bulkCreate(exitRows, { transaction });

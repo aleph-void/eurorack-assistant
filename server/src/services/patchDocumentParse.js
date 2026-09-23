@@ -182,15 +182,17 @@ export function parsePatchDocument(input) {
   });
 
   // Where sound leaves the system. A file from before outputs existed has
-  // none, which is simply a patch with no exits marked.
+  // none, which is simply a patch with no exits marked; an output with no
+  // jack is the module as a whole.
   const outputs = list(body.outputs ?? [], 'outputs', LIMITS.outputs).map((o, at) => {
     if (!isObject(o)) fail('every output must be an object');
     const module = integer(o.module, -1);
     if (!seenRefs.has(module)) fail(`output ${at + 1} names a module that is not in the file`);
+    const jack = text(o.jack, `output ${at + 1} jack name`, { required: false });
     return {
       module,
-      jack: text(o.jack, `output ${at + 1} jack name`),
-      type: componentType(o.type, `output ${at + 1} jack type`, { jack: true }),
+      jack,
+      type: jack === null ? null : componentType(o.type, `output ${at + 1} jack type`, { jack: true }),
     };
   });
 
