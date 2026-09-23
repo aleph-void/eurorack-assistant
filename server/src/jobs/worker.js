@@ -424,7 +424,9 @@ export function createWorker(db, options = {}) {
       // offer, so the attempt is given up on and the runner freed. Whatever it
       // was waiting for is left to finish and be ignored.
       const limitMs = attemptTimeoutMs(jobTimeoutMs, job.attempts);
-      await withTimeout(
+      // A handler may answer with one line saying what it did — the toast
+      // that announces the finished job says that instead of 'Finished.'
+      const outcome = await withTimeout(
         handler(job, backend, progress),
         limitMs,
         `job exceeded its ${Math.round(limitMs / 60000)} minute time limit`
@@ -438,7 +440,7 @@ export function createWorker(db, options = {}) {
       );
       if (!doneRows || !doneRows[0]) return abandoned(job, owners, 'completed');
       const done = { ...doneRows[0].get({ plain: true }), ...labels };
-      publish(owners, 'completed', done);
+      publish(owners, 'completed', done, typeof outcome === 'string' ? outcome : undefined);
       // A job can spend the last of the subscription and still finish — the
       // manual search falls back to archive.org when the model will not run —
       // so the wall is acted on on the way out of a success too.

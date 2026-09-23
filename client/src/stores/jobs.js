@@ -240,6 +240,9 @@ export const useJobsStore = defineStore('jobs', {
         at: event.at,
         jobId: event.job.id,
         type: event.job.type,
+        // The patch a job is about, so a patch page can pick its own lines
+        // out of the feed — the model's last move in collaboration mode.
+        patchId: event.job.patch_id ?? null,
         event: event.event,
         message: event.message || event.event,
       });

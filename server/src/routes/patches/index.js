@@ -23,6 +23,7 @@ import { patchLinkRoutes } from './links.js';
 import { patchCableRoutes } from './cables.js';
 import { patchSettingRoutes } from './settings.js';
 import { patchOutputRoutes } from './outputs.js';
+import { patchCollaborationRoutes } from './collaboration.js';
 
 // /api/patches, one router per sub-resource. A request falls through the
 // sub-routers in order until one matches; every route sits behind the same
@@ -38,5 +39,6 @@ export function patchRoutes(db) {
   router.use(patchCableRoutes(db));
   router.use(patchSettingRoutes(db));
   router.use(patchOutputRoutes(db));
+  router.use(patchCollaborationRoutes(db));
   return router;
 }

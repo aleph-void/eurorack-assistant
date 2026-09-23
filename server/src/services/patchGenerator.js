@@ -101,20 +101,22 @@ export function readMaxCables(raw) {
   return { value: n };
 }
 
-const clip = (text, max) => {
+// Shared with services/patchTurn.js, which asks the same model for one cable
+// at a time over the same inventory and judges the answer the same way.
+export const clip = (text, max) => {
   const s = String(text ?? '')
     .replace(/\s+/g, ' ')
     .trim();
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 };
 
-const instanceLabel = (pm) => {
+export const instanceLabel = (pm) => {
   const base = `${pm.manufacturer ?? ''} ${pm.module_name ?? ''}`.trim() || 'unnamed module';
   const numbered = pm.instance > 1 ? `${base} #${pm.instance}` : base;
   return pm.label ? `${numbered} (${pm.label})` : numbered;
 };
 
-const JACK_TYPES = new Set(['input_jack', 'output_jack', 'bidirectional_jack']);
+export const JACK_TYPES = new Set(['input_jack', 'output_jack', 'bidirectional_jack']);
 
 const jackRole = (component) => {
   if (component.type === 'output_jack') return 'output';
@@ -339,7 +341,7 @@ function isPatchable(component) {
   return !['ribbon', 'usb', 'memory_card'].includes(component.port_kind ?? '');
 }
 
-const CABLE_RULES = `Rules — a cable that breaks one is thrown away, so respect them:
+export const CABLE_RULES = `Rules — a cable that breaks one is thrown away, so respect them:
 - A cable runs FROM an output jack (or a mult jack) TO an input jack (or a mult jack). Never output to output, never input to input.
 - Each input takes at most ONE cable. An output may feed several inputs.
 - Only join jacks of the same kind of connection: a MIDI or USB socket and a 3.5 mm patch point never share a cable, and a jack that is "gear outside the rack" is patched like any other.
@@ -547,11 +549,17 @@ export function parseGeneratedPatch(text, { maxCables = MAX_GENERATED_CABLES } =
   };
 }
 
-// Which of the user's patches a generate_patch job is still working on.
+// The jobs that have the model plugging cables into a patch: the generator
+// itself, and a turn taken in collaboration mode (services/patchTurn.js).
+// One of either per patch at a time — two hands in the same case would each
+// plug into inputs the other had just taken.
+export const MODEL_PATCH_JOB_TYPES = ['generate_patch', 'patch_turn'];
+
+// Which of the user's patches the model is still working on, in either job.
 // The payload is TEXT, so the few live rows are read in JS.
 export async function generatingPatchIds(db, userId) {
   const live = await db.models.Job.findAll({
-    where: { type: 'generate_patch', user_id: userId, status: ['pending', 'running'] },
+    where: { type: MODEL_PATCH_JOB_TYPES, user_id: userId, status: ['pending', 'running'] },
     attributes: ['payload'],
   });
   const ids = new Set();
@@ -628,7 +636,7 @@ async function resolveSetting(db, patch, setting, jacksByPatchModule) {
 
 // The patch as the model needs to see it: the loadPatchDetail json with the
 // module summaries and the normalled connections beside it.
-async function readPatch(db, patch, focus = null) {
+export async function readPatch(db, patch, focus = null) {
   const { Module, ModuleComponent, ComponentNormalization } = db.models;
   const { json, topology, liveIds } = await loadPatchDetail(db, patch, {
     includeRackLayout: false,
@@ -666,7 +674,7 @@ async function readPatch(db, patch, focus = null) {
 // Every cable of one round through the rules a hand-plugged one meets, in
 // the order the model ranked them, against the patch as it will be once the
 // ones before it are in. Answers what to write and what was refused.
-async function judgeCables(db, patch, proposed, rows, maxCables, log, allowed = null) {
+export async function judgeCables(db, patch, proposed, rows, maxCables, log, allowed = null) {
   const kept = [];
   const refused = [];
   for (const p of proposed) {
@@ -723,7 +731,7 @@ async function judgeCables(db, patch, proposed, rows, maxCables, log, allowed = 
 
 // The settings of one answer, checked and written (a value already recorded
 // is replaced). Answers how many were written.
-async function writeSettings(db, patch, proposed, jacksByPatchModule, log, transaction, allowed = null) {
+export async function writeSettings(db, patch, proposed, jacksByPatchModule, log, transaction, allowed = null) {
   const { PatchSetting } = db.models;
   let written = 0;
   for (const p of proposed) {

@@ -1,10 +1,18 @@
 import { Router } from 'express';
 import { cableJson } from '../../services/patchDetail.js';
+import { generatingPatchIds } from '../../services/patchGenerator.js';
+import { enqueuePatchTurn } from '../../services/patchTurn.js';
 import { cableProblem, pairedJack, requireOwnedPatch, resolveEndpoint } from './helpers.js';
 import { asyncHandler } from '../asyncHandler.js';
 
 // Cables. The legality rules (mult groups, one-cable inputs, port kinds,
 // switch and bridge exemptions) live in helpers.js cableProblem().
+//
+// Plugging one is also the user's MOVE when the patch is in collaboration
+// mode (services/patchTurn.js): the model answers it with a cable of its
+// own, queued here as a patch_turn job, and the answer says so (`turn`, and
+// `generating` for whether the model is now at work on the patch) so the
+// page can wait for it without reading the patch back.
 export function patchCableRoutes(db) {
   const {
     PatchCable,
@@ -82,7 +90,14 @@ export function patchCableRoutes(db) {
       cable = await PatchCable.create(row({ from, to }), { transaction });
       if (second) paired = await PatchCable.create(row(second), { transaction });
     });
-    res.status(201).json({ ...cableJson(cable), paired_cable: paired ? cableJson(paired) : null });
+    const turn = await enqueuePatchTurn(db, patch, { cableId: cable.id });
+    const generating = turn ? true : (await generatingPatchIds(db, req.user.id)).has(patch.id);
+    res.status(201).json({
+      ...cableJson(cable),
+      paired_cable: paired ? cableJson(paired) : null,
+      turn: turn ? { job_id: turn.id } : null,
+      generating,
+    });
   }));
 
   // Annotate a cable: why it is there, whether it is provisional, whether it

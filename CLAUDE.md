@@ -473,6 +473,36 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   payload carries the resolved `patch_module_ids` and the flag; under `only`
   the inventory offers nothing else but the OUTPUT instances (below), and a
   cable or setting on any other instance is refused like an illegal cable.
+- COLLABORATION MODE IS THE SAME MODEL AT THE OTHER PACE: one cable each.
+  Switched on for a patch (`PUT /api/patches/:id/collaboration`, body
+  `{ enabled, prompt? }` — the brief, 2000 chars at most, kept across a
+  switch-off), and recorded ON THE PATCH ROW (`patches.collaborating` /
+  `collaboration_prompt`, migration 050, served as `collaboration`) because a
+  cable plugged on the picture, on the cable list or by voice is a move
+  whichever page it came from. While it is on, `POST /api/patches/:id/cables`
+  queues a `patch_turn` job (`services/patchTurn.js`, one of the
+  `LLM_JOB_TYPES`) naming the cable it answers, and says so in its answer
+  (`turn`, and `generating` for whether the model is now at work) so the
+  diagram page can fold that into the payload and re-read itself when the
+  turn lands, as it does for the generator. A turn is the generator's
+  machinery over a budget of ONE — the same inventory, the same
+  `judgeCables()` over the same `cableProblem()` — asked for a few cables in
+  order of preference with the first legal one plugged, plus the setting or
+  two that cable needs to be heard, and nothing else touched: no settings
+  review, no rewritten description. A round whose every cable was refused
+  earns one more with the refusals in front of it; a turn that still finds no
+  legal cable fails for good rather than retrying, since the patch is what has
+  no move. The user's move is answered once: a cable plugged while a turn is
+  PENDING joins the patch that turn will read, one plugged while a turn is
+  RUNNING (which read the patch before it landed) queues another, and while a
+  `generate_patch` job is live nothing is queued at all — the two job types
+  share `generatingPatchIds()`, so one of either per patch. A handler's return
+  value, when it is a string, is the message of the job's `completed` event,
+  which is the toast: a turn's says what it plugged and why. The bar is
+  `patchdetail/CollaborateBar.vue` on the diagram page, which also shows the
+  model's last move on this patch read off the jobs store's feed (entries
+  carry `patchId` for that), and the header badge reads "the model's turn"
+  instead of "generating" while the mode is on.
 - WHERE SOUND LEAVES THE SYSTEM is a fact about the studio, not the module
   (module records are shared; the same Outs feeds a monitor in one room and
   sits spare in another). AN OUTPUT IS A MODULE: the Outs, the mixer, the
