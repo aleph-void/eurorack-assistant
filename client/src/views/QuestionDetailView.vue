@@ -628,6 +628,19 @@ onUnmounted(() => clearTimeout(pollTimer));
           <h2>Modules in scope</h2>
         </summary>
         <div class="panel-body">
+          <p v-if="question.systems?.length || question.racks?.length" class="muted" data-test="asked-about">
+            Asked about
+            <template v-for="(s, i) in question.systems ?? []" :key="`system-${s.id}`">
+              <template v-if="i > 0">, </template>
+              the system <RouterLink to="/systems">{{ s.name }}</RouterLink>
+            </template>
+            <template v-if="question.systems?.length && question.racks?.length">, </template>
+            <template v-for="(r, i) in question.racks ?? []" :key="`rack-${r.id}`">
+              <template v-if="i > 0">, </template>
+              the rack <RouterLink to="/racks">{{ r.name }}</RouterLink>
+            </template>
+            — every module in it went into the scope.
+          </p>
           <p>
             <template v-for="(m, i) in question.modules" :key="m.id">
               <RouterLink :to="`/modules/${m.id}`">{{ m.manufacturer }} {{ m.name }}</RouterLink>

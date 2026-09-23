@@ -507,3 +507,136 @@ describe('confirming the review', () => {
     expect(jobs).toEqual([{ question_id: fixture.question.id }]);
   });
 });
+
+// A rack, or a system, is the level above a module: asking about one puts
+// EVERY module of it in scope as the question is created — the same module
+// links a module question writes — with the rack or system recorded beside
+// them, and skips the scoping pass the way a module question does.
+describe('asking about a rack or a system', () => {
+  async function withTwoRacks() {
+    const fixture = await withModules();
+    fixture.plaits = await insertModule(fixture.db, fixture.alice.id, {
+      manufacturer: 'Mutable',
+      name: 'Plaits',
+    });
+    fixture.pluck = await insertModule(fixture.db, fixture.alice.id, {
+      manufacturer: '2hp',
+      name: 'Pluck',
+      rack: 'travel case',
+    });
+    const racks = (
+      await request(fixture.app).get('/api/racks').set('Cookie', fixture.aliceCookie)
+    ).body;
+    fixture.mainRack = racks.find((r) => r.name !== 'travel case');
+    fixture.travelRack = racks.find((r) => r.name === 'travel case');
+    return fixture;
+  }
+
+  it('puts every module of the rack in scope and lists the question under the rack', async () => {
+    const fixture = await withTwoRacks();
+    const { app, db, aliceCookie } = fixture;
+
+    const res = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({ prompt: 'What is this case missing?', rack_id: fixture.mainRack.id });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('scoped');
+
+    const { rows: links } = await db.query(
+      'SELECT module_id FROM question_modules WHERE question_id = $1 ORDER BY module_id',
+      [res.body.id]
+    );
+    expect(links.map((l) => l.module_id)).toEqual(
+      [fixture.module.id, fixture.plaits.id].sort((a, b) => a - b)
+    );
+    const { rows: jobs } = await db.query(
+      "SELECT id FROM jobs WHERE type = 'scope_question' AND question_id = $1",
+      [res.body.id]
+    );
+    expect(jobs).toHaveLength(0);
+
+    // Listed under the rack it was asked about, and under neither module's
+    // own page's query it is not — a rack question is the rack's.
+    const byRack = await request(app)
+      .get(`/api/questions?rack_id=${fixture.mainRack.id}`)
+      .set('Cookie', aliceCookie);
+    expect(byRack.body.map((q) => q.id)).toEqual([res.body.id]);
+    const byOther = await request(app)
+      .get(`/api/questions?rack_id=${fixture.travelRack.id}`)
+      .set('Cookie', aliceCookie);
+    expect(byOther.body).toEqual([]);
+
+    const detail = await request(app).get(`/api/questions/${res.body.id}`).set('Cookie', aliceCookie);
+    expect(detail.body.racks).toEqual([{ id: fixture.mainRack.id, name: fixture.mainRack.name }]);
+    expect(detail.body.modules.map((m) => m.name).sort()).toEqual(['Maths', 'Plaits']);
+  });
+
+  it('puts every module of every rack in the system in scope', async () => {
+    const fixture = await withTwoRacks();
+    const { app, db, aliceCookie } = fixture;
+    const system = (
+      await request(app).post('/api/systems').set('Cookie', aliceCookie).send({ name: 'studio' })
+    ).body;
+    for (const rack of [fixture.mainRack, fixture.travelRack]) {
+      await request(app)
+        .put(`/api/racks/${rack.id}/system`)
+        .set('Cookie', aliceCookie)
+        .send({ system_id: system.id });
+    }
+
+    const res = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({ prompt: 'How would I patch a generative piece on this?', system_ids: [system.id] });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('scoped');
+    const { rows: links } = await db.query(
+      'SELECT module_id FROM question_modules WHERE question_id = $1',
+      [res.body.id]
+    );
+    expect(links.map((l) => l.module_id).sort((a, b) => a - b)).toEqual(
+      [fixture.module.id, fixture.plaits.id, fixture.pluck.id].sort((a, b) => a - b)
+    );
+
+    const bySystem = await request(app)
+      .get(`/api/questions?system_id=${system.id}`)
+      .set('Cookie', aliceCookie);
+    expect(bySystem.body.map((q) => q.id)).toEqual([res.body.id]);
+    const detail = await request(app).get(`/api/questions/${res.body.id}`).set('Cookie', aliceCookie);
+    expect(detail.body.systems).toEqual([{ id: system.id, name: 'studio' }]);
+  });
+
+  it('refuses a rack or a system that is not yours, and an empty one', async () => {
+    const fixture = await withTwoRacks();
+    const { app, db, aliceCookie } = fixture;
+
+    const foreignRack = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({ prompt: 'Why?', rack_ids: [fixture.mainRack.id, 999999] });
+    expect(foreignRack.status).toBe(400);
+    expect(foreignRack.body.error).toMatch(/rack_ids must be your racks/);
+
+    const foreignSystem = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({ prompt: 'Why?', system_id: 999999 });
+    expect(foreignSystem.status).toBe(400);
+    expect(foreignSystem.body.error).toMatch(/system_ids must be your systems/);
+
+    const empty = (
+      await request(app).post('/api/racks').set('Cookie', aliceCookie).send({ name: 'empty' })
+    ).body;
+    const nothing = await request(app)
+      .post('/api/questions')
+      .set('Cookie', aliceCookie)
+      .send({ prompt: 'Why?', rack_id: empty.id });
+    expect(nothing.status).toBe(400);
+    expect(nothing.body.error).toMatch(/no modules/);
+    const { rows } = await db.query('SELECT id FROM questions WHERE user_id = $1', [
+      fixture.alice.id,
+    ]);
+    expect(rows).toHaveLength(0);
+  });
+});

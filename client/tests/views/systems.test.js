@@ -93,6 +93,35 @@ describe('SystemsView', () => {
     });
   });
 
+  // Asking about a system is the whole instrument at once: every module of
+  // every rack in it is the scope, and the panel opens from the row.
+  it('opens a system s questions from its row and asks with the system in scope', async () => {
+    api.get.mockImplementation((path) =>
+      Promise.resolve(path === '/api/systems' ? systemsResponse : [])
+    );
+    api.post.mockResolvedValue({ id: 9 });
+    const wrapper = mount(SystemsView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="system-questions"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="questions-1"]').trigger('click');
+    await flushPromises();
+    const panel = wrapper.find('[data-test="system-questions"]');
+    expect(panel.text()).toContain('studio');
+    expect(api.get).toHaveBeenCalledWith('/api/questions?system_id=1');
+
+    await panel.find('[data-test="ask-prompt"]').setValue('How would I patch a generative piece?');
+    await panel.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/questions', {
+      prompt: 'How would I patch a generative piece?',
+      system_ids: [1],
+    });
+
+    await wrapper.find('[data-test="questions-1"]').trigger('click');
+    expect(wrapper.find('[data-test="system-questions"]').exists()).toBe(false);
+  });
+
   // A system has no page of its own either: its links open from its row.
   it('opens a system s links from its row and closes them again', async () => {
     api.get.mockImplementation((path) =>

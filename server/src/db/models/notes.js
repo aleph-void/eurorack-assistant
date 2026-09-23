@@ -138,5 +138,43 @@ export function defineNotesModels(define) {
     { tableName: 'question_patches', timestamps: false }
   );
 
-  return { Note, NoteModule, NoteComponent, NotePatch, Question, QuestionModule, QuestionComponent, QuestionManual, QuestionAnswer, QuestionNote, QuestionCapture, QuestionAudio, QuestionPatch };
+  // A rack, or a system, a question was asked about (migration 051): every
+  // module of it went into the question's module scope as it was created,
+  // and the row is what lists the question on that rack's or system's own
+  // questions panel.
+  const QuestionRack = define(
+    'QuestionRack',
+    {
+      question_id: { type: DataTypes.INTEGER, primaryKey: true },
+      rack_id: { type: DataTypes.INTEGER, primaryKey: true },
+    },
+    { tableName: 'question_racks', timestamps: false }
+  );
+
+  const QuestionSystem = define(
+    'QuestionSystem',
+    {
+      question_id: { type: DataTypes.INTEGER, primaryKey: true },
+      system_id: { type: DataTypes.INTEGER, primaryKey: true },
+    },
+    { tableName: 'question_systems', timestamps: false }
+  );
+
+  return {
+    Note,
+    NoteModule,
+    NoteComponent,
+    NotePatch,
+    Question,
+    QuestionModule,
+    QuestionComponent,
+    QuestionManual,
+    QuestionAnswer,
+    QuestionNote,
+    QuestionCapture,
+    QuestionAudio,
+    QuestionPatch,
+    QuestionRack,
+    QuestionSystem,
+  };
 }

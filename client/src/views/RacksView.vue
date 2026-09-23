@@ -5,6 +5,7 @@ import { dialog } from '../dialog.js';
 import ComponentLegend from '../components/ComponentLegend.vue';
 import ShareButton from '../components/ShareButton.vue';
 import ResourceLinks from '../components/ResourceLinks.vue';
+import QuestionsPanel from '../components/QuestionsPanel.vue';
 import OutputsEditor from '../components/racks/OutputsEditor.vue';
 import { panelCropStyle } from '../panelLayout.js';
 import { usePanelChips } from '../components/racks/usePanelChips.js';
@@ -35,6 +36,12 @@ const outputsRack = computed(() => racks.value.find((r) => r.id === outputsRackI
 const systemNameOf = (rack) =>
   !rack.system_id ? '' : systems.value.find((s) => s.id === rack.system_id)?.name ?? 'a system';
 const linksRack = computed(() => racks.value.find((r) => r.id === linksRackId.value) ?? null);
+// Which rack's questions are open: asked from here, every module of the rack
+// is the question's scope.
+const questionsRackId = ref(null);
+const questionsRack = computed(
+  () => racks.value.find((r) => r.id === questionsRackId.value) ?? null
+);
 const layoutBusy = ref(false);
 const dragged = ref(null);
 // A layout failure is shown INSIDE the organizer: `error` is drawn at the top
@@ -496,6 +503,16 @@ async function nudge(rowIndex, index, delta) {
                 >
                   {{ outputsRackId === rack.id ? 'Close outputs' : 'Outputs' }}
                 </button>
+                <button
+                  class="secondary"
+                  style="margin: 0"
+                  :disabled="rack.module_count === 0"
+                  title="Ask the assistant about this rack, with every module in it in scope"
+                  :data-test="`questions-${rack.id}`"
+                  @click="questionsRackId = questionsRackId === rack.id ? null : rack.id"
+                >
+                  {{ questionsRackId === rack.id ? 'Close questions' : 'Questions' }}
+                </button>
               </div>
             </td>
             <td class="actions-cell">
@@ -544,6 +561,11 @@ async function nudge(rowIndex, index, delta) {
     <section v-if="linksRack" class="rack-links" data-test="rack-links">
       <h2>{{ linksRack.name }}</h2>
       <ResourceLinks kind="rack" :record-id="linksRack.id" />
+    </section>
+
+    <section v-if="questionsRack" class="rack-links" data-test="rack-questions">
+      <h2>Ask about {{ questionsRack.name }}</h2>
+      <QuestionsPanel kind="rack" :record-id="String(questionsRack.id)" />
     </section>
 
     <section v-if="outputsRack" class="rack-links" data-test="rack-outputs">
