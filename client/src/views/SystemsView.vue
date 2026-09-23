@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import { panelCropStyle, panelThumbUrl } from '../panelLayout.js';
@@ -9,6 +10,7 @@ import ResourceLinks from '../components/ResourceLinks.vue';
 // lists them, assigns racks in and out, and arranges the racks of one system
 // on a floor plan so the picture matches the studio.
 
+const router = useRouter();
 const systems = ref([]);
 const error = ref('');
 const notice = ref('');
@@ -92,6 +94,13 @@ async function remove(system) {
   } catch (e) {
     error.value = e.message;
   }
+}
+
+// A patch of the whole system, wired up by the model: the form lives on the
+// patches page (where every patch is made), and this opens it with the
+// system already picked.
+function generatePatch(system) {
+  router.push({ path: '/patches', query: { generate: `system:${system.id}` } });
 }
 
 // Cut the blank backdrop off every panel in the system, in one go. The same
@@ -536,6 +545,19 @@ async function assign(rackId, systemId) {
                   @click="trimPanels(system)"
                 >
                   Trim All Panels
+                </button>
+                <button
+                  class="secondary"
+                  :disabled="system.module_count === 0"
+                  :title="
+                    system.module_count === 0
+                      ? 'This system has no modules to patch'
+                      : 'Have the model build a patch of this system, within a cable budget you set'
+                  "
+                  :data-test="`generate-patch-${system.id}`"
+                  @click="generatePatch(system)"
+                >
+                  Generate Patch
                 </button>
                 <button class="danger" :data-test="`delete-${system.id}`" @click="remove(system)">
                   Delete

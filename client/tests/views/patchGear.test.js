@@ -29,6 +29,41 @@ beforeEach(() => {
 });
 
 describe('PatchGearView', () => {
+  it('lists where sound leaves, whether the flow gets there, and edits the list', async () => {
+    const withOutputs = {
+      ...richPatch,
+      outputs: [
+        { id: 51, patch_module_id: 11, component_id: 1, component_name: 'OUT', position: 1, live: true, reached: true },
+        { id: 52, patch_module_id: 12, component_id: 90, component_name: 'MIDI OUT', position: 2, live: true, reached: false },
+      ],
+    };
+    api.get.mockResolvedValue(withOutputs);
+    api.post.mockResolvedValue({ outputs: [] });
+    api.delete.mockResolvedValue({ outputs: [] });
+    const wrapper = mount(PatchGearView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+
+    expect(wrapper.find('[data-test="outputs-count"]').text()).toContain('2 outputs, 1 reached');
+    expect(wrapper.find('[data-test="output-reached-51"]').text()).toBe('reaches it');
+    expect(wrapper.find('[data-test="output-reached-52"]').text()).toBe('nothing reaches it');
+    expect(wrapper.find('[data-test="output-51"]').text()).toContain('OUT');
+
+    // Adding one: an instance, then one of its jacks.
+    await wrapper.find('[data-test="output-module"]').setValue('13');
+    await wrapper.find('[data-test="output-jack"]').setValue('7');
+    await wrapper.find('[data-test="add-output"]').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/outputs', { patch_module_id: 13, component_id: 7 });
+    // The page re-reads the patch after the write (the other read on mount
+    // is the module list the gear form offers).
+    expect(api.get.mock.calls.filter(([path]) => path === '/api/patches/7')).toHaveLength(2);
+
+    await wrapper.find('[data-test="remove-output-52"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/patches/7/outputs/52');
+  });
+
   it('shows bridged links and the connection points of off-rack gear', async () => {
     api.get.mockResolvedValue(richPatch);
     const wrapper = mount(PatchGearView, { props: { id: '7' }, global: testGlobal() });

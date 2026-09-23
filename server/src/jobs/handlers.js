@@ -12,6 +12,7 @@
 //   handlers/videos.js    — download_video, analyze_video
 //   handlers/questions.js — scope_question, answer_question
 //   handlers/exports.js   — export_rack
+//   handlers/patches.js   — generate_patch
 //
 // The queue mechanics (claiming, leases, retries, pauses) live in worker.js.
 
@@ -24,6 +25,7 @@ import { createPanelsHandlers } from './handlers/panels.js';
 import { createVideosHandlers } from './handlers/videos.js';
 import { createQuestionsHandlers } from './handlers/questions.js';
 import { createExportsHandlers } from './handlers/exports.js';
+import { createPatchesHandlers } from './handlers/patches.js';
 
 export function createHandlers(
   db,
@@ -46,5 +48,6 @@ export function createHandlers(
     ...createVideosHandlers(db, { videosDir, downloadVideoImpl, analyzeVideoImpl }),
     ...createQuestionsHandlers(db, { manualsDir, capturesDir }),
     ...createExportsHandlers(db, { manualsDir, exportsDir }),
+    ...createPatchesHandlers(db),
   };
 }

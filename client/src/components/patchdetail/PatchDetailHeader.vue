@@ -102,6 +102,16 @@ async function duplicatePatch() {
          at odd heights beside it. -->
     <h1 v-else class="actions">
       {{ patch.name }}
+      <!-- The model is still wiring this one up (a generate_patch job); the
+           page re-reads itself when it lands. -->
+      <span
+        v-if="patch.generating"
+        class="badge running"
+        data-test="generating"
+        title="The model is still building this patch — the cables and settings arrive when its job finishes (progress is on the Jobs page)"
+      >
+        generating
+      </span>
       <button
         style="font-size: 0.8rem"
         data-test="rename"

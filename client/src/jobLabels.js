@@ -9,13 +9,14 @@ export function jobTypeLabel(type) {
   return text ? text[0].toUpperCase() + text.slice(1) : 'Job';
 }
 
-// What the job is about: the module, question, rack or system it names. A job
-// carries whichever of those applies to its type.
+// What the job is about: the module, question, rack, system or patch it
+// names. A job carries whichever of those applies to its type.
 export function describeJob(job) {
   if (job?.module_name) return `${job.module_manufacturer || ''} ${job.module_name}`.trim();
   if (job?.question_prompt) return job.question_prompt;
   if (job?.rack_name) return job.rack_name;
   if (job?.system_name) return job.system_name;
+  if (job?.patch_name) return job.patch_name;
   return '';
 }
 

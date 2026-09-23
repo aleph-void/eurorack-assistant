@@ -71,6 +71,38 @@ export async function layoutJson(db, rack, mappings, panels = new Map()) {
 
 // One rack, whole: the record, its module inventory and its rows. Used by the
 // rack detail route and by the system view, which draws every rack it holds.
+// Where sound leaves the rack: each marked jack with the module it is on,
+// in the order they were marked. A row whose component has since been
+// re-analyzed away is gone with it (the foreign keys cascade), so every
+// row here is a jack that exists.
+export async function rackOutputsJson(db, rackId) {
+  const { RackOutput, Module, ModuleComponent } = db.models;
+  const rows = await RackOutput.findAll({
+    where: { rack_id: rackId },
+    include: [
+      { model: Module, attributes: ['id', 'manufacturer', 'name'] },
+      { model: ModuleComponent, attributes: ['id', 'name', 'type', 'port_kind'] },
+    ],
+    order: [
+      ['position', 'ASC'],
+      ['id', 'ASC'],
+    ],
+  });
+  return rows
+    .filter((r) => r.Module && r.ModuleComponent)
+    .map((r) => ({
+      id: r.id,
+      module_id: r.module_id,
+      manufacturer: r.Module.manufacturer,
+      module_name: r.Module.name,
+      component_id: r.component_id,
+      component_name: r.ModuleComponent.name,
+      component_type: r.ModuleComponent.type,
+      port_kind: r.ModuleComponent.port_kind ?? null,
+      position: r.position,
+    }));
+}
+
 export async function rackDetailJson(db, rack, { panels = null } = {}) {
   const { RackModule, Module } = db.models;
   const mappings = await RackModule.findAll({
@@ -101,5 +133,7 @@ export async function rackDetailJson(db, rack, { panels = null } = {}) {
         quantity: rm.quantity,
       })),
     rows,
+    // Where sound leaves this rack (migration 047).
+    outputs: await rackOutputsJson(db, rack.id),
   };
 }

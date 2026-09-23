@@ -1,8 +1,13 @@
 <script setup>
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
+import { useJobsStore } from '../stores/jobs.js';
 import ShareButton from '../components/ShareButton.vue';
+
+const route = useRoute();
+const jobs = useJobsStore();
 
 const patches = ref([]);
 // The list is one PAGE of the library, newest first: patches pile up for as
@@ -24,6 +29,54 @@ const newName = ref('');
 // single rack or from every rack of a system at once.
 const newSource = ref('');
 const newDescription = ref('');
+
+// ---- having the model build one ----
+// The same source picker as a new patch, plus how many cables the user is
+// willing to plug and, optionally, what the patch should be. The server
+// makes the patch empty straight away and a generate_patch job wires it up;
+// the row says 'generating' until that lands.
+const DEFAULT_MAX_CABLES = 12;
+const genName = ref('');
+const genSource = ref('');
+const genMaxCables = ref(DEFAULT_MAX_CABLES);
+const genBrief = ref('');
+const generating = ref(false);
+const genNotice = ref('');
+// The modules to use, as module ids of the chosen rack or system — either
+// ones that must take part, or with `genOnly` the only ones allowed. The
+// module list is read the first time the picker is opened, not on every
+// visit to the page.
+const genModuleIds = ref([]);
+const genOnly = ref(false);
+const allModules = ref(null);
+const modulesLoading = ref(false);
+async function openModulePicker(event) {
+  if (!event.target.open || allModules.value !== null || modulesLoading.value) return;
+  modulesLoading.value = true;
+  try {
+    const list = await api.get('/api/modules', { quiet: true });
+    allModules.value = Array.isArray(list) ? list : [];
+  } catch {
+    allModules.value = [];
+  } finally {
+    modulesLoading.value = false;
+  }
+}
+// The modules of whichever rack or system the generator is pointed at.
+const sourceModules = computed(() => {
+  if (!allModules.value) return [];
+  const [kind, id] = String(genSource.value).split(':');
+  const rackIds = new Set(
+    kind === 'system'
+      ? racks.value.filter((r) => String(r.system_id) === id).map((r) => r.id)
+      : [Number(id)]
+  );
+  return allModules.value.filter((m) => (m.racks || []).some((r) => rackIds.has(r.id)));
+});
+// A different source is a different set of modules: nothing chosen carries over.
+watch(genSource, () => {
+  genModuleIds.value = [];
+});
 
 // One page of the list as the server sends it.
 function applyPage(page, { append = false } = {}) {
@@ -51,6 +104,19 @@ async function load() {
       const rack = racks.value.find((r) => r.module_count > 0);
       if (system) newSource.value = `system:${system.id}`;
       else if (rack) newSource.value = `rack:${rack.id}`;
+    }
+    // The generator's picker follows the same default — unless the page was
+    // opened from a system's own 'Generate Patch' button, which names it.
+    if (!genSource.value) {
+      const asked = String(route.query?.generate || '');
+      const [kind, id] = asked.split(':');
+      const named =
+        kind === 'system'
+          ? systems.value.find((s) => String(s.id) === id)
+          : kind === 'rack'
+            ? racks.value.find((r) => String(r.id) === id)
+            : null;
+      genSource.value = named ? asked : newSource.value;
     }
   } catch (e) {
     error.value = e.message;
@@ -94,6 +160,44 @@ async function create() {
     error.value = e.message;
   }
 }
+
+async function generate() {
+  error.value = '';
+  genNotice.value = '';
+  const [kind, id] = String(genSource.value).split(':');
+  generating.value = true;
+  try {
+    const made = await api.post('/api/patches/generate', {
+      ...(kind === 'system' ? { system_id: Number(id) } : { rack_id: Number(id) }),
+      name: genName.value,
+      max_cables: Number(genMaxCables.value) || DEFAULT_MAX_CABLES,
+      prompt: genBrief.value.trim() || undefined,
+      ...(genModuleIds.value.length
+        ? { module_ids: genModuleIds.value.slice(), only_modules: genOnly.value }
+        : {}),
+    });
+    genNotice.value =
+      `Building '${made.name}' — the model is wiring it up in the background ` +
+      '(progress is on the Jobs page); the cables appear here when it finishes.';
+    genName.value = '';
+    genBrief.value = '';
+    genModuleIds.value = [];
+    await load();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    generating.value = false;
+  }
+}
+
+// A patch being generated fills in when its job ends, so the list re-reads
+// itself then — and only while one of its rows is waiting on a job.
+watch(
+  () => jobs.finished,
+  () => {
+    if (patches.value.some((p) => p.generating)) load();
+  }
+);
 
 // ---- reading a patch back in from a file ----
 // A patch exported here or on somebody else's install. Modules are matched by
@@ -197,6 +301,14 @@ onMounted(load);
           <tr v-for="patch in patches" :key="patch.id" :data-test="`patch-${patch.id}`">
             <td data-label="Name">
               <RouterLink :to="`/patches/${patch.id}`">{{ patch.name }}</RouterLink>
+              <span
+                v-if="patch.generating"
+                class="badge running"
+                :data-test="`generating-${patch.id}`"
+                title="The model is still building this patch"
+              >
+                generating
+              </span>
               <span v-if="patch.description" class="muted"> — {{ patch.description }}</span>
             </td>
             <td data-label="Rack or system">
@@ -299,6 +411,106 @@ onMounted(load);
       </div>
     </form>
 
+    <form data-test="generate-form" @submit.prevent="generate">
+      <label for="generate-patch-name">Or have the model build one</label>
+      <p class="muted" style="margin-top: 0">
+        Name the patch, pick the rack or system, say how many cables you are willing to plug and —
+        if you like — what the patch should be. The model reads every module in it and wires up a
+        patch within that budget; every cable it proposes goes through the same rules as one you
+        plug by hand, so what lands is always a patch the case can actually hold.
+      </p>
+      <p v-if="genNotice" class="success" data-test="generate-notice">{{ genNotice }}</p>
+      <div class="row">
+        <input
+          id="generate-patch-name"
+          v-model="genName"
+          data-test="generate-name"
+          placeholder="e.g. Evening drone"
+        />
+        <div>
+          <select
+            id="generate-patch-rack"
+            v-model="genSource"
+            data-test="generate-rack"
+            aria-label="Rack or system to generate a patch of"
+          >
+            <option value="" disabled>Select a rack or system…</option>
+            <optgroup v-if="systems.length" label="Systems (every rack in them)">
+              <option v-for="system in systems" :key="`s${system.id}`" :value="`system:${system.id}`">
+                {{ system.name }} ({{ system.rack_count }} racks, {{ system.module_count }} modules)
+              </option>
+            </optgroup>
+            <optgroup label="Racks">
+              <option v-for="rack in racks" :key="`r${rack.id}`" :value="`rack:${rack.id}`">
+                {{ rack.name }} ({{ rack.module_count }} modules)
+              </option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="shrink">
+          <label for="generate-max-cables" class="inline-label">Max cables</label>
+          <input
+            id="generate-max-cables"
+            v-model="genMaxCables"
+            type="number"
+            min="1"
+            max="200"
+            step="1"
+            data-test="generate-max-cables"
+            class="max-cables"
+          />
+        </div>
+      </div>
+      <details class="module-picker" data-test="generate-modules" @toggle="openModulePicker">
+        <summary>
+          Choose modules
+          <span v-if="genModuleIds.length" class="muted" data-test="generate-modules-count">
+            — {{ genModuleIds.length }} chosen{{ genOnly ? ', and only those' : '' }}
+          </span>
+          <span v-else class="muted">(optional — the whole case otherwise)</span>
+        </summary>
+        <p v-if="modulesLoading" class="muted">Loading modules…</p>
+        <template v-else-if="allModules">
+          <p v-if="sourceModules.length === 0" class="muted">No modules in the chosen rack or system.</p>
+          <div v-else class="module-choices">
+            <label v-for="module in sourceModules" :key="module.id" class="module-choice">
+              <input
+                v-model="genModuleIds"
+                type="checkbox"
+                :value="module.id"
+                :data-test="`generate-module-${module.id}`"
+              />
+              {{ module.manufacturer }} {{ module.name }}
+            </label>
+          </div>
+          <label class="module-choice only-choice">
+            <input v-model="genOnly" type="checkbox" data-test="generate-only" :disabled="!genModuleIds.length" />
+            Use only these modules (the outputs stay available, so the patch can still be heard)
+          </label>
+        </template>
+      </details>
+      <div class="row">
+        <textarea
+          v-model="genBrief"
+          data-test="generate-brief"
+          rows="2"
+          maxlength="2000"
+          placeholder="What should it be? (optional) — e.g. a slow evolving drone; a techno kick with an acid line; use the delay and the LFOs"
+          style="flex: 3"
+        ></textarea>
+        <div class="shrink">
+          <button
+            type="submit"
+            style="margin: 0"
+            :disabled="!genName.trim() || !genSource || generating || Number(genMaxCables) < 1"
+            data-test="generate"
+          >
+            {{ generating ? 'Queueing…' : 'Generate' }}
+          </button>
+        </div>
+      </div>
+    </form>
+
     <label for="import-patch">Or import a patch file</label>
     <p class="muted" style="margin-top: 0">
       A <code>.patch.json</code> file exported from here or from somebody else's install. Modules
@@ -329,6 +541,44 @@ onMounted(load);
 .export-link {
   font-size: 0.85rem;
   margin-right: 0.4rem;
+}
+
+/* The module picker: a fold of checkboxes, several to a line. */
+.module-picker {
+  margin: 0.25rem 0 0.75rem;
+}
+
+.module-picker summary {
+  cursor: pointer;
+}
+
+.module-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.module-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: normal;
+}
+
+.only-choice {
+  margin-top: 0.25rem;
+}
+
+/* The cable budget is a small number beside its label, not a text field the
+   width of a name. */
+.inline-label {
+  display: inline-block;
+  margin: 0 0.4rem 0 0;
+}
+
+.max-cables {
+  width: 5.5rem;
 }
 
 /* The count and the button that fetches the next page sit on one line under

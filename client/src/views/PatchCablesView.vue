@@ -5,6 +5,7 @@ import { onMounted, ref, toRef } from 'vue';
 import { api } from '../api.js';
 import PatchDetailHeader from '../components/patchdetail/PatchDetailHeader.vue';
 import CablesSection from '../components/patchdetail/CablesSection.vue';
+import GenerateMoreSection from '../components/patchdetail/GenerateMoreSection.vue';
 import { usePatchRecord } from '../components/patchdetail/usePatchRecord.js';
 
 const props = defineProps({ id: { type: String, required: true } });
@@ -39,4 +40,5 @@ async function reload() {
     :suggestions="suggestions"
     @reload="reload"
   />
+  <GenerateMoreSection v-if="patch" :patch="patch" :patch-id="id" @reload="load" />
 </template>

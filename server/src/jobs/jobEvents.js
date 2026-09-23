@@ -54,18 +54,23 @@ export function createJobEvents(db, { bus = null, log = () => {} } = {}) {
       question_prompt = null,
     } = job;
     // export_rack jobs carry their target rack and, once complete, the
-    // download link in the payload; trim_panels carries the system it sweeps.
+    // download link in the payload; trim_panels carries the system it sweeps;
+    // generate_patch carries the patch it is wiring up.
     let rack_name = null;
     let system_name = null;
+    let patch_id = null;
+    let patch_name = null;
     let download = null;
     if (job.payload) {
       try {
         const payload = JSON.parse(job.payload);
         rack_name = payload.rack_name ?? null;
         system_name = payload.system_name ?? null;
+        patch_id = payload.patch_id ?? null;
+        patch_name = payload.patch_name ?? null;
         download = payload.download ?? null;
       } catch {
-        // payload is not JSON (never the case for export or trim jobs)
+        // payload is not JSON (never the case for export, trim or patch jobs)
       }
     }
     return {
@@ -81,6 +86,8 @@ export function createJobEvents(db, { bus = null, log = () => {} } = {}) {
       question_prompt,
       rack_name,
       system_name,
+      patch_id,
+      patch_name,
       download,
     };
   }

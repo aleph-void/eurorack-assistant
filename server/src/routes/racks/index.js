@@ -12,6 +12,7 @@ import { rackCoreRoutes } from './core.js';
 import { rackLayoutRoutes } from './layout.js';
 import { rackVideoRoutes } from './videos.js';
 import { rackModuleRoutes } from './modules.js';
+import { rackOutputRoutes } from './outputs.js';
 
 export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
   const router = Router();
@@ -19,6 +20,7 @@ export function rackRoutes(db, { fetchImpl, runImpl } = {}) {
   router.use(rackLayoutRoutes(db));
   router.use(rackVideoRoutes(db, { fetchImpl, runImpl }));
   router.use(rackModuleRoutes(db));
+  router.use(rackOutputRoutes(db));
   router.use(rackCoreRoutes(db));
   return router;
 }

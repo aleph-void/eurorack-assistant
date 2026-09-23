@@ -79,6 +79,74 @@ describe('RacksView', () => {
     expect(wrapper.find('[data-test="rack-links"]').exists()).toBe(false);
   });
 
+  it('marks the jacks sound leaves a rack at, from the rack row', async () => {
+    api.get.mockImplementation((path) => {
+      if (path === '/api/systems') return Promise.resolve(systemsResponse);
+      if (path === '/api/racks') return Promise.resolve(racksResponse);
+      if (path === '/api/racks/1') {
+        return Promise.resolve({
+          id: 1,
+          name: 'main rack',
+          modules: [
+            { id: 3, manufacturer: 'Intellijel', name: 'Outs' },
+            { id: 4, manufacturer: 'Make Noise', name: 'Maths' },
+          ],
+          rows: [],
+          outputs: [
+            { id: 9, module_id: 3, manufacturer: 'Intellijel', module_name: 'Outs', component_id: 31, component_name: 'L', component_type: 'input_jack' },
+          ],
+        });
+      }
+      if (path === '/api/modules/3') {
+        return Promise.resolve({
+          id: 3,
+          components: [
+            { id: 31, type: 'input_jack', name: 'L' },
+            { id: 32, type: 'input_jack', name: 'R' },
+            { id: 33, type: 'knob', name: 'Level' },
+            { id: 34, type: 'input_jack', name: 'Expander', port_kind: 'ribbon' },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+    api.post.mockResolvedValue({
+      outputs: [
+        { id: 9, module_id: 3, manufacturer: 'Intellijel', module_name: 'Outs', component_id: 31, component_name: 'L', component_type: 'input_jack' },
+        { id: 10, module_id: 3, manufacturer: 'Intellijel', module_name: 'Outs', component_id: 32, component_name: 'R', component_type: 'input_jack' },
+      ],
+    });
+    api.delete.mockResolvedValue({ outputs: [] });
+    const wrapper = mount(RacksView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="rack-outputs"]').exists()).toBe(false);
+    // An empty rack has nothing to mark.
+    expect(wrapper.find('[data-test="outputs-2"]').attributes('disabled')).toBeUndefined();
+
+    await wrapper.find('[data-test="outputs-1"]').trigger('click');
+    await flushPromises();
+    const panel = wrapper.find('[data-test="rack-outputs"]');
+    expect(panel.text()).toContain('Where sound leaves main rack');
+    expect(panel.find('[data-test="rack-output-9"]').text()).toContain('Intellijel Outs — L');
+
+    // Picking a module reads its jacks — and only the ones a cable reaches.
+    await panel.find('[data-test="rack-output-module"]').setValue('3');
+    await flushPromises();
+    expect(api.get).toHaveBeenCalledWith('/api/modules/3', { quiet: true });
+    const jackOptions = panel.find('[data-test="rack-output-jack"]').findAll('option').map((o) => o.text());
+    expect(jackOptions).toEqual(['Jack…', 'L (input)', 'R (input)']);
+    await panel.find('[data-test="rack-output-jack"]').setValue('32');
+    await panel.find('[data-test="add-rack-output"]').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/racks/1/outputs', { module_id: 3, component_id: 32 });
+    expect(wrapper.find('[data-test="rack-output-10"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="remove-rack-output-9"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/racks/1/outputs/9');
+    expect(wrapper.find('[data-test="rack-outputs-empty"]').exists()).toBe(true);
+  });
+
   it('renders placed modules as panel images inside an organized rack row', async () => {
     api.get.mockImplementation((path) => {
       if (path === '/api/racks') return Promise.resolve(racksResponse);

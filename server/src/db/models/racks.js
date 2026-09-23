@@ -77,5 +77,21 @@ export function defineRacksModels(define) {
     { tableName: 'rack_row_modules', createdAt: 'created_at', updatedAt: false }
   );
 
-  return { System, Rack, RackModule, RackRow, RackRowModule };
+  // A jack of one of the rack's modules that sound leaves the system at —
+  // the input of an output module, a mixer's main out — recorded on the rack
+  // because whether a jack feeds the speakers is a fact about the studio,
+  // not the module (migration 047).
+  const RackOutput = define(
+    'RackOutput',
+    {
+      id,
+      rack_id: { type: DataTypes.INTEGER, allowNull: false },
+      module_id: { type: DataTypes.INTEGER, allowNull: false },
+      component_id: { type: DataTypes.INTEGER, allowNull: false },
+      position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { tableName: 'rack_outputs', createdAt: 'created_at', updatedAt: false }
+  );
+
+  return { System, Rack, RackModule, RackRow, RackRowModule, RackOutput };
 }

@@ -12,7 +12,10 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   - `routes/modules/` — core, detail, components, signals (normalizations /
     routes / switches / pairs), expanders, panel, manuals + shared `helpers.js`
   - `routes/patches/` — core, io (import/export), instances, groups, links,
-    cables, settings + shared `helpers.js` (incl. the cable-legality rules)
+    cables, settings + shared `helpers.js` (incl. the cable-legality rules).
+    Making a patch out of a rack or a system — the snapshot every patch
+    starts as — is `services/patchCreate.js`, because `POST /api/patches`
+    and `POST /api/patches/generate` both begin there
   - `routes/questions/` — core (the list, one question, asking, deleting) and
     review (what may be attached to a scoped question, and confirming it) +
     shared `helpers.js`
@@ -67,7 +70,8 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   retries), with `jobEvents.js` (who hears about a job, and in what shape) and
   `jobPauses.js` (the three reasons work stops: the whole queue, one account,
   one user's budget) beside it; `handlers/` holds the per-job-type logic, one
-  file per stage of the pipeline (manuals, panels, videos, questions, exports)
+  file per stage of the pipeline (manuals, panels, videos, questions, exports,
+  patches)
   composed by `handlers.js`; `enqueue.js` the queueing helpers. `worker.js`
   re-exports the handlers and the queueing helpers, so callers have one import
   point.
@@ -426,6 +430,71 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   (`lock: transaction.LOCK.UPDATE`) first, `rack_rows` has a unique
   `(rack_id, position)` (migration 032), and the organizer keeps only one save
   in the air — a save asked for while one is running is made when it lands.
+- A GENERATED PATCH IS A PATCH THE MODEL PLUGGED, NOT A PATCH THE MODEL
+  INVENTED. `POST /api/patches/generate` takes what `POST /api/patches`
+  takes plus `max_cables` (1..200, 12 by default) and an optional `prompt`
+  (the brief, 2000 chars at most), makes the patch EMPTY at once — so a taken
+  name is a 409 now, and the row is on the list marked `generating` while
+  the work runs — and queues a `generate_patch` job (`handlers/patches.js` →
+  `services/patchGenerator.js`, one of the `LLM_JOB_TYPES`).
+  `POST /api/patches/:id/generate` queues the SAME job over a patch that
+  exists (one live job per patch, 409 otherwise): `max_cables` is then the
+  total the patch may hold, cables already there count, and a patch already
+  at it gets only the settings review below. The model gets an INVENTORY
+  (`patchInventoryDocument()`: every instance with its jacks, controls and
+  menu settings by id, the cables and settings already there, the normalled
+  connections) and answers with cables and settings naming those ids.
+  NOTHING IT SAYS IS TRUSTED: every cable is resolved onto the patch and put
+  through the same `cableProblem()` a hand-plugged cable meets, in the order
+  the model ranked them, and the first `max_cables` legal ones are written —
+  the rest are counted as refused in the job's progress; a setting has to
+  name a control of the instance (never a jack) and, where positions are
+  recorded, one of them. A PATCH IS NOT MADE IN ONE ANSWER: the job is
+  ROUNDS (`MAX_CABLE_ROUNDS`), each written as it lands. A round after the
+  first (`REFINE_TEMPLATE`) shows the model what was kept — by cable id, so
+  it may `unplug` a cable IT plugged in this job, never the user's — what was
+  refused and why, and the budget left, and only follows a round that had
+  refusals with budget to spend; a model that used its allowance, chose
+  fewer, or answers `done` is finished. A SETTINGS REVIEW always follows
+  (`SETTINGS_TEMPLATE`): the patch as it now stands, traced — the same
+  `patchTextDocument()` a question reads — beside the inventory, and the
+  model goes through every module the patch uses dialing in what it depends
+  on, because a patch is more than its connections. The model's account of
+  the patch becomes its description when the user gave none, and each
+  cable's note is the model's reason for it. `generating` is not a column:
+  it is whether a live `generate_patch` job of the owner's names the patch
+  (`generatingPatchIds()`), read by the list and the record; the patches
+  page and every patch page re-read themselves on `jobs.finished` only while
+  a row says so. `patchdetail/GenerateMoreSection.vue` (on `/cables` and
+  `/settings`) is where a patch is taken further. Both generate routes also
+  take the MODULES TO USE — `module_ids` (module records; every instance of
+  each) and, on a patch that exists, `patch_module_ids` (instances) — with
+  `only_modules` saying whether those are the only ones allowed. The job
+  payload carries the resolved `patch_module_ids` and the flag; under `only`
+  the inventory offers nothing else but the OUTPUT instances (below), and a
+  cable or setting on any other instance is refused like an illegal cable.
+- WHERE SOUND LEAVES THE SYSTEM is a fact about the studio, not the module
+  (module records are shared; the same Outs feeds a monitor in one room and
+  sits spare in another), so it is recorded on the RACK — `rack_outputs`,
+  migration 047, one row per jack, added and removed one at a time on the
+  racks page (`components/racks/RackOutputs.vue`, `/api/racks/:id/outputs`)
+  — and a patch takes its OWN COPY at creation (`patch_outputs`, written by
+  `snapshotPatch()` onto every instance of the marked module in that rack),
+  soft references with the jack's name beside them like a cable's ends,
+  cloned, exported and imported by name, and edited on the patch's gear page
+  (`patchdetail/OutputsSection.vue`, `/api/patches/:id/outputs`), where gear
+  declared inside the patch can be an exit too. The payload serves them as
+  `outputs`, each with `live` (the jack still exists) and `reached` — whether
+  the traced flow arrives at it (`reachedJacks()` over `flow` in
+  `services/patchDetail.js`). The flow page says so, the cables page's
+  loose-ends list leaves an output holder out, and `patchTextDocument()`
+  tells the model where the sound was meant to come out. The generator
+  (`sinkJacks()`) builds towards the live ones — or, when none is marked,
+  the input jacks of the gear declared inside the patch, flagged as assumed
+  — names them in every prompt, and after the cable rounds checks the traced
+  flow against them: a patch reaching none gets ONE more round about exactly
+  that (`REFINE_TEMPLATE`'s `unreached`), budget allowing, and the job's
+  progress says whether audio reaches an output either way.
 - A patch NAME is one per account (unique `(user_id, name)`, migration 035;
   the rule and its helpers are `services/patchNames.js`). Only live patches
   count — a patch is really deleted, so its name comes free with it — and it

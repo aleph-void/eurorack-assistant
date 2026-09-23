@@ -244,6 +244,33 @@ describe('PatchCablesView', () => {
     expect(wrapper.find('[data-test="loose-end-11"]').exists()).toBe(false);
   });
 
+  it('does not call a marked output a loose end', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path === '/api/patches/7/suggestions') return { suggestions: [] };
+      return {
+        ...patchResponse,
+        outputs: [{ id: 51, patch_module_id: 11, component_id: 1, component_name: 'Signal In', live: true, reached: true }],
+        cables: [
+          {
+            id: 26,
+            from_patch_module_id: 13,
+            from_component_id: 5,
+            from_component_name: 'M1',
+            to_patch_module_id: 11,
+            to_component_id: 1,
+            to_component_name: 'Signal In',
+          },
+        ],
+      };
+    });
+    const wrapper = mount(PatchCablesView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    await openPanels(wrapper);
+    // Signal reaches Maths and nothing leaves it — but that is where the
+    // patch is supposed to end.
+    expect(wrapper.find('[data-test="loose-end-11"]').exists()).toBe(false);
+  });
+
   it('marks a module that receives signal but sends none as a loose end', async () => {
     api.get.mockImplementation(async (path) => {
       if (path === '/api/patches/7/suggestions') return { suggestions: [] };

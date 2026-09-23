@@ -254,6 +254,39 @@ of `find_manuals.py`, `process_manuals.py`, and `ask.py`.
   by name and the import says which, rather than dropping it. Buses, labels,
   off-rack gear with its declared connection points, and expander/bridge links
   all survive the round trip.
+- **Generated patches**: name a rack or a whole system, say how many cables
+  you are willing to plug and — optionally — what the patch should be ("a
+  slow evolving drone", "techno kick and acid line"), and a `generate_patch`
+  job has the model wire one up. It reads every module in the snapshot (its
+  jacks, controls, menu settings and normalled connections) and answers with
+  cables; every cable it proposes then goes through the same legality rules
+  as one you plug by hand, in the order the model ranked them, and the first
+  ones within the budget are kept. A patch is not made in one answer: when a
+  cable is refused the model is shown what landed, what was refused and why,
+  and how much budget is left, and goes another round (re-routing, or taking
+  back a cable it plugged) until the patch is complete. A patch is also more
+  than its connections, so the job ends with a settings review over the
+  patch as it stands, traced — the model goes through every module the patch
+  uses and dials in the controls and menu settings it depends on (a VCA that
+  must be open, a clock division, a waveform, a modulation depth). Each cable
+  carries the model's note on what it is for, and the model's account of the
+  patch becomes the description. The patch exists (marked "generating") from
+  the moment you ask, so a name that is taken is refused immediately rather
+  than an hour into the queue — and any patch, generated or hand-made, can be
+  taken further from its cables or settings page with a new brief and a new
+  budget; at a budget the patch already meets, only the settings are
+  reviewed. A set of modules can be named too: ones the patch must make use
+  of, or with "only these" the only ones it may use at all.
+- **Where sound leaves**: a rack's outputs — the jacks that feed the
+  speakers, the interface, the mixer on the desk — are marked on the racks
+  page, and every new patch of the rack takes its own copy (edited on the
+  patch's gear page, where gear declared inside the patch can be an exit
+  too). The generator designs backwards from them and, if a traced patch
+  reaches none, spends a round on exactly that; the flow page says whether a
+  patch reaches one, the loose-ends list stops calling an output a dead end,
+  and a question about a silent patch is told where the sound was meant to
+  come out. Under "only these modules" the outputs stay available, so the
+  patch can still be heard.
 - **What to patch next**: every cable in your other patches is reduced to
   (module, jack) → (module, jack), counted, and offered here when both ends
   are free — a rack is patched in habits. Modules that receive signal and send

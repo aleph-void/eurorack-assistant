@@ -1,6 +1,7 @@
 import { onMounted, shallowRef, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '../../api.js';
+import { useJobsStore } from '../../stores/jobs.js';
 
 // Every patch page is its own route over the same record: each one reads
 // `GET /api/patches/:id` and reloads it after every write.
@@ -44,6 +45,20 @@ export function usePatchRecord(id) {
 
   onMounted(load);
   watch(id, load);
+
+  // A patch the model is still wiring up (`generating`, a generate_patch
+  // job of the owner's) fills in when that job lands, so the page re-reads
+  // itself when a job ENDS — and only while the payload says one is at it:
+  // a whole-studio patch is a second of server work, and every other job
+  // that ends is somebody's manual being analyzed, which changes nothing
+  // here.
+  const jobs = useJobsStore();
+  watch(
+    () => jobs.finished,
+    () => {
+      if (patch.value?.generating) load();
+    }
+  );
 
   return { patch, error, load, setCables };
 }
