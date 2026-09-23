@@ -191,6 +191,39 @@ export function patchCoreRoutes(db) {
     );
   }));
 
+  // Run the generator AGAIN on a patch that exists — a generated one to be
+  // taken further, or a hand-made one to be finished off. The brief is what
+  // to add or change and `max_cables` the total the patch may hold once it
+  // is done (cables already there count); a patch already at that total gets
+  // its settings reviewed and nothing more. One job per patch at a time.
+  // Body: { max_cables?, prompt? }
+  router.post('/:id/generate', requireOwnedPatch(db), asyncHandler(async (req, res) => {
+    const patch = req.patch;
+    const maxCables = readMaxCables(req.body?.max_cables);
+    if (maxCables.error) return res.status(400).json({ error: maxCables.error });
+    const brief = String(req.body?.prompt || '').trim();
+    if (brief.length > MAX_BRIEF_CHARS) {
+      return res
+        .status(400)
+        .json({ error: `prompt must be ${MAX_BRIEF_CHARS} characters or fewer` });
+    }
+    if ((await generatingPatchIds(db, req.user.id)).has(patch.id)) {
+      return res.status(409).json({
+        error: `'${patch.name}' is already being generated — wait for that job to finish`,
+      });
+    }
+    const job = await enqueueJob(db, 'generate_patch', {
+      userId: req.user.id,
+      payload: {
+        patch_id: patch.id,
+        patch_name: patch.name,
+        max_cables: maxCables.value,
+        prompt: brief || null,
+      },
+    });
+    res.status(202).json({ id: patch.id, generating: true, job_id: job.id });
+  }));
+
   // Full detail: the snapshot instances (with each live module's components
   // and their valid values joined in), the cables, settings, groups, links,
   // and the traced normalled connections and signal flow.

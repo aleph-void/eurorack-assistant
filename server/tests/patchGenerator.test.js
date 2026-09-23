@@ -6,7 +6,10 @@ import { LLM_JOB_TYPES } from '../src/services/llmModels.js';
 import {
   DEFAULT_MAX_CABLES,
   GENERATE_TEMPLATE,
+  MAX_CABLE_ROUNDS,
   MAX_GENERATED_CABLES,
+  REFINE_TEMPLATE,
+  SETTINGS_TEMPLATE,
   parseGeneratedPatch,
   patchInventoryDocument,
   readMaxCables,
@@ -36,6 +39,7 @@ async function withVoice() {
      ($1, 'input_jack', '1V/Oct', NULL, NULL),
      ($1, 'knob', 'Shape', NULL, NULL),
      ($2, 'input_jack', 'In', NULL, NULL),
+     ($2, 'input_jack', 'FM', NULL, NULL),
      ($2, 'output_jack', 'LP', NULL, NULL),
      ($2, 'knob', 'Cutoff', NULL, NULL),
      ($2, 'switch', 'Mode', NULL, NULL),
@@ -52,6 +56,7 @@ async function withVoice() {
   fixture.pitch = named(fixture.vco.id, '1V/Oct');
   fixture.shape = named(fixture.vco.id, 'Shape');
   fixture.filterIn = named(fixture.vcf.id, 'In');
+  fixture.filterFm = named(fixture.vcf.id, 'FM');
   fixture.filterOut = named(fixture.vcf.id, 'LP');
   fixture.cutoff = named(fixture.vcf.id, 'Cutoff');
   fixture.mode = named(fixture.vcf.id, 'Mode');
@@ -78,6 +83,22 @@ async function instancesOf(db, patchId) {
     [patchId]
   );
   return new Map(rows.map((r) => [r.module_id, r.id]));
+}
+
+// A backend that answers each call with the next scripted answer (the last
+// one again once they run out), recording every prompt it was given.
+function scripted(answers) {
+  const prompts = [];
+  const backend = fakeBackend({
+    completeText: (prompt) => {
+      prompts.push(prompt);
+      const answer = answers[Math.min(prompts.length - 1, answers.length - 1)];
+      if (typeof answer === 'function') return answer(prompt);
+      return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    },
+  });
+  backend.prompts = prompts;
+  return backend;
 }
 
 function makeWorker(db, backend) {
@@ -130,7 +151,15 @@ describe('parseGeneratedPatch', () => {
         { module: 2, component: 21, parameter: null, value: 'LP' },
         { module: 2, component: null, parameter: 5, value: '3' },
       ],
+      unplug: [],
+      done: false,
     });
+  });
+
+  it('reads the cables to take back and whether the model is done', () => {
+    const parsed = parseGeneratedPatch('{"done": true, "unplug": [4, "x", {"cable": 9}, 4]}');
+    expect(parsed).toMatchObject({ done: true, unplug: [4, 9], cables: [], settings: [] });
+    expect(parseGeneratedPatch('{"done": "yes"}').done).toBe(false);
   });
 
   it('keeps a few spares past the limit but not a thousand', () => {
@@ -194,6 +223,10 @@ describe('patchInventoryDocument', () => {
         to_component_name: 'In',
       },
     ],
+    settings: [
+      { patch_module_id: 1, component_id: 15, component_name: 'Mode', parameter_id: null, value: 'HP' },
+      { patch_module_id: 1, component_id: 10, component_name: 'Sine', parameter_id: 7, parameter_name: 'Division', value: '/2' },
+    ],
   };
 
   it('names every instance, jack, control and menu setting by id', () => {
@@ -214,6 +247,9 @@ describe('patchInventoryDocument', () => {
     expect(text).toContain('(instance 1, jack 10) → Intellijel Outs #2 "In" (instance 2, jack 20)');
     expect(text).toContain('Normalled connections');
     expect(text).toContain('"Sub" is normalled to');
+    expect(text).toContain('Settings already dialed in');
+    expect(text).toContain('(instance 1) control 15 "Mode" = HP');
+    expect(text).toContain('(instance 1) parameter 7 "Division" (of "Sine") = /2');
   });
 
   it('leaves out the connectors a cable cannot reach', () => {
@@ -229,6 +265,33 @@ describe('patchInventoryDocument', () => {
     const topped = GENERATE_TEMPLATE('I', { maxCables: 6, existingCables: 4 });
     expect(topped).toContain('AT MOST 2 new patch cable(s) (4 are already plugged');
     expect(topped).toContain('No brief was given');
+  });
+
+  it('shows a later round what landed, what was refused and why, and the budget left', () => {
+    const prompt = REFINE_TEMPLATE('INVENTORY', {
+      maxCables: 6,
+      brief: 'a drone',
+      room: 2,
+      round: 2,
+      kept: [{ id: 41, text: 'STO "Sine" → Ripples "In"' }],
+      refused: [{ text: 'instance 1 jack 3 → instance 2 jack 5', reason: 'already has a cable in it' }],
+    });
+    expect(prompt).toContain('round 2 of building it');
+    expect(prompt).toContain('a drone');
+    expect(prompt).toContain('- cable 41: STO "Sine" → Ripples "In"');
+    expect(prompt).toContain('- instance 1 jack 3 → instance 2 jack 5: already has a cable in it');
+    expect(prompt).toContain('AT MOST 2 more cable(s) (the user\'s limit is 6 in all)');
+    expect(prompt).toContain('"unplug"');
+    expect(prompt).toContain('INVENTORY');
+  });
+
+  it('reviews the settings over the traced patch, not the inventory alone', () => {
+    const prompt = SETTINGS_TEMPLATE('INVENTORY', '# Patch: Krell\nTRACED', { brief: 'a drone' });
+    expect(prompt).toContain('A patch is more than its connections');
+    expect(prompt).toContain('a drone');
+    expect(prompt).toContain('TRACED');
+    expect(prompt).toContain('INVENTORY');
+    expect(prompt).toContain('"settings"');
   });
 });
 
@@ -317,13 +380,45 @@ describe('POST /api/patches/generate', () => {
     expect(jobs).toHaveLength(0);
   });
 
+  it('runs the generator again on a patch that exists, one job at a time', async () => {
+    const fixture = await withVoice();
+    const { app, db, aliceCookie, rackId, adminCookie } = fixture;
+    const created = (
+      await request(app)
+        .post('/api/patches')
+        .set('Cookie', aliceCookie)
+        .send({ rack_id: rackId, name: 'By hand' })
+    ).body;
+    const refine = (cookie, body) =>
+      request(app).post(`/api/patches/${created.id}/generate`).set('Cookie', cookie).send(body);
+    // Somebody else's patch is not there to be generated.
+    expect((await refine(adminCookie, {})).status).toBe(404);
+    expect((await refine(aliceCookie, { max_cables: 'many' })).status).toBe(400);
+    const res = await refine(aliceCookie, { max_cables: 8, prompt: 'add modulation' });
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ id: created.id, generating: true, job_id: expect.any(Number) });
+    const { rows: jobs } = await db.query('SELECT payload FROM jobs');
+    expect(JSON.parse(jobs[0].payload)).toEqual({
+      patch_id: created.id,
+      patch_name: 'By hand',
+      max_cables: 8,
+      prompt: 'add modulation',
+    });
+    // While that job is live the patch says so, and a second is refused.
+    const detail = await request(app).get(`/api/patches/${created.id}`).set('Cookie', aliceCookie);
+    expect(detail.body.generating).toBe(true);
+    const again = await refine(aliceCookie, { prompt: 'more' });
+    expect(again.status).toBe(409);
+    expect(again.body.error).toContain('already being generated');
+  });
+
   it('is a model job with a per-type model override like the other LLM work', () => {
     expect(LLM_JOB_TYPES).toContain('generate_patch');
   });
 });
 
 describe('generate_patch job', () => {
-  it('writes the legal cables and settings the model proposed, and nothing else', async () => {
+  it('writes the legal cables the model proposed, then reviews the settings over the traced patch', async () => {
     const fixture = await withVoice();
     const { app, db, aliceCookie, rackId } = fixture;
     const created = (
@@ -337,65 +432,73 @@ describe('generate_patch job', () => {
     const vcf = at.get(fixture.vcf.id);
     const out = at.get(fixture.out.id);
 
-    const prompts = [];
-    const backend = fakeBackend({
-      completeText: (prompt) => {
-        prompts.push(prompt);
-        return JSON.stringify({
-          description: 'Sine through the filter to the outs.',
-          cables: [
-            // Legal: audio into the filter.
-            { from_module: vco, from_jack: fixture.sine.id, to_module: vcf, to_jack: fixture.filterIn.id, note: 'audio' },
-            // Illegal: an input is not a source.
-            { from_module: vco, from_jack: fixture.pitch.id, to_module: vcf, to_jack: fixture.filterIn.id },
-            // Illegal: the filter input already has a cable in it.
-            { from_module: vco, from_jack: fixture.sub.id, to_module: vcf, to_jack: fixture.filterIn.id },
-            // Illegal: a MIDI socket does not take a 3.5 mm cable.
-            { from_module: vcf, from_jack: fixture.filterOut.id, to_module: out, to_jack: fixture.midiIn.id },
-            // Illegal: an expansion header is not a patch point.
-            { from_module: vcf, from_jack: fixture.filterOut.id, to_module: out, to_jack: fixture.ribbon.id },
-            // Illegal: an invented jack.
-            { from_module: vcf, from_jack: 999999, to_module: out, to_jack: fixture.audioIn.id },
-            // Legal: the filter to the outs.
-            { from_module: vcf, from_jack: fixture.filterOut.id, to_module: out, to_jack: fixture.audioIn.id, note: 'to the speakers' },
-            // Legal, but the budget is spent after it.
-            { from_module: vco, from_jack: fixture.sub.id, to_module: vco, to_jack: fixture.pitch.id, note: 'fm' },
-            // Legal on its own, but over the budget.
-            { from_module: vcf, from_jack: fixture.filterOut.id, to_module: vco, to_jack: fixture.pitch.id },
-          ],
-          settings: [
-            { module: vcf, component: fixture.mode.id, value: 'lp' },
-            { module: vcf, component: fixture.cutoff.id, value: '4' },
-            // A position the switch does not have.
-            { module: vcf, component: fixture.mode.id, value: 'notch' },
-            // A jack is not a setting.
-            { module: vco, component: fixture.sine.id, value: '1' },
-            // Somebody else's instance id.
-            { module: 999999, component: fixture.cutoff.id, value: '1' },
-          ],
-        });
+    const backend = scripted([
+      {
+        description: 'Sine through the filter to the outs.',
+        cables: [
+          // Legal: audio into the filter.
+          { from_module: vco, from_jack: fixture.sine.id, to_module: vcf, to_jack: fixture.filterIn.id, note: 'audio' },
+          // Illegal: an input is not a source.
+          { from_module: vco, from_jack: fixture.pitch.id, to_module: vcf, to_jack: fixture.filterIn.id },
+          // Illegal: the filter input already has a cable in it.
+          { from_module: vco, from_jack: fixture.sub.id, to_module: vcf, to_jack: fixture.filterIn.id },
+          // Illegal: a MIDI socket does not take a 3.5 mm cable.
+          { from_module: vcf, from_jack: fixture.filterOut.id, to_module: out, to_jack: fixture.midiIn.id },
+          // Illegal: an expansion header is not a patch point.
+          { from_module: vcf, from_jack: fixture.filterOut.id, to_module: out, to_jack: fixture.ribbon.id },
+          // Illegal: an invented jack.
+          { from_module: vcf, from_jack: 999999, to_module: out, to_jack: fixture.audioIn.id },
+          // Legal: the filter to the outs.
+          { from_module: vcf, from_jack: fixture.filterOut.id, to_module: out, to_jack: fixture.audioIn.id, note: 'to the speakers' },
+          // Legal, and the budget is spent after it.
+          { from_module: vco, from_jack: fixture.sub.id, to_module: vco, to_jack: fixture.pitch.id, note: 'fm' },
+          // Legal on its own, but over the budget.
+          { from_module: vcf, from_jack: fixture.filterOut.id, to_module: vco, to_jack: fixture.pitch.id },
+        ],
+        settings: [{ module: vcf, component: fixture.mode.id, value: 'bp' }],
       },
-    });
+      // The settings review.
+      {
+        description: 'Acid: sine into a low-pass, swept.',
+        settings: [
+          { module: vcf, component: fixture.mode.id, value: 'lp' },
+          { module: vcf, component: fixture.cutoff.id, value: '4' },
+          // A position the switch does not have.
+          { module: vcf, component: fixture.mode.id, value: 'notch' },
+          // A jack is not a setting.
+          { module: vco, component: fixture.sine.id, value: '1' },
+          // Somebody else's instance id.
+          { module: 999999, component: fixture.cutoff.id, value: '1' },
+        ],
+      },
+    ]);
     const worker = makeWorker(db, backend);
     const done = await worker.tick();
     expect(done.status).toBe('complete');
     expect(done.error).toBeNull();
 
-    // The prompt carried the brief, the budget and the inventory.
-    expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain('an acid line');
-    expect(prompts[0]).toContain('AT MOST 3 new patch cable(s)');
-    expect(prompts[0]).toContain(`## Instance ${vco}: Make Noise STO`);
-    expect(prompts[0]).toContain('A compact analog oscillator');
-    expect(prompts[0]).toContain(`- jack ${fixture.sine.id} "Sine" — output`);
-    expect(prompts[0]).toContain(`- control ${fixture.mode.id} "Mode" — switch — positions: LP | BP | HP`);
-    expect(prompts[0]).not.toContain('"Expander"');
+    // The budget was met in the first round, so no second cable round: one
+    // ask for cables, one settings review.
+    expect(backend.prompts).toHaveLength(2);
+    expect(backend.prompts[0]).toContain('an acid line');
+    expect(backend.prompts[0]).toContain('AT MOST 3 new patch cable(s)');
+    expect(backend.prompts[0]).toContain(`## Instance ${vco}: Make Noise STO`);
+    expect(backend.prompts[0]).toContain('A compact analog oscillator');
+    expect(backend.prompts[0]).toContain(`- jack ${fixture.sine.id} "Sine" — output`);
+    expect(backend.prompts[0]).toContain(`- control ${fixture.mode.id} "Mode" — switch — positions: LP | BP | HP`);
+    expect(backend.prompts[0]).not.toContain('"Expander"');
+    // The review sees the patch as it stands, traced, and what is set so far.
+    expect(backend.prompts[1]).toContain('A patch is more than its connections');
+    expect(backend.prompts[1]).toContain('# Patch: Auto');
+    expect(backend.prompts[1]).toContain('"Sine"');
+    expect(backend.prompts[1]).toContain(`control ${fixture.mode.id} "Mode" = BP`);
 
     const detail = (
       await request(app).get(`/api/patches/${created.id}`).set('Cookie', aliceCookie)
     ).body;
     expect(detail.generating).toBe(false);
-    expect(detail.description).toBe('Sine through the filter to the outs.');
+    // The review's account of the patch is the last word.
+    expect(detail.description).toBe('Acid: sine into a low-pass, swept.');
     expect(
       detail.cables.map((c) => [c.from_component_name, c.to_component_name, c.note])
     ).toEqual([
@@ -403,6 +506,7 @@ describe('generate_patch job', () => {
       ['LP', 'Audio In', 'to the speakers'],
       ['Sub', '1V/Oct', 'fm'],
     ]);
+    // The round-one setting was replaced by the review's.
     expect(detail.settings.map((s) => [s.component_name, s.value])).toEqual([
       ['Mode', 'LP'],
       ['Cutoff', '4'],
@@ -411,7 +515,68 @@ describe('generate_patch job', () => {
     expect(detail.flow.length).toBeGreaterThan(0);
   });
 
-  it('fills up to the limit around cables already there, and stops when it is met', async () => {
+  it('goes another round after a refusal, showing what landed and letting the model re-route', async () => {
+    const fixture = await withVoice();
+    const { app, db, aliceCookie, rackId } = fixture;
+    const created = (
+      await request(app)
+        .post('/api/patches/generate')
+        .set('Cookie', aliceCookie)
+        .send({ rack_id: rackId, name: 'Auto', max_cables: 4 })
+    ).body;
+    const at = await instancesOf(db, created.id);
+    const vco = at.get(fixture.vco.id);
+    const vcf = at.get(fixture.vcf.id);
+    const out = at.get(fixture.out.id);
+
+    let firstRoundIds = null;
+    const backend = scripted([
+      // Round 1: two land, one is refused (the filter input taken twice).
+      {
+        cables: [
+          { from_module: vco, from_jack: fixture.sine.id, to_module: vcf, to_jack: fixture.filterIn.id, note: 'audio' },
+          { from_module: vco, from_jack: fixture.sub.id, to_module: vcf, to_jack: fixture.filterIn.id, note: 'sub too' },
+          { from_module: vcf, from_jack: fixture.filterOut.id, to_module: out, to_jack: fixture.audioIn.id, note: 'out' },
+        ],
+      },
+      // Round 2: take back the sine, put the sub in its place and the sine
+      // onto the FM input — a re-route around the refusal.
+      (prompt) => {
+        firstRoundIds = [...prompt.matchAll(/- cable (\d+): /g)].map((m) => Number(m[1]));
+        return JSON.stringify({
+          unplug: [firstRoundIds[0], 999999],
+          cables: [
+            { from_module: vco, from_jack: fixture.sub.id, to_module: vcf, to_jack: fixture.filterIn.id, note: 'sub instead' },
+            { from_module: vco, from_jack: fixture.sine.id, to_module: vcf, to_jack: fixture.filterFm.id, note: 'sine as fm' },
+          ],
+          done: true,
+        });
+      },
+      // The settings review.
+      { settings: [{ module: vcf, component: fixture.cutoff.id, value: '7' }] },
+    ]);
+    const worker = makeWorker(db, backend);
+    const done = await worker.tick();
+    expect(done.status).toBe('complete');
+    expect(backend.prompts).toHaveLength(3);
+    expect(backend.prompts[1]).toContain('round 2 of building it');
+    expect(backend.prompts[1]).toContain('AT MOST 2 more cable(s)');
+    expect(backend.prompts[1]).toContain('already has a cable in it');
+    expect(backend.prompts[1]).toContain(`Make Noise STO "Sine" (instance ${vco}, jack ${fixture.sine.id}) → Mutable Ripples "In"`);
+    expect(firstRoundIds).toHaveLength(2);
+
+    const detail = (
+      await request(app).get(`/api/patches/${created.id}`).set('Cookie', aliceCookie)
+    ).body;
+    expect(detail.cables.map((c) => [c.from_component_name, c.to_component_name, c.note])).toEqual([
+      ['LP', 'Audio In', 'out'],
+      ['Sub', 'In', 'sub instead'],
+      ['Sine', 'FM', 'sine as fm'],
+    ]);
+    expect(detail.settings.map((s) => [s.component_name, s.value])).toEqual([['Cutoff', '7']]);
+  });
+
+  it('fills up to the limit around cables already there, and only reviews settings once it is met', async () => {
     const fixture = await withVoice();
     const { app, db, aliceCookie, rackId } = fixture;
     const created = (
@@ -434,36 +599,46 @@ describe('generate_patch job', () => {
         to_patch_module_id: vcf,
         to_component_id: fixture.filterIn.id,
       });
-    const backend = fakeBackend({
-      completeText: (prompt) => {
-        expect(prompt).toContain('AT MOST 1 new patch cable(s) (1 are already plugged');
-        expect(prompt).toContain('Cables already patched');
-        return JSON.stringify({
-          cables: [
-            { from_module: vcf, from_jack: fixture.filterOut.id, to_module: out, to_jack: fixture.audioIn.id },
-            { from_module: vco, from_jack: fixture.sub.id, to_module: vco, to_jack: fixture.pitch.id },
-          ],
-        });
+    const backend = scripted([
+      {
+        cables: [
+          { from_module: vcf, from_jack: fixture.filterOut.id, to_module: out, to_jack: fixture.audioIn.id },
+          { from_module: vco, from_jack: fixture.sub.id, to_module: vco, to_jack: fixture.pitch.id },
+        ],
+        // The user's own cable is not the model's to take back.
+        unplug: [],
       },
-    });
+      { settings: [] },
+    ]);
     const worker = makeWorker(db, backend);
     expect((await worker.tick()).status).toBe('complete');
+    expect(backend.prompts[0]).toContain('AT MOST 1 new patch cable(s) (1 are already plugged');
+    expect(backend.prompts[0]).toContain('Cables already patched');
     const { rows: cables } = await db.query(
       'SELECT to_component_name FROM patch_cables WHERE patch_id = $1 ORDER BY id',
       [created.id]
     );
     expect(cables.map((c) => c.to_component_name)).toEqual(['In', 'Audio In']);
+    expect(backend.prompts).toHaveLength(2);
 
-    // Asked again with the budget already met, nothing is asked of the model.
-    await db.query(
-      `INSERT INTO jobs (type, user_id, payload, status) VALUES ('generate_patch', $1, $2, 'pending')`,
-      [fixture.alice.id, JSON.stringify({ patch_id: created.id, max_cables: 2 })]
+    // Asked again with the budget already met, only the settings are reviewed.
+    await request(app)
+      .post(`/api/patches/${created.id}/generate`)
+      .set('Cookie', aliceCookie)
+      .send({ max_cables: 2, prompt: 'make it brighter' });
+    const again = scripted([{ settings: [{ module: vcf, component: fixture.cutoff.id, value: '9' }] }]);
+    expect((await makeWorker(db, again).tick()).status).toBe('complete');
+    expect(again.prompts).toHaveLength(1);
+    expect(again.prompts[0]).toContain('A patch is more than its connections');
+    expect(again.prompts[0]).toContain('make it brighter');
+    const { rows: settings } = await db.query(
+      'SELECT component_name, value FROM patch_settings WHERE patch_id = $1',
+      [created.id]
     );
-    expect((await worker.tick()).status).toBe('complete');
-    expect(backend.calls.completeText).toHaveLength(1);
+    expect(settings).toEqual([{ component_name: 'Cutoff', value: '9' }]);
   });
 
-  it('fails the attempt when the model proposes nothing usable', async () => {
+  it('fails the attempt when no round produces a usable cable', async () => {
     const fixture = await withVoice();
     const { app, db, aliceCookie, rackId } = fixture;
     const created = (
@@ -474,16 +649,18 @@ describe('generate_patch job', () => {
     ).body;
     const at = await instancesOf(db, created.id);
     const vco = at.get(fixture.vco.id);
-    const backend = fakeBackend({
-      completeText: JSON.stringify({
+    const backend = scripted([
+      {
         cables: [{ from_module: vco, from_jack: fixture.pitch.id, to_module: vco, to_jack: fixture.sine.id }],
-      }),
-    });
+      },
+    ]);
     const worker = makeWorker(db, backend);
     const failed = await worker.tick();
     // Not permanent: the next attempt gets another answer.
     expect(failed.status).toBe('pending');
-    expect(failed.error).toMatch(/none of the 1 cable\(s\) the model proposed was legal/);
+    expect(failed.error).toMatch(new RegExp(`none of the ${MAX_CABLE_ROUNDS} cable\\(s\\) the model proposed was legal`));
+    // Every round was tried, and no settings review followed nothing.
+    expect(backend.prompts).toHaveLength(MAX_CABLE_ROUNDS);
     const { rows: cables } = await db.query('SELECT id FROM patch_cables WHERE patch_id = $1', [
       created.id,
     ]);

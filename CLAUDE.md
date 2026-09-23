@@ -436,24 +436,37 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   (the brief, 2000 chars at most), makes the patch EMPTY at once — so a taken
   name is a 409 now, and the row is on the list marked `generating` while
   the work runs — and queues a `generate_patch` job (`handlers/patches.js` →
-  `services/patchGenerator.js`, one of the `LLM_JOB_TYPES`). The model gets
-  an INVENTORY (`patchInventoryDocument()`: every instance with its jacks,
-  controls and menu settings by id, the cables already plugged, the normalled
+  `services/patchGenerator.js`, one of the `LLM_JOB_TYPES`).
+  `POST /api/patches/:id/generate` queues the SAME job over a patch that
+  exists (one live job per patch, 409 otherwise): `max_cables` is then the
+  total the patch may hold, cables already there count, and a patch already
+  at it gets only the settings review below. The model gets an INVENTORY
+  (`patchInventoryDocument()`: every instance with its jacks, controls and
+  menu settings by id, the cables and settings already there, the normalled
   connections) and answers with cables and settings naming those ids.
   NOTHING IT SAYS IS TRUSTED: every cable is resolved onto the patch and put
   through the same `cableProblem()` a hand-plugged cable meets, in the order
   the model ranked them, and the first `max_cables` legal ones are written —
   the rest are counted as refused in the job's progress; a setting has to
   name a control of the instance (never a jack) and, where positions are
-  recorded, one of them. Cables already in the patch count towards the
-  budget, so a retry adds to the patch rather than doubling it, and a patch
-  already at its limit asks the model nothing. The model's account of the
-  patch becomes its description when the user gave none, and each cable's
-  note is the model's reason for it. `generating` is not a column: it is
-  whether a live `generate_patch` job of the owner's names the patch
+  recorded, one of them. A PATCH IS NOT MADE IN ONE ANSWER: the job is
+  ROUNDS (`MAX_CABLE_ROUNDS`), each written as it lands. A round after the
+  first (`REFINE_TEMPLATE`) shows the model what was kept — by cable id, so
+  it may `unplug` a cable IT plugged in this job, never the user's — what was
+  refused and why, and the budget left, and only follows a round that had
+  refusals with budget to spend; a model that used its allowance, chose
+  fewer, or answers `done` is finished. A SETTINGS REVIEW always follows
+  (`SETTINGS_TEMPLATE`): the patch as it now stands, traced — the same
+  `patchTextDocument()` a question reads — beside the inventory, and the
+  model goes through every module the patch uses dialing in what it depends
+  on, because a patch is more than its connections. The model's account of
+  the patch becomes its description when the user gave none, and each
+  cable's note is the model's reason for it. `generating` is not a column:
+  it is whether a live `generate_patch` job of the owner's names the patch
   (`generatingPatchIds()`), read by the list and the record; the patches
   page and every patch page re-read themselves on `jobs.finished` only while
-  a row says so.
+  a row says so. `patchdetail/GenerateMoreSection.vue` (on `/cables` and
+  `/settings`) is where a patch is taken further.
 - A patch NAME is one per account (unique `(user_id, name)`, migration 035;
   the rule and its helpers are `services/patchNames.js`). Only live patches
   count — a patch is really deleted, so its name comes free with it — and it
