@@ -26,6 +26,13 @@ export function definePatchesModels(define) {
       system_name: { type: DataTypes.TEXT },
       name: { type: DataTypes.TEXT, allowNull: false },
       description: { type: DataTypes.TEXT },
+      // Being patched in turns with the model (migration 050): every cable
+      // the user plugs queues a patch_turn job that answers with one cable,
+      // steered by the brief. On the row, not in a browser, because a cable
+      // plugged by voice or on the cable list is as much a move as one
+      // dragged on the picture.
+      collaborating: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+      collaboration_prompt: { type: DataTypes.TEXT },
     },
     { tableName: 'patches', createdAt: 'created_at', updatedAt: 'updated_at' }
   );

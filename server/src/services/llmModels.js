@@ -57,4 +57,5 @@ export const LLM_JOB_TYPES = [
   'scope_question',
   'answer_question',
   'generate_patch',
+  'patch_turn',
 ];

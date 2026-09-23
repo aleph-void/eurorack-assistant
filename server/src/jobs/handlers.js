@@ -12,7 +12,7 @@
 //   handlers/videos.js    — download_video, analyze_video
 //   handlers/questions.js — scope_question, answer_question
 //   handlers/exports.js   — export_rack
-//   handlers/patches.js   — generate_patch
+//   handlers/patches.js   — generate_patch, patch_turn
 //
 // The queue mechanics (claiming, leases, retries, pauses) live in worker.js.
 

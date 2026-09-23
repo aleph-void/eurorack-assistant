@@ -13,6 +13,7 @@ import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import { toast } from '../toast.js';
 import PatchDiagram from '../components/PatchDiagram.vue';
+import CollaborateBar from '../components/patchdetail/CollaborateBar.vue';
 import PatchDetailHeader from '../components/patchdetail/PatchDetailHeader.vue';
 import {
   FROM_TYPES,
@@ -24,7 +25,7 @@ import { clearVoicePatch, setVoicePatch } from '../voicePatchTarget.js';
 
 const props = defineProps({ id: { type: String, required: true } });
 
-const { patch, error, load, setCables } = usePatchRecord(toRef(props, 'id'));
+const { patch, error, load, setCables, setFields } = usePatchRecord(toRef(props, 'id'));
 const { modules, modulesById, moduleLabel, cables, cablePolarityWarning, jackCandidates } =
   usePatchFacts(patch);
 
@@ -88,14 +89,21 @@ function warnAboutPolarity(...plugged) {
   }
 }
 
+// In collaboration mode the plug is also a MOVE, and the answer says whether
+// the model's turn is now on the queue (`generating`): that goes into the
+// payload with the cable, so the page re-reads itself when the turn lands
+// (usePatchRecord) without reading the patch back now.
 async function connectDiagramCable(ends) {
   cableError.value = '';
   try {
-    const { paired_cable: paired, ...cable } = await api.post(
+    const { paired_cable: paired, turn, generating, ...cable } = await api.post(
       `/api/patches/${props.id}/cables`,
       ends
     );
-    setCables([...patch.value.cables, cable, ...(paired ? [paired] : [])]);
+    setCables(
+      [...patch.value.cables, cable, ...(paired ? [paired] : [])],
+      generating === undefined ? {} : { generating: Boolean(generating) }
+    );
     warnAboutPolarity(cable, paired);
   } catch (e) {
     cableError.value = e.message;
@@ -203,6 +211,13 @@ async function resyncLayout() {
       this patch.
     </p>
     <p v-if="patch.description" style="white-space: pre-wrap">{{ patch.description }}</p>
+    <!-- Patching in turns with the model: switched on here, every cable
+         plugged below is answered with one of the model's own. -->
+    <CollaborateBar
+      :patch="patch"
+      :patch-id="id"
+      @collaboration="(collaboration) => setFields({ collaboration })"
+    />
     <p v-if="cableError" class="error" data-test="cable-error">{{ cableError }}</p>
 
     <PatchDiagram

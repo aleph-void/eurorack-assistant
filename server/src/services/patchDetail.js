@@ -23,6 +23,12 @@ export const patchJson = (patch, extra = {}) => ({
   system_name: patch.system_name ?? null,
   created_at: patch.created_at,
   updated_at: patch.updated_at,
+  // Being patched in turns with the model, and the brief it is steered by
+  // (migration 050, services/patchTurn.js).
+  collaboration: {
+    enabled: Boolean(patch.collaborating),
+    prompt: patch.collaboration_prompt ?? null,
+  },
   ...extra,
 });
 

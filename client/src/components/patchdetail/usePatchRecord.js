@@ -38,16 +38,28 @@ export function usePatchRecord(id) {
   // patched cable take that long to appear. Cables are their own list in the
   // payload and nothing else the picture draws is made of them, so the page
   // that plugs one takes the row the server just made and puts it in place.
-  function setCables(cables) {
+  // `extras` are the other fields the same answer settled — whether the
+  // model is now at work on the patch (`generating`), which the cable route
+  // says when plugging the cable queued the model's turn.
+  function setCables(cables, extras = {}) {
     if (!patch.value) return;
-    patch.value = { ...patch.value, cables };
+    patch.value = { ...patch.value, cables, ...extras };
+  }
+
+  // Fields of the record itself that a small write answers with — switching
+  // collaboration mode on or off is one boolean and a line of text, and the
+  // server's answer already holds the state the page shows.
+  function setFields(extras) {
+    if (!patch.value) return;
+    patch.value = { ...patch.value, ...extras };
   }
 
   onMounted(load);
   watch(id, load);
 
   // A patch the model is still wiring up (`generating`, a generate_patch
-  // job of the owner's) fills in when that job lands, so the page re-reads
+  // job of the owner's — or, in collaboration mode, the model's turn) fills
+  // in when that job lands, so the page re-reads
   // itself when a job ENDS — and only while the payload says one is at it:
   // a whole-studio patch is a second of server work, and every other job
   // that ends is somebody's manual being analyzed, which changes nothing
@@ -60,5 +72,5 @@ export function usePatchRecord(id) {
     }
   );
 
-  return { patch, error, load, setCables };
+  return { patch, error, load, setCables, setFields };
 }

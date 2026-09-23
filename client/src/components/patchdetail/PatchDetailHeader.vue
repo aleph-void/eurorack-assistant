@@ -102,15 +102,20 @@ async function duplicatePatch() {
          at odd heights beside it. -->
     <h1 v-else class="actions">
       {{ patch.name }}
-      <!-- The model is still wiring this one up (a generate_patch job); the
-           page re-reads itself when it lands. -->
+      <!-- The model is still wiring this one up (a generate_patch job), or
+           taking its turn in collaboration mode (a patch_turn job); the page
+           re-reads itself when it lands. -->
       <span
         v-if="patch.generating"
         class="badge running"
         data-test="generating"
-        title="The model is still building this patch — the cables and settings arrive when its job finishes (progress is on the Jobs page)"
+        :title="
+          patch.collaboration?.enabled
+            ? 'The model is choosing its next cable — it appears when its job finishes (progress is on the Jobs page)'
+            : 'The model is still building this patch — the cables and settings arrive when its job finishes (progress is on the Jobs page)'
+        "
       >
-        generating
+        {{ patch.collaboration?.enabled ? "the model's turn" : 'generating' }}
       </span>
       <button
         style="font-size: 0.8rem"
