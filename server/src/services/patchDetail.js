@@ -72,11 +72,14 @@ export const outputJson = (o, { reached = false, live = true } = {}) => ({
   reached,
 });
 
-// Every (instance, jack) a signal flow tree passes through.
+// Every (instance, jack) a signal flow tree passes through — and, under
+// `${instance}:*`, every instance it passes through at all, which is what an
+// output naming no jack (the module as a whole) is reached by.
 export function reachedJacks(flow) {
   const seen = new Set();
   const walk = (node) => {
     if (!node) return;
+    seen.add(`${node.patch_module_id}:*`);
     if (node.component_id !== null && node.component_id !== undefined) {
       seen.add(`${node.patch_module_id}:${node.component_id}`);
     }
@@ -351,11 +354,17 @@ const {
   const arrived = reachedJacks(flow);
   const outputs = outputRows.map((o) => {
     // Live while the jack is still one of the instance's connection points;
-    // a re-analyzed module leaves a name that no longer resolves.
-    const live = Boolean(
-      (topology.jacksByPatchModule.get(o.patch_module_id) ?? []).find((c) => c.id === o.component_id)
-    );
-    return outputJson(o, { live, reached: arrived.has(`${o.patch_module_id}:${o.component_id}`) });
+    // a re-analyzed module leaves a name that no longer resolves. An output
+    // naming no jack is the whole instance, live while the instance is and
+    // reached when the flow passes through it anywhere.
+    const whole = o.component_id == null && o.component_name == null;
+    const live =
+      whole ||
+      Boolean(
+        (topology.jacksByPatchModule.get(o.patch_module_id) ?? []).find((c) => c.id === o.component_id)
+      );
+    const key = whole ? `${o.patch_module_id}:*` : `${o.patch_module_id}:${o.component_id}`;
+    return outputJson(o, { live, reached: arrived.has(key) });
   });
   const panels = await loadPanels(db, [...liveIds], { describe });
   // The menu parameters of every module still in the rack, so the patch pages

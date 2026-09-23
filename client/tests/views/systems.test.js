@@ -113,8 +113,9 @@ describe('SystemsView', () => {
   });
 
   // Where sound leaves is marked on the system: a studio of several cases has
-  // one set of exits, and the same module may stand in two of its racks.
-  it('marks a system s outputs, naming the rack each module stands in', async () => {
+  // one set of exits, and the same module may stand in two of its racks. An
+  // exit is a module; which of its jacks are in use is optional.
+  it('marks a system s output modules, naming the rack each stands in', async () => {
     const detail = {
       ...planResponse,
       racks: [
@@ -122,7 +123,7 @@ describe('SystemsView', () => {
         { id: 11, name: 'right case', modules: [{ id: 3, manufacturer: 'Intellijel', name: 'Outs' }] },
       ],
       outputs: [
-        { id: 7, rack_id: 10, rack_name: 'left case', module_id: 3, manufacturer: 'Intellijel', module_name: 'Outs', component_id: 31, component_name: 'L' },
+        { id: 7, rack_id: 10, rack_name: 'left case', module_id: 3, manufacturer: 'Intellijel', module_name: 'Outs', jacks: [] },
       ],
     };
     api.get.mockImplementation((path) => {
@@ -139,7 +140,12 @@ describe('SystemsView', () => {
       }
       return Promise.resolve([]);
     });
-    api.post.mockResolvedValue({ outputs: [...detail.outputs, { ...detail.outputs[0], id: 8, rack_id: 11, rack_name: 'right case', component_id: 32, component_name: 'R' }] });
+    api.post.mockResolvedValue({
+      outputs: [
+        ...detail.outputs,
+        { ...detail.outputs[0], id: 8, rack_id: 11, rack_name: 'right case', jacks: [{ component_id: 32, component_name: 'R' }] },
+      ],
+    });
     api.delete.mockResolvedValue({ outputs: [] });
     const wrapper = mount(SystemsView, { global: testGlobal() });
     await flushPromises();
@@ -150,18 +156,17 @@ describe('SystemsView', () => {
     await flushPromises();
     const panel = wrapper.find('[data-test="system-outputs"]');
     expect(panel.text()).toContain('Where sound leaves studio');
-    expect(panel.find('[data-test="rack-output-7"]').text()).toContain('Intellijel Outs — L');
-    expect(panel.find('[data-test="rack-output-7"]').text()).toContain('in left case');
+    expect(panel.find('[data-test="rack-output-7"]').text()).toContain('Intellijel Outs in left case — the whole module');
     const modules = panel.find('[data-test="rack-output-module"]').findAll('option').map((o) => o.text());
     expect(modules).toEqual(['Module…', 'Intellijel Outs (left case)', 'Intellijel Outs (right case)']);
 
     await panel.find('[data-test="rack-output-module"]').setValue('11:3');
     await flushPromises();
-    await panel.find('[data-test="rack-output-jack"]').setValue('32');
+    await panel.find('[data-test="rack-output-jack-32"]').setValue(true);
     await panel.find('[data-test="add-rack-output"]').trigger('submit');
     await flushPromises();
-    expect(api.post).toHaveBeenCalledWith('/api/systems/1/outputs', { rack_id: 11, module_id: 3, component_id: 32 });
-    expect(wrapper.find('[data-test="rack-output-8"]').text()).toContain('in right case');
+    expect(api.post).toHaveBeenCalledWith('/api/systems/1/outputs', { rack_id: 11, module_id: 3, component_ids: [32] });
+    expect(wrapper.find('[data-test="rack-output-8"]').text()).toContain('in right case — R');
 
     await wrapper.find('[data-test="remove-rack-output-7"]').trigger('click');
     await flushPromises();

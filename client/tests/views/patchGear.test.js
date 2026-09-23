@@ -35,6 +35,7 @@ describe('PatchGearView', () => {
       outputs: [
         { id: 51, patch_module_id: 11, component_id: 1, component_name: 'OUT', position: 1, live: true, reached: true },
         { id: 52, patch_module_id: 12, component_id: 90, component_name: 'MIDI OUT', position: 2, live: true, reached: false },
+        { id: 53, patch_module_id: 13, component_id: null, component_name: null, position: 3, live: true, reached: false },
       ],
     };
     api.get.mockResolvedValue(withOutputs);
@@ -44,13 +45,23 @@ describe('PatchGearView', () => {
     await flushPromises();
     await openPanels(wrapper);
 
-    expect(wrapper.find('[data-test="outputs-count"]').text()).toContain('2 outputs, 1 reached');
+    expect(wrapper.find('[data-test="outputs-count"]').text()).toContain('3 outputs, 1 reached');
     expect(wrapper.find('[data-test="output-reached-51"]').text()).toBe('reaches it');
     expect(wrapper.find('[data-test="output-reached-52"]').text()).toBe('nothing reaches it');
     expect(wrapper.find('[data-test="output-51"]').text()).toContain('OUT');
+    // An output naming no jack is the module as a whole.
+    expect(wrapper.find('[data-test="output-53"]').text()).toContain('the whole module');
 
-    // Adding one: an instance, then one of its jacks.
+    // Adding one: an instance, then — if you like — one of its jacks, which
+    // is an input or bidirectional one: nothing is patched into an output.
+    await wrapper.find('[data-test="output-module"]').setValue('11');
+    await flushPromises();
+    const jackOptions = wrapper.find('[data-test="output-jack"]').findAll('option').map((o) => o.text());
+    // Instance 11's only jack is its OUT.
+    expect(jackOptions).toEqual(['Whole module']);
     await wrapper.find('[data-test="output-module"]').setValue('13');
+    await flushPromises();
+    expect(wrapper.find('[data-test="output-jack"]').findAll('option').map((o) => o.text())).toEqual(['Whole module', '1']);
     await wrapper.find('[data-test="output-jack"]').setValue('7');
     await wrapper.find('[data-test="add-output"]').trigger('submit');
     await flushPromises();
@@ -58,6 +69,11 @@ describe('PatchGearView', () => {
     // The page re-reads the patch after the write (the other read on mount
     // is the module list the gear form offers).
     expect(api.get.mock.calls.filter(([path]) => path === '/api/patches/7')).toHaveLength(2);
+    // No jack picked: the whole module.
+    await wrapper.find('[data-test="output-module"]').setValue('11');
+    await wrapper.find('[data-test="add-output"]').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/patches/7/outputs', { patch_module_id: 11, component_id: null });
 
     await wrapper.find('[data-test="remove-output-52"]').trigger('click');
     await flushPromises();

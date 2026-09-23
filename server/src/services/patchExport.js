@@ -136,11 +136,13 @@ export async function exportPatchDocument(db, patch) {
             b_type: componentType.get(j.b_component_id) ?? null,
           })),
       })),
-      // Where sound leaves the system, by instance and jack name.
+      // Where sound leaves the system, by instance and jack name — no jack
+      // at all for an output that is the module as a whole.
       outputs: outputs.map((o) => ({
         module: refs.get(o.patch_module_id) ?? null,
-        jack: o.component_name,
-        type: componentType.get(o.component_id) ?? null,
+        ...(o.component_name == null
+          ? {}
+          : { jack: o.component_name, type: componentType.get(o.component_id) ?? null }),
       })),
     },
   };

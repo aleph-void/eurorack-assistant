@@ -475,29 +475,41 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   cable or setting on any other instance is refused like an illegal cable.
 - WHERE SOUND LEAVES THE SYSTEM is a fact about the studio, not the module
   (module records are shared; the same Outs feeds a monitor in one room and
-  sits spare in another), so it is recorded on the SYSTEM — `system_outputs`,
-  migration 048, one row per jack naming the rack its module stands in (the
-  same module may be racked in two cases of a system), added and removed one
-  at a time on the systems page (`/api/systems/:id/outputs`) — because a
-  studio of several cases has ONE set of exits. A rack standing alone keeps
-  its own (`rack_outputs`, migration 047, `/api/racks/:id/outputs`); a rack
-  in a system shows those read-only and refuses edits (409), since its
-  patches build towards the system's. Joining a system carries the rack's
-  exits into it, leaving takes that rack's rows out of the system's. Both
-  pages draw ONE editor, `components/racks/OutputsEditor.vue` (`kind`). A
-  patch takes its OWN COPY at creation (`patch_outputs`, written by
-  `snapshotPatch()` from the system's list for a system patch and the rack's
-  for a rack patch, onto every instance of the marked module in that rack),
+  sits spare in another). AN OUTPUT IS A MODULE: the Outs, the mixer, the
+  interface's inputs — with the jacks of it in use as an optional list under
+  it, none meaning the module as a whole (migration 049). It is recorded on
+  the SYSTEM (migration 048) — `system_outputs` + `system_output_jacks`, one
+  row per module
+  naming the rack it stands in (the same module may be racked in two cases of
+  a system), edited on the systems page (`/api/systems/:id/outputs`: POST a
+  module with optional `component_ids`, PUT the jacks all at once, DELETE) —
+  because a studio of several cases has ONE set of exits. A rack standing
+  alone keeps its own (`rack_outputs` + `rack_output_jacks`,
+  `/api/racks/:id/outputs`; the per-jack `component_id` of both owner tables
+  is RETIRED, always NULL and in no model, because pg-mem cannot drop a
+  column that carries a foreign key); a rack in a system shows those read-only and refuses edits
+  (409), since its patches build towards the system's. Joining a system
+  carries the rack's exits into it, leaving takes that rack's rows out of the
+  system's. The writing is `services/studioOutputs.js`, the shapes
+  `rackOutputsJson` / `systemOutputsJson`, and both pages draw ONE editor,
+  `components/racks/OutputsEditor.vue` (`kind`). A patch takes its OWN COPY
+  at creation (`patch_outputs`, written by `snapshotPatch()` from the
+  system's list for a system patch and the rack's for a rack patch, onto
+  every instance of the marked module in that rack — a row per jack, or ONE
+  row with `component_id` and `component_name` both NULL for the module as a
+  whole),
   soft references with the jack's name beside them like a cable's ends,
   cloned, exported and imported by name, and edited on the patch's gear page
   (`patchdetail/OutputsSection.vue`, `/api/patches/:id/outputs`), where gear
   declared inside the patch can be an exit too. The payload serves them as
   `outputs`, each with `live` (the jack still exists) and `reached` — whether
-  the traced flow arrives at it (`reachedJacks()` over `flow` in
-  `services/patchDetail.js`). The flow page says so, the cables page's
+  the traced flow arrives at it, or anywhere on the instance for a whole
+  module (`reachedJacks()` over `flow` in `services/patchDetail.js`, whose
+  `<instance>:*` keys are that). The flow page says so, the cables page's
   loose-ends list leaves an output holder out, and `patchTextDocument()`
   tells the model where the sound was meant to come out. The generator
-  (`sinkJacks()`) builds towards the live ones — or, when none is marked,
+  (`sinkJacks()`) builds towards the live ones — a whole module standing for
+  every input jack it has — or, when none is marked,
   the input jacks of the gear declared inside the patch, flagged as assumed
   — names them in every prompt, and after the cable rounds checks the traced
   flow against them: a patch reaching none gets ONE more round about exactly

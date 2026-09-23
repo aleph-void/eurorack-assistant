@@ -285,15 +285,35 @@ export function allowedInstances(modules, sinks = [], focus = null) {
 // (a jack a re-analysis took away is not somewhere to build towards), or —
 // when none is marked — the inputs of the gear declared inside the patch,
 // which is what the cables page has always taken the end of a patch to be.
+// An output naming no jack is the module as a whole, and a signal goes into
+// a module at its inputs: it stands for every input jack it has.
 export function sinkJacks(patch) {
   const marked = (patch.outputs ?? []).filter((o) => o.live !== false);
   if (marked.length > 0) {
-    return marked.map((o) => ({
-      patch_module_id: o.patch_module_id,
-      component_id: o.component_id,
-      component_name: o.component_name,
-      assumed: false,
-    }));
+    const modulesById = new Map((patch.modules ?? []).map((pm) => [pm.id, pm]));
+    const sinks = [];
+    const seen = new Set();
+    const add = (patchModuleId, componentId, componentName) => {
+      const key = `${patchModuleId}:${componentId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      sinks.push({
+        patch_module_id: patchModuleId,
+        component_id: componentId,
+        component_name: componentName,
+        assumed: false,
+      });
+    };
+    for (const o of marked) {
+      if (o.component_id != null || o.component_name != null) {
+        add(o.patch_module_id, o.component_id, o.component_name);
+        continue;
+      }
+      for (const c of modulesById.get(o.patch_module_id)?.components ?? []) {
+        if (c.type === 'input_jack' && isPatchable(c)) add(o.patch_module_id, c.id, c.name);
+      }
+    }
+    return sinks;
   }
   const assumed = [];
   for (const pm of patch.modules ?? []) {

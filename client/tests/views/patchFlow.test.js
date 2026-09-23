@@ -47,6 +47,15 @@ describe('PatchFlowView', () => {
     await flushPromises();
     expect(wrapper.find('[data-test="outputs-reached"]').text()).toContain('Nothing reaches an output');
 
+    // An output that is a whole module is named by the module alone.
+    api.get.mockResolvedValue({
+      ...krellPatch,
+      outputs: [{ id: 52, patch_module_id: 11, component_id: null, component_name: null, live: true, reached: true }],
+    });
+    wrapper = mount(PatchFlowView, { props: { id: '7' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="outputs-reached"]').text()).toContain('Audio reaches Make Noise Maths.');
+
     // No outputs marked: nothing to say.
     api.get.mockResolvedValue(krellPatch);
     wrapper = mount(PatchFlowView, { props: { id: '7' }, global: testGlobal() });
