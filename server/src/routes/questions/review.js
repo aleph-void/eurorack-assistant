@@ -419,20 +419,10 @@ export function questionReviewRoutes(db) {
       }
     }
 
-    if (
-      manualIds.length +
-        answerIds.length +
-        noteIds.length +
-        captureIds.length +
-        audioIds.length +
-        patchIds.length ===
-      0
-    ) {
-      return res.status(400).json({
-        error:
-          'Attach at least one document (manual, previous answer, note, capture, recording, or patch)',
-      });
-    }
+    // Nothing has to be attached: a question with only its modules in scope
+    // is answered from what the model knows of them (services/ask.js says
+    // so in the prompt), which is what a question about a whole rack or
+    // system usually is.
 
     await db.sequelize.transaction(async (transaction) => {
       await QuestionModule.destroy({ where: { question_id: question.id }, transaction });

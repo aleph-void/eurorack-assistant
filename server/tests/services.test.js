@@ -1567,12 +1567,18 @@ describe('answerQuestion', () => {
     await expect(answerQuestion(db, backend, question, manualsDir)).rejects.toThrow(/in scope/);
   });
 
-  it('fails when nothing valid is attached', async () => {
+  // Nothing attached is not a failure: the model answers from what it knows
+  // of the modules in scope, and the prompt says so.
+  it('answers from its own knowledge of the modules when nothing is attached', async () => {
     const { db, question } = await fixture();
     await db.query('DELETE FROM question_manuals');
-    const backend = fakeBackend();
-    await expect(answerQuestion(db, backend, question, manualsDir)).rejects.toThrow(
-      /No readable manuals/
-    );
+    const backend = fakeBackend({ answerWithDocuments: 'From memory.' });
+    const updated = await answerQuestion(db, backend, question, manualsDir);
+    expect(updated.status).toBe('answered');
+    const [prompt, pdfs, textDocs] = backend.calls.answerWithDocuments[0];
+    expect(pdfs).toEqual([]);
+    expect(textDocs).toEqual([]);
+    expect(prompt).toMatch(/No documents are attached/);
+    expect(prompt).not.toMatch(/Using the attached/);
   });
 });
