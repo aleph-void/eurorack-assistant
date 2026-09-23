@@ -1466,8 +1466,6 @@ describe('questions API', () => {
 
     // No modules selected.
     expect((await post({ module_ids: [], manual_ids: [manual[0].id] })).status).toBe(400);
-    // No attachments selected at all.
-    expect((await post({ module_ids: [moduleId] })).status).toBe(400);
     // A module that is not in alice's rack.
     const stranger = await insertModule(db, null, { manufacturer: 'X', name: 'Y' });
     expect(
@@ -1505,6 +1503,12 @@ describe('questions API', () => {
       question.id,
     ]);
     expect(q[0].status).toBe('scoped');
+
+    // No attachments at all is allowed: the modules in scope are enough, and
+    // the question goes off to be answered from what the model knows of them.
+    expect((await post({ module_ids: [moduleId] })).status).toBe(200);
+    const { rows: queued } = await db.query("SELECT * FROM jobs WHERE type = 'answer_question'");
+    expect(queued).toHaveLength(1);
   });
 
   it('only accepts review submissions for scoped questions', async () => {

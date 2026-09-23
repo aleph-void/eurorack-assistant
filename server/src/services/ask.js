@@ -526,12 +526,6 @@ export async function answerQuestion(
   }
 
   const textDocs = [...previous, ...notes, ...captures, ...recordings, ...patches];
-  if (manualPaths.length === 0 && textDocs.length === 0) {
-    if (scratchDir) fs.rmSync(scratchDir, { recursive: true, force: true });
-    throw new Error(
-      'No readable manuals, previous answers, notes, captures, recordings, or patches are attached to this question.'
-    );
-  }
   const manuals = manualPaths.slice(0, MAX_MANUALS);
 
   const kinds = [];
@@ -542,9 +536,17 @@ export async function answerQuestion(
   if (recordings.length > 0) kinds.push('recordings of what it actually sounds like');
   if (patches.length > 0) kinds.push('a description of the patch itself');
   const moduleNames = scoped.map((m) => `${m.manufacturer} ${m.name}`).join(', ');
+  // A question with nothing attached — a whole rack asked "what is this case
+  // missing?" — is answered from what the model knows of the modules named,
+  // and the prompt says so rather than pointing at documents that are not
+  // there.
   let answerPrompt =
-    `You are a eurorack modular synthesizer expert. Using the attached ${kinds.join(', ')} ` +
-    `(for: ${moduleNames}), answer the following question. `;
+    kinds.length > 0
+      ? `You are a eurorack modular synthesizer expert. Using the attached ${kinds.join(', ')} ` +
+        `(for: ${moduleNames}), answer the following question. `
+      : `You are a eurorack modular synthesizer expert. No documents are attached: answer the ` +
+        `following question from what you know about these modules (${moduleNames}), and say ` +
+        `where you are unsure of a detail the manual would settle. `;
   if (patches.length > 0) {
     answerPrompt +=
       `The question is about ${patches.length === 1 ? 'a patch the user has built' : 'patches the user has built'}: ` +

@@ -485,15 +485,28 @@ describe('QuestionDetailView', () => {
     await flushPromises();
 
     // Drop the second module — its manual disappears from the list — and
-    // untick the first module's primary manual: no attachments remain, so
-    // the submit button disables.
+    // untick the first module's primary manual: nothing is attached, which
+    // the page says, and the answer can still be asked for.
     const moduleBoxes = wrapper.findAll('[data-test="module-option"]');
     await moduleBoxes[1].setValue(false);
     expect(wrapper.findAll('[data-test="manual-option"]')).toHaveLength(1);
     await wrapper.find('[data-test="manual-option"]').setValue(false);
+    expect(wrapper.find('[data-test="no-attachments"]').exists()).toBe(true);
     expect(
       wrapper.find('[data-test="request-answer"]').attributes('disabled')
-    ).toBeDefined();
+    ).toBeUndefined();
+    await wrapper.find('[data-test="request-answer"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/questions/1/answer', {
+      module_ids: [3],
+      component_ids: [],
+      manual_ids: [],
+      answer_ids: [],
+      note_ids: [],
+      capture_ids: [],
+      audio_ids: [],
+      patch_ids: [],
+    });
     wrapper.unmount();
   });
 

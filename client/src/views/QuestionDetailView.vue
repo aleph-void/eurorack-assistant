@@ -103,6 +103,9 @@ const patchOptions = computed(() => options.value?.patches ?? []);
 const chosenPatchIds = computed(() =>
   patchOptions.value.filter((p) => selectedPatches.value.includes(p.id)).map((p) => p.id)
 );
+// Nothing HAS to be attached: a question about a whole rack ("what kind of
+// voice is this case missing?") is answered from what the model knows of the
+// modules in scope, and the review step says so rather than refusing.
 const attachmentCount = computed(
   () =>
     chosenManualIds.value.length +
@@ -608,12 +611,13 @@ onUnmounted(() => clearTimeout(pollTimer));
         </details>
 
         <p v-if="selectedModules.length === 0" class="muted">Select at least one module.</p>
-        <p v-else-if="attachmentCount === 0" class="muted">
-          Attach at least one document (manual, previous answer, note, capture, or patch).
+        <p v-else-if="attachmentCount === 0" class="muted" data-test="no-attachments">
+          Nothing is attached: the assistant will answer from what it knows about the modules in
+          scope. Attach a manual, note, previous answer, capture or patch to ground it.
         </p>
         <button
           type="button"
-          :disabled="submitting || selectedModules.length === 0 || attachmentCount === 0"
+          :disabled="submitting || selectedModules.length === 0"
           data-test="request-answer"
           @click="requestAnswer"
         >

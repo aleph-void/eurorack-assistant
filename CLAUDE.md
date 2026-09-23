@@ -803,7 +803,11 @@ created, the rack or system is recorded beside them (`question_racks` /
 `question_systems`, migration 051), and there is no scoping pass either. The
 Ask page offers the same as a picker. A question about one module of a case
 is that module's, not the rack's: the rack's list is what was asked ABOUT
-the rack.
+the rack. NOTHING HAS TO BE ATTACHED to get an answer: the review step, the
+answer route and `answerQuestion()` all accept a question with only its
+modules in scope, and the prompt then says no documents are attached and asks
+for an answer from what the model knows of the modules named — which is what
+"what is this case missing?" asked of a whole rack is.
 
 THE OSCILLOSCOPE IS A PAGE OF A PATCH AND A PAGE OF A MODULE, because most
 scope work is BENCH work: one module on the rails, a cable into the
