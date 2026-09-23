@@ -147,6 +147,32 @@ const otherModules = computed(() =>
 );
 const hiddenScopedCount = computed(() => selectedModules.value.length - scopedModules.value.length);
 
+// Bulk ticking acts on what the filter SHOWS — the whole rack when there is no
+// filter, otherwise the modules that match it — so a filter is how a bulk
+// selection is aimed. A selected module the filter hides keeps its tick.
+const filteredModules = computed(() => (options.value?.modules ?? []).filter(moduleMatchesFilter));
+function selectAllModules() {
+  const ids = new Set(selectedModules.value);
+  for (const m of filteredModules.value) ids.add(m.id);
+  selectedModules.value = [...ids];
+}
+function selectNoModules() {
+  const shown = new Set(filteredModules.value.map((m) => m.id));
+  selectedModules.value = selectedModules.value.filter((id) => !shown.has(id));
+}
+// Manuals are only ever offered for the selected modules, so these act on the
+// list on screen; a manual of a module ticked later still starts selected if
+// it is the module's primary one.
+function selectAllManuals() {
+  const ids = new Set(selectedManuals.value);
+  for (const m of visibleManuals.value) ids.add(m.id);
+  selectedManuals.value = [...ids];
+}
+function selectNoManuals() {
+  const shown = new Set(visibleManuals.value.map((m) => m.id));
+  selectedManuals.value = selectedManuals.value.filter((id) => !shown.has(id));
+}
+
 function moduleLabel(moduleId) {
   const m = options.value?.modules.find((mod) => mod.id === moduleId);
   return m ? `${m.manufacturer} ${m.name}`.trim() : `module ${moduleId}`;
@@ -303,6 +329,29 @@ onUnmounted(() => clearTimeout(pollTimer));
                 </button>
               </div>
             </div>
+            <div class="actions bulk-select">
+              <button
+                type="button"
+                class="secondary"
+                :disabled="otherModules.length === 0"
+                data-test="select-all-modules"
+                @click="selectAllModules"
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                class="secondary"
+                :disabled="scopedModules.length === 0"
+                data-test="select-no-modules"
+                @click="selectNoModules"
+              >
+                Select none
+              </button>
+              <span v-if="moduleFilterTerms.length" class="muted">
+                {{ filteredModules.length }} matching the filter
+              </span>
+            </div>
 
             <h4>In scope</h4>
             <p v-if="selectedModules.length === 0" class="muted">No modules selected yet.</p>
@@ -383,17 +432,39 @@ onUnmounted(() => clearTimeout(pollTimer));
             <p v-if="visibleManuals.length === 0" class="muted">
               No manual documents for the selected modules.
             </p>
-            <ul v-else class="check-list">
-              <li v-for="m in visibleManuals" :key="m.id">
-                <label>
-                  <input v-model="selectedManuals" type="checkbox" :value="m.id" data-test="manual-option" />
-                  <span>
-                    {{ moduleLabel(m.module_id) }} — {{ manualLabel(m) }}
-                    <span v-if="m.source === 'upload'" class="badge">upload</span>
-                  </span>
-                </label>
-              </li>
-            </ul>
+            <template v-else>
+              <div class="actions bulk-select">
+                <button
+                  type="button"
+                  class="secondary"
+                  :disabled="chosenManualIds.length === visibleManuals.length"
+                  data-test="select-all-manuals"
+                  @click="selectAllManuals"
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  class="secondary"
+                  :disabled="chosenManualIds.length === 0"
+                  data-test="select-no-manuals"
+                  @click="selectNoManuals"
+                >
+                  Select none
+                </button>
+              </div>
+              <ul class="check-list">
+                <li v-for="m in visibleManuals" :key="m.id">
+                  <label>
+                    <input v-model="selectedManuals" type="checkbox" :value="m.id" data-test="manual-option" />
+                    <span>
+                      {{ moduleLabel(m.module_id) }} — {{ manualLabel(m) }}
+                      <span v-if="m.source === 'upload'" class="badge">upload</span>
+                    </span>
+                  </label>
+                </li>
+              </ul>
+            </template>
           </div>
         </details>
 

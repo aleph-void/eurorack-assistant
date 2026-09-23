@@ -176,6 +176,69 @@ describe('QuestionDetailView', () => {
     wrapper.unmount();
   });
 
+  it('ticks and unticks every module and manual at once, aimed by the filter', async () => {
+    api.get.mockImplementation(async (path) => {
+      if (path === '/api/questions/1')
+        return { id: 1, prompt: 'How?', status: 'scoped', modules: [], components: [] };
+      if (path === '/api/questions/1/options')
+        return {
+          modules: [
+            { id: 3, manufacturer: '2hp', name: 'Pluck', in_scope: false },
+            { id: 4, manufacturer: 'Make Noise', name: 'Maths', in_scope: true },
+            { id: 5, manufacturer: 'Mutable', name: 'Plaits', in_scope: false },
+          ],
+          components: [],
+          manuals: [
+            { id: 11, module_id: 4, name: 'manual', original_name: null, source: 'found' },
+            { id: 12, module_id: 4, name: 'quickstart.pdf', original_name: 'quickstart.pdf', source: 'upload' },
+            { id: 13, module_id: 5, name: 'manual', original_name: null, source: 'found' },
+          ],
+          answers: [],
+          notes: [],
+        };
+      throw new Error(`unexpected ${path}`);
+    });
+
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const checkedModules = () =>
+      wrapper.findAll('[data-test="module-option"]').filter((b) => b.element.checked).length;
+    const checkedManuals = () =>
+      wrapper.findAll('[data-test="manual-option"]').filter((b) => b.element.checked).length;
+
+    // Select all takes the whole rack; every module's primary manual comes
+    // along already ticked, the upload does not.
+    await wrapper.find('[data-test="select-all-modules"]').trigger('click');
+    expect(checkedModules()).toBe(3);
+    expect(wrapper.find('[data-test="select-all-modules"]').element.disabled).toBe(true);
+    expect(wrapper.findAll('[data-test="manual-option"]')).toHaveLength(3);
+    expect(checkedManuals()).toBe(2);
+
+    await wrapper.find('[data-test="select-all-manuals"]').trigger('click');
+    expect(checkedManuals()).toBe(3);
+    expect(wrapper.find('[data-test="select-all-manuals"]').element.disabled).toBe(true);
+    await wrapper.find('[data-test="select-no-manuals"]').trigger('click');
+    expect(checkedManuals()).toBe(0);
+    expect(wrapper.find('[data-test="select-no-manuals"]').element.disabled).toBe(true);
+
+    // With a filter on, the buttons act on the modules it shows and leave
+    // the rest as they were.
+    await wrapper.find('[data-test="module-filter"]').setValue('mutable');
+    await wrapper.find('[data-test="select-no-modules"]').trigger('click');
+    await wrapper.find('[data-test="clear-module-filter"]').trigger('click');
+    expect(checkedModules()).toBe(2);
+    const labels = () =>
+      wrapper.findAll('[data-test="module-option"]').map((b) => b.element.closest('label').textContent.trim());
+    expect(labels().slice(0, 2).join(' ')).not.toContain('Plaits');
+
+    await wrapper.find('[data-test="select-no-modules"]').trigger('click');
+    expect(checkedModules()).toBe(0);
+    expect(wrapper.find('[data-test="select-no-modules"]').element.disabled).toBe(true);
+    expect(wrapper.find('[data-test="review"]').text()).toContain('No modules selected yet.');
+    wrapper.unmount();
+  });
+
   it('presents the review step for a scoped question and submits the selection', async () => {
     api.get.mockImplementation(async (path) => {
       if (path === '/api/questions/1')

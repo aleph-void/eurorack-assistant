@@ -1067,6 +1067,10 @@ button.linklike:hover {
   padding: 0;
   margin: 0.4rem 0 0.9rem;
 }
+/* The pair of buttons that tick or untick a whole check-list at once. */
+.bulk-select {
+  margin: 0.6rem 0 0.2rem;
+}
 .check-list li {
   padding: 0.15rem 0;
 }
