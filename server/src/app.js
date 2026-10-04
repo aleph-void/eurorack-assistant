@@ -29,6 +29,7 @@ import { audioRoutes } from './routes/audio.js';
 import { linkRoutes } from './routes/links.js';
 import { panelRoutes } from './routes/panels.js';
 import { shareRoutes } from './routes/shares.js';
+import { performanceRoutes } from './routes/performances.js';
 import { cspReportRoutes } from './routes/cspReports.js';
 
 export function createApp(
@@ -144,6 +145,8 @@ export function createApp(
   // Recordings of a module or a patch, and the links kept beside a record.
   app.use('/api/audio', audioRoutes(db, { capturesDir, runImpl }));
   app.use('/api/links', linkRoutes(db));
+  // Videos of people playing their systems, shown to every account.
+  app.use('/api/performances', performanceRoutes(db));
 
   app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

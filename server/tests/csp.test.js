@@ -158,6 +158,18 @@ describe('the client shell policy', () => {
     }
   });
 
+  // A performance's video is YouTube's player in a frame, and the privacy
+  // host is the only frame the page may hold: a frame-src that named a
+  // scheme or a wildcard would be a hole the size of the internet.
+  it('frames the YouTube player and nothing else', () => {
+    const directives = policy.match(/frame-src[^;"]*/g) || [];
+    expect(directives.length).toBeGreaterThan(0);
+    for (const directive of directives) {
+      const sources = directive.replace('frame-src', '').trim().split(/\s+/);
+      expect(sources).toEqual(['https://www.youtube-nocookie.com']);
+    }
+  });
+
   it('keeps the directives that need no exception', () => {
     expect(policy).toContain("default-src 'self'");
     expect(policy).toContain("object-src 'none'");
