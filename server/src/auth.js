@@ -233,6 +233,23 @@ export function requireAuth(db, { allowPasswordChange = false } = {}) {
   };
 }
 
+// The session if there is one, and nobody otherwise: for the few routes a
+// page may be read from without signing in (a public performance), where
+// who is asking changes what the answer says rather than whether there is
+// one. A user who must still change their password reads as nobody, the
+// same as requireAuth refuses them.
+export function optionalAuth(db) {
+  return async (req, res, next) => {
+    try {
+      const user = await getSessionUser(db, req.cookies?.[SESSION_COOKIE]);
+      req.user = user && !user.must_change_password ? user : null;
+      next();
+    } catch (e) {
+      next(e);
+    }
+  };
+}
+
 export function requireAdmin() {
   return (req, res, next) => {
     if (!req.user?.is_admin) return res.status(403).json({ error: 'Admin access required' });

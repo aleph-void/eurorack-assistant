@@ -50,6 +50,10 @@ const PatchCompositionsView = () => import('./views/PatchCompositionsView.vue');
 const CompositionsView = () => import('./views/CompositionsView.vue');
 const CompositionStoryboardView = () => import('./views/CompositionStoryboardView.vue');
 const CompositionMappingView = () => import('./views/CompositionMappingView.vue');
+// Performances: videos of people playing their systems, shown to everyone
+// with an account — and, when the author says so, to anyone with the link.
+const PerformancesView = () => import('./views/PerformancesView.vue');
+const PerformanceDetailView = () => import('./views/PerformanceDetailView.vue');
 const ImportView = () => import('./views/ImportView.vue');
 const SearchView = () => import('./views/SearchView.vue');
 const ManualTextView = () => import('./views/ManualTextView.vue');
@@ -235,6 +239,16 @@ export const routes = [
     name: 'composition-mapping',
     component: CompositionMappingView,
     props: true,
+  },
+  { path: '/performances', name: 'performances', component: PerformancesView },
+  // Public on purpose: a performance its author opened to the world is read
+  // without a session, and the page itself says "log in" for one that is not.
+  {
+    path: '/performances/:id',
+    name: 'performance-detail',
+    component: PerformanceDetailView,
+    props: true,
+    meta: { public: true },
   },
   { path: '/import', name: 'import', component: ImportView },
   { path: '/search', name: 'search', component: SearchView },

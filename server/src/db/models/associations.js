@@ -84,6 +84,9 @@ export function associate(m) {
     CompositionSceneElement,
     CompositionPatch,
     CompositionMapping,
+    Performance,
+    PerformanceModule,
+    PerformanceComment,
   } = m;
 
   // Associations. pg-mem (the test database) cannot parse the parenthesized
@@ -356,6 +359,20 @@ export function associate(m) {
   CompositionMapping.belongsTo(CompositionPatch, { foreignKey: 'composition_patch_id' });
   CompositionElement.hasMany(CompositionMapping, { foreignKey: 'element_id' });
   CompositionMapping.belongsTo(CompositionElement, { foreignKey: 'element_id' });
+
+  // A performance is one user's, names the modules used and (soft, nulled
+  // when the patch goes) the patch that played it; the comments hang under
+  // it and go with it.
+  Performance.belongsTo(User, { foreignKey: 'user_id' });
+  User.hasMany(Performance, { foreignKey: 'user_id' });
+  Performance.belongsTo(Patch, { foreignKey: 'patch_id' });
+  Performance.hasMany(PerformanceModule, { foreignKey: 'performance_id' });
+  PerformanceModule.belongsTo(Performance, { foreignKey: 'performance_id' });
+  PerformanceModule.belongsTo(Module, { foreignKey: 'module_id' });
+  Module.hasMany(PerformanceModule, { foreignKey: 'module_id' });
+  Performance.hasMany(PerformanceComment, { foreignKey: 'performance_id' });
+  PerformanceComment.belongsTo(Performance, { foreignKey: 'performance_id' });
+  PerformanceComment.belongsTo(User, { foreignKey: 'user_id' });
 
   return m;
 }

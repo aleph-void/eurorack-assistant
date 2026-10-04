@@ -34,6 +34,16 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   holds the vocabulary, the serializers, the loaders and the one function that
   checks a binding against a patch and names it. `docs/compositions.md` is
   the design.
+- `routes/performances.js` — a PERFORMANCE is a video of someone playing
+  their system, shown to EVERY account the moment it is shared (the one place
+  the private-until-shared rule runs the other way), with the modules used
+  and, if the author chooses, one of their patches readable through it, and
+  comments underneath. Marked `public`, it is also read without a session —
+  the record and its patch take `optionalAuth` — while commenting always
+  takes an account. `services/performances.js` holds the permissions and
+  shapes; `docs/performances.md` is the design. The embedded player is the
+  one frame the client shell's CSP allows (`frame-src` in `nginx/csp.conf`,
+  built by `client/src/youtubeEmbed.js`).
 - `routes/systems.js` — systems: collections of racks patched together as
   one instrument. A rack joins/leaves via `PUT /api/racks/:id/system`; the
   system's own routes arrange the racks on a floor plan.
