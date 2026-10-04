@@ -1,4 +1,5 @@
 import { PROVIDERS, DEFAULT_MODELS, modelNameProblem } from './llm.js';
+import { looksLikeEmail, smtpUrlProblem } from './mail.js';
 
 export const CONFIG_DEFAULTS = {
   llm_provider: 'claude',
@@ -20,6 +21,13 @@ export const CONFIG_DEFAULTS = {
   // Blank disables the scan; the per-video attach flow (yt-dlp) never needs
   // a key, so nothing else breaks without one.
   youtube_api_key: '',
+  // Where the app sends word of something the admin is not looking at — a
+  // failed backup (services/backups.js) — and the SMTP server it sends it
+  // through (services/mail.js). All three blank means nothing is sent, and
+  // the admin page is the only place the failure shows.
+  smtp_url: '',
+  smtp_from: '',
+  alert_email: '',
 };
 
 export const DEFAULT_IMPORT_WORKERS = Number(CONFIG_DEFAULTS.import_workers);
@@ -64,6 +72,19 @@ export async function setConfig(db, updates) {
     if (key === 'youtube_api_key') {
       value = String(value ?? '').trim();
       if (/\s/.test(value)) throw new Error('Invalid youtube_api_key: must not contain spaces');
+    }
+    if (key === 'smtp_url') {
+      value = String(value ?? '').trim();
+      const problem = smtpUrlProblem(value);
+      if (problem) throw new Error(`Invalid smtp_url: ${problem}`);
+    }
+    if (key === 'smtp_from') {
+      value = String(value ?? '').trim();
+      if (value && !looksLikeEmail(value)) throw new Error('Invalid smtp_from: not an email address');
+    }
+    if (key === 'alert_email') {
+      value = String(value ?? '').trim();
+      if (value && !looksLikeEmail(value)) throw new Error('Invalid alert_email: not an email address');
     }
     if (key === 'import_workers') {
       const n = Number(value);

@@ -29,6 +29,7 @@ import { linkRoutes } from './routes/links.js';
 import { panelRoutes } from './routes/panels.js';
 import { shareRoutes } from './routes/shares.js';
 import { cspReportRoutes } from './routes/cspReports.js';
+import { backupRoutes } from './routes/backups.js';
 
 export function createApp(
   db,
@@ -44,6 +45,8 @@ export function createApp(
     fetchImpl,
     runImpl,
     csrf,
+    // The alert mail's sender (services/mail.js); tests hand in a fake.
+    sendMailImpl = null,
   } = {}
 ) {
   const app = express();
@@ -111,7 +114,10 @@ export function createApp(
   app.use('/api/panels', panelRoutes(db, { panelsDir }));
   app.use('/api/imports', importRoutes(db));
   app.use('/api/questions', questionRoutes(db));
-  app.use('/api/config', configRoutes(db));
+  app.use('/api/config', configRoutes(db, { sendMailImpl }));
+  // What the daily backup reported, run by run — admin reading only; the
+  // runs are written by scripts/report-backup.js, not over HTTP.
+  app.use('/api/backups', backupRoutes(db));
   // Per-user LLM provider accounts: who each user's model runs bill to.
   app.use('/api/llm', llmRoutes(db, { fetchImpl }));
   app.use('/api/usage', usageRoutes(db));

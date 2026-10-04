@@ -5,6 +5,7 @@ import { useAuthStore } from './stores/auth.js';
 import { useJobsStore } from './stores/jobs.js';
 import { useDevicesStore } from './stores/devices.js';
 import { useDetailStore } from './stores/detail.js';
+import { useBackupsStore } from './stores/backups.js';
 import { createProgressSocket } from './progressSocket.js';
 import ConfirmDialog from './components/ConfirmDialog.vue';
 import ToastStack from './components/ToastStack.vue';
@@ -20,6 +21,7 @@ const auth = useAuthStore();
 const jobs = useJobsStore();
 const devices = useDevicesStore();
 const detail = useDetailStore();
+const backups = useBackupsStore();
 const router = useRouter();
 const route = useRoute();
 
@@ -53,6 +55,23 @@ function loadVoiceFor(user) {
   else resetVoiceSettings();
 }
 watch(() => auth.user?.id, () => loadVoiceFor(auth.user), { immediate: true });
+
+// ---- the backups ----
+// Whether the last backup worked is the admin's to know and nobody else's,
+// so the status is read when an admin signs in and forgotten when they sign
+// out; and re-read on a page change once it is old (stores/backups.js), so
+// a failure overnight is a banner by the second page of the morning.
+watch(
+  () => auth.isAdmin,
+  (admin) => (admin ? backups.load() : backups.forget()),
+  { immediate: true }
+);
+watch(
+  () => route.fullPath,
+  () => {
+    if (auth.isAdmin) backups.refresh();
+  }
+);
 
 // ---- the menu ----
 // The whole nav lives in a drawer, so what it would have shown as a badge
@@ -336,6 +355,10 @@ async function logout() {
       <RouterLink to="/admin/csp-reports" data-test="nav-csp-reports">
         Policy violations
       </RouterLink>
+      <RouterLink to="/admin/backups" data-test="nav-backups">
+        Backups
+        <span v-if="backups.problem" class="badge failed">!</span>
+      </RouterLink>
     </template>
 
     <div class="nav-foot">
@@ -345,6 +368,19 @@ async function logout() {
       <a href="#" data-test="logout" @click.prevent="logout">Log out</a>
     </div>
   </nav>
+
+  <!-- The one thing said over every page: the backup the admin is not
+       looking at failed. Admins only — it is their host — and gone the
+       moment a run succeeds. -->
+  <div
+    v-if="auth.isLoggedIn && auth.isAdmin && backups.problem"
+    class="site-banner"
+    role="alert"
+    data-test="backup-banner"
+  >
+    <strong>Backup problem.</strong> {{ backups.problem }}
+    <RouterLink to="/admin/backups" data-test="backup-banner-link">See the backups page</RouterLink>
+  </div>
 
   <main class="container">
     <RouterView />

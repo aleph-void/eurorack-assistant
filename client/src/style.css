@@ -162,6 +162,29 @@ pre {
   padding: 1.5rem;
 }
 
+/* A line said over every page, under the top bar: the admin's backup failed
+   (App.vue). Red because it is a failure, in the flow because it must not
+   hide anything, and one line because the page it links to has the rest. */
+.site-banner {
+  max-width: 1100px;
+  margin: 1rem auto 0;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: rgba(248, 113, 113, 0.1);
+  color: var(--text);
+}
+.site-banner a {
+  margin-left: 0.5rem;
+  white-space: nowrap;
+}
+@media (max-width: 1140px) {
+  .site-banner {
+    margin-left: 1.5rem;
+    margin-right: 1.5rem;
+  }
+}
+
 /* ---- top bar and hamburger drawer ---------------------------------- */
 
 .topbar {

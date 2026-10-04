@@ -31,6 +31,7 @@ import { useAuthStore } from '../src/stores/auth.js';
 import { useJobsStore } from '../src/stores/jobs.js';
 import { useDevicesStore } from '../src/stores/devices.js';
 import { useDetailStore } from '../src/stores/detail.js';
+import { useBackupsStore } from '../src/stores/backups.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -64,6 +65,43 @@ describe('App', () => {
     await flushPromises();
     expect(createProgressSocket.mock.results[0].value.close).toHaveBeenCalled();
     expect(createProgressSocket).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  // The backup is the admin's host's business: its status is read for an
+  // admin alone, said over every page while the last run failed, and gone
+  // the moment one succeeds.
+  it('tells an admin over every page that the last backup failed', async () => {
+    api.get.mockImplementation(async (path) =>
+      path === '/api/backups'
+        ? { problem: 'The last backup failed on Mon, 05 Oct 2026 03:17:12 GMT.', runs: [] }
+        : undefined
+    );
+    const { wrapper } = mountApp({ id: 1, username: 'nick', is_admin: true });
+    await flushPromises();
+    expect(api.get).toHaveBeenCalledWith('/api/backups', { quiet: true });
+    const banner = wrapper.find('[data-test="backup-banner"]');
+    expect(banner.exists()).toBe(true);
+    expect(banner.text()).toContain('The last backup failed');
+    expect(wrapper.find('[data-test="nav-backups"]').text()).toContain('!');
+
+    // The next read says it is fine again: the banner goes.
+    api.get.mockImplementation(async (path) =>
+      path === '/api/backups' ? { problem: null, runs: [] } : undefined
+    );
+    const backups = useBackupsStore();
+    await backups.load();
+    await nextTick();
+    expect(wrapper.find('[data-test="backup-banner"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('never asks a plain user about backups', async () => {
+    const { wrapper } = mountApp();
+    await flushPromises();
+    expect(api.get).not.toHaveBeenCalledWith('/api/backups', expect.anything());
+    expect(wrapper.find('[data-test="backup-banner"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="nav-backups"]').exists()).toBe(false);
     wrapper.unmount();
   });
 

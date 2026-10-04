@@ -518,6 +518,20 @@ systemd get the equivalent cron line printed instead; under rootless Docker
 the installer prints the user-timer steps, as `setup.sh` does for the boot
 unit.
 
+**When a backup fails, the admin hears about it.** Every run reports how it
+ended to the app as it finishes (`server/scripts/report-backup.js`, run
+inside the server container; `--no-report` skips it), and the record is read
+two places: **Admin → Backups** lists the recent runs with the tail of each
+one's log, and while the last run failed — or no run has succeeded in two
+days — a red banner says so over every page an admin opens. A failure is
+also **emailed** to the address under **Admin → Application Config →
+Alerts**, through the SMTP server named there (`smtp://user:password@host:587`
+for STARTTLS, `smtps://…:465` for TLS from the first byte; the sender
+defaults to the SMTP login). The success that follows a failure is mailed
+too, so the fix is known to have held without logging in. "Send a test
+message" on that page proves the settings today rather than on the night a
+backup fails; with nothing configured, the failure shows in the app alone.
+
 ## Architecture
 
 ```

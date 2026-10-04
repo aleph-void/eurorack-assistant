@@ -619,6 +619,27 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   FETCHES A LINK: no request leaves the server when one is saved, so a link is
   never a way to make the server knock on an address somebody chose for it.
   Every rendered link carries `target="_blank" rel="noopener noreferrer"`.
+- THE BACKUP IS REPORTED, NOT WATCHED. The daily backup is `backup-to-s3.sh`
+  on the host (a systemd timer from `deploy/`, installed by
+  `install-backup.sh`), the one piece of upkeep that runs outside the
+  containers, so nothing in the server starts it or polls for it. Each run
+  reports how it ended as it finishes — `scripts/report-backup.js`, run
+  through `docker compose exec` inside the server container, which already
+  has the database, rather than an HTTP route the host would need a
+  credential for — into `backup_runs` (migration 053, `services/backups.js`).
+  From the rows the app answers the admin's two questions (did the last one
+  work, when did one last succeed): `GET /api/backups` is admin-only, the
+  Backups page (`/admin/backups`) lists the runs, and `stores/backups.js`
+  holds the status for the banner App.vue draws over every page while
+  `problem` is set — read for an admin alone, re-read on a page change once
+  it is ten minutes old, never polled. A failure is MAILED from the server,
+  not the host, because the SMTP server and the address are app_config
+  (`smtp_url`, `smtp_from`, `alert_email`; `services/mail.js`, nodemailer,
+  with `sendMailImpl` injected by tests the way the LLM backends take a fake
+  `run`): every failure, and the success that ends one, once each; the mail
+  is best-effort and a failure that could not be announced is still a
+  failure on record. `POST /api/config/mail-test` sends through the SAVED
+  settings.
 - Failures are said twice: inline where the work is, and as a toast over the
   page (`client/src/toast.js` + `components/ToastStack.vue`, mounted once in
   `App.vue`, styled in `style.css`). `api.js` raises the red one itself for

@@ -186,7 +186,13 @@ export async function login(app, username, password = 'password123') {
 // Standard fixture: app + admin ('admin') + regular user ('alice').
 // A device hub is always attached so the oscilloscope routes are exercisable;
 // with no device registered it simply reports nothing connected.
-export async function createTestApp({ hub = createDeviceHub(), bus = null, fetchImpl, runImpl } = {}) {
+export async function createTestApp({
+  hub = createDeviceHub(),
+  bus = null,
+  fetchImpl,
+  runImpl,
+  sendMailImpl,
+} = {}) {
   const db = await createTestDb();
   const manualsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-manuals-'));
   const exportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-exports-'));
@@ -203,6 +209,7 @@ export async function createTestApp({ hub = createDeviceHub(), bus = null, fetch
     bus,
     fetchImpl,
     runImpl,
+    sendMailImpl,
     rateLimit: false,
   });
   await createUser(db, { username: 'admin', isAdmin: true });

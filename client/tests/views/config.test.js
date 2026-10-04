@@ -56,6 +56,8 @@ describe('ConfigView', () => {
     await wrapper.find('[data-test="token-budget-default"]').setValue('250000');
     await wrapper.find('[data-test="token-budget-period"]').setValue('week');
     await wrapper.find('[data-test="youtube-api-key"]').setValue('AIzaTestKey123');
+    await wrapper.find('[data-test="alert-email"]').setValue('admin@example.com');
+    await wrapper.find('[data-test="smtp-url"]').setValue('smtps://u:p@smtp.example.com:465');
     await wrapper.find('form').trigger('submit');
     await flushPromises();
     expect(api.put).toHaveBeenCalledWith('/api/config', {
@@ -65,8 +67,36 @@ describe('ConfigView', () => {
       token_budget_default: 250000,
       token_budget_period: 'week',
       youtube_api_key: 'AIzaTestKey123',
+      smtp_url: 'smtps://u:p@smtp.example.com:465',
+      smtp_from: '',
+      alert_email: 'admin@example.com',
     });
     expect(wrapper.find('[data-test="saved"]').exists()).toBe(true);
+  });
+
+  it('sends a test message through the saved alert settings, and shows the refusal', async () => {
+    api.get.mockResolvedValue({
+      ...configResponse,
+      smtp_url: 'smtp://u:p@smtp.example.com:587',
+      alert_email: 'admin@example.com',
+    });
+    api.post.mockResolvedValueOnce({ sent: true, to: 'admin@example.com' });
+    const wrapper = mount(ConfigView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="smtp-url"]').element.value).toBe('smtp://u:p@smtp.example.com:587');
+
+    await wrapper.find('[data-test="send-test-mail"]').trigger('click');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/config/mail-test');
+    expect(wrapper.find('[data-test="mail-result"]').text()).toContain('sent to admin@example.com');
+    // The test is not a save: nothing was put.
+    expect(api.put).not.toHaveBeenCalled();
+
+    api.post.mockRejectedValueOnce(new Error('Could not send: 535 Authentication failed'));
+    await wrapper.find('[data-test="send-test-mail"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="mail-error"]').text()).toContain('535 Authentication failed');
+    expect(wrapper.find('[data-test="mail-result"]').exists()).toBe(false);
   });
 
   it('shows save errors', async () => {

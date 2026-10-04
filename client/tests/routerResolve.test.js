@@ -34,6 +34,7 @@ describe('route matching', () => {
       ['/account/voice', 'voice-settings'],
       ['/admin/users', 'users'],
       ['/admin/config', 'config'],
+      ['/admin/backups', 'backups'],
     ]) {
       expect(r.resolve(path).name, path).toBe(name);
     }

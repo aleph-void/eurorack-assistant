@@ -9,6 +9,12 @@ const importWorkers = ref(4);
 const budgetDefault = ref(0);
 const budgetPeriod = ref('month');
 const youtubeApiKey = ref('');
+const smtpUrl = ref('');
+const smtpFrom = ref('');
+const alertEmail = ref('');
+const mailResult = ref('');
+const mailError = ref('');
+const mailBusy = ref(false);
 const error = ref('');
 const saved = ref(false);
 const busy = ref(false);
@@ -24,6 +30,9 @@ onMounted(async () => {
     budgetDefault.value = Number(config.value.token_budget_default) || 0;
     budgetPeriod.value = config.value.token_budget_period || 'month';
     youtubeApiKey.value = config.value.youtube_api_key || '';
+    smtpUrl.value = config.value.smtp_url || '';
+    smtpFrom.value = config.value.smtp_from || '';
+    alertEmail.value = config.value.alert_email || '';
   } catch (e) {
     error.value = e.message;
   }
@@ -41,12 +50,31 @@ async function save() {
       token_budget_default: budgetDefault.value,
       token_budget_period: budgetPeriod.value,
       youtube_api_key: youtubeApiKey.value,
+      smtp_url: smtpUrl.value,
+      smtp_from: smtpFrom.value,
+      alert_email: alertEmail.value,
     })) };
     saved.value = true;
   } catch (e) {
     error.value = e.message;
   } finally {
     busy.value = false;
+  }
+}
+
+// A message through the SAVED settings: the server refusing the login is
+// news to have today, not on the night a backup fails.
+async function sendTestMail() {
+  mailResult.value = '';
+  mailError.value = '';
+  mailBusy.value = true;
+  try {
+    const result = await api.post('/api/config/mail-test');
+    mailResult.value = `Test message sent to ${result.to}.`;
+  } catch (e) {
+    mailError.value = e.message;
+  } finally {
+    mailBusy.value = false;
   }
 }
 </script>
@@ -127,6 +155,57 @@ async function save() {
           autocomplete="off"
           placeholder="AIza…"
         />
+      </fieldset>
+
+      <fieldset>
+        <legend>Alerts</legend>
+        <p class="muted" style="margin-top: 0">
+          Where the app sends word of something you are not looking at: a daily backup that
+          failed (see <RouterLink to="/admin/backups">Backups</RouterLink>). Mail goes through
+          the SMTP server named here — <code>smtp://user:password@host:587</code> for STARTTLS,
+          <code>smtps://…:465</code> for TLS from the first byte. Blank means nothing is sent
+          and the failure shows only in the app.
+        </p>
+        <label for="alert-email">Alert address</label>
+        <input
+          id="alert-email"
+          v-model="alertEmail"
+          data-test="alert-email"
+          type="email"
+          autocomplete="off"
+          placeholder="you@example.com"
+        />
+        <label for="smtp-url">SMTP URL</label>
+        <input
+          id="smtp-url"
+          v-model="smtpUrl"
+          data-test="smtp-url"
+          autocomplete="off"
+          placeholder="smtps://user:password@smtp.example.com:465"
+        />
+        <label for="smtp-from">Sender address (blank = the SMTP login)</label>
+        <input
+          id="smtp-from"
+          v-model="smtpFrom"
+          data-test="smtp-from"
+          type="email"
+          autocomplete="off"
+          placeholder="rack@example.com"
+        />
+        <p class="muted">
+          <button
+            type="button"
+            class="secondary"
+            :disabled="mailBusy"
+            data-test="send-test-mail"
+            @click="sendTestMail"
+          >
+            {{ mailBusy ? 'Sending…' : 'Send a test message' }}
+          </button>
+          — uses the settings as last saved.
+        </p>
+        <p v-if="mailResult" class="success" data-test="mail-result">{{ mailResult }}</p>
+        <p v-if="mailError" class="error" data-test="mail-error">{{ mailError }}</p>
       </fieldset>
 
       <p v-if="error" class="error" data-test="error">{{ error }}</p>

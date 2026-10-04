@@ -65,6 +65,8 @@ const LinkDeviceView = () => import('./views/LinkDeviceView.vue');
 const UsersView = () => import('./views/UsersView.vue');
 const ConfigView = () => import('./views/ConfigView.vue');
 const CspReportsView = () => import('./views/CspReportsView.vue');
+// What the daily backup on the host reported, run by run.
+const BackupsView = () => import('./views/BackupsView.vue');
 const ChangePasswordView = () => import('./views/ChangePasswordView.vue');
 const LlmSettingsView = () => import('./views/LlmSettingsView.vue');
 const VoiceSettingsView = () => import('./views/VoiceSettingsView.vue');
@@ -255,6 +257,7 @@ export const routes = [
     component: CspReportsView,
     meta: { admin: true },
   },
+  { path: '/admin/backups', name: 'backups', component: BackupsView, meta: { admin: true } },
 ];
 
 // Exported for tests: decides where (if anywhere) to redirect a navigation.
