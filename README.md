@@ -420,17 +420,30 @@ The app is then at <http://localhost:8080>.
 Pass your domain to the setup script to serve TLS on port 443:
 
 ```sh
-sudo certbot certonly --standalone -d rack.example.com   # if you don't have certs yet
 ./setup.sh rack.example.com
 ```
 
-When certs exist in `/etc/letsencrypt/live/<fqdn>/`, nginx serves
-<https://fqdn/> on port 443 with port 80 redirecting to it (the FQDN is
-remembered in `.env`, so later plain `./setup.sh` runs keep TLS). Certs are
-mounted read-only from the host; after a `certbot renew`, reload nginx with
-`docker compose exec nginx nginx -s reload` (a good certbot deploy hook).
-With rootless Docker, setup grants `rootlesskit` the `cap_net_bind_service`
-capability so it can bind ports 80/443.
+When no certs exist in `/etc/letsencrypt/live/<fqdn>/` yet, setup requests
+them from Let's Encrypt with `certbot certonly --standalone` (installing
+certbot on Ubuntu if it is missing). That needs the domain's DNS pointing at
+the host and port 80 reachable from the internet, and it agrees to the
+Let's Encrypt subscriber agreement for you; set `CERTBOT_EMAIL=you@example.com`
+to register the account with an address. If the request fails, setup says why
+and stays on plain HTTP — fix the DNS or the port and re-run.
+
+With certs in place, nginx serves <https://fqdn/> on port 443 with port 80
+redirecting to it (the FQDN is remembered in `.env`, so later plain
+`./setup.sh` runs keep TLS). Certs are mounted read-only from the host and
+renewed by certbot's own timer; setup installs renewal hooks under
+`/etc/letsencrypt/renewal-hooks/` (`deploy/certbot-renewal-hook.sh`) that
+stop nginx for the renewal, since the standalone challenge needs port 80, and
+start it again with the new cert. Certs obtained some other way (a DNS
+challenge, say) still need a reload after renewal:
+`docker compose exec nginx nginx -s reload` as a certbot deploy hook. With
+rootless Docker, setup grants `rootlesskit` the `cap_net_bind_service`
+capability so it can bind ports 80/443, and skips the renewal hooks (root's
+certbot cannot reach your daemon) — stop and start nginx around renewals
+yourself.
 
 LLM credentials are per user, connected in the web UI (Account → LLM
 provider) — the server no longer mounts or uses a login from the host. Each
