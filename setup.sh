@@ -252,6 +252,23 @@ ensure_boot_service() {
     warn "could not start $UNIT_NAME; check: systemctl status $UNIT_NAME"
 }
 
+# --------------------------------------------------------------- backup ----
+# The daily S3 backup is opted into with ./install-backup.sh <bucket>, which
+# records the bucket in .env. Once it is there, every later setup run
+# re-renders the timer from the current templates (a changed path, a changed
+# unit) the same way the boot unit is kept current.
+ensure_backup_timer() {
+  if [ -z "$(get_env BACKUP_S3_BUCKET)" ]; then
+    info "no BACKUP_S3_BUCKET in .env — daily S3 backups are off (./install-backup.sh <bucket> turns them on)"
+    return
+  fi
+  if [ "${SKIP_BOOT_SERVICE:-0}" = "1" ]; then
+    info "SKIP_BOOT_SERVICE=1 — not touching the backup timer"
+    return
+  fi
+  ./install-backup.sh || warn "could not install the backup timer; re-run ./install-backup.sh with sudo available."
+}
+
 # ------------------------------------------------------------------- app ----
 random_hex() {
   if command -v openssl >/dev/null 2>&1; then
@@ -337,6 +354,7 @@ info "starting all services..."
 $DOCKER compose up -d
 
 ensure_boot_service
+ensure_backup_timer
 
 echo ""
 if [ "$TLS_ENABLED" = "1" ]; then

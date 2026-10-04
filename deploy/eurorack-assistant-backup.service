@@ -1,0 +1,33 @@
+# eurorack-assistant-backup — one full backup of the deployment to S3.
+#
+# Started by eurorack-assistant-backup.timer once a day; `systemctl start
+# eurorack-assistant-backup.service` makes one right now. The work is
+# ./backup-to-s3.sh, which reads its bucket and credentials from .env in the
+# app directory and leaves its log in the journal:
+#
+#   journalctl -u eurorack-assistant-backup.service
+#
+# TEMPLATE: @APP_DIR@ is substituted at install time by ./install-backup.sh.
+
+[Unit]
+Description=Eurorack Assistant backup to S3
+Documentation=https://github.com/aleph-void/eurorack-assistant
+Requires=docker.service
+After=docker.service network-online.target eurorack-assistant.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@APP_DIR@
+ExecStart=@APP_DIR@/backup-to-s3.sh
+
+# Dumping a big library and pushing it over the wire takes as long as it
+# takes; the script holds its own lock, so a slow run can never overlap the
+# next one.
+TimeoutStartSec=0
+
+# The app is serving while this runs: stay out of its way on the CPU and the
+# disk.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
