@@ -67,11 +67,15 @@ const ConfigView = () => import('./views/ConfigView.vue');
 const CspReportsView = () => import('./views/CspReportsView.vue');
 const ChangePasswordView = () => import('./views/ChangePasswordView.vue');
 const AccountEmailView = () => import('./views/AccountEmailView.vue');
+const VerifyEmailView = () => import('./views/VerifyEmailView.vue');
+const MailSettingsView = () => import('./views/MailSettingsView.vue');
 const LlmSettingsView = () => import('./views/LlmSettingsView.vue');
 const VoiceSettingsView = () => import('./views/VoiceSettingsView.vue');
 
 export const routes = [
   { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
+  // The link in the confirmation mail, opened wherever the mail is read.
+  { path: '/verify-email', name: 'verify-email', component: VerifyEmailView, meta: { public: true } },
   { path: '/', redirect: '/modules' },
   { path: '/account/password', name: 'change-password', component: ChangePasswordView },
   // The address a password reset is sent to.
@@ -249,6 +253,7 @@ export const routes = [
   // Where a device's verification_uri points; the code may ride along as ?code=
   { path: '/link', name: 'link-device', component: LinkDeviceView },
   { path: '/admin/users', name: 'users', component: UsersView, meta: { admin: true } },
+  { path: '/admin/mail', name: 'mail-settings', component: MailSettingsView, meta: { admin: true } },
   { path: '/admin/config', name: 'config', component: ConfigView, meta: { admin: true } },
   // What browsers refused to load, reported by the browsers themselves. The
   // policy is nginx/csp.conf and server/src/csp.js; this is its other end.

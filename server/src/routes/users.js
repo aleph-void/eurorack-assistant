@@ -12,29 +12,61 @@ import {
 } from '../auth.js';
 import { purgeUserLlmData } from '../services/llmAccounts.js';
 import { revokeUserDeviceTokens } from '../services/deviceAuth.js';
+import { lockUser, unlockUser } from '../services/accountLock.js';
+import { startEmailVerification } from '../services/emailVerification.js';
+import { sendMail } from '../services/mailer.js';
 import { asyncHandler } from './asyncHandler.js';
 
+const iso = (value) => (value ? new Date(value).toISOString() : null);
+
 function publicUser(user) {
-  const { id, username, email, is_admin, created_at, token_budget } = user;
+  const {
+    id,
+    username,
+    email,
+    email_verified_at,
+    is_admin,
+    created_at,
+    token_budget,
+    locked_at,
+    locked_reason,
+    failed_logins,
+  } = user;
   return {
     id,
     username,
-    email: email ?? null,
+    email,
+    email_verified_at: iso(email_verified_at),
     is_admin,
     created_at,
+    locked_at: iso(locked_at),
+    locked_reason: locked_reason ?? null,
+    failed_logins: Number(failed_logins || 0),
     // BIGINT arrives from postgres as a string; the API says numbers.
     token_budget: token_budget === null || token_budget === undefined ? null : Number(token_budget),
   };
 }
 
-export function userRoutes(db) {
+export function userRoutes(db, { mailImpl } = {}) {
   const { User } = db.models;
   const router = Router();
   router.use(requireAuth(db), requireAdmin());
+  const mail = (message) => sendMail(db, message, { mailImpl });
 
   router.get('/', asyncHandler(async (req, res) => {
     const users = await User.findAll({
-      attributes: ['id', 'username', 'email', 'is_admin', 'created_at', 'token_budget'],
+      attributes: [
+        'id',
+        'username',
+        'email',
+        'email_verified_at',
+        'is_admin',
+        'created_at',
+        'token_budget',
+        'locked_at',
+        'locked_reason',
+        'failed_logins',
+      ],
       order: [['id', 'ASC']],
     });
     res.json(users.map(publicUser));
@@ -42,8 +74,8 @@ export function userRoutes(db) {
 
   // Admins create non-admin users only. If no password is given, one is
   // generated and returned once in the response (stored only as a hash).
-  // An email address is optional here: the one place it is required is the
-  // registration the user does for themselves.
+  // The address is required and starts unconfirmed: the confirmation mail
+  // goes out as the account is made.
   router.post('/', asyncHandler(async (req, res) => {
     const { username } = req.body || {};
     let { password } = req.body || {};
@@ -53,17 +85,15 @@ export function userRoutes(db) {
       });
     }
     const email = normalizeEmail(req.body?.email);
-    if (email !== null) {
-      const problem = emailProblem(email);
-      if (problem) return res.status(400).json({ error: problem });
-    }
+    const emailTrouble = emailProblem(email ?? '');
+    if (emailTrouble) return res.status(400).json({ error: emailTrouble });
     const existing = await User.findOne({
       where: where(fn('lower', col('username')), String(username).toLowerCase()),
     });
     if (existing) {
       return res.status(409).json({ error: 'Username already exists' });
     }
-    if (email !== null && (await User.findOne({ where: { email } }))) {
+    if (await User.findOne({ where: { email } })) {
       return res.status(409).json({ error: 'Email already in use' });
     }
     let generated = null;
@@ -80,8 +110,47 @@ export function userRoutes(db) {
       password_hash: hashPassword(String(password)),
       is_admin: false,
     });
-    const user = publicUser(created);
+    const verification = await startEmailVerification(db, created, { sendMail: mail });
+    const user = { ...publicUser(created), verification };
     res.status(201).json(generated ? { ...user, generated_password: generated } : user);
+  }));
+
+  // The admin putting right a user's address. Whatever was confirmed was the
+  // old one, so the new one starts unconfirmed and the mail goes out again.
+  // The admin's own address is changed on the account page, with a password.
+  router.put('/:id/email', asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    if (id === req.user.id) {
+      return res.status(400).json({ error: 'Use the account page to change your own address' });
+    }
+    const user = await User.findByPk(id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const email = normalizeEmail(req.body?.email);
+    const problem = emailProblem(email ?? '');
+    if (problem) return res.status(400).json({ error: problem });
+    if (email !== user.email && (await User.findOne({ where: { email } }))) {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+    await user.update({ email, email_verified_at: null });
+    const verification = await startEmailVerification(db, user, { sendMail: mail });
+    res.json({ ...publicUser(user), verification });
+  }));
+
+  // Shutting an account, and opening it again — the latter also for one the
+  // failed-login rule shut. Locking logs the user out everywhere.
+  router.put('/:id/lock', asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    if (id === req.user.id) {
+      return res.status(400).json({ error: 'Cannot lock your own account' });
+    }
+    if (typeof req.body?.locked !== 'boolean') {
+      return res.status(400).json({ error: 'locked must be true or false' });
+    }
+    const user = await User.findByPk(id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (req.body.locked) await lockUser(db, user, { reason: 'admin' });
+    else await unlockUser(db, user);
+    res.json(publicUser(user));
   }));
 
   // Admins reset another user's password without knowing the current one.

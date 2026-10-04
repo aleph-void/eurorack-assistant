@@ -497,7 +497,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 
 | table | purpose |
 | --- | --- |
-| `users` | accounts; `is_admin` flag, and `token_budget` — this user's own token allowance per window (NULL takes the configured default, 0 lifts the ceiling for them) |
+| `users` | accounts; `is_admin` flag, `email` (required, one per account, with `email_verified_at` once the mailed link is followed), the lock (`failed_logins`, `locked_at`, `locked_reason`), and `token_budget` — this user's own token allowance per window (NULL takes the configured default, 0 lifts the ceiling for them). `email_verifications` holds the hashed token of the outstanding confirmation. See `docs/accounts.md` |
 | `modules` | **shared** module records with `manual_status` / `analysis_status` / `panel_status` — the manual is found, analyzed and drawn once, for everyone |
 | `racks` | a user's named racks (unique name per user, `main rack` by default); strictly private to their owner |
 | `rack_modules` | maps racks to the modules in them (per-rack quantity); "deleting" a module only unlinks it, and the same module can sit in many racks |
@@ -535,7 +535,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `question_patches` | the patches a question is about — the patch rides along as a document of its cables, settings, normalled connections and signal flow, and the modules it uses go into scope |
 | `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `reanalyze_components`, `panel_image`, `extract_manual`, `scope_question`, `answer_question`) with attempts + errors |
 | `llm_usage` | one row per CLI invocation: the tokens it spent (fresh input, cached input, cache writes, output), the model that spent them, and the job and user it is billed to. `cost_usd` is filled in where the provider reports one (claude does, codex does not) |
-| `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`), job worker count (`import_workers`, default 4), the per-user token budget and its window (`token_budget_default`, `token_budget_period`), and the queue pause the worker sets when the provider runs out of tokens (`queue_paused_until`, `queue_paused_reason`) |
+| `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`), job worker count (`import_workers`, default 4), the per-user token budget and its window (`token_budget_default`, `token_budget_period`), and the queue pause the worker sets when the provider runs out of tokens (`queue_paused_until`, `queue_paused_reason`); also the mail server settings (`mail_*`, `public_url`, the password encrypted), served only through `/api/config/mail` |
 
 ## Development
 
@@ -577,6 +577,13 @@ free for public repositories) to turn that on.
   endpoint except the change-password form until they set their own password.
 - Users change their own password (current password required) via the username
   link in the nav; admins can reset any other user's password without it.
+- Every account has an email address, confirmed by following a mailed link;
+  users change their own (current password required) under the Email link in
+  the nav, admins change anyone's from the Users page, and either change has to
+  be confirmed again. Mail goes out through the SMTP account set on the admin's
+  Mail server page (`/admin/mail`).
+- Five wrong passwords in a row lock an account; admins lock and unlock
+  accounts from the Users page, and only an admin unlocks one.
 - Only admins can create users (always non-admin) and change the LLM config.
 - Each user sees only their own module mappings, questions, notes, uploaded
   documents, captures, and jobs (admins see all jobs), plus whatever another

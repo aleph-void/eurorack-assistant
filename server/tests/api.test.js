@@ -1792,10 +1792,10 @@ describe('jobs API', () => {
     await request(app)
       .post('/api/users')
       .set('Cookie', adminCookie)
-      .send({ username: 'bob', password: 'password123' });
+      .send({ username: 'bob', email: 'bob@example.net', password: 'password123' });
     const bobLogin = await request(app)
       .post('/api/auth/login')
-      .send({ username: 'bob', password: 'password123' });
+      .send({ username: 'bob', email: 'bob@example.net', password: 'password123' });
     const bobCookie = bobLogin.headers['set-cookie'][0].split(';')[0];
     const { rows: bob } = await db.query("SELECT id FROM users WHERE username = 'bob'");
     await mapModule(db, bob[0].id, module.id);
