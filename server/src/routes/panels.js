@@ -4,6 +4,7 @@
 // route can never be used to read arbitrary bytes out of the panels directory.
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { STORED_FILE_POLICY } from '../csp.js';
@@ -18,7 +19,22 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 // few hundred kilobytes if it ever fills.
 const VERIFIED_LIMIT = 4096;
 
-export function panelRoutes(db, { panelsDir = process.env.PANELS_DIR || '/data/panels' } = {}) {
+// `accelPrefix` is set when nginx has the panels directory mounted and an
+// `internal` location over it (nginx.conf, /_panels/): the route then
+// answers with an X-Accel-Redirect naming the file under that prefix and no
+// body, and nginx sends the bytes itself with sendfile — a 3-8 MB
+// manufacturer's original no longer passes through node a chunk at a time.
+// The route still decides WHETHER the file is served (the session, the hash
+// a panel row names) and WHICH one (the width variant), and still sets the
+// headers nginx carries over from the redirect: Content-Type and
+// Cache-Control. The ones it does not carry over — the stored-file CSP and
+// nosniff — the nginx location adds itself, and tests/csp.test.js holds it
+// to the same policy. Unset (the Vite dev proxy, the tests), the bytes are
+// streamed from here as before.
+export function panelRoutes(
+  db,
+  { panelsDir = process.env.PANELS_DIR || '/data/panels', accelPrefix = null } = {}
+) {
   const { ModulePanel } = db.models;
   const router = Router();
   router.use(requireAuth(db));
@@ -67,9 +83,18 @@ export function panelRoutes(db, { panelsDir = process.env.PANELS_DIR || '/data/p
     res.set('X-Content-Type-Options', 'nosniff');
     // The bytes are addressed by their own hash, so they can never change.
     res.set('Cache-Control', 'private, max-age=31536000, immutable');
+    const served = variant ?? file;
+    if (accelPrefix) {
+      // The path under the panels directory, as the nginx location's alias
+      // sees it: the file itself, or thumbs/<hash>@<width>.webp. Nothing in
+      // it needs escaping — a hex hash, a width, an extension this route
+      // validated — and nothing is, so nginx has nothing to decode.
+      const relative = path.relative(panelsDir, served).split(path.sep).join('/');
+      res.set('X-Accel-Redirect', `${accelPrefix}/${relative}`);
+      return res.status(200).end();
+    }
     // Sized, so the browser can lay the picture's download out and nginx
     // need not chunk it.
-    const served = variant ?? file;
     res.set('Content-Length', String((await fs.promises.stat(served)).size));
     fs.createReadStream(served).pipe(res);
   }));

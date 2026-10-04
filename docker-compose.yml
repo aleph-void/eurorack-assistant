@@ -64,6 +64,9 @@ services:
       # Set to 1 by setup.sh when the TLS override is active, so the session
       # cookie gets the Secure attribute only where HTTPS is actually served.
       SECURE_COOKIES: ${SECURE_COOKIES:-0}
+      # nginx has the panels volume mounted (below) and sends panel pictures
+      # itself once the API has said yes to one (routes/panels.js).
+      PANELS_ACCEL_PREFIX: /_panels
       # Where yt-dlp's bgutil plugin fetches YouTube "proof of origin"
       # tokens (services/videos.js). The tv_simply client works without one,
       # so a dead sidecar degrades to a warning, not a failure.
@@ -106,6 +109,11 @@ services:
       dockerfile: nginx/Dockerfile
     ports:
       - "${APP_PORT:-8080}:80"
+    volumes:
+      # Read-only: nginx sends panel pictures from here on the API's
+      # X-Accel-Redirect (nginx.conf, location /_panels/); the API is what
+      # writes them.
+      - panels:/data/panels:ro
     depends_on:
       - server
     restart: unless-stopped

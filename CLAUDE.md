@@ -250,7 +250,12 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   (`services/panelThumbs.js`). Every renderer asks for the size it is about to
   draw — `panelImageUrl()`/`panelThumbUrl()` in `client/src/panelLayout.js`,
   never a bare `panel.url` — because a stored panel is the multi-megabyte file
-  the manufacturer published and a patch draws forty of them at once.
+  the manufacturer published and a patch draws forty of them at once. In the
+  compose deployment the BYTES ARE SENT BY NGINX: the route checks the
+  session and the hash and picks the variant, then answers with an
+  `X-Accel-Redirect` under `/_panels/` (`PANELS_ACCEL_PREFIX`), an `internal`
+  location over the panels volume mounted read-only into the nginx
+  container. Without the prefix (the Vite dev proxy) the route streams them.
 - A MENU PARAMETER is a setting a module keeps behind an encoder and a screen
   rather than under a control of its own. The component inventory plus
   `component_values` covers a filter whose LP/BP/HP switch you can see; it

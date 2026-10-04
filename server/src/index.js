@@ -16,6 +16,11 @@ const MANUALS_DIR = process.env.MANUALS_DIR || '/data/manuals';
 const EXPORTS_DIR = process.env.EXPORTS_DIR || '/data/exports';
 const CAPTURES_DIR = process.env.CAPTURES_DIR || '/data/captures';
 const PANELS_DIR = process.env.PANELS_DIR || '/data/panels';
+// Set by docker-compose.yml, where nginx has the panels volume mounted and
+// serves the files itself on the API's say-so (routes/panels.js). Left unset
+// wherever requests reach the API without nginx in front — the Vite dev
+// proxy — and the API streams them.
+const PANELS_ACCEL_PREFIX = process.env.PANELS_ACCEL_PREFIX || null;
 const VIDEOS_DIR = process.env.VIDEOS_DIR || '/data/videos';
 // Lapsed device codes and long-revoked tokens are swept hourly.
 const DEVICE_AUTH_PRUNE_MS = 60 * 60 * 1000;
@@ -57,6 +62,7 @@ async function main() {
     exportsDir: EXPORTS_DIR,
     capturesDir: CAPTURES_DIR,
     panelsDir: PANELS_DIR,
+    panelsAccelPrefix: PANELS_ACCEL_PREFIX,
     videosDir: VIDEOS_DIR,
     hub,
     bus,
