@@ -6,6 +6,7 @@ import DOMPurify from 'dompurify';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
 import ShareButton from '../components/ShareButton.vue';
+import QuestionThread from '../components/QuestionThread.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -23,6 +24,8 @@ const selectedCaptures = ref([]);
 const selectedAudio = ref([]);
 const selectedPatches = ref([]);
 const moduleFilter = ref('');
+const followUp = ref('');
+const askingFollowUp = ref(false);
 let pollTimer = null;
 
 const answerHtml = computed(() => {
@@ -34,6 +37,15 @@ const isWorking = computed(() =>
   ['scoping', 'pending', 'answering'].includes(question.value?.status)
 );
 const isReview = computed(() => question.value?.status === 'scoped');
+
+// The thread under an answered question: the follow-ups asked so far, and
+// whether the last of them is still being answered — the next one waits for
+// it, because it is answered against the conversation as it then stands.
+const thread = computed(() => question.value?.thread ?? []);
+const threadWorking = computed(() =>
+  thread.value.some((turn) => ['scoping', 'scoped', 'pending', 'answering'].includes(turn.status))
+);
+const canFollowUp = computed(() => question.value?.status === 'answered');
 
 // Attachment choices narrow to whatever modules (and components) are
 // currently selected.
@@ -215,9 +227,14 @@ async function load() {
       router.replace(`/shared/question/${props.id}`);
       return;
     }
+    // A follow-up is a turn of its thread, read on the root's page.
+    if (loaded.parent_id) {
+      router.replace(`/questions/${loaded.parent_id}`);
+      return;
+    }
     question.value = loaded;
     if (isReview.value && !options.value) await loadOptions();
-    if (isWorking.value) {
+    if (isWorking.value || threadWorking.value) {
       pollTimer = setTimeout(load, 3000);
     }
   } catch (e) {
@@ -248,10 +265,56 @@ async function requestAnswer() {
   }
 }
 
+// The next question in the thread. The server copies the thread's scope and
+// attachments onto it and queues the answer at once — no review step — so
+// the turn goes straight into the list as pending and the page polls until
+// it lands.
+async function askFollowUp() {
+  const prompt = followUp.value.trim();
+  if (!prompt || askingFollowUp.value) return;
+  error.value = '';
+  askingFollowUp.value = true;
+  try {
+    const turn = await api.post(`/api/questions/${props.id}/followups`, { prompt });
+    question.value = { ...question.value, thread: [...thread.value, { answer: null, ...turn }] };
+    followUp.value = '';
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(load, 3000);
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    askingFollowUp.value = false;
+  }
+}
+
+// One turn out of the thread; the rest of it stands.
+async function removeTurn(turn) {
+  const ok = await dialog.confirm({
+    title: 'Remove follow-up',
+    message: 'Remove this follow-up and its answer from the thread?',
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (!ok) return;
+  error.value = '';
+  try {
+    await api.delete(`/api/questions/${turn.id}`);
+    question.value = {
+      ...question.value,
+      thread: thread.value.filter((t) => t.id !== turn.id),
+    };
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
 async function removeQuestion() {
   const ok = await dialog.confirm({
     title: 'Delete question',
-    message: 'Delete this question and its answer?',
+    message:
+      thread.value.length > 0
+        ? 'Delete this question, its answer and every follow-up under it?'
+        : 'Delete this question and its answer?',
     confirmLabel: 'Delete',
     danger: true,
   });
@@ -732,6 +795,39 @@ onUnmounted(() => clearTimeout(pollTimer));
           <div class="answer" data-test="answer" v-html="answerHtml"></div>
         </div>
       </details>
+
+      <!-- The thread: what was asked next, and the box for the next thing.
+           A follow-up carries this question's scope and attachments and is
+           answered with the conversation so far, so there is nothing to
+           review — ask, and the answer lands below. -->
+      <div v-if="canFollowUp" class="panel" data-test="follow-ups">
+        <h2>Follow-ups</h2>
+        <QuestionThread :turns="thread" removable @remove="removeTurn" />
+        <form @submit.prevent="askFollowUp">
+          <label for="follow-up-prompt">Ask a follow-up</label>
+          <textarea
+            id="follow-up-prompt"
+            v-model="followUp"
+            data-test="follow-up-prompt"
+            :disabled="threadWorking || askingFollowUp"
+            placeholder="e.g. And if I take the envelope out of that?"
+          ></textarea>
+          <p class="muted">
+            Answered with the same modules and attachments as the question above, and with the
+            whole conversation so far in front of the assistant.
+          </p>
+          <p v-if="threadWorking" class="muted" data-test="follow-up-waiting">
+            Waiting for the last follow-up to be answered…
+          </p>
+          <button
+            type="submit"
+            :disabled="threadWorking || askingFollowUp || !followUp.trim()"
+            data-test="ask-follow-up"
+          >
+            Ask
+          </button>
+        </form>
+      </div>
     </template>
   </template>
 </template>

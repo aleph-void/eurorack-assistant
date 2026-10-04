@@ -809,6 +809,34 @@ modules in scope, and the prompt then says no documents are attached and asks
 for an answer from what the model knows of the modules named — which is what
 "what is this case missing?" asked of a whole rack is.
 
+AN ANSWERED QUESTION IS A THREAD BEGUN. The question page takes the next
+question under the answer (`POST /api/questions/:id/followups`, body
+`{ prompt }`): a FOLLOW-UP is a `questions` row of its own with `parent_id`
+naming the ROOT of its thread (migration 052 — every follow-up points at the
+first question, never at the one before it, and goes with the root when it is
+deleted; the DELETE route removes them by hand as well, because pg-mem does
+not cascade a table onto itself). It carries the thread's scope and
+attachments — the root's link rows copied onto it, so `answerQuestion()`
+reads it exactly as it reads any question — and is created `pending` with
+its `answer_question` job at once: no scoping pass and no review step,
+because the thread already settled what the conversation is about. What it
+adds is the CONVERSATION SO FAR: `conversationDocument()` in `services/ask.js`
+writes the root and every answered follow-up asked before it as one
+question-and-answer document, attached as `conversation.md`, and the prompt
+says the question is a follow-up to be answered in the light of it (a failed
+turn said nothing and is left out). Attaching a previous answer attaches the
+same document — the whole thread, since the later turns are where the
+detail ended up — which is also why only ROOTS are offered and accepted as
+`answer_ids`, and why `GET /api/questions` (and the per-record lists) show
+roots only: a thread is read whole off its root, served as `thread` on
+`GET /api/questions/:id` to its owner and to a share's reader alike, and a
+follow-up's own id sends the page to the root's. One follow-up at a time per
+thread (409 while one is `pending`/`answering`) since each is answered against
+the thread as it then stands; the root must be `answered` first. The page is
+`components/QuestionThread.vue` (the turns, drawn on the question page and on
+the shared one) plus the box on `QuestionDetailView.vue`, which is the
+owner's alone.
+
 THE OSCILLOSCOPE IS A PAGE OF A PATCH AND A PAGE OF A MODULE, because most
 scope work is BENCH work: one module on the rails, a cable into the
 interface, "what does this output actually look like". `/patches/:id/scope`

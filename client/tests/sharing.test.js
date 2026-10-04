@@ -245,6 +245,30 @@ describe('SharedItemView', () => {
     expect(wrapper.find('[data-test="shared-answer"]').html()).toContain('<strong>EOR</strong>');
   });
 
+  it('reads the follow-ups under a shared question, with no box to ask another', async () => {
+    const wrapper = mountItem('question', 3, {
+      id: 3,
+      prompt: 'How do I make it cycle?',
+      answer: 'Patch **EOR** into Signal In.',
+      status: 'answered',
+      modules: [],
+      shared: true,
+      owner_username: 'alice',
+      thread: [
+        { id: 4, prompt: 'And slower?', status: 'answered', answer: 'Turn _Rise_ up.' },
+        { id: 5, prompt: 'Faster?', status: 'pending', answer: null },
+      ],
+    });
+    await flushPromises();
+    const turns = wrapper.findAll('[data-test="thread-turn"]');
+    expect(turns).toHaveLength(2);
+    expect(turns[0].text()).toContain('And slower?');
+    expect(turns[0].find('[data-test="thread-answer"]').html()).toContain('<em>Rise</em>');
+    expect(turns[1].find('[data-test="thread-pending"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="follow-up-prompt"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="remove-turn-4"]').exists()).toBe(false);
+  });
+
   it('reads a shared rack as the list of what is in it', async () => {
     const wrapper = mountItem('rack', 1, {
       id: 1,
