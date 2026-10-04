@@ -215,7 +215,10 @@ describe('password policy', () => {
   it('enforces the minimum when an admin creates a user', async () => {
     const { app, db, adminCookie } = await createTestApp();
     const create = (username, password) =>
-      request(app).post('/api/users').set('Cookie', adminCookie).send({ username, password });
+      request(app)
+        .post('/api/users')
+        .set('Cookie', adminCookie)
+        .send({ username, password, email: `${username}@example.net` });
 
     const short = await create('shorty', 'a'.repeat(MIN_PASSWORD_LENGTH - 1));
     expect(short.status).toBe(400);
@@ -439,7 +442,7 @@ describe('user management', () => {
     const res = await request(app)
       .post('/api/users')
       .set('Cookie', adminCookie)
-      .send({ username: 'newuser' });
+      .send({ username: 'newuser', email: 'newuser@example.net' });
     expect(res.status).toBe(201);
     expect(res.body.is_admin).toBe(false);
     expect(res.body.generated_password).toBeDefined();
@@ -455,7 +458,7 @@ describe('user management', () => {
     await request(app)
       .post('/api/users')
       .set('Cookie', adminCookie)
-      .send({ username: 'sneaky', password: 'password123', is_admin: true });
+      .send({ username: 'sneaky', email: 'sneaky@example.net', password: 'password123', is_admin: true });
     const { rows } = await db.query("SELECT is_admin FROM users WHERE username = 'sneaky'");
     expect(rows[0].is_admin).toBe(false);
   });
@@ -465,7 +468,7 @@ describe('user management', () => {
     const res = await request(app)
       .post('/api/users')
       .set('Cookie', adminCookie)
-      .send({ username: 'ALICE' });
+      .send({ username: 'ALICE', email: 'alice2@example.net' });
     expect(res.status).toBe(409);
   });
 
@@ -476,7 +479,7 @@ describe('user management', () => {
         await request(app)
           .post('/api/users')
           .set('Cookie', adminCookie)
-          .send({ username: 'ok', password: 'short' })
+          .send({ username: 'ok', email: 'ok@example.net', password: 'short' })
       ).status
     ).toBe(400);
     expect(
@@ -601,5 +604,395 @@ describe('user management', () => {
     expect(
       (await request(app).delete(`/api/users/${admins[0].id}`).set('Cookie', adminCookie)).status
     ).toBe(400);
+  });
+});
+
+describe('email address', () => {
+  it('is served on /me and at login, with whether it is confirmed', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    const me = await request(app).get('/api/auth/me').set('Cookie', aliceCookie);
+    expect(me.body.email).toBe('alice@example.org');
+    expect(me.body.email_verified_at).toMatch(/^\d{4}-/);
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'alice', password: 'password123' });
+    expect(loginRes.body.email).toBe('alice@example.org');
+  });
+
+  it('changes the address with the current password, lowercased, and mails a confirmation', async () => {
+    const { app, aliceCookie, db, sentMail } = await createTestApp();
+    const set = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: '  Alice@Example.NET ', current_password: 'password123' });
+    expect(set.status).toBe(200);
+    expect(set.body.user.email).toBe('alice@example.net');
+    expect(set.body.user.email_verified_at).toBeNull();
+    expect(set.body.verification).toEqual({ sent: true, problem: null });
+
+    expect(sentMail).toHaveLength(1);
+    expect(sentMail[0].to).toBe('alice@example.net');
+    expect(sentMail[0].from).toBe('rack@example.org');
+    const link = sentMail[0].text.match(/https:\/\/rack\.example\.org\/verify-email\?token=([0-9a-f]{64})/);
+    expect(link).not.toBeNull();
+
+    const { rows } = await db.query("SELECT email, email_verified_at FROM users WHERE username = 'alice'");
+    expect(rows[0].email).toBe('alice@example.net');
+    expect(rows[0].email_verified_at).toBeNull();
+
+    // Following the link confirms it, with no session at all.
+    const confirm = await request(app).post('/api/auth/verify-email').send({ token: link[1] });
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.email).toBe('alice@example.net');
+    const me = await request(app).get('/api/auth/me').set('Cookie', aliceCookie);
+    expect(me.body.email_verified_at).not.toBeNull();
+    // A token is good once.
+    expect((await request(app).post('/api/auth/verify-email').send({ token: link[1] })).status).toBe(400);
+  });
+
+  it('cannot be removed', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    for (const email of ['', null, undefined, '   ']) {
+      const res = await request(app)
+        .put('/api/auth/email')
+        .set('Cookie', aliceCookie)
+        .send({ email, current_password: 'password123' });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it('refuses a wrong or missing current password', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    const missing = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: 'alice@example.net' });
+    expect(missing.status).toBe(400);
+    const wrong = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: 'alice@example.net', current_password: 'nope' });
+    expect(wrong.status).toBe(401);
+    const me = await request(app).get('/api/auth/me').set('Cookie', aliceCookie);
+    expect(me.body.email).toBe('alice@example.org');
+  });
+
+  it('refuses an address that is not one, the placeholder domain included', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    const bad = [
+      'alice',
+      'alice@',
+      '@example.com',
+      'alice@example',
+      'a lice@example.com',
+      `${'a'.repeat(250)}@example.com`,
+      'alice@unset.invalid',
+      'alice@host.test',
+    ];
+    for (const email of bad) {
+      const res = await request(app)
+        .put('/api/auth/email')
+        .set('Cookie', aliceCookie)
+        .send({ email, current_password: 'password123' });
+      expect(res.status, email).toBe(400);
+    }
+  });
+
+  it('is one account per address, whatever the case', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    const res = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: 'ADMIN@example.org', current_password: 'password123' });
+    expect(res.status).toBe(409);
+  });
+
+  it('saving the same confirmed address again changes nothing and sends nothing', async () => {
+    const { app, aliceCookie, sentMail } = await createTestApp();
+    const res = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: 'Alice@Example.org', current_password: 'password123' });
+    expect(res.status).toBe(200);
+    expect(res.body.user.email_verified_at).not.toBeNull();
+    expect(res.body.verification.sent).toBe(false);
+    expect(sentMail).toHaveLength(0);
+  });
+
+  it('sends the confirmation again on request, not twice a minute', async () => {
+    const { app, db, sentMail } = await createTestApp();
+    await createUser(db, { username: 'carol', emailVerified: false });
+    const cookie = await login(app, 'carol');
+    const first = await request(app).post('/api/auth/verify-email/resend').set('Cookie', cookie);
+    expect(first.status).toBe(200);
+    expect(first.body.sent).toBe(true);
+    expect(sentMail).toHaveLength(1);
+    const again = await request(app).post('/api/auth/verify-email/resend').set('Cookie', cookie);
+    expect(again.status).toBe(429);
+    expect(sentMail).toHaveLength(1);
+
+    // Already confirmed: nothing to send.
+    const { aliceCookie } = { aliceCookie: await login(app, 'alice') };
+    const done = await request(app).post('/api/auth/verify-email/resend').set('Cookie', aliceCookie);
+    expect(done.status).toBe(400);
+  });
+
+  it('a token proves the address it was sent to, not whatever the address is now', async () => {
+    const { app, aliceCookie, sentMail } = await createTestApp();
+    await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: 'one@example.net', current_password: 'password123' });
+    const first = sentMail[0].text.match(/token=([0-9a-f]{64})/)[1];
+    await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: 'two@example.net', current_password: 'password123' });
+    expect((await request(app).post('/api/auth/verify-email').send({ token: first })).status).toBe(400);
+    for (const token of ['', 'zz', 'a'.repeat(64), null]) {
+      expect((await request(app).post('/api/auth/verify-email').send({ token })).status).toBe(400);
+    }
+  });
+
+  it('records the change even when the mail cannot go, and says so', async () => {
+    const { app, aliceCookie, sentMail } = await createTestApp({ mail: false });
+    const res = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: 'alice@example.net', current_password: 'password123' });
+    expect(res.status).toBe(200);
+    expect(res.body.user.email).toBe('alice@example.net');
+    expect(res.body.verification.sent).toBe(false);
+    expect(res.body.verification.problem).toMatch(/Mail is not set up/);
+    expect(sentMail).toHaveLength(0);
+  });
+
+  it('is not reachable while a password change is forced', async () => {
+    const { app, adminCookie, db } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    await request(app)
+      .post(`/api/users/${rows[0].id}/password`)
+      .set('Cookie', adminCookie)
+      .send({ password: 'temporary-pw' });
+    const cookie = await login(app, 'alice', 'temporary-pw');
+    const res = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', cookie)
+      .send({ email: 'alice@example.net', current_password: 'temporary-pw' });
+    expect(res.status).toBe(403);
+  });
+
+  it('is required when the admin creates a user, and the confirmation is mailed', async () => {
+    const { app, adminCookie, sentMail } = await createTestApp();
+    const missing = await request(app)
+      .post('/api/users')
+      .set('Cookie', adminCookie)
+      .send({ username: 'newuser' });
+    expect(missing.status).toBe(400);
+    expect(missing.body.error).toMatch(/email is required/);
+
+    const created = await request(app)
+      .post('/api/users')
+      .set('Cookie', adminCookie)
+      .send({ username: 'newuser', email: 'New@Example.net' });
+    expect(created.status).toBe(201);
+    expect(created.body.email).toBe('new@example.net');
+    expect(created.body.email_verified_at).toBeNull();
+    expect(created.body.verification.sent).toBe(true);
+    expect(sentMail.map((m) => m.to)).toEqual(['new@example.net']);
+
+    const list = await request(app).get('/api/users').set('Cookie', adminCookie);
+    const row = list.body.find((u) => u.username === 'newuser');
+    expect(row.email).toBe('new@example.net');
+    expect(row.email_verified_at).toBeNull();
+    expect(list.body.find((u) => u.username === 'alice').email_verified_at).not.toBeNull();
+
+    const bad = await request(app)
+      .post('/api/users')
+      .set('Cookie', adminCookie)
+      .send({ username: 'another', email: 'not-an-address' });
+    expect(bad.status).toBe(400);
+    const taken = await request(app)
+      .post('/api/users')
+      .set('Cookie', adminCookie)
+      .send({ username: 'another', email: 'new@example.net' });
+    expect(taken.status).toBe(409);
+  });
+
+  it('lets the admin change a user\'s address, which has to be confirmed again', async () => {
+    const { app, adminCookie, db, sentMail } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const res = await request(app)
+      .put(`/api/users/${rows[0].id}/email`)
+      .set('Cookie', adminCookie)
+      .send({ email: 'Alice@Example.net' });
+    expect(res.status).toBe(200);
+    expect(res.body.email).toBe('alice@example.net');
+    expect(res.body.email_verified_at).toBeNull();
+    expect(res.body.verification.sent).toBe(true);
+    expect(sentMail[0].to).toBe('alice@example.net');
+
+    const token = sentMail[0].text.match(/token=([0-9a-f]{64})/)[1];
+    expect((await request(app).post('/api/auth/verify-email').send({ token })).status).toBe(200);
+    const list = await request(app).get('/api/users').set('Cookie', adminCookie);
+    expect(list.body.find((u) => u.username === 'alice').email_verified_at).not.toBeNull();
+
+    // Not their own (that takes a password), not one that is taken, not junk.
+    const { rows: me } = await db.query("SELECT id FROM users WHERE username = 'admin'");
+    expect(
+      (await request(app).put(`/api/users/${me[0].id}/email`).set('Cookie', adminCookie).send({ email: 'x@example.net' })).status
+    ).toBe(400);
+    expect(
+      (await request(app).put(`/api/users/${rows[0].id}/email`).set('Cookie', adminCookie).send({ email: 'admin@example.org' })).status
+    ).toBe(409);
+    expect(
+      (await request(app).put(`/api/users/${rows[0].id}/email`).set('Cookie', adminCookie).send({ email: 'nope' })).status
+    ).toBe(400);
+    expect(
+      (await request(app).put('/api/users/99999/email').set('Cookie', adminCookie).send({ email: 'x@example.net' })).status
+    ).toBe(404);
+  });
+
+  it('gives an account from before the column a placeholder nobody can keep', async () => {
+    const db = await createTestDb();
+    const result = await ensureAdmin(db);
+    const admin = await db.models.User.findOne({ where: { username: result.username } });
+    expect(admin.email).toBe('admin@unset.invalid');
+    expect(admin.email_verified_at).toBeNull();
+
+    const db2 = await createTestDb();
+    await ensureAdmin(db2, { email: 'Owner@Example.net' });
+    expect((await db2.models.User.findOne({ where: { is_admin: true } })).email).toBe('owner@example.net');
+  });
+});
+
+describe('last login', () => {
+  it('is recorded on a successful login and nothing else', async () => {
+    const { app, adminCookie, db } = await createTestApp();
+    // The fixture logs alice in once already; a fresh user has never.
+    await createUser(db, { username: 'carol' });
+    const before = await request(app).get('/api/users').set('Cookie', adminCookie);
+    const carolBefore = before.body.find((u) => u.username === 'carol');
+    expect(carolBefore.last_login_at).toBeNull();
+    expect(before.body.find((u) => u.username === 'alice').last_login_at).toMatch(/^\d{4}-/);
+
+    await request(app).post('/api/auth/login').send({ username: 'carol', password: 'wrong' });
+    const stillNone = await request(app).get('/api/users').set('Cookie', adminCookie);
+    expect(stillNone.body.find((u) => u.username === 'carol').last_login_at).toBeNull();
+
+    const start = Date.now();
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'carol', password: 'password123' });
+    expect(loginRes.status).toBe(200);
+    expect(new Date(loginRes.body.last_login_at).getTime()).toBeGreaterThanOrEqual(start - 1000);
+    const cookie = loginRes.headers['set-cookie'][0].split(';')[0];
+
+    // Using the session is the same login continuing, not a new one.
+    const me = await request(app).get('/api/auth/me').set('Cookie', cookie);
+    expect(me.body.last_login_at).toBe(loginRes.body.last_login_at);
+    const after = await request(app).get('/api/users').set('Cookie', adminCookie);
+    expect(after.body.find((u) => u.username === 'carol').last_login_at).toBe(loginRes.body.last_login_at);
+  });
+});
+
+describe('account lockout', () => {
+  const attempt = (app, password) =>
+    request(app).post('/api/auth/login').send({ username: 'alice', password });
+
+  it('locks the account after five wrong passwords in a row and logs it out everywhere', async () => {
+    const { app, aliceCookie, db } = await createTestApp();
+    for (let i = 1; i <= 4; i += 1) {
+      const res = await attempt(app, 'wrong');
+      expect(res.status, `attempt ${i}`).toBe(401);
+    }
+    // The session from before still works: four is not five.
+    expect((await request(app).get('/api/auth/me').set('Cookie', aliceCookie)).status).toBe(200);
+
+    const fifth = await attempt(app, 'wrong');
+    expect(fifth.status).toBe(403);
+    expect(fifth.body.code).toBe('account_locked');
+
+    // The right password no longer gets in, and the old session is gone.
+    expect((await attempt(app, 'password123')).status).toBe(403);
+    expect((await request(app).get('/api/auth/me').set('Cookie', aliceCookie)).status).toBe(401);
+    const { rows } = await db.query("SELECT locked_at, locked_reason, failed_logins FROM users WHERE username = 'alice'");
+    expect(rows[0].locked_at).not.toBeNull();
+    expect(rows[0].locked_reason).toBe('failed_logins');
+    expect(rows[0].failed_logins).toBe(5);
+  });
+
+  it('a right password ends the row of wrong ones', async () => {
+    const { app, db } = await createTestApp();
+    for (let i = 0; i < 4; i += 1) await attempt(app, 'wrong');
+    expect((await attempt(app, 'password123')).status).toBe(200);
+    const { rows } = await db.query("SELECT failed_logins FROM users WHERE username = 'alice'");
+    expect(rows[0].failed_logins).toBe(0);
+    // Wrong passwords never count as a login.
+    for (let i = 0; i < 4; i += 1) expect((await attempt(app, 'wrong')).status).toBe(401);
+  });
+
+  it('an unknown username counts against nobody', async () => {
+    const { app } = await createTestApp();
+    for (let i = 0; i < 6; i += 1) {
+      const res = await request(app).post('/api/auth/login').send({ username: 'ghost', password: 'x' });
+      expect(res.status).toBe(401);
+    }
+  });
+
+  it('the admin locks and unlocks an account, and unlocking forgets the failures', async () => {
+    const { app, adminCookie, aliceCookie, db } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const id = rows[0].id;
+    // A device token the lock has to cut off too.
+    const { accessToken } = await issueDeviceToken(db, {
+      userId: id,
+      clientId: 'scope',
+      name: 'bench',
+      scopes: 'oscilloscope',
+    });
+    expect(await getDeviceTokenUser(db, accessToken)).not.toBeNull();
+
+    const lock = await request(app)
+      .put(`/api/users/${id}/lock`)
+      .set('Cookie', adminCookie)
+      .send({ locked: true });
+    expect(lock.status).toBe(200);
+    expect(lock.body.locked_at).not.toBeNull();
+    expect(lock.body.locked_reason).toBe('admin');
+    expect((await request(app).get('/api/auth/me').set('Cookie', aliceCookie)).status).toBe(401);
+    expect((await attempt(app, 'password123')).status).toBe(403);
+    expect(await getDeviceTokenUser(db, accessToken)).toBeNull();
+
+    const list = await request(app).get('/api/users').set('Cookie', adminCookie);
+    expect(list.body.find((u) => u.username === 'alice').locked_reason).toBe('admin');
+
+    await db.models.User.update({ failed_logins: 3 }, { where: { id } });
+    const unlock = await request(app)
+      .put(`/api/users/${id}/lock`)
+      .set('Cookie', adminCookie)
+      .send({ locked: false });
+    expect(unlock.status).toBe(200);
+    expect(unlock.body.locked_at).toBeNull();
+    expect(unlock.body.failed_logins).toBe(0);
+    expect((await attempt(app, 'password123')).status).toBe(200);
+  });
+
+  it('the admin cannot lock themselves, and the body has to say which way', async () => {
+    const { app, adminCookie, aliceCookie, db } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'admin'");
+    expect(
+      (await request(app).put(`/api/users/${rows[0].id}/lock`).set('Cookie', adminCookie).send({ locked: true })).status
+    ).toBe(400);
+    const { rows: alice } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    expect(
+      (await request(app).put(`/api/users/${alice[0].id}/lock`).set('Cookie', adminCookie).send({ locked: 'yes' })).status
+    ).toBe(400);
+    expect(
+      (await request(app).put(`/api/users/${alice[0].id}/lock`).set('Cookie', aliceCookie).send({ locked: true })).status
+    ).toBe(403);
+    expect(
+      (await request(app).put('/api/users/99999/lock').set('Cookie', adminCookie).send({ locked: true })).status
+    ).toBe(404);
   });
 });

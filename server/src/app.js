@@ -45,6 +45,8 @@ export function createApp(
     fetchImpl,
     runImpl,
     csrf,
+    // The mail transport (services/mailer.js); tests hand in a recorder.
+    mailImpl,
   } = {}
 ) {
   const app = express();
@@ -97,12 +99,14 @@ export function createApp(
   app.use('/api', limiters.api);
   app.use('/api/auth/login', limiters.credentials);
   app.use('/api/auth/password', limiters.credentials);
+  app.use('/api/auth/email', limiters.credentials);
+  app.use('/api/auth/verify-email', limiters.credentials);
   // The one write with no session behind it, so it is held to a bucket of
   // its own on top of the shared one.
   app.use(CSP_REPORT_PATH, limiters.reports);
 
-  app.use('/api/auth', authRoutes(db));
-  app.use('/api/users', userRoutes(db));
+  app.use('/api/auth', authRoutes(db, { mailImpl }));
+  app.use('/api/users', userRoutes(db, { mailImpl }));
   // runImpl is the test seam for the keyless yt-dlp listings (module
   // tutorial search, channel scan), like fetchImpl is for outbound HTTP.
   app.use('/api/modules', moduleRoutes(db, { manualsDir, panelsDir, videosDir, fetchImpl, runImpl }));
@@ -112,7 +116,7 @@ export function createApp(
   app.use('/api/panels', panelRoutes(db, { panelsDir }));
   app.use('/api/imports', importRoutes(db));
   app.use('/api/questions', questionRoutes(db));
-  app.use('/api/config', configRoutes(db));
+  app.use('/api/config', configRoutes(db, { mailImpl }));
   // The handful of settings every user sees (the footer's Discord link).
   app.use('/api/site', siteRoutes(db));
   // Per-user LLM provider accounts: who each user's model runs bill to.

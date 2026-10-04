@@ -35,6 +35,21 @@ export const useAuthStore = defineStore('auth', {
       });
       return this.user;
     },
+    // The recovery address. Takes the current password like a password
+    // change does. Answers { user, verification }: the new address is on the
+    // account whether or not the confirmation mail went, and the page says.
+    async updateEmail(email, currentPassword) {
+      const result = await api.put('/api/auth/email', {
+        email,
+        current_password: currentPassword,
+      });
+      this.user = result.user;
+      return result;
+    },
+    // The confirmation mail again. { sent, problem }.
+    resendVerification() {
+      return api.post('/api/auth/verify-email/resend');
+    },
     async logout() {
       try {
         await api.post('/api/auth/logout');

@@ -17,6 +17,18 @@ export function defineAccountsModels(define) {
       password_hash: { type: DataTypes.TEXT, allowNull: false },
       is_admin: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       must_change_password: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+      // Where a password reset is sent (migration 052). Lowercased on write
+      // (auth.js normalizeEmail) and unique. Confirmed when the user follows
+      // the link mailed to it; a change of address unconfirms it.
+      email: { type: DataTypes.TEXT, allowNull: false, unique: true },
+      email_verified_at: { type: DataTypes.DATE },
+      // Locking (migration 053): wrong passwords in a row, and whether and
+      // why the account is shut — 'failed_logins' or 'admin'.
+      failed_logins: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      locked_at: { type: DataTypes.DATE },
+      locked_reason: { type: DataTypes.TEXT },
+      // The last successful password login (migration 054); NULL until one.
+      last_login_at: { type: DataTypes.DATE },
       // Token allowance per budget window (migration 021). NULL takes the
       // configured default; 0 lifts the ceiling for this user alone.
       token_budget: { type: DataTypes.BIGINT },
@@ -46,6 +58,20 @@ export function defineAccountsModels(define) {
       paused_reason: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
     },
     { tableName: 'user_llm_accounts', createdAt: 'created_at', updatedAt: 'updated_at' }
+  );
+
+  // The one outstanding confirmation of a user's address (migration 052):
+  // the hash of the mailed token, the address it proves, and its expiry.
+  const EmailVerification = define(
+    'EmailVerification',
+    {
+      id,
+      user_id: { type: DataTypes.INTEGER, allowNull: false },
+      email: { type: DataTypes.TEXT, allowNull: false },
+      token_hash: { type: DataTypes.TEXT, allowNull: false, unique: true },
+      expires_at: { type: DataTypes.DATE, allowNull: false },
+    },
+    { tableName: 'email_verifications', createdAt: 'created_at', updatedAt: false }
   );
 
   const Session = define(
@@ -156,5 +182,5 @@ export function defineAccountsModels(define) {
     { tableName: 'llm_usage', createdAt: 'created_at', updatedAt: false }
   );
 
-  return { User, UserLlmAccount, Session, AppConfig, OAuthClient, DeviceAuthorization, DeviceToken, Share, LlmUsage };
+  return { User, UserLlmAccount, EmailVerification, Session, AppConfig, OAuthClient, DeviceAuthorization, DeviceToken, Share, LlmUsage };
 }

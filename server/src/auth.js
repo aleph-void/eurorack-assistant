@@ -40,6 +40,82 @@ export function passwordProblem(password, { label = 'password' } = {}) {
   return null;
 }
 
+// The address a password reset is sent to, so it is held to the same
+// one-place rule as the password. Lowercased before it is stored or looked
+// up: the local part of an address is case-sensitive on paper and on no mail
+// provider anyone uses, and one account per address only holds if
+// Nick@example.com and nick@example.com are the same key. An emptied field
+// normalizes to NULL, which every route then refuses: the column is NOT NULL.
+export const MAX_EMAIL_LENGTH = 254;
+
+// The address an account from before migration 052 was given, under the
+// reserved `.invalid` domain nothing is ever sent to. Unconfirmed by
+// definition, which is what tells the page to ask for a real one.
+export const PLACEHOLDER_EMAIL_DOMAIN = 'unset.invalid';
+export const placeholderEmail = (username) =>
+  `${String(username).toLowerCase()}@${PLACEHOLDER_EMAIL_DOMAIN}`;
+export const isPlaceholderEmail = (email) =>
+  typeof email === 'string' && email.endsWith(`@${PLACEHOLDER_EMAIL_DOMAIN}`);
+
+export function normalizeEmail(value) {
+  if (value === null || value === undefined) return null;
+  const email = String(value).trim().toLowerCase();
+  return email === '' ? null : email;
+}
+
+// Returns an error string, or null when the (normalized) address will do.
+// The shape check is deliberately loose — one @, something either side, a
+// dot in the domain — because the only test of an address that matters is
+// whether mail sent to it arrives, and that is what the confirmation step
+// is for.
+export function emailProblem(email) {
+  if (typeof email !== 'string' || email === '') return 'email is required';
+  if (email.length > MAX_EMAIL_LENGTH) {
+    return `email must be at most ${MAX_EMAIL_LENGTH} characters`;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return 'email must look like name@example.com';
+  }
+  // RFC 2606 reserves these for addresses that are not real, which is
+  // exactly what the placeholder is and exactly what nobody may type in.
+  if (/\.(invalid|test|example|localhost)$/.test(email)) {
+    return 'email must be a real address';
+  }
+  return null;
+}
+
+// The user as every auth response describes them — the session lookup, the
+// login and the self-service changes answer with the same shape so the client
+// store can take any of them as the current user.
+export function sessionUserJson(user) {
+  const {
+    id,
+    username,
+    email,
+    email_verified_at,
+    is_admin,
+    must_change_password,
+    token_budget,
+    llm_provider,
+    llm_model,
+    llm_models,
+    last_login_at,
+  } = user;
+  return {
+    id,
+    username,
+    email,
+    email_verified_at: email_verified_at ? new Date(email_verified_at).toISOString() : null,
+    last_login_at: last_login_at ? new Date(last_login_at).toISOString() : null,
+    is_admin,
+    must_change_password,
+    token_budget,
+    llm_provider,
+    llm_model,
+    llm_models,
+  };
+}
+
 // Passwords are stored as PBKDF2-HMAC-SHA512 hashes in a self-describing
 // format: pbkdf2$<digest>$<iterations>$<salt hex>$<derived key hex>.
 // Verification reads the parameters from the stored hash, so these constants
@@ -123,16 +199,17 @@ export async function getSessionUser(db, token) {
     include: db.models.User,
   });
   if (!session || !session.User) return null;
-  if (new Date(session.expires_at).getTime() < Date.now()) {
+  // A lock deletes the sessions, but one made between the lock's read and
+  // its write would live on; a locked user is nobody here whatever the row
+  // says.
+  if (new Date(session.expires_at).getTime() < Date.now() || session.User.locked_at) {
     await deleteSession(db, token);
     return null;
   }
   // token_budget rides along because the budget guard runs on the request
   // path and would otherwise re-read the user on every call it protects; the
   // llm_* columns likewise, for the LLM settings route and requireLlmAccount.
-  const { id, username, is_admin, must_change_password, token_budget, llm_provider, llm_model, llm_models } =
-    session.User;
-  return { id, username, is_admin, must_change_password, token_budget, llm_provider, llm_model, llm_models };
+  return sessionUserJson(session.User);
 }
 
 // A user flagged must_change_password is locked out of everything except the

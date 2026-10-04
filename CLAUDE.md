@@ -36,7 +36,26 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   the design.
 - `routes/systems.js` — systems: collections of racks patched together as
   one instrument. A rack joins/leaves via `PUT /api/racks/:id/system`; the
-  system's own routes arrange the racks on a floor plan.
+  system's own routes arrange the racks on a floor plan. AN ADMIN HANDS A
+  SYSTEM TO ANOTHER USER WHOLE: `POST /api/systems/:id/transfer` (admin only,
+  any owner's system, body `{ user_id }`) → `services/systemTransfer.js`,
+  which moves the rows rather than copying them — the system, its racks (and
+  by FK their modules, rows and exits), every patch of the owner's made from
+  the system or one of its racks, and the owner's PRIVATE rows about any of
+  that: notes, questions (follow-ups with their root), bench captures and
+  clips, recordings, uploaded documents, videos, links, shares, the jobs of
+  moved questions and the model's live work on moved patches. A module is a
+  shared record, so what is transferred about one is those private rows,
+  and they go when the module stands in the system and in NO rack the old
+  owner keeps (it is out of their sight the moment the racks change hands).
+  A note or question goes when EVERYTHING it is about goes, except that one
+  asked OF the system or of one of its racks goes on that alone; one that
+  straddles the line stays whole, and a moved question's attachment links to
+  records that stayed are cut (the answer pipeline reads attachments by id,
+  no owner check). Names are per account, so a mover that collides takes
+  `<name> 2` (`freeName`), and a patch's snapshotted `system_name` /
+  `rack_name` follow. The Users admin page drives it (`GET
+  /api/users/:id/systems` lists what an owner has to hand over).
 - `server/src/services/` — domain logic, one concern per file. Serializer
   shapes for module hardware facts live in `services/moduleJson.js`; patch
   ones in `services/patchDetail.js`; rack ones in `services/rackJson.js`;
@@ -552,6 +571,39 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   A name the USER typed and cannot have is refused (409, the name in the
   message); one the APP made up for them — a clone's `(copy)`, the name an
   imported file carries — takes the next free `<name> 2`, `<name> 3` instead.
+- AN ACCOUNT HAS AN EMAIL ADDRESS, AND IT MAY BE LOCKED (`docs/accounts.md`).
+  `users.email` (migration 052) is where a password reset is sent and, later,
+  where a registration is confirmed before the admin approves it. NOT NULL
+  and ONE ACCOUNT PER ADDRESS under a plain unique index, which only holds
+  because `normalizeEmail()` (auth.js) lowercases and trims every address
+  before it is stored or looked up (pg-mem has no functional indexes, so
+  there is no `lower(email)` index to lean on). The accounts from before the
+  column carry `<username>@unset.invalid` — the reserved domain nothing is
+  sent to — which `emailProblem()` refuses, so it is a placeholder nobody can
+  keep and the account page asks for a real one. An address is a CLAIM until
+  the link mailed to it is followed (`email_verified_at`,
+  `services/emailVerification.js`: the token is stored HASHED with the
+  address it proves and an expiry, redeemed with no session at
+  `POST /api/auth/verify-email` from `/verify-email`), and ANY change of
+  address — the user's own (`PUT /api/auth/email`, which takes the current
+  password and shares the credentials rate limiter) or the admin's
+  (`PUT /api/users/:id/email`) — unconfirms it and mails a new link. The
+  change is recorded whether or not the mail went; the answer carries
+  `verification: { sent, problem }` and the page says which. Every auth
+  response describes the user through `sessionUserJson()`. MAIL goes out
+  through `services/mailer.js` over the settings in
+  `services/mailConfig.js` — a declared list of SMTP settings plus
+  `public_url` (links in a mail are never built from a Host header), kept in
+  `app_config` with the password encrypted at rest and never served back,
+  edited at `/admin/mail`, with the transport (nodemailer) as the seam
+  `createApp(db, { mailImpl })` replaces in tests. LOCKING
+  (`services/accountLock.js`, migration 053): five wrong passwords in a row
+  lock the account they were tried against, the admin locks and unlocks by
+  hand (`PUT /api/users/:id/lock`), and only the admin unlocks either kind.
+  A lock deletes every session and revokes every device token, and
+  `getSessionUser()` refuses a locked user besides. `users.last_login_at`
+  (migration 054) is set by the same `recordLogin()` a right password calls,
+  and by nothing else: a session presented is the same login continuing.
 - A TABLE ROW IS A CARD ON A PHONE. A table is columns beside each other and
   a phone has room for about two of them, so under 768px every `.table-wrap`
   table stops being columns: each row becomes a small bordered block, one line

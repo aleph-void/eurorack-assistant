@@ -397,14 +397,21 @@ The setup script does everything (Ubuntu is the supported target for automatic
 installation; on other distros install Docker yourself first):
 
 1. installs `docker.io` + `docker-compose-v2` via apt if missing,
-2. installs the `claude` and `codex` CLIs if missing (each user connects
-   their own Claude or Codex account in the web UI afterwards),
-3. generates `.env` (random database password), builds the images, migrates
+2. installs Node.js 26 from [NodeSource](https://github.com/nodesource/distributions)'s
+   apt repository when the host's `node` is missing or older (Ubuntu's own
+   `nodejs` package is too old for the CLIs), then the `claude` and `codex`
+   CLIs if missing (each user connects their own Claude or Codex account in
+   the web UI afterwards),
+3. installs the [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+   from AWS's installer if missing, for the daily S3 backup below (not fatal
+   when it cannot: the backup job falls back to the `amazon/aws-cli`
+   container),
+4. generates `.env` (random database password), builds the images, migrates
    the database, and
-4. creates the `admin` account — **its random password is printed once during
+5. creates the `admin` account — **its random password is printed once during
    setup and stored only as a bcrypt hash**. The admin must set their own
    password at the first login, and
-5. installs `/etc/systemd/system/eurorack-assistant.service` (rendered from
+6. installs `/etc/systemd/system/eurorack-assistant.service` (rendered from
    `deploy/eurorack-assistant.service`) and enables it, so the stack comes up at
    boot. The containers' own `restart: unless-stopped` covers crashes and
    reboots only until someone runs `docker compose stop` — after that Docker
@@ -510,8 +517,9 @@ docker compose cp llm-token.key server:/data/keys/llm-token.key && docker compos
 ```
 
 **Credentials.** The job runs as root through systemd and uses the AWS CLI
-when one is on `PATH`, else the `amazon/aws-cli` container image (so a host
-with docker needs nothing installed). Give it access any one of these ways:
+when one is on `PATH` (`setup.sh` installs v2), else the `amazon/aws-cli`
+container image (so a host with docker still works without it). Give it
+access any one of these ways:
 an instance role on the host, `sudo aws configure` (root's `~/.aws`), or
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` lines in `.env` (which the
 installer makes `0600`). The identity needs `s3:PutObject`,
@@ -567,7 +575,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 
 | table | purpose |
 | --- | --- |
-| `users` | accounts; `is_admin` flag, and `token_budget` — this user's own token allowance per window (NULL takes the configured default, 0 lifts the ceiling for them) |
+| `users` | accounts; `is_admin` flag, `email` (required, one per account, with `email_verified_at` once the mailed link is followed), the lock (`failed_logins`, `locked_at`, `locked_reason`), `last_login_at` (the last successful password login), and `token_budget` — this user's own token allowance per window (NULL takes the configured default, 0 lifts the ceiling for them). `email_verifications` holds the hashed token of the outstanding confirmation. See `docs/accounts.md` |
 | `modules` | **shared** module records with `manual_status` / `analysis_status` / `panel_status` — the manual is found, analyzed and drawn once, for everyone |
 | `racks` | a user's named racks (unique name per user, `main rack` by default); strictly private to their owner |
 | `rack_modules` | maps racks to the modules in them (per-rack quantity); "deleting" a module only unlinks it, and the same module can sit in many racks |
@@ -605,7 +613,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `question_patches` | the patches a question is about — the patch rides along as a document of its cables, settings, normalled connections and signal flow, and the modules it uses go into scope |
 | `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `reanalyze_components`, `panel_image`, `extract_manual`, `scope_question`, `answer_question`) with attempts + errors |
 | `llm_usage` | one row per CLI invocation: the tokens it spent (fresh input, cached input, cache writes, output), the model that spent them, and the job and user it is billed to. `cost_usd` is filled in where the provider reports one (claude does, codex does not) |
-| `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`), job worker count (`import_workers`, default 4), the per-user token budget and its window (`token_budget_default`, `token_budget_period`), and the queue pause the worker sets when the provider runs out of tokens (`queue_paused_until`, `queue_paused_reason`) |
+| `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`), job worker count (`import_workers`, default 4), the per-user token budget and its window (`token_budget_default`, `token_budget_period`), and the queue pause the worker sets when the provider runs out of tokens (`queue_paused_until`, `queue_paused_reason`); also the mail server settings (`mail_*`, `public_url`, the password encrypted), served only through `/api/config/mail` |
 
 ## Development
 
@@ -647,6 +655,13 @@ free for public repositories) to turn that on.
   endpoint except the change-password form until they set their own password.
 - Users change their own password (current password required) via the username
   link in the nav; admins can reset any other user's password without it.
+- Every account has an email address, confirmed by following a mailed link;
+  users change their own (current password required) under the Email link in
+  the nav, admins change anyone's from the Users page, and either change has to
+  be confirmed again. Mail goes out through the SMTP account set on the admin's
+  Mail server page (`/admin/mail`).
+- Five wrong passwords in a row lock an account; admins lock and unlock
+  accounts from the Users page, and only an admin unlocks one.
 - Only admins can create users (always non-admin) and change the LLM config.
 - Each user sees only their own module mappings, questions, notes, uploaded
   documents, captures, and jobs (admins see all jobs), plus whatever another

@@ -5,7 +5,9 @@
 #   Usage: ./setup.sh [fqdn]
 #
 #   1. Installs Docker (docker.io + docker-compose-v2) on Ubuntu if missing.
-#   2. Installs the LLM provider CLIs (claude, codex) if missing.
+#   2. Installs Node.js 26 (from NodeSource's apt repository — Ubuntu's own
+#      nodejs package is too old for the LLM CLIs) and the LLM provider CLIs
+#      (claude, codex) if missing, and the AWS CLI v2 for the S3 backups.
 #   3. When an FQDN is given (or remembered in .env), serves HTTPS on port 443
 #      (with port 80 redirecting) instead of plain HTTP on port 8080, using the
 #      Let's Encrypt certs in /etc/letsencrypt/live/<fqdn>/ — and when there
@@ -88,14 +90,53 @@ ensure_buildx() {
 }
 
 # --------------------------------------------------------------- LLM CLIs ----
+# The LLM CLIs want a current Node (claude-code refuses anything older than
+# 18, and Ubuntu 22.04's apt nodejs is 12), so Node comes from NodeSource's
+# apt repository rather than Ubuntu's, pinned to the same major the server
+# image runs on (server/Dockerfile: node:26). A host whose node is already at
+# that major or newer is left alone.
+NODE_MAJOR=26
+NODESOURCE_KEYRING="/etc/apt/keyrings/nodesource.gpg"
+NODESOURCE_LIST="/etc/apt/sources.list.d/nodesource.list"
+
+node_major() {
+  command -v node >/dev/null 2>&1 || return 1
+  node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/'
+}
+
+node_is_current() {
+  local major
+  major=$(node_major) || return 1
+  [ -n "$major" ] && [ "$major" -ge "$NODE_MAJOR" ] && command -v npm >/dev/null 2>&1
+}
+
 ensure_node() {
-  if command -v npm >/dev/null 2>&1; then return 0; fi
-  if is_ubuntu; then
-    info "installing nodejs + npm (required for the LLM CLIs, requires sudo)..."
-    sudo apt-get update
-    sudo apt-get install -y nodejs npm
+  if node_is_current; then return 0; fi
+  if ! is_ubuntu; then
+    warn "Node.js >= $NODE_MAJOR not found; install it: https://nodejs.org/en/download"
+    return 1
   fi
-  command -v npm >/dev/null 2>&1
+  local have
+  have=$(node_major || true)
+  if [ -n "$have" ]; then
+    info "node v$have is older than the LLM CLIs need; upgrading to Node.js $NODE_MAJOR (requires sudo)..."
+  else
+    info "installing Node.js $NODE_MAJOR from NodeSource (requires sudo)..."
+  fi
+  sudo apt-get update
+  sudo apt-get install -y ca-certificates curl gnupg
+  sudo install -d -m 755 "$(dirname "$NODESOURCE_KEYRING")"
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | sudo gpg --dearmor --yes -o "$NODESOURCE_KEYRING"
+  echo "deb [signed-by=$NODESOURCE_KEYRING] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+    | sudo tee "$NODESOURCE_LIST" >/dev/null
+  sudo apt-get update
+  # Ubuntu's nodejs and NodeSource's both provide /usr/bin/node; the separate
+  # npm package only exists for Ubuntu's build and would conflict with the
+  # NodeSource one, which bundles npm.
+  sudo apt-get remove -y npm 2>/dev/null || true
+  sudo apt-get install -y nodejs
+  node_is_current
 }
 
 install_cli() {
@@ -113,12 +154,56 @@ install_cli() {
 
 ensure_llm_clis() {
   if ! ensure_node; then
-    warn "npm not available; skipping LLM CLI installation."
+    warn "Node.js $NODE_MAJOR not available; skipping LLM CLI installation."
     warn "Install manually: npm install -g @anthropic-ai/claude-code @openai/codex"
     return
   fi
   install_cli claude @anthropic-ai/claude-code || true
   install_cli codex @openai/codex || true
+}
+
+# ---------------------------------------------------------------- AWS CLI ----
+# backup-to-s3.sh uses the aws CLI on PATH and only falls back to the
+# amazon/aws-cli container when there is none. Ubuntu's awscli package is v1
+# on 22.04 and v2 on 24.04, so the CLI comes from AWS's own installer, which
+# is the same v2 on every release and architecture. Missing it is not fatal:
+# the backup job still works through the container.
+ensure_aws_cli() {
+  if command -v aws >/dev/null 2>&1; then
+    info "aws CLI already installed"
+    return 0
+  fi
+  if ! is_ubuntu; then
+    warn "aws CLI not installed; backups will use the amazon/aws-cli container."
+    warn "Install it yourself: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+    return 0
+  fi
+  local arch
+  case "$(uname -m)" in
+    x86_64) arch="x86_64" ;;
+    aarch64 | arm64) arch="aarch64" ;;
+    *)
+      warn "no AWS CLI v2 build for $(uname -m); backups will use the amazon/aws-cli container."
+      return 0
+      ;;
+  esac
+  info "installing AWS CLI v2 (requires sudo)..."
+  sudo apt-get install -y curl unzip ca-certificates || {
+    sudo apt-get update && sudo apt-get install -y curl unzip ca-certificates
+  } || {
+    warn "could not install curl/unzip; backups will use the amazon/aws-cli container."
+    return 0
+  }
+  local tmp
+  tmp=$(mktemp -d)
+  if curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${arch}.zip" -o "$tmp/awscliv2.zip" \
+    && unzip -q "$tmp/awscliv2.zip" -d "$tmp" \
+    && sudo "$tmp/aws/install" --update; then
+    info "aws CLI installed: $(aws --version 2>&1 | head -n 1)"
+  else
+    warn "could not install the AWS CLI; backups will use the amazon/aws-cli container."
+  fi
+  rm -rf "$tmp"
 }
 
 # ------------------------------------------------------------------- tls ----
@@ -374,6 +459,7 @@ random_hex() {
 ensure_docker
 ensure_buildx
 ensure_llm_clis
+ensure_aws_cli
 
 if [ ! -f .env ]; then
   cat > .env <<EOF

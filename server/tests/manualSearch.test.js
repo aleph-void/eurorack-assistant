@@ -50,6 +50,7 @@ beforeEach(async () => {
   alice = await ctx.db.models.User.findOne({ where: { username: 'alice' } });
   bob = await ctx.db.models.User.create({
     username: 'bob',
+    email: 'bob@example.org',
     password_hash: 'x',
     is_admin: false,
   });
