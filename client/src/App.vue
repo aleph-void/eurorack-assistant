@@ -333,6 +333,7 @@ async function logout() {
       <p class="nav-heading">Admin</p>
       <RouterLink to="/admin/users">Users</RouterLink>
       <RouterLink to="/admin/config">Application Config</RouterLink>
+      <RouterLink to="/admin/mail" data-test="nav-mail">Mail server</RouterLink>
       <RouterLink to="/admin/csp-reports" data-test="nav-csp-reports">
         Policy violations
       </RouterLink>
@@ -341,6 +342,12 @@ async function logout() {
     <div class="nav-foot">
       <RouterLink to="/account/password" title="Change password" data-test="account">
         {{ auth.user.username }}
+      </RouterLink>
+      <RouterLink to="/account/email" title="Email address" data-test="nav-email">
+        Email
+        <span v-if="!auth.user.email_verified_at" class="badge pending" data-test="email-unconfirmed">
+          unconfirmed
+        </span>
       </RouterLink>
       <a href="#" data-test="logout" @click.prevent="logout">Log out</a>
     </div>

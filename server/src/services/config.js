@@ -27,7 +27,9 @@ export const DEFAULT_IMPORT_WORKERS = Number(CONFIG_DEFAULTS.import_workers);
 export async function getConfig(db) {
   const rows = await db.models.AppConfig.findAll();
   const config = { ...CONFIG_DEFAULTS };
-  for (const row of rows) config[row.key] = row.value;
+  // Only this file's keys: the mail settings share the table
+  // (services/mailConfig.js) and carry a secret this must not serve.
+  for (const row of rows) if (row.key in CONFIG_DEFAULTS) config[row.key] = row.value;
   return config;
 }
 

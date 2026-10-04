@@ -1,4 +1,10 @@
-import { deleteUserSessions, generateHexPassword, hashPassword } from './auth.js';
+import {
+  deleteUserSessions,
+  generateHexPassword,
+  hashPassword,
+  normalizeEmail,
+  placeholderEmail,
+} from './auth.js';
 
 // Create the initial admin account with a random hex password. The cleartext
 // password is only ever returned to the caller (the setup script prints it
@@ -10,7 +16,11 @@ import { deleteUserSessions, generateHexPassword, hashPassword } from './auth.js
 // nothing is changed unless `reset` is true, which sets a new random password
 // (again forcing a change at the next login) and invalidates the admin's
 // existing sessions.
-export async function ensureAdmin(db, { username = 'admin', reset = false } = {}) {
+//
+// `email` is the admin's address when the installer knows it (ADMIN_EMAIL);
+// otherwise the placeholder every pre-052 account carries, which the admin
+// is asked to replace at their first visit to the account page.
+export async function ensureAdmin(db, { username = 'admin', email = null, reset = false } = {}) {
   const { User } = db.models;
   const admin = await User.findOne({ where: { is_admin: true } });
   if (admin && !reset) {
@@ -32,6 +42,7 @@ export async function ensureAdmin(db, { username = 'admin', reset = false } = {}
 
   await User.create({
     username,
+    email: normalizeEmail(email) || placeholderEmail(username),
     password_hash: hashPassword(password),
     is_admin: true,
     must_change_password: true,
