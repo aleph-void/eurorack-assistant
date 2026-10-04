@@ -31,6 +31,7 @@ function publicUser(user) {
     locked_at,
     locked_reason,
     failed_logins,
+    last_login_at,
   } = user;
   return {
     id,
@@ -42,6 +43,7 @@ function publicUser(user) {
     locked_at: iso(locked_at),
     locked_reason: locked_reason ?? null,
     failed_logins: Number(failed_logins || 0),
+    last_login_at: iso(last_login_at),
     // BIGINT arrives from postgres as a string; the API says numbers.
     token_budget: token_budget === null || token_budget === undefined ? null : Number(token_budget),
   };
@@ -66,6 +68,7 @@ export function userRoutes(db, { mailImpl } = {}) {
         'locked_at',
         'locked_reason',
         'failed_logins',
+        'last_login_at',
       ],
       order: [['id', 'ASC']],
     });

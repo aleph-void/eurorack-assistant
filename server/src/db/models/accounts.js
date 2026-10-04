@@ -27,6 +27,8 @@ export function defineAccountsModels(define) {
       failed_logins: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
       locked_at: { type: DataTypes.DATE },
       locked_reason: { type: DataTypes.TEXT },
+      // The last successful password login (migration 054); NULL until one.
+      last_login_at: { type: DataTypes.DATE },
       // Token allowance per budget window (migration 021). NULL takes the
       // configured default; 0 lifts the ceiling for this user alone.
       token_budget: { type: DataTypes.BIGINT },

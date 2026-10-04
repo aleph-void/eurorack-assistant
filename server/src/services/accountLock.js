@@ -50,7 +50,8 @@ export async function recordFailedLogin(db, user, { now = Date.now() } = {}) {
   return { locked: true, failed };
 }
 
-// A right password ends the row of wrong ones.
-export async function recordLogin(db, user) {
-  if (Number(user.failed_logins || 0) !== 0) await user.update({ failed_logins: 0 });
+// A right password ends the row of wrong ones, and is the moment
+// `last_login_at` records.
+export async function recordLogin(db, user, { now = Date.now() } = {}) {
+  await user.update({ failed_logins: 0, last_login_at: new Date(now) });
 }

@@ -259,6 +259,7 @@ onMounted(load);
             <th>Email</th>
             <th>Role</th>
             <th>Created</th>
+            <th>Last login</th>
             <th>Spent</th>
             <th>Budget</th>
             <th></th>
@@ -308,6 +309,9 @@ onMounted(load);
               </span>
             </td>
             <td data-label="Created" class="muted">{{ new Date(user.created_at).toLocaleDateString() }}</td>
+            <td data-label="Last login" class="muted" :data-test="`last-login-${user.id}`">
+              {{ user.last_login_at ? new Date(user.last_login_at).toLocaleString() : 'never' }}
+            </td>
             <td data-label="Spent" :data-test="`spent-${user.id}`">
               {{ tokens(spending.get(user.id)?.used ?? 0) }}
               <span

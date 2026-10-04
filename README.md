@@ -497,7 +497,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 
 | table | purpose |
 | --- | --- |
-| `users` | accounts; `is_admin` flag, `email` (required, one per account, with `email_verified_at` once the mailed link is followed), the lock (`failed_logins`, `locked_at`, `locked_reason`), and `token_budget` — this user's own token allowance per window (NULL takes the configured default, 0 lifts the ceiling for them). `email_verifications` holds the hashed token of the outstanding confirmation. See `docs/accounts.md` |
+| `users` | accounts; `is_admin` flag, `email` (required, one per account, with `email_verified_at` once the mailed link is followed), the lock (`failed_logins`, `locked_at`, `locked_reason`), `last_login_at` (the last successful password login), and `token_budget` — this user's own token allowance per window (NULL takes the configured default, 0 lifts the ceiling for them). `email_verifications` holds the hashed token of the outstanding confirmation. See `docs/accounts.md` |
 | `modules` | **shared** module records with `manual_status` / `analysis_status` / `panel_status` — the manual is found, analyzed and drawn once, for everyone |
 | `racks` | a user's named racks (unique name per user, `main rack` by default); strictly private to their owner |
 | `rack_modules` | maps racks to the modules in them (per-rack quantity); "deleting" a module only unlinks it, and the same module can sit in many racks |

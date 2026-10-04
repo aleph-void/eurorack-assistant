@@ -70,8 +70,8 @@ describe('UsersView', () => {
 
   it('shows each address with whether it is confirmed, and lets the admin change one', async () => {
     const users = [
-      { id: 1, username: 'admin', is_admin: true, email: 'admin@example.com', email_verified_at: '2026-01-01T00:00:00Z', created_at: new Date().toISOString() },
-      { id: 2, username: 'alice', is_admin: false, email: 'alice@example.com', email_verified_at: null, created_at: new Date().toISOString() },
+      { id: 1, username: 'admin', is_admin: true, email: 'admin@example.com', email_verified_at: '2026-01-01T00:00:00Z', created_at: new Date().toISOString(), last_login_at: '2026-03-04T05:06:07Z' },
+      { id: 2, username: 'alice', is_admin: false, email: 'alice@example.com', email_verified_at: null, created_at: new Date().toISOString(), last_login_at: null },
     ];
     api.get.mockResolvedValue(users);
     api.put.mockResolvedValue({
@@ -84,6 +84,8 @@ describe('UsersView', () => {
     expect(wrapper.find('[data-test="email-state-1"]').text()).toBe('confirmed');
     expect(wrapper.find('[data-test="email-state-2"]').text()).toBe('unconfirmed');
     expect(wrapper.find('[data-test="email-2"]').text()).toContain('alice@example.com');
+    expect(wrapper.find('[data-test="last-login-1"]').text()).toBe(new Date('2026-03-04T05:06:07Z').toLocaleString());
+    expect(wrapper.find('[data-test="last-login-2"]').text()).toBe('never');
 
     await wrapper.find('[data-test="edit-email-2"]').trigger('click');
     const input = wrapper.find('[data-test="email-input-2"]');

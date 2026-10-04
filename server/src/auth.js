@@ -99,12 +99,14 @@ export function sessionUserJson(user) {
     llm_provider,
     llm_model,
     llm_models,
+    last_login_at,
   } = user;
   return {
     id,
     username,
     email,
     email_verified_at: email_verified_at ? new Date(email_verified_at).toISOString() : null,
+    last_login_at: last_login_at ? new Date(last_login_at).toISOString() : null,
     is_admin,
     must_change_password,
     token_budget,

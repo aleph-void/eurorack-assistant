@@ -582,7 +582,9 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   lock the account they were tried against, the admin locks and unlocks by
   hand (`PUT /api/users/:id/lock`), and only the admin unlocks either kind.
   A lock deletes every session and revokes every device token, and
-  `getSessionUser()` refuses a locked user besides.
+  `getSessionUser()` refuses a locked user besides. `users.last_login_at`
+  (migration 054) is set by the same `recordLogin()` a right password calls,
+  and by nothing else: a session presented is the same login continuing.
 - A TABLE ROW IS A CARD ON A PHONE. A table is columns beside each other and
   a phone has room for about two of them, so under 768px every `.table-wrap`
   table stops being columns: each row becomes a small bordered block, one line

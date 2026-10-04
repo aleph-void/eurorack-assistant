@@ -47,6 +47,14 @@ recorded whether or not the mail could be sent; every such answer carries
 Pages: `/account/email` (the user's own address, with the resend button),
 `/verify-email` (the link's landing page), and the Users page for the admin.
 
+## Last login
+
+`users.last_login_at` (migration 054) is set on every successful password
+login and nowhere else: a session cookie being presented is the same login
+continuing, and a device token refreshing itself is a machine. It is served
+to the user on `/api/auth/me` and to the admin in the user list, where the
+Users page shows it (or "never").
+
 ## Locking
 
 Five wrong passwords in a row lock the account they were tried against

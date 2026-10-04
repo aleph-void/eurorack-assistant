@@ -866,6 +866,36 @@ describe('email address', () => {
   });
 });
 
+describe('last login', () => {
+  it('is recorded on a successful login and nothing else', async () => {
+    const { app, adminCookie, db } = await createTestApp();
+    // The fixture logs alice in once already; a fresh user has never.
+    await createUser(db, { username: 'carol' });
+    const before = await request(app).get('/api/users').set('Cookie', adminCookie);
+    const carolBefore = before.body.find((u) => u.username === 'carol');
+    expect(carolBefore.last_login_at).toBeNull();
+    expect(before.body.find((u) => u.username === 'alice').last_login_at).toMatch(/^\d{4}-/);
+
+    await request(app).post('/api/auth/login').send({ username: 'carol', password: 'wrong' });
+    const stillNone = await request(app).get('/api/users').set('Cookie', adminCookie);
+    expect(stillNone.body.find((u) => u.username === 'carol').last_login_at).toBeNull();
+
+    const start = Date.now();
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'carol', password: 'password123' });
+    expect(loginRes.status).toBe(200);
+    expect(new Date(loginRes.body.last_login_at).getTime()).toBeGreaterThanOrEqual(start - 1000);
+    const cookie = loginRes.headers['set-cookie'][0].split(';')[0];
+
+    // Using the session is the same login continuing, not a new one.
+    const me = await request(app).get('/api/auth/me').set('Cookie', cookie);
+    expect(me.body.last_login_at).toBe(loginRes.body.last_login_at);
+    const after = await request(app).get('/api/users').set('Cookie', adminCookie);
+    expect(after.body.find((u) => u.username === 'carol').last_login_at).toBe(loginRes.body.last_login_at);
+  });
+});
+
 describe('account lockout', () => {
   const attempt = (app, password) =>
     request(app).post('/api/auth/login').send({ username: 'alice', password });
@@ -898,6 +928,7 @@ describe('account lockout', () => {
     expect((await attempt(app, 'password123')).status).toBe(200);
     const { rows } = await db.query("SELECT failed_logins FROM users WHERE username = 'alice'");
     expect(rows[0].failed_logins).toBe(0);
+    // Wrong passwords never count as a login.
     for (let i = 0; i < 4; i += 1) expect((await attempt(app, 'wrong')).status).toBe(401);
   });
 
