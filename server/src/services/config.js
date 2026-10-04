@@ -1,4 +1,5 @@
 import { PROVIDERS, DEFAULT_MODELS, modelNameProblem } from './llm.js';
+import { normalizeUrl } from './resourceLinks.js';
 
 export const CONFIG_DEFAULTS = {
   llm_provider: 'claude',
@@ -20,7 +21,16 @@ export const CONFIG_DEFAULTS = {
   // Blank disables the scan; the per-video attach flow (yt-dlp) never needs
   // a key, so nothing else breaks without one.
   youtube_api_key: '',
+  // Where the community talks. Blank means there is no such place; set, it
+  // is a link in the footer every signed-in user sees (GET /api/site), so it
+  // is held to the same http(s)-only rule as a resource link.
+  discord_invite_url: '',
 };
+
+// The keys every signed-in user may read, as opposed to the admin's page.
+// A key is public because the app DRAWS it for everyone, not because it is
+// harmless: an API key is neither, and is not here.
+export const PUBLIC_CONFIG_KEYS = ['discord_invite_url'];
 
 export const DEFAULT_IMPORT_WORKERS = Number(CONFIG_DEFAULTS.import_workers);
 
@@ -65,6 +75,14 @@ export async function setConfig(db, updates) {
       value = String(value ?? '').trim();
       if (/\s/.test(value)) throw new Error('Invalid youtube_api_key: must not contain spaces');
     }
+    if (key === 'discord_invite_url') {
+      value = String(value ?? '').trim();
+      if (value !== '') {
+        const normalized = normalizeUrl(value);
+        if (normalized.error) throw new Error(`Invalid discord_invite_url: ${normalized.error}`);
+        value = normalized.url;
+      }
+    }
     if (key === 'import_workers') {
       const n = Number(value);
       if (typeof value === 'boolean' || String(value).trim() === '' || !Number.isInteger(n) || n < 1) {
@@ -78,6 +96,12 @@ export async function setConfig(db, updates) {
     }
   }
   return getConfig(db);
+}
+
+// What the footer shows: the public keys and nothing else.
+export async function getSiteConfig(db) {
+  const config = await getConfig(db);
+  return Object.fromEntries(PUBLIC_CONFIG_KEYS.map((key) => [key, config[key]]));
 }
 
 // Number of concurrent job workers, from app_config. Falls back to the

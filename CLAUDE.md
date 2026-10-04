@@ -619,6 +619,16 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   FETCHES A LINK: no request leaves the server when one is saved, so a link is
   never a way to make the server knock on an address somebody chose for it.
   Every rendered link carries `target="_blank" rel="noopener noreferrer"`.
+- A SETTING EVERY USER SEES is still written on the admin's page.
+  `app_config` is the admin's (`/api/config`, `services/config.js`), and the
+  one or two keys the app draws for everyone — the Discord invite in the
+  footer — are named in `PUBLIC_CONFIG_KEYS` and served, those alone, by
+  `GET /api/site` to any signed-in user (a password change still owed
+  included, since the footer is on that page too). `stores/site.js` reads it
+  when someone signs in and forgets it when they sign out; the config page
+  hands what it just saved to the same store, so its own footer changes at
+  once. The invite is held to the resource-link rule (http(s) only, a bare
+  host read as https) and is never fetched by the server.
 - Failures are said twice: inline where the work is, and as a toast over the
   page (`client/src/toast.js` + `components/ToastStack.vue`, mounted once in
   `App.vue`, styled in `style.css`). `api.js` raises the red one itself for

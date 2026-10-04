@@ -1,7 +1,9 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import { api } from '../api.js';
+import { useSiteStore } from '../stores/site.js';
 
+const site = useSiteStore();
 const config = ref(null);
 const provider = ref('claude');
 const model = ref('');
@@ -9,6 +11,7 @@ const importWorkers = ref(4);
 const budgetDefault = ref(0);
 const budgetPeriod = ref('month');
 const youtubeApiKey = ref('');
+const discordInviteUrl = ref('');
 const error = ref('');
 const saved = ref(false);
 const busy = ref(false);
@@ -24,6 +27,7 @@ onMounted(async () => {
     budgetDefault.value = Number(config.value.token_budget_default) || 0;
     budgetPeriod.value = config.value.token_budget_period || 'month';
     youtubeApiKey.value = config.value.youtube_api_key || '';
+    discordInviteUrl.value = config.value.discord_invite_url || '';
   } catch (e) {
     error.value = e.message;
   }
@@ -41,7 +45,12 @@ async function save() {
       token_budget_default: budgetDefault.value,
       token_budget_period: budgetPeriod.value,
       youtube_api_key: youtubeApiKey.value,
+      discord_invite_url: discordInviteUrl.value,
     })) };
+    // The server normalizes the address (a bare host becomes https); show
+    // what it kept, and put it in this page's own footer at once.
+    discordInviteUrl.value = config.value.discord_invite_url || '';
+    site.apply(config.value);
     saved.value = true;
   } catch (e) {
     error.value = e.message;
@@ -126,6 +135,22 @@ async function save() {
           data-test="youtube-api-key"
           autocomplete="off"
           placeholder="AIza…"
+        />
+      </fieldset>
+
+      <fieldset>
+        <legend>Community</legend>
+        <p class="muted" style="margin-top: 0">
+          A Discord invite link is shown in the footer of every page to every signed-in user.
+          Leave it blank to show nothing.
+        </p>
+        <label for="discord-invite-url">Discord invite URL</label>
+        <input
+          id="discord-invite-url"
+          v-model="discordInviteUrl"
+          data-test="discord-invite-url"
+          autocomplete="off"
+          placeholder="https://discord.gg/…"
         />
       </fieldset>
 

@@ -12,6 +12,7 @@ import { manualRoutes } from './routes/manuals.js';
 import { importRoutes } from './routes/imports.js';
 import { questionRoutes } from './routes/questions/index.js';
 import { configRoutes } from './routes/config.js';
+import { siteRoutes } from './routes/site.js';
 import { llmRoutes } from './routes/llm.js';
 import { usageRoutes } from './routes/usage.js';
 import { jobRoutes } from './routes/jobs.js';
@@ -112,6 +113,8 @@ export function createApp(
   app.use('/api/imports', importRoutes(db));
   app.use('/api/questions', questionRoutes(db));
   app.use('/api/config', configRoutes(db));
+  // The handful of settings every user sees (the footer's Discord link).
+  app.use('/api/site', siteRoutes(db));
   // Per-user LLM provider accounts: who each user's model runs bill to.
   app.use('/api/llm', llmRoutes(db, { fetchImpl }));
   app.use('/api/usage', usageRoutes(db));

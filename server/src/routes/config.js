@@ -28,6 +28,7 @@ export function configRoutes(db) {
         'token_budget_default',
         'token_budget_period',
         'youtube_api_key',
+        'discord_invite_url',
       ];
       for (const key of allowed) {
         if (req.body?.[key] !== undefined) updates[key] = req.body[key];

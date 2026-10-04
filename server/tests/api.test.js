@@ -1169,6 +1169,47 @@ describe('config API', () => {
     expect(res.status).toBe(400);
   });
 
+  it('keeps the Discord invite as an http(s) URL, or blank', async () => {
+    const { app, adminCookie, aliceCookie } = await createTestApp();
+    // Nothing set: every user reads a blank, and nobody who is not signed in.
+    expect((await request(app).get('/api/site')).status).toBe(401);
+    const unset = await request(app).get('/api/site').set('Cookie', aliceCookie);
+    expect(unset.status).toBe(200);
+    expect(unset.body).toEqual({ discord_invite_url: '' });
+
+    // A bare host is read as https, like a resource link.
+    const set = await request(app)
+      .put('/api/config')
+      .set('Cookie', adminCookie)
+      .send({ discord_invite_url: ' discord.gg/abc123 ' });
+    expect(set.status).toBe(200);
+    expect(set.body.discord_invite_url).toBe('https://discord.gg/abc123');
+
+    // Any signed-in user sees it, and only it — never the API key beside it.
+    const shown = await request(app).get('/api/site').set('Cookie', aliceCookie);
+    expect(shown.body).toEqual({ discord_invite_url: 'https://discord.gg/abc123' });
+
+    for (const bad of ['javascript:alert(1)', 'not a url', 'ftp://discord.gg/x']) {
+      const rejected = await request(app)
+        .put('/api/config')
+        .set('Cookie', adminCookie)
+        .send({ discord_invite_url: bad });
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error).toMatch(/discord_invite_url/);
+    }
+
+    // Blank takes the link down again.
+    const cleared = await request(app)
+      .put('/api/config')
+      .set('Cookie', adminCookie)
+      .send({ discord_invite_url: '' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.discord_invite_url).toBe('');
+    expect((await request(app).get('/api/site').set('Cookie', aliceCookie)).body).toEqual({
+      discord_invite_url: '',
+    });
+  });
+
   it('is admin-only', async () => {
     const { app, aliceCookie } = await createTestApp();
     expect((await request(app).get('/api/config').set('Cookie', aliceCookie)).status).toBe(403);
