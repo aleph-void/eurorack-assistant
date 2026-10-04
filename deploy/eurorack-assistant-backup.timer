@@ -1,0 +1,20 @@
+# eurorack-assistant-backup.timer — runs the backup once a day.
+#
+# TEMPLATE: @BACKUP_TIME@ (HH:MM, the host's local time) is substituted at
+# install time by ./install-backup.sh from BACKUP_TIME in .env.
+#
+#   systemctl list-timers eurorack-assistant-backup.timer   # next and last run
+
+[Unit]
+Description=Daily Eurorack Assistant backup to S3
+Documentation=https://github.com/aleph-void/eurorack-assistant
+
+[Timer]
+OnCalendar=*-*-* @BACKUP_TIME@:00
+# A run the host slept through (it was off at the hour) is made as soon as
+# it is back up, rather than skipped until tomorrow.
+Persistent=true
+Unit=eurorack-assistant-backup.service
+
+[Install]
+WantedBy=timers.target

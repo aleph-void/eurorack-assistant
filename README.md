@@ -447,6 +447,8 @@ docker compose logs -f server   # watch the job worker
 ./reset-admin-password.sh       # new random admin password (printed once; forces a change at next login)
 ./backup-db.sh [--files]        # dump the database to /tmp on the host (or pass a path)
 ./restore-db.sh [--files <zip>] <dump-file>   # replace the database with a dump (stops the app during the restore)
+./install-backup.sh <s3-bucket> # a full backup to S3 every day, keeping the newest 10 (see below)
+./backup-to-s3.sh               # one full backup to S3 right now
 docker compose down             # stop (data persists in volumes)
 sudo systemctl status eurorack-assistant   # the boot unit (start/stop/restart drive compose)
 ```
@@ -460,6 +462,61 @@ to `restore-db.sh --files` puts the files back after the database restore;
 files in the archive overwrite files on disk, extra files on disk are left
 alone (the stores are content-addressed, so an extra file is unreferenced,
 never wrong).
+
+### Daily backups to S3
+
+```sh
+./install-backup.sh my-backups --now      # bucket name; --now also makes the first backup
+```
+
+`install-backup.sh` records the bucket in `.env` and installs a systemd timer
+(`eurorack-assistant-backup.timer`, rendered from `deploy/`) that runs
+`backup-to-s3.sh` once a day — at 03:17 host time by default, `--at HH:MM`
+for another — and keeps the newest 10 backups in the bucket, deleting older
+ones after each upload (`--keep N` for another count; `0` keeps everything).
+Re-running `./setup.sh` keeps the timer current once a bucket is configured.
+`--prefix <folder>` picks the folder in the bucket (default
+`eurorack-assistant`); `--region` records `AWS_REGION`.
+
+Each backup is **one object**, `eurorack-backup-<UTC stamp>.tar`, holding
+everything a restore needs: `db.dump` (the database), `files.zip` (manuals,
+panels, captures and recordings), `llm-token.key` (the key that decrypts the
+stored LLM credentials — without it every restored user re-authorizes) and a
+`MANIFEST` with the sha256 of each. The `llm` volume is not in it: the server
+rebuilds those per-user CLI homes from the database and the key. The dump and
+the zip are staged under `/var/tmp` (`BACKUP_TMP` in `.env` for somewhere
+with more room) and the tar is streamed straight into the upload, so the host
+never holds a second copy. A backup holds the key and every credential the
+database stores, so the bucket must be private. To restore from one:
+
+```sh
+aws s3 cp s3://my-backups/eurorack-assistant/eurorack-backup-20260101-031700Z.tar .
+tar -xf eurorack-backup-20260101-031700Z.tar
+./restore-db.sh --files files.zip db.dump
+docker compose cp llm-token.key server:/data/keys/llm-token.key && docker compose restart server
+```
+
+**Credentials.** The job runs as root through systemd and uses the AWS CLI
+when one is on `PATH`, else the `amazon/aws-cli` container image (so a host
+with docker needs nothing installed). Give it access any one of these ways:
+an instance role on the host, `sudo aws configure` (root's `~/.aws`), or
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` lines in `.env` (which the
+installer makes `0600`). The identity needs `s3:PutObject`,
+`s3:AbortMultipartUpload`, `s3:ListBucket` and `s3:DeleteObject` on the
+bucket. `BACKUP_S3_ENDPOINT_URL` in `.env` points the job at an
+S3-compatible store that is not AWS; `BACKUP_S3_STORAGE_CLASS` picks a
+cheaper class. On a bucket with versioning on, a deleted backup is only a
+delete marker — add a lifecycle rule expiring noncurrent versions, or the
+old ones never free their space.
+
+Pruning deletes only objects named like the job's own uploads under its
+prefix, and only once the listing shows the backup just made; a listing that
+cannot be read deletes nothing. Watch it with
+`journalctl -u eurorack-assistant-backup.service` and
+`systemctl list-timers eurorack-assistant-backup.timer`. Hosts without
+systemd get the equivalent cron line printed instead; under rootless Docker
+the installer prints the user-timer steps, as `setup.sh` does for the boot
+unit.
 
 ## Architecture
 
