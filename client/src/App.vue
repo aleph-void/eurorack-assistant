@@ -5,6 +5,7 @@ import { useAuthStore } from './stores/auth.js';
 import { useJobsStore } from './stores/jobs.js';
 import { useDevicesStore } from './stores/devices.js';
 import { useDetailStore } from './stores/detail.js';
+import { useSiteStore } from './stores/site.js';
 import { createProgressSocket } from './progressSocket.js';
 import ConfirmDialog from './components/ConfirmDialog.vue';
 import ToastStack from './components/ToastStack.vue';
@@ -20,6 +21,7 @@ const auth = useAuthStore();
 const jobs = useJobsStore();
 const devices = useDevicesStore();
 const detail = useDetailStore();
+const site = useSiteStore();
 const router = useRouter();
 const route = useRoute();
 
@@ -43,6 +45,14 @@ function ensureSocket() {
 watch(() => auth.isLoggedIn, ensureSocket);
 onMounted(ensureSocket);
 onUnmounted(() => socket?.close());
+
+// The footer's community link is a setting every signed-in user may read
+// and nobody else: read when someone signs in, forgotten when they sign out.
+watch(
+  () => auth.isLoggedIn,
+  (loggedIn) => (loggedIn ? site.load() : site.reset()),
+  { immediate: true }
+);
 
 // Voice patching is set up per account and kept in this browser, so which
 // settings are in force follows who is signed in. Signing out puts them back
@@ -373,5 +383,17 @@ async function logout() {
     </a>
     <span class="sep" aria-hidden="true">·</span>
     <a href="https://alephvoid.com" target="_blank" rel="noopener">alephvoid.com</a>
+    <!-- Only when an admin has set one (Application Config). -->
+    <template v-if="site.discordInviteUrl">
+      <span class="sep" aria-hidden="true">·</span>
+      <a
+        :href="site.discordInviteUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        data-test="discord-link"
+      >
+        Discord
+      </a>
+    </template>
   </footer>
 </template>

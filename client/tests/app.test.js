@@ -31,6 +31,7 @@ import { useAuthStore } from '../src/stores/auth.js';
 import { useJobsStore } from '../src/stores/jobs.js';
 import { useDevicesStore } from '../src/stores/devices.js';
 import { useDetailStore } from '../src/stores/detail.js';
+import { useSiteStore } from '../src/stores/site.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -65,6 +66,43 @@ describe('App', () => {
     expect(createProgressSocket.mock.results[0].value.close).toHaveBeenCalled();
     expect(createProgressSocket).toHaveBeenCalledTimes(1);
     wrapper.unmount();
+  });
+
+  // The community link is an admin setting every signed-in user may read:
+  // the footer carries it once the server has answered, and not before, and
+  // drops it again when the session ends.
+  it('shows the Discord link in the footer when an admin has set one', async () => {
+    api.get.mockImplementation(async (path) =>
+      path === '/api/site' ? { discord_invite_url: 'https://discord.gg/abc123' } : []
+    );
+    const { wrapper, auth } = mountApp();
+    await flushPromises();
+    expect(api.get).toHaveBeenCalledWith('/api/site', { quiet: true });
+    const link = wrapper.find('[data-test="discord-link"]');
+    expect(link.exists()).toBe(true);
+    expect(link.attributes('href')).toBe('https://discord.gg/abc123');
+    expect(link.attributes('target')).toBe('_blank');
+    expect(link.attributes('rel')).toBe('noopener noreferrer');
+
+    auth.user = null;
+    await flushPromises();
+    expect(wrapper.find('[data-test="discord-link"]').exists()).toBe(false);
+    expect(useSiteStore().discordInviteUrl).toBe('');
+    wrapper.unmount();
+  });
+
+  it('leaves the Discord link out when none is set, or the read fails', async () => {
+    api.get.mockResolvedValue({ discord_invite_url: '' });
+    const first = mountApp();
+    await flushPromises();
+    expect(first.wrapper.find('[data-test="discord-link"]').exists()).toBe(false);
+    first.wrapper.unmount();
+
+    api.get.mockRejectedValue(new Error('down'));
+    const second = mountApp();
+    await flushPromises();
+    expect(second.wrapper.find('[data-test="discord-link"]').exists()).toBe(false);
+    second.wrapper.unmount();
   });
 
   it('does not open a socket, or show the chrome, when nobody is logged in', async () => {

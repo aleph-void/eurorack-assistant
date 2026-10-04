@@ -19,6 +19,7 @@ vi.mock('vue-router', async (importOriginal) => {
 
 import { api } from '../../src/api.js';
 import ConfigView from '../../src/views/ConfigView.vue';
+import { useSiteStore } from '../../src/stores/site.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -36,6 +37,7 @@ describe('ConfigView', () => {
     token_budget_default: '0',
     token_budget_period: 'month',
     youtube_api_key: '',
+    discord_invite_url: '',
   };
 
   it('loads current config and saves changes', async () => {
@@ -56,6 +58,7 @@ describe('ConfigView', () => {
     await wrapper.find('[data-test="token-budget-default"]').setValue('250000');
     await wrapper.find('[data-test="token-budget-period"]').setValue('week');
     await wrapper.find('[data-test="youtube-api-key"]').setValue('AIzaTestKey123');
+    await wrapper.find('[data-test="discord-invite-url"]').setValue('discord.gg/abc123');
     await wrapper.find('form').trigger('submit');
     await flushPromises();
     expect(api.put).toHaveBeenCalledWith('/api/config', {
@@ -65,8 +68,31 @@ describe('ConfigView', () => {
       token_budget_default: 250000,
       token_budget_period: 'week',
       youtube_api_key: 'AIzaTestKey123',
+      discord_invite_url: 'discord.gg/abc123',
     });
     expect(wrapper.find('[data-test="saved"]').exists()).toBe(true);
+  });
+
+  it('shows the Discord invite as the server kept it, and hands it to the footer', async () => {
+    api.get.mockResolvedValue({ ...configResponse, discord_invite_url: 'https://discord.gg/old' });
+    api.put.mockResolvedValue({ ...configResponse, discord_invite_url: 'https://discord.gg/new' });
+    const wrapper = mount(ConfigView, { global: testGlobal() });
+    const site = useSiteStore();
+    await flushPromises();
+    expect(wrapper.find('[data-test="discord-invite-url"]').element.value).toBe(
+      'https://discord.gg/old'
+    );
+
+    // A bare host is sent as typed; the server answers with the https URL it
+    // stored, which is what the field and this page's footer then show.
+    await wrapper.find('[data-test="discord-invite-url"]').setValue('discord.gg/new');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.put.mock.calls[0][1].discord_invite_url).toBe('discord.gg/new');
+    expect(wrapper.find('[data-test="discord-invite-url"]').element.value).toBe(
+      'https://discord.gg/new'
+    );
+    expect(site.discordInviteUrl).toBe('https://discord.gg/new');
   });
 
   it('shows save errors', async () => {

@@ -51,6 +51,8 @@ describe('config service', () => {
     const budgetDefaults = { token_budget_default: '0', token_budget_period: 'month' };
     // The channel scan is off until an admin pastes a YouTube API key.
     const youtubeDefaults = { youtube_api_key: '' };
+    // No community link until an admin pastes one.
+    const siteDefaults = { discord_invite_url: '' };
     expect(await getConfig(db)).toEqual({
       llm_provider: 'claude',
       llm_model: '',
@@ -58,6 +60,7 @@ describe('config service', () => {
       ...queueDefaults,
       ...budgetDefaults,
       ...youtubeDefaults,
+      ...siteDefaults,
     });
     await setConfig(db, { llm_provider: 'codex', llm_model: 'gpt-5.1' });
     expect(await getConfig(db)).toEqual({
@@ -67,6 +70,7 @@ describe('config service', () => {
       ...queueDefaults,
       ...budgetDefaults,
       ...youtubeDefaults,
+      ...siteDefaults,
     });
     await setConfig(db, { llm_model: '' });
     expect((await getLlmSettings(db)).model).toBe('gpt-5.1-codex');
