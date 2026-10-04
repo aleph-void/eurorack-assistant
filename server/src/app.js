@@ -96,6 +96,7 @@ export function createApp(
   app.use('/api', limiters.api);
   app.use('/api/auth/login', limiters.credentials);
   app.use('/api/auth/password', limiters.credentials);
+  app.use('/api/auth/email', limiters.credentials);
   // The one write with no session behind it, so it is held to a bucket of
   // its own on top of the shared one.
   app.use(CSP_REPORT_PATH, limiters.reports);

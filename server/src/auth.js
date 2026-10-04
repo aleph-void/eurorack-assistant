@@ -40,6 +40,64 @@ export function passwordProblem(password, { label = 'password' } = {}) {
   return null;
 }
 
+// The address a password reset is sent to, so it is held to the same
+// one-place rule as the password. Lowercased before it is stored or looked
+// up: the local part of an address is case-sensitive on paper and on no mail
+// provider anyone uses, and one account per address only holds if
+// Nick@example.com and nick@example.com are the same key. An emptied field
+// is NULL — an account may have no address — never ''.
+export const MAX_EMAIL_LENGTH = 254;
+
+export function normalizeEmail(value) {
+  if (value === null || value === undefined) return null;
+  const email = String(value).trim().toLowerCase();
+  return email === '' ? null : email;
+}
+
+// Returns an error string, or null when the (normalized) address will do.
+// The shape check is deliberately loose — one @, something either side, a
+// dot in the domain — because the only test of an address that matters is
+// whether mail sent to it arrives, and that is what the confirmation step
+// is for.
+export function emailProblem(email) {
+  if (typeof email !== 'string' || email === '') return 'email is required';
+  if (email.length > MAX_EMAIL_LENGTH) {
+    return `email must be at most ${MAX_EMAIL_LENGTH} characters`;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return 'email must look like name@example.com';
+  }
+  return null;
+}
+
+// The user as every auth response describes them — the session lookup, the
+// login and the self-service changes answer with the same shape so the client
+// store can take any of them as the current user.
+export function sessionUserJson(user) {
+  const {
+    id,
+    username,
+    email,
+    is_admin,
+    must_change_password,
+    token_budget,
+    llm_provider,
+    llm_model,
+    llm_models,
+  } = user;
+  return {
+    id,
+    username,
+    email: email ?? null,
+    is_admin,
+    must_change_password,
+    token_budget,
+    llm_provider,
+    llm_model,
+    llm_models,
+  };
+}
+
 // Passwords are stored as PBKDF2-HMAC-SHA512 hashes in a self-describing
 // format: pbkdf2$<digest>$<iterations>$<salt hex>$<derived key hex>.
 // Verification reads the parameters from the stored hash, so these constants
@@ -130,9 +188,7 @@ export async function getSessionUser(db, token) {
   // token_budget rides along because the budget guard runs on the request
   // path and would otherwise re-read the user on every call it protects; the
   // llm_* columns likewise, for the LLM settings route and requireLlmAccount.
-  const { id, username, is_admin, must_change_password, token_budget, llm_provider, llm_model, llm_models } =
-    session.User;
-  return { id, username, is_admin, must_change_password, token_budget, llm_provider, llm_model, llm_models };
+  return sessionUserJson(session.User);
 }
 
 // A user flagged must_change_password is locked out of everything except the

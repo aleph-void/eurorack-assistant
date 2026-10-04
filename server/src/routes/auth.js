@@ -4,10 +4,13 @@ import {
   createSession,
   deleteSession,
   deleteUserSessions,
+  emailProblem,
   hashPassword,
+  normalizeEmail,
   passwordProblem,
   requireAuth,
   sessionCookieOptions,
+  sessionUserJson,
   verifyPassword,
 } from '../auth.js';
 import { revokeUserDeviceTokens } from '../services/deviceAuth.js';
@@ -27,12 +30,7 @@ export function authRoutes(db) {
     }
     const { token, expiresAt } = await createSession(db, user.id);
     res.cookie(SESSION_COOKIE, token, { ...sessionCookieOptions(), expires: expiresAt });
-    res.json({
-      id: user.id,
-      username: user.username,
-      is_admin: user.is_admin,
-      must_change_password: user.must_change_password,
-    });
+    res.json(sessionUserJson(user));
   }));
 
   router.post('/logout', asyncHandler(async (req, res) => {
@@ -80,12 +78,34 @@ export function authRoutes(db) {
       // browser must cut those off too — the user re-links the device once.
       await revokeUserDeviceTokens(db, user.id, { transaction });
     });
-    res.json({
-      id: user.id,
-      username: user.username,
-      is_admin: user.is_admin,
-      must_change_password: false,
-    });
+    res.json(sessionUserJson(user));
+  }));
+
+  // The address a password reset is sent to. Setting it is as good as
+  // holding the password, so it takes the current password the way the
+  // password change does, and is rate-limited with it (app.js). An empty
+  // or null address takes the address away; one another account holds is a
+  // 409 — the index says so too, but the check here names the reason.
+  router.put('/email', requireAuth(db), asyncHandler(async (req, res) => {
+    const { current_password } = req.body || {};
+    if (!current_password) {
+      return res.status(400).json({ error: 'current_password is required' });
+    }
+    const email = normalizeEmail(req.body?.email);
+    if (email !== null) {
+      const problem = emailProblem(email);
+      if (problem) return res.status(400).json({ error: problem });
+    }
+    const user = await db.models.User.findByPk(req.user.id);
+    if (!user || !verifyPassword(String(current_password), user.password_hash)) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+    if (email !== null && email !== user.email) {
+      const taken = await db.models.User.findOne({ where: { email } });
+      if (taken) return res.status(409).json({ error: 'Email already in use' });
+    }
+    await user.update({ email });
+    res.json(sessionUserJson(user));
   }));
 
   return router;

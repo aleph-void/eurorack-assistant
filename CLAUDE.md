@@ -552,6 +552,21 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   A name the USER typed and cannot have is refused (409, the name in the
   message); one the APP made up for them — a clone's `(copy)`, the name an
   imported file carries — takes the next free `<name> 2`, `<name> 3` instead.
+- AN ACCOUNT HAS AN EMAIL ADDRESS (`users.email`, migration 052), which is
+  where a password reset will be sent and, later, where a registration is
+  confirmed before the admin approves it. Nullable — every account from before
+  has none — and ONE ACCOUNT PER ADDRESS under a plain unique index, which
+  only holds because `normalizeEmail()` (auth.js) lowercases and trims every
+  address before it is stored or looked up (pg-mem has no functional indexes,
+  so there is no `lower(email)` index to lean on); an emptied field is NULL,
+  never ''. The policy is one place like the password's: `emailProblem()`
+  beside `passwordProblem()`, used by the self-service change
+  (`PUT /api/auth/email`, `/account/email`) and by the admin's create. Setting
+  the address is as good as holding the password, so the change takes
+  `current_password` and shares the credentials rate limiter with login and
+  the password change (app.js). Every auth response describes the user
+  through `sessionUserJson()` — the session lookup, login, the password and
+  email changes — so the client store can take any of them as the user.
 - A TABLE ROW IS A CARD ON A PHONE. A table is columns beside each other and
   a phone has room for about two of them, so under 768px every `.table-wrap`
   table stops being columns: each row becomes a small bordered block, one line

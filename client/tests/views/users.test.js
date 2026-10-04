@@ -44,6 +44,25 @@ describe('UsersView', () => {
     expect(wrapper.find('[data-test="generated-password"]').text()).toBe('abc123xyz');
   });
 
+  it('sends the email address only when one was typed, and lists it', async () => {
+    api.get.mockResolvedValue([
+      { id: 1, username: 'admin', is_admin: true, email: null, created_at: new Date().toISOString() },
+      { id: 2, username: 'alice', is_admin: false, email: 'alice@example.com', created_at: new Date().toISOString() },
+    ]);
+    api.post.mockResolvedValue({ id: 3, username: 'newbie', is_admin: false, email: 'newbie@example.com' });
+    const wrapper = mount(UsersView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="email-2"]').text()).toBe('alice@example.com');
+    expect(wrapper.find('[data-test="email-1"]').text()).toBe('—');
+
+    await wrapper.find('[data-test="username"]').setValue('newbie');
+    await wrapper.find('[data-test="email"]').setValue(' newbie@example.com ');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/users', { username: 'newbie', email: 'newbie@example.com' });
+    expect(wrapper.find('[data-test="email"]').element.value).toBe('');
+  });
+
   it('resets a user password and reveals the generated password once', async () => {
     api.get.mockResolvedValue([
       { id: 1, username: 'admin', is_admin: true, created_at: new Date().toISOString() },

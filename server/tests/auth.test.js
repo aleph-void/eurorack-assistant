@@ -603,3 +603,125 @@ describe('user management', () => {
     ).toBe(400);
   });
 });
+
+describe('email address', () => {
+  it('starts empty and is served on /me and at login', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    const me = await request(app).get('/api/auth/me').set('Cookie', aliceCookie);
+    expect(me.body.email).toBeNull();
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'alice', password: 'password123' });
+    expect(loginRes.body.email).toBeNull();
+  });
+
+  it('sets, lowercases and clears the address with the current password', async () => {
+    const { app, aliceCookie, db } = await createTestApp();
+    const set = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: '  Alice@Example.COM ', current_password: 'password123' });
+    expect(set.status).toBe(200);
+    expect(set.body.email).toBe('alice@example.com');
+    expect(set.body.username).toBe('alice');
+
+    const me = await request(app).get('/api/auth/me').set('Cookie', aliceCookie);
+    expect(me.body.email).toBe('alice@example.com');
+    const { rows } = await db.query("SELECT email FROM users WHERE username = 'alice'");
+    expect(rows[0].email).toBe('alice@example.com');
+
+    const cleared = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: '', current_password: 'password123' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.email).toBeNull();
+  });
+
+  it('refuses a wrong or missing current password', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    const missing = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: 'alice@example.com' });
+    expect(missing.status).toBe(400);
+    const wrong = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: 'alice@example.com', current_password: 'nope' });
+    expect(wrong.status).toBe(401);
+    const me = await request(app).get('/api/auth/me').set('Cookie', aliceCookie);
+    expect(me.body.email).toBeNull();
+  });
+
+  it('refuses an address that is not one', async () => {
+    const { app, aliceCookie } = await createTestApp();
+    for (const email of ['alice', 'alice@', '@example.com', 'alice@example', 'a lice@example.com', `${'a'.repeat(250)}@example.com`]) {
+      const res = await request(app)
+        .put('/api/auth/email')
+        .set('Cookie', aliceCookie)
+        .send({ email, current_password: 'password123' });
+      expect(res.status, email).toBe(400);
+    }
+  });
+
+  it('is one account per address, whatever the case', async () => {
+    const { app, aliceCookie, adminCookie } = await createTestApp();
+    await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', adminCookie)
+      .send({ email: 'shared@example.com', current_password: 'password123' });
+    const res = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', aliceCookie)
+      .send({ email: 'SHARED@example.com', current_password: 'password123' });
+    expect(res.status).toBe(409);
+    // Saving your own address again is not a collision with yourself.
+    const same = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', adminCookie)
+      .send({ email: 'Shared@Example.com', current_password: 'password123' });
+    expect(same.status).toBe(200);
+  });
+
+  it('is not reachable while a password change is forced', async () => {
+    const { app, adminCookie, db } = await createTestApp();
+    const { rows } = await db.query("SELECT id FROM users WHERE username = 'alice'");
+    const reset = await request(app)
+      .post(`/api/users/${rows[0].id}/password`)
+      .set('Cookie', adminCookie)
+      .send({ password: 'temporary-pw' });
+    const cookie = await login(app, 'alice', reset.body.generated_password || 'temporary-pw');
+    const res = await request(app)
+      .put('/api/auth/email')
+      .set('Cookie', cookie)
+      .send({ email: 'alice@example.com', current_password: 'temporary-pw' });
+    expect(res.status).toBe(403);
+  });
+
+  it('lets the admin create a user with an address, and lists it', async () => {
+    const { app, adminCookie } = await createTestApp();
+    const created = await request(app)
+      .post('/api/users')
+      .set('Cookie', adminCookie)
+      .send({ username: 'newuser', email: 'New@Example.com' });
+    expect(created.status).toBe(201);
+    expect(created.body.email).toBe('new@example.com');
+
+    const list = await request(app).get('/api/users').set('Cookie', adminCookie);
+    const row = list.body.find((u) => u.username === 'newuser');
+    expect(row.email).toBe('new@example.com');
+    expect(list.body.find((u) => u.username === 'alice').email).toBeNull();
+
+    const bad = await request(app)
+      .post('/api/users')
+      .set('Cookie', adminCookie)
+      .send({ username: 'another', email: 'not-an-address' });
+    expect(bad.status).toBe(400);
+    const taken = await request(app)
+      .post('/api/users')
+      .set('Cookie', adminCookie)
+      .send({ username: 'another', email: 'new@example.com' });
+    expect(taken.status).toBe(409);
+  });
+});

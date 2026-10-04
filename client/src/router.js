@@ -66,6 +66,7 @@ const UsersView = () => import('./views/UsersView.vue');
 const ConfigView = () => import('./views/ConfigView.vue');
 const CspReportsView = () => import('./views/CspReportsView.vue');
 const ChangePasswordView = () => import('./views/ChangePasswordView.vue');
+const AccountEmailView = () => import('./views/AccountEmailView.vue');
 const LlmSettingsView = () => import('./views/LlmSettingsView.vue');
 const VoiceSettingsView = () => import('./views/VoiceSettingsView.vue');
 
@@ -73,6 +74,8 @@ export const routes = [
   { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
   { path: '/', redirect: '/modules' },
   { path: '/account/password', name: 'change-password', component: ChangePasswordView },
+  // The address a password reset is sent to.
+  { path: '/account/email', name: 'account-email', component: AccountEmailView },
   // Per-user LLM provider account and settings.
   { path: '/account/llm', name: 'llm-settings', component: LlmSettingsView },
   // Patching by voice is a way of WORKING, not a property of a patch: it is

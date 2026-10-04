@@ -34,6 +34,19 @@ describe('auth store', () => {
     expect(auth.isLoggedIn).toBe(false);
   });
 
+  it('updateEmail sends the address with the password and keeps the answer as the user', async () => {
+    api.post.mockResolvedValueOnce({ id: 1, username: 'u', is_admin: false, email: null });
+    const auth = useAuthStore();
+    await auth.login('u', 'pw');
+    api.put.mockResolvedValueOnce({ id: 1, username: 'u', is_admin: false, email: 'u@example.com' });
+    await auth.updateEmail('U@example.com', 'pw');
+    expect(api.put).toHaveBeenCalledWith('/api/auth/email', {
+      email: 'U@example.com',
+      current_password: 'pw',
+    });
+    expect(auth.user.email).toBe('u@example.com');
+  });
+
   it('changePassword updates the user and clears the forced flag', async () => {
     api.post.mockResolvedValueOnce({ id: 1, username: 'u', is_admin: false, must_change_password: true });
     const auth = useAuthStore();

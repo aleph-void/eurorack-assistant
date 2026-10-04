@@ -7,6 +7,7 @@ import { useAuthStore } from '../stores/auth.js';
 const auth = useAuthStore();
 const users = ref([]);
 const username = ref('');
+const email = ref('');
 const password = ref('');
 const error = ref('');
 const created = ref(null);
@@ -59,9 +60,11 @@ async function createUser() {
   busy.value = true;
   try {
     const body = { username: username.value };
+    if (email.value.trim()) body.email = email.value.trim();
     if (password.value) body.password = password.value;
     created.value = await api.post('/api/users', body);
     username.value = '';
+    email.value = '';
     password.value = '';
     await load();
   } catch (e) {
@@ -122,6 +125,17 @@ onMounted(load);
           <input id="new-username" v-model="username" data-test="username" required />
         </div>
         <div>
+          <label for="new-email">Email (optional)</label>
+          <input
+            id="new-email"
+            v-model="email"
+            data-test="email"
+            type="email"
+            autocomplete="off"
+            placeholder="name@example.com"
+          />
+        </div>
+        <div>
           <label for="new-password">Password (min 8 chars, blank to generate)</label>
           <!-- minlength only applies when a value is present, so leaving the
                field blank still generates a password. -->
@@ -179,6 +193,7 @@ onMounted(load);
         <thead>
           <tr>
             <th>Username</th>
+            <th>Email</th>
             <th>Role</th>
             <th>Created</th>
             <th>Spent</th>
@@ -189,6 +204,9 @@ onMounted(load);
         <tbody>
           <tr v-for="user in users" :key="user.id">
             <td data-label="Username">{{ user.username }}</td>
+            <td data-label="Email" :class="{ muted: !user.email }" :data-test="`email-${user.id}`">
+              {{ user.email || '—' }}
+            </td>
             <td data-label="Role">
               <span class="badge" :class="user.is_admin ? 'found' : ''">
                 {{ user.is_admin ? 'admin' : 'user' }}

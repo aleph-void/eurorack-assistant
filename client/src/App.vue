@@ -342,6 +342,7 @@ async function logout() {
       <RouterLink to="/account/password" title="Change password" data-test="account">
         {{ auth.user.username }}
       </RouterLink>
+      <RouterLink to="/account/email" title="Email address" data-test="nav-email">Email</RouterLink>
       <a href="#" data-test="logout" @click.prevent="logout">Log out</a>
     </div>
   </nav>

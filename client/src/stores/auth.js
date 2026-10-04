@@ -35,6 +35,15 @@ export const useAuthStore = defineStore('auth', {
       });
       return this.user;
     },
+    // The recovery address. Takes the current password like a password
+    // change does; '' or null takes the address away.
+    async updateEmail(email, currentPassword) {
+      this.user = await api.put('/api/auth/email', {
+        email,
+        current_password: currentPassword,
+      });
+      return this.user;
+    },
     async logout() {
       try {
         await api.post('/api/auth/logout');

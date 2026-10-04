@@ -2,8 +2,10 @@ import { Router } from 'express';
 import { fn, col, where } from 'sequelize';
 import {
   deleteUserSessions,
+  emailProblem,
   generatePassword,
   hashPassword,
+  normalizeEmail,
   passwordProblem,
   requireAdmin,
   requireAuth,
@@ -13,10 +15,11 @@ import { revokeUserDeviceTokens } from '../services/deviceAuth.js';
 import { asyncHandler } from './asyncHandler.js';
 
 function publicUser(user) {
-  const { id, username, is_admin, created_at, token_budget } = user;
+  const { id, username, email, is_admin, created_at, token_budget } = user;
   return {
     id,
     username,
+    email: email ?? null,
     is_admin,
     created_at,
     // BIGINT arrives from postgres as a string; the API says numbers.
@@ -31,7 +34,7 @@ export function userRoutes(db) {
 
   router.get('/', asyncHandler(async (req, res) => {
     const users = await User.findAll({
-      attributes: ['id', 'username', 'is_admin', 'created_at', 'token_budget'],
+      attributes: ['id', 'username', 'email', 'is_admin', 'created_at', 'token_budget'],
       order: [['id', 'ASC']],
     });
     res.json(users.map(publicUser));
@@ -39,6 +42,8 @@ export function userRoutes(db) {
 
   // Admins create non-admin users only. If no password is given, one is
   // generated and returned once in the response (stored only as a hash).
+  // An email address is optional here: the one place it is required is the
+  // registration the user does for themselves.
   router.post('/', asyncHandler(async (req, res) => {
     const { username } = req.body || {};
     let { password } = req.body || {};
@@ -47,11 +52,19 @@ export function userRoutes(db) {
         error: 'username is required (2-64 chars: letters, digits, . _ -)',
       });
     }
+    const email = normalizeEmail(req.body?.email);
+    if (email !== null) {
+      const problem = emailProblem(email);
+      if (problem) return res.status(400).json({ error: problem });
+    }
     const existing = await User.findOne({
       where: where(fn('lower', col('username')), String(username).toLowerCase()),
     });
     if (existing) {
       return res.status(409).json({ error: 'Username already exists' });
+    }
+    if (email !== null && (await User.findOne({ where: { email } }))) {
+      return res.status(409).json({ error: 'Email already in use' });
     }
     let generated = null;
     if (!password) {
@@ -63,6 +76,7 @@ export function userRoutes(db) {
     }
     const created = await User.create({
       username,
+      email,
       password_hash: hashPassword(String(password)),
       is_admin: false,
     });
