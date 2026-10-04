@@ -102,8 +102,14 @@ export function questionReviewRoutes(db) {
     // ids they are linked to so the client can narrow them to the current
     // selection. Link rows are fetched separately (pg-mem-friendly flat
     // queries) and only entries touching the rack are offered.
+    // Roots only: a follow-up is attached with its thread, through the root.
     const answeredRows = await Question.findAll({
-      where: { user_id: req.user.id, status: 'answered', id: { [Op.ne]: question.id } },
+      where: {
+        user_id: req.user.id,
+        status: 'answered',
+        parent_id: null,
+        id: { [Op.ne]: question.id },
+      },
       attributes: ['id', 'prompt', 'answered_at'],
       order: [['created_at', 'ASC']],
     });
@@ -312,7 +318,7 @@ export function questionReviewRoutes(db) {
     const answerIds = uniqueIds(req.body?.answer_ids);
     if (answerIds.length > 0) {
       const rows = await Question.count({
-        where: { id: answerIds, user_id: req.user.id, status: 'answered' },
+        where: { id: answerIds, user_id: req.user.id, status: 'answered', parent_id: null },
       });
       if (rows !== answerIds.length) {
         return res.status(400).json({ error: 'answer_ids must be your answered questions' });

@@ -13,6 +13,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { api } from '../api.js';
 import PatchDiagram from '../components/PatchDiagram.vue';
+import QuestionThread from '../components/QuestionThread.vue';
 
 const props = defineProps({
   type: { type: String, required: true },
@@ -121,6 +122,11 @@ const patchLabel = (pm) =>
       <!-- eslint-disable-next-line vue/no-v-html -- sanitized with DOMPurify -->
       <div v-if="answerHtml" class="answer" data-test="shared-answer" v-html="answerHtml"></div>
       <p v-else class="muted" data-test="no-answer">This question has not been answered yet.</p>
+      <!-- The follow-ups asked under it are the rest of the conversation. -->
+      <template v-if="item.thread?.length">
+        <h3>Follow-ups</h3>
+        <QuestionThread :turns="item.thread" />
+      </template>
     </div>
 
     <!-- A rack: what is in it. -->

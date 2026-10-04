@@ -57,6 +57,9 @@ export function defineNotesModels(define) {
       status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'pending' },
       error: { type: DataTypes.TEXT },
       answered_at: { type: DataTypes.DATE },
+      // The root of the thread this question follows up on (migration 052);
+      // NULL for a question asked on its own.
+      parent_id: { type: DataTypes.INTEGER },
     },
     { tableName: 'questions', createdAt: 'created_at', updatedAt: false }
   );

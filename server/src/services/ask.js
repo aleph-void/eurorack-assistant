@@ -285,6 +285,39 @@ export async function normalizationSummary({ ModuleComponent, ComponentNormaliza
   });
 }
 
+// A THREAD is a question and the follow-ups asked under it, in the order they
+// were asked (migration 052). The follow-ups of one root, oldest first; with
+// `before`, only the ones asked before that question — what a follow-up being
+// answered may be told about.
+export async function threadFollowUps(db, rootId, { before = null } = {}) {
+  const { Question } = db.models;
+  const rows = await Question.findAll({
+    where: { parent_id: rootId },
+    order: [
+      ['created_at', 'ASC'],
+      ['id', 'ASC'],
+    ],
+  });
+  return rows
+    .map((q) => q.get({ plain: true }))
+    .filter((q) => before === null || q.id < before);
+}
+
+// The conversation as a document: each question and the answer it got, in
+// order. Turns that were never answered (failed, or still working) are left
+// out — they said nothing. This is what a follow-up is answered against, and
+// what attaching a previous answer attaches: the whole exchange, not the
+// first question of it.
+export function conversationDocument(root, followUps) {
+  const turns = [root, ...followUps].filter((q) => q.answer);
+  return turns
+    .map(
+      (q, i) =>
+        `# ${i === 0 ? 'Question' : 'Follow-up question'}\n\n${q.prompt}\n\n# Answer\n\n${q.answer}`
+    )
+    .join('\n\n');
+}
+
 // Phase two, after the user confirmed the review step: submit the question
 // Each attached manual as the cheapest thing that says the same: the markdown
 // the extract_manual job pulled out of the PDF, written to a scratch file for
@@ -416,12 +449,18 @@ export async function answerQuestion(
     include: [{ model: Question, as: 'SourceQuestion' }],
     order: [['source_question_id', 'ASC']],
   });
-  const previous = answerLinks
-    .filter((l) => l.SourceQuestion?.answer)
-    .map((l) => ({
-      name: `previous-answer-${l.source_question_id}.md`,
-      text: `# Question\n\n${l.SourceQuestion.prompt}\n\n# Answer\n\n${l.SourceQuestion.answer}`,
-    }));
+  // A previous answer that grew a thread of follow-ups is attached whole: the
+  // later turns are where the detail usually ended up.
+  const previous = [];
+  for (const link of answerLinks) {
+    const source = link.SourceQuestion;
+    if (!source?.answer) continue;
+    const followUps = await threadFollowUps(db, source.id);
+    previous.push({
+      name: `previous-answer-${link.source_question_id}.md`,
+      text: conversationDocument(source.get({ plain: true }), followUps),
+    });
+  }
 
   const noteLinks = await QuestionNote.findAll({
     where: { question_id: question.id },
@@ -525,10 +564,33 @@ export async function answerQuestion(
     });
   }
 
-  const textDocs = [...previous, ...notes, ...captures, ...recordings, ...patches];
+  // A follow-up is answered with the conversation it continues in front of
+  // the model: the root question, the answer it got, and every answered
+  // follow-up asked before this one.
+  const conversation = [];
+  if (question.parent_id) {
+    const root = await Question.findByPk(question.parent_id);
+    if (!root) throw new Error('The question this one follows up on has been deleted.');
+    const earlier = await threadFollowUps(db, root.id, { before: question.id });
+    conversation.push({
+      name: 'conversation.md',
+      text: conversationDocument(root.get({ plain: true }), earlier),
+    });
+    log(`a follow-up: ${1 + earlier.filter((q) => q.answer).length} earlier turns attached`);
+  }
+
+  const textDocs = [
+    ...conversation,
+    ...previous,
+    ...notes,
+    ...captures,
+    ...recordings,
+    ...patches,
+  ];
   const manuals = manualPaths.slice(0, MAX_MANUALS);
 
   const kinds = [];
+  if (conversation.length > 0) kinds.push('the conversation so far');
   if (manuals.length > 0) kinds.push('module manuals');
   if (previous.length > 0) kinds.push('previous question-and-answer documents');
   if (notes.length > 0) kinds.push("the user's own notes");
@@ -547,6 +609,13 @@ export async function answerQuestion(
       : `You are a eurorack modular synthesizer expert. No documents are attached: answer the ` +
         `following question from what you know about these modules (${moduleNames}), and say ` +
         `where you are unsure of a detail the manual would settle. `;
+  if (conversation.length > 0) {
+    answerPrompt +=
+      `This question is a follow-up: the attached conversation document holds the earlier ` +
+      `questions and the answers already given, in order. Answer it in the light of that ` +
+      `exchange — refer back to it where that helps, do not repeat it, and take the latest ` +
+      `question as what is being asked now. `;
+  }
   if (patches.length > 0) {
     answerPrompt +=
       `The question is about ${patches.length === 1 ? 'a patch the user has built' : 'patches the user has built'}: ` +

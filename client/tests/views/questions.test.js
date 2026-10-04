@@ -7,12 +7,13 @@ vi.mock('../../src/api.js', () => ({
 }));
 
 const routerPush = vi.fn();
+const routerReplace = vi.fn();
 let currentRouteQuery = {};
 vi.mock('vue-router', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    useRouter: () => ({ push: routerPush }),
+    useRouter: () => ({ push: routerPush, replace: routerReplace }),
     useRoute: () => ({ query: currentRouteQuery }),
   };
 });
@@ -516,6 +517,113 @@ describe('QuestionDetailView', () => {
     await flushPromises();
     expect(wrapper.find('[data-test="answer-pending"]').exists()).toBe(true);
     wrapper.unmount();
+  });
+
+  // An answered question is the start of a thread: the follow-ups asked under
+  // it are listed below the answer, and the next one is asked right there.
+  it('lists the follow-ups under the answer and asks the next one', async () => {
+    api.get.mockResolvedValue({
+      id: 1,
+      prompt: 'How?',
+      status: 'answered',
+      answer: 'Like this.',
+      modules: [],
+      components: [],
+      thread: [
+        { id: 2, prompt: 'And then?', status: 'answered', answer: 'Then **that**.' },
+        { id: 3, prompt: 'Why?', status: 'failed', error: 'quota' },
+      ],
+    });
+    api.post.mockResolvedValue({ id: 4, prompt: 'And after that?', status: 'pending', parent_id: 1 });
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    const turns = wrapper.findAll('[data-test="thread-turn"]');
+    expect(turns).toHaveLength(2);
+    expect(turns[0].find('[data-test="thread-answer"]').html()).toContain('<strong>that</strong>');
+    expect(turns[1].find('[data-test="thread-error"]').text()).toContain('quota');
+
+    // Nothing typed, nothing to send.
+    expect(wrapper.find('[data-test="ask-follow-up"]').attributes('disabled')).toBeDefined();
+    await wrapper.find('[data-test="follow-up-prompt"]').setValue('  And after that?  ');
+    expect(wrapper.find('[data-test="ask-follow-up"]').attributes('disabled')).toBeUndefined();
+    await wrapper.find('[data-test="ask-follow-up"]').trigger('submit');
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith('/api/questions/1/followups', {
+      prompt: 'And after that?',
+    });
+
+    // The new turn joins the thread as pending, and the box waits for it.
+    const after = wrapper.findAll('[data-test="thread-turn"]');
+    expect(after).toHaveLength(3);
+    expect(after[2].text()).toContain('And after that?');
+    expect(after[2].find('[data-test="thread-pending"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="follow-up-prompt"]').element.value).toBe('');
+    expect(wrapper.find('[data-test="follow-up-prompt"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('[data-test="follow-up-waiting"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('removes one follow-up from the thread after confirmation', async () => {
+    api.get.mockResolvedValue({
+      id: 1,
+      prompt: 'How?',
+      status: 'answered',
+      answer: 'Like this.',
+      modules: [],
+      components: [],
+      thread: [
+        { id: 2, prompt: 'And then?', status: 'answered', answer: 'Then that.' },
+        { id: 3, prompt: 'Why?', status: 'answered', answer: 'Because.' },
+      ],
+    });
+    api.delete.mockResolvedValue({ ok: true });
+    vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    await wrapper.find('[data-test="remove-turn-2"]').trigger('click');
+    await flushPromises();
+    expect(api.delete).toHaveBeenCalledWith('/api/questions/2');
+    const turns = wrapper.findAll('[data-test="thread-turn"]');
+    expect(turns).toHaveLength(1);
+    expect(turns[0].text()).toContain('Why?');
+    // The question itself is still there, and so is the box.
+    expect(wrapper.find('[data-test="answer"]').text()).toContain('Like this.');
+    expect(wrapper.find('[data-test="follow-up-prompt"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('offers no follow-up box until the question is answered', async () => {
+    api.get.mockResolvedValue({
+      id: 1,
+      prompt: 'How?',
+      status: 'failed',
+      error: 'quota',
+      modules: [],
+      components: [],
+      thread: [],
+    });
+    const wrapper = mount(QuestionDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="follow-up-prompt"]').exists()).toBe(false);
+  });
+
+  it('sends a follow-up id to the page of its thread', async () => {
+    api.get.mockResolvedValue({
+      id: 4,
+      prompt: 'And then?',
+      status: 'answered',
+      answer: 'Then that.',
+      parent_id: 1,
+      modules: [],
+      components: [],
+      thread: [],
+    });
+    const wrapper = mount(QuestionDetailView, { props: { id: '4' }, global: testGlobal() });
+    await flushPromises();
+    expect(routerReplace).toHaveBeenCalledWith('/questions/1');
+    expect(wrapper.find('[data-test="prompt"]').exists()).toBe(false);
   });
 
   it('shows the failure reason', async () => {

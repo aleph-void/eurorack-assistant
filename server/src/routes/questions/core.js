@@ -13,6 +13,14 @@
 // module of the rack (or of every rack in the system), written as the same
 // module links, with the rack or system itself recorded beside them so its
 // own questions panel can list the question.
+//
+// And once a question is answered it can be FOLLOWED UP: POST /:id/followups
+// asks the next thing under it. A follow-up is a question row of its own
+// (`parent_id` naming the root of the thread, migration 052) carrying the
+// thread's scope and attachments — copied as the same link rows — queued
+// straight to answer_question with no scoping pass and no review step, and
+// answered with the conversation so far in front of the model. The list
+// shows roots only; a thread is read whole off its root.
 
 import { Router } from 'express';
 import { userModuleIds } from '../../services/racks.js';
@@ -59,7 +67,9 @@ export function questionCoreRoutes(db) {
   // joined: pg-mem drops rows from an OR ANDed with anything else, and a
   // flat page filtered in JS is the house workaround.
   router.get('/', asyncHandler(async (req, res) => {
-    const where = { user_id: req.user.id };
+    // A follow-up is a turn of its thread, not a question of the list's own:
+    // it is read under its root.
+    const where = { user_id: req.user.id, parent_id: null };
     const narrow = (ids) => {
       where.id = Array.isArray(where.id) ? where.id.filter((id) => ids.includes(id)) : ids;
     };
@@ -98,6 +108,22 @@ export function questionCoreRoutes(db) {
     });
     res.json(questions);
   }));
+
+  // The thread under a question, in the order it was asked: each follow-up
+  // with the answer it got, or the state it is in. Served with the root to
+  // its owner and to anyone it is shared with alike — the follow-ups ARE the
+  // conversation the share is of.
+  async function threadJson(rootId) {
+    const followUps = await Question.findAll({
+      where: { parent_id: rootId },
+      attributes: ['id', 'prompt', 'answer', 'status', 'error', 'created_at', 'answered_at'],
+      order: [
+        ['created_at', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
+    return followUps.map((q) => q.get({ plain: true }));
+  }
 
   // Yours, or one somebody shared with you. A shared question is the question
   // and its answer, read-only: the review step and the delete below find it
@@ -189,6 +215,7 @@ export function questionCoreRoutes(db) {
       ...question.get({ plain: true }),
       shared: found.shared,
       owner_username: owner?.username ?? req.user.username,
+      thread: question.parent_id ? [] : await threadJson(question.id),
       modules: links.map(({ Module: m }) => ({
         id: m.id,
         manufacturer: m.manufacturer,
@@ -404,16 +431,95 @@ export function questionCoreRoutes(db) {
     res.status(201).json(question);
   }));
 
+  // The next question in a thread. Asked under the ROOT (a follow-up's id is
+  // taken to mean its thread), of a question that is yours — a shared one is
+  // read-only, and a follow-up would run on your LLM account against
+  // somebody else's attachments — and only while nothing in the thread is
+  // still being worked on: the conversation a follow-up is answered against
+  // has to be finished first. The root must have been answered; a follow-up
+  // that failed is skipped by the transcript and does not block the next.
+  //
+  // The scope and the attachments are the thread's, copied onto the new row
+  // as the same link rows, so the answering job reads a follow-up exactly as
+  // it reads any other question. No scoping pass and no review step: the
+  // thread already settled what the conversation is about.
+  router.post('/:id/followups', requireBudget(db), requireLlmAccount(db), asyncHandler(async (req, res) => {
+    const prompt = String(req.body?.prompt || '').trim();
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+
+    const asked = await Question.findOne({
+      where: { id: Number(req.params.id), user_id: req.user.id },
+    });
+    if (!asked) return res.status(404).json({ error: 'Question not found' });
+    const root = asked.parent_id ? await Question.findByPk(asked.parent_id) : asked;
+    if (!root || root.user_id !== req.user.id) {
+      return res.status(404).json({ error: 'Question not found' });
+    }
+    if (root.status !== 'answered') {
+      return res.status(409).json({ error: 'Follow up once the question has been answered' });
+    }
+    const live = await Question.count({
+      where: { parent_id: root.id, status: ['scoping', 'scoped', 'pending', 'answering'] },
+    });
+    if (live > 0) {
+      return res.status(409).json({ error: 'The last follow-up is still being answered' });
+    }
+
+    const copies = [
+      [QuestionModule, 'module_id'],
+      [QuestionComponent, 'component_id'],
+      [QuestionManual, 'manual_id'],
+      [QuestionAnswer, 'source_question_id'],
+      [QuestionNote, 'note_id'],
+      [QuestionCapture, 'capture_id'],
+      [QuestionAudio, 'audio_id'],
+      [QuestionPatch, 'patch_id'],
+      [QuestionRack, 'rack_id'],
+      [QuestionSystem, 'system_id'],
+    ];
+    const question = await db.sequelize.transaction(async (transaction) => {
+      const created = await Question.create(
+        { user_id: req.user.id, prompt, status: 'pending', parent_id: root.id },
+        { transaction }
+      );
+      for (const [Link, key] of copies) {
+        const rows = await Link.findAll({ where: { question_id: root.id }, transaction });
+        if (rows.length === 0) continue;
+        await Link.bulkCreate(
+          rows.map((row) => ({ question_id: created.id, [key]: row[key] })),
+          { transaction }
+        );
+      }
+      await Job.create(
+        {
+          type: 'answer_question',
+          user_id: req.user.id,
+          question_id: created.id,
+          status: 'pending',
+        },
+        { transaction }
+      );
+      return created;
+    });
+    res.status(201).json(question);
+  }));
+
   // Deleting a question takes all of its records with it via the schema's
   // ON DELETE CASCADE rules: scope links, attachment selections, its own
-  // jobs, and any question_answers rows citing it as a source (the citing
-  // questions themselves are untouched).
+  // jobs, any question_answers rows citing it as a source (the citing
+  // questions themselves are untouched) — and the follow-ups threaded under
+  // it, which are removed here by hand as well because the test database
+  // does not cascade a table onto itself. A follow-up deleted on its own
+  // leaves the rest of its thread standing.
   router.delete('/:id', asyncHandler(async (req, res) => {
     const question = await Question.findOne({
       where: { id: Number(req.params.id), user_id: req.user.id },
     });
     if (!question) return res.status(404).json({ error: 'Question not found' });
-    await question.destroy();
+    await db.sequelize.transaction(async (transaction) => {
+      await Question.destroy({ where: { parent_id: question.id }, transaction });
+      await question.destroy({ transaction });
+    });
     await removeShares(db, 'question', question.id);
     res.json({ ok: true });
   }));

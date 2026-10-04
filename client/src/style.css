@@ -1129,6 +1129,26 @@ button.linklike:hover {
   border-radius: 4px;
 }
 
+/* A thread of follow-ups under an answer: each turn is the question asked,
+   set off from the answer it got by a rule down the side. */
+.thread {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+.thread-turn {
+  border-left: 3px solid var(--border);
+  padding: 0.2rem 0 0.2rem 1rem;
+  margin-bottom: 1rem;
+}
+.thread-prompt {
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+.thread-actions {
+  margin: 0.4rem 0 0;
+}
+
 .note-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
