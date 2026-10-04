@@ -266,4 +266,82 @@ describe('UsersView budgets', () => {
     await flushPromises();
     expect(api.put).toHaveBeenLastCalledWith('/api/users/2/budget', { token_budget: null });
   });
+
+  // The transfer panel: pick whose system, which one, who gets it; the
+  // confirm says what goes; the result says what went.
+  describe('transferring a system', () => {
+    const users = [
+      { id: 1, username: 'admin', is_admin: true, created_at: new Date().toISOString() },
+      { id: 2, username: 'alice', is_admin: false, created_at: new Date().toISOString() },
+      { id: 3, username: 'bob', is_admin: false, created_at: new Date().toISOString() },
+    ];
+    const systems = [{ id: 7, name: 'studio', rack_count: 2, module_count: 9, patch_count: 3 }];
+    const answer = (path) => {
+      if (path === '/api/users') return Promise.resolve(users);
+      if (path === '/api/users/2/systems') return Promise.resolve(systems);
+      if (path === '/api/usage') return Promise.resolve(null);
+      return Promise.resolve([]);
+    };
+
+    it('lists the picked owner\'s systems and leaves them out of the recipients', async () => {
+      api.get.mockImplementation(answer);
+      const wrapper = mount(UsersView, { global: testGlobal() });
+      await flushPromises();
+      expect(wrapper.find('[data-test="transfer"]').attributes('disabled')).toBeDefined();
+      await wrapper.find('[data-test="transfer-owner"]').setValue('2');
+      await flushPromises();
+      expect(api.get).toHaveBeenCalledWith('/api/users/2/systems');
+      const options = wrapper.findAll('[data-test="transfer-system"] option').map((o) => o.text());
+      expect(options.some((text) => text.includes('studio') && text.includes('9 modules'))).toBe(true);
+      const recipients = wrapper.findAll('[data-test="transfer-to"] option').map((o) => o.text());
+      expect(recipients).toContain('bob');
+      expect(recipients).not.toContain('alice');
+    });
+
+    it('transfers once the admin confirms, then reports what moved', async () => {
+      api.get.mockImplementation(answer);
+      const confirm = vi.spyOn(dialog, 'confirm').mockResolvedValue(true);
+      api.post.mockResolvedValue({
+        ok: true,
+        system: { id: 7, name: 'studio 2' },
+        from: { id: 2, username: 'alice' },
+        to: { id: 3, username: 'bob' },
+        moved: { racks: 2, modules: 9, patches: 3, questions: 4, notes: 0, shares: 0, jobs: 0 },
+        kept_modules: 0,
+        renamed: [{ kind: 'system', id: 7, from: 'studio', to: 'studio 2' }],
+      });
+      const wrapper = mount(UsersView, { global: testGlobal() });
+      await flushPromises();
+      await wrapper.find('[data-test="transfer-owner"]').setValue('2');
+      await flushPromises();
+      await wrapper.find('[data-test="transfer-system"]').setValue('7');
+      await wrapper.find('[data-test="transfer-to"]').setValue('3');
+      await wrapper.find('[data-test="transfer"]').trigger('click');
+      await flushPromises();
+      expect(confirm).toHaveBeenCalled();
+      expect(confirm.mock.calls[0][0].message).toContain('from alice to bob');
+      expect(api.post).toHaveBeenCalledWith('/api/systems/7/transfer', { user_id: 3 });
+      const result = wrapper.find('[data-test="transfer-result"]');
+      expect(result.text()).toContain('studio 2');
+      expect(result.text()).toContain('bob');
+      expect(wrapper.find('[data-test="transfer-moved"]').text()).toContain('2 racks, 9 modules, 3 patches, 4 questions');
+      expect(wrapper.find('[data-test="transfer-renamed"]').text()).toContain("'studio' → 'studio 2'");
+      vi.restoreAllMocks();
+    });
+
+    it('does nothing when the admin backs out', async () => {
+      api.get.mockImplementation(answer);
+      vi.spyOn(dialog, 'confirm').mockResolvedValue(false);
+      const wrapper = mount(UsersView, { global: testGlobal() });
+      await flushPromises();
+      await wrapper.find('[data-test="transfer-owner"]').setValue('2');
+      await flushPromises();
+      await wrapper.find('[data-test="transfer-system"]').setValue('7');
+      await wrapper.find('[data-test="transfer-to"]').setValue('3');
+      await wrapper.find('[data-test="transfer"]').trigger('click');
+      await flushPromises();
+      expect(api.post).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+    });
+  });
 });

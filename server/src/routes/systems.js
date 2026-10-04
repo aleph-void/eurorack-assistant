@@ -1,10 +1,11 @@
 import { Router } from 'express';
-import { requireAuth } from '../auth.js';
+import { requireAdmin, requireAuth } from '../auth.js';
 import { findSystemByName, rackFootprints, racksOverlap } from '../services/racks.js';
 import { addOutput, outputJackIds, setOutputJacks } from '../services/studioOutputs.js';
 import { rackDetailJson, systemOutputsJson } from '../services/rackJson.js';
 import { loadPanels } from '../services/panelJson.js';
 import { enqueueJob } from '../jobs/enqueue.js';
+import { transferSystem } from '../services/systemTransfer.js';
 import { asyncHandler } from './asyncHandler.js';
 
 // A user's systems: collections of racks that are patched together as one
@@ -24,7 +25,7 @@ export const MIN_FLOOR_HEIGHT = 3;
 export const MAX_FLOOR = 5000;
 
 export function systemRoutes(db) {
-  const { Job, System, Rack, RackModule, SystemOutput, SystemOutputJack } = db.models;
+  const { Job, System, Rack, RackModule, SystemOutput, SystemOutputJack, User } = db.models;
   const router = Router();
   router.use(requireAuth(db));
 
@@ -370,6 +371,34 @@ export function systemRoutes(db) {
   // Deleting a system keeps its racks — they simply stop being part of one.
   // Patches built from it keep rendering: patches hold the system by a soft
   // reference and by name.
+  // Hand a system to another user, whole: its racks, the patches made from
+  // it, and the owner's notes, questions and attachments about any of that
+  // (services/systemTransfer.js says exactly what goes). An admin's power, on
+  // ANY user's system — which is why this one route does not take
+  // requireOwnedSystem. Body: { user_id } — the new owner.
+  router.post('/:id/transfer', requireAdmin(), asyncHandler(async (req, res) => {
+    const system = await System.findByPk(Number(req.params.id) || 0);
+    if (!system) return res.status(404).json({ error: 'System not found' });
+    const toUserId = Number(req.body?.user_id);
+    if (!Number.isInteger(toUserId) || toUserId <= 0) {
+      return res.status(400).json({ error: 'user_id is required' });
+    }
+    const to = await User.findByPk(toUserId);
+    if (!to) return res.status(404).json({ error: 'User not found' });
+    if (to.id === system.user_id) {
+      return res.status(400).json({ error: `${to.username} already owns this system` });
+    }
+    const from = await User.findByPk(system.user_id);
+    const result = await transferSystem(db, system, to.id);
+    if (!result) return res.status(409).json({ error: 'the system changed hands while it was being transferred' });
+    res.json({
+      ok: true,
+      ...result,
+      from: from ? { id: from.id, username: from.username } : null,
+      to: { id: to.id, username: to.username },
+    });
+  }));
+
   router.delete('/:id', requireOwnedSystem, asyncHandler(async (req, res) => {
     await req.system.destroy();
     res.json({ ok: true });

@@ -157,6 +157,91 @@ async function removeUser(user) {
   }
 }
 
+// ---- handing a system to another user ----
+// The admin picks whose system, which one, and who gets it; the server moves
+// the racks, the patches made from it and everything written about them
+// (services/systemTransfer.js is the list) and answers with what went.
+const transferOwner = ref('');
+const transferSystems = ref([]);
+const transferSystemId = ref('');
+const transferTo = ref('');
+const transferResult = ref(null);
+const transferError = ref('');
+const transferBusy = ref(false);
+
+const recipients = computed(() =>
+  users.value.filter((user) => String(user.id) !== String(transferOwner.value))
+);
+const transferSystem = computed(() =>
+  transferSystems.value.find((system) => String(system.id) === String(transferSystemId.value)) || null
+);
+const usernameOf = (id) => users.value.find((user) => String(user.id) === String(id))?.username || '';
+
+async function loadTransferSystems() {
+  transferSystemId.value = '';
+  transferSystems.value = [];
+  transferResult.value = null;
+  transferError.value = '';
+  if (transferOwner.value === '') return;
+  try {
+    transferSystems.value = await api.get(`/api/users/${transferOwner.value}/systems`);
+  } catch (e) {
+    transferError.value = e.message;
+  }
+}
+
+const movedLabels = [
+  ['racks', 'racks'],
+  ['modules', 'modules'],
+  ['patches', 'patches'],
+  ['compositions', 'compositions'],
+  ['notes', 'notes'],
+  ['questions', 'questions'],
+  ['captures', 'scope captures'],
+  ['clips', 'scope clips'],
+  ['recordings', 'recordings'],
+  ['links', 'links'],
+  ['videos', 'videos'],
+  ['documents', 'uploaded documents'],
+  ['shares', 'shares'],
+  ['jobs', 'jobs'],
+];
+const movedSummary = computed(() =>
+  movedLabels
+    .filter(([key]) => transferResult.value?.moved?.[key] > 0)
+    .map(([key, label]) => `${transferResult.value.moved[key]} ${label}`)
+);
+
+async function transfer() {
+  const system = transferSystem.value;
+  if (!system || transferTo.value === '') return;
+  const ok = await dialog.confirm({
+    title: 'Transfer system',
+    message:
+      `Hand ${system.name} from ${usernameOf(transferOwner.value)} to ${usernameOf(transferTo.value)}? ` +
+      `Its ${system.rack_count} rack(s), ${system.module_count} module(s) and ${system.patch_count} ` +
+      'patch(es) go with it, along with the notes, questions and attachments about them. ' +
+      `${usernameOf(transferOwner.value)} keeps nothing of it.`,
+    confirmLabel: 'Transfer',
+    danger: true,
+  });
+  if (!ok) return;
+  transferError.value = '';
+  transferResult.value = null;
+  transferBusy.value = true;
+  try {
+    const result = await api.post(`/api/systems/${system.id}/transfer`, {
+      user_id: Number(transferTo.value),
+    });
+    await loadTransferSystems();
+    transferResult.value = result;
+  } catch (e) {
+    transferError.value = e.message;
+  } finally {
+    transferBusy.value = false;
+  }
+}
+
 onMounted(load);
 </script>
 
@@ -218,6 +303,98 @@ onMounted(load);
         <template v-else>
           The confirmation mail did not go: {{ created.verification.problem }}
         </template>
+      </p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Transfer a system</h2>
+    <p class="muted">
+      Hand one user's system to another, whole: its racks and their modules, the patches made
+      from it, and the notes, questions, recordings, captures, documents and links about any
+      of those. Nothing is copied — the records change hands, and a name the new owner already
+      uses takes the next free one.
+    </p>
+    <div class="row">
+      <div>
+        <label for="transfer-owner">From</label>
+        <select
+          id="transfer-owner"
+          v-model="transferOwner"
+          data-test="transfer-owner"
+          @change="loadTransferSystems"
+        >
+          <option value="">Pick a user</option>
+          <option v-for="user in users" :key="user.id" :value="String(user.id)">
+            {{ user.username }}
+          </option>
+        </select>
+      </div>
+      <div>
+        <label for="transfer-system">System</label>
+        <select
+          id="transfer-system"
+          v-model="transferSystemId"
+          data-test="transfer-system"
+          :disabled="transferOwner === ''"
+        >
+          <option value="">
+            {{
+              transferOwner === ''
+                ? 'Pick a user first'
+                : transferSystems.length
+                  ? 'Pick a system'
+                  : 'No systems'
+            }}
+          </option>
+          <option v-for="system in transferSystems" :key="system.id" :value="String(system.id)">
+            {{ system.name }} ({{ system.rack_count }} racks, {{ system.module_count }} modules,
+            {{ system.patch_count }} patches)
+          </option>
+        </select>
+      </div>
+      <div>
+        <label for="transfer-to">To</label>
+        <select id="transfer-to" v-model="transferTo" data-test="transfer-to">
+          <option value="">Pick a user</option>
+          <option v-for="user in recipients" :key="user.id" :value="String(user.id)">
+            {{ user.username }}
+          </option>
+        </select>
+      </div>
+      <div class="shrink">
+        <button
+          type="button"
+          class="danger"
+          data-test="transfer"
+          :disabled="transferBusy || !transferSystem || transferTo === ''"
+          @click="transfer"
+        >
+          Transfer
+        </button>
+      </div>
+    </div>
+    <p v-if="transferError" class="error" data-test="transfer-error">{{ transferError }}</p>
+    <div v-if="transferResult" class="password-reveal" data-test="transfer-result">
+      <p style="margin: 0 0 0.4rem">
+        <strong>{{ transferResult.system.name }}</strong> now belongs to
+        <strong>{{ transferResult.to.username }}</strong
+        ><template v-if="transferResult.from"> (it was {{ transferResult.from.username }}'s)</template>.
+      </p>
+      <p v-if="movedSummary.length" style="margin: 0" data-test="transfer-moved">
+        Moved: {{ movedSummary.join(', ') }}.
+      </p>
+      <p v-if="transferResult.kept_modules > 0" class="muted" style="margin: 0.4rem 0 0">
+        {{ transferResult.kept_modules }} module(s) also stand in a rack the previous owner keeps,
+        so their notes and questions on those stayed.
+      </p>
+      <p v-if="transferResult.renamed?.length" class="muted" style="margin: 0.4rem 0 0" data-test="transfer-renamed">
+        Renamed to stay unique:
+        <template v-for="(entry, i) in transferResult.renamed" :key="`${entry.kind}-${entry.id}`">
+          <template v-if="i > 0">, </template>
+          {{ entry.kind }} '{{ entry.from }}' → '{{ entry.to }}'
+        </template>
+        .
       </p>
     </div>
   </div>

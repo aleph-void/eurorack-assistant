@@ -12,6 +12,7 @@ import {
 } from '../auth.js';
 import { purgeUserLlmData } from '../services/llmAccounts.js';
 import { revokeUserDeviceTokens } from '../services/deviceAuth.js';
+import { userSystemsSummary } from '../services/systemTransfer.js';
 import { lockUser, unlockUser } from '../services/accountLock.js';
 import { startEmailVerification } from '../services/emailVerification.js';
 import { sendMail } from '../services/mailer.js';
@@ -215,6 +216,15 @@ export function userRoutes(db, { mailImpl } = {}) {
     }
     await user.update({ token_budget: budget });
     res.json(publicUser(user));
+  }));
+
+  // This user's systems, each with how much hangs off it — what an admin
+  // picks from before handing one to another user
+  // (POST /api/systems/:id/transfer).
+  router.get('/:id/systems', asyncHandler(async (req, res) => {
+    const user = await User.findByPk(Number(req.params.id));
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json(await userSystemsSummary(db, user.id));
   }));
 
   router.delete('/:id', asyncHandler(async (req, res) => {
