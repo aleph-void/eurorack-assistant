@@ -226,7 +226,7 @@ export async function getDeviceTokenUser(db, accessToken, { now = Date.now() } =
     where: { access_token_hash: hashToken(accessToken) },
     include: db.models.User,
   });
-  if (!row || !row.User || row.revoked_at) return null;
+  if (!row || !row.User || row.revoked_at || row.User.locked_at) return null;
   if (new Date(row.expires_at).getTime() <= now) return null;
   const { id, username, is_admin, must_change_password } = row.User;
   return {

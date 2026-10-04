@@ -15,6 +15,7 @@ import { saveClaudeToken } from '../src/services/llmAccounts.js';
 import { DEFAULT_RACK_NAME, findOrCreateRack } from '../src/services/racks.js';
 import { textToPdf } from '../src/services/textPdf.js';
 import { setDefaultLookup } from '../src/services/safeFetch.js';
+import { setMailConfig } from '../src/services/mailConfig.js';
 
 // The download paths run every URL through the SSRF guard, which resolves the
 // host and rejects private/loopback/metadata addresses. The suite uses fake
@@ -160,13 +161,23 @@ export async function createTestDb() {
 
 // Users start with a connected claude account (a pasted setup-token) because
 // LLM work now requires one per user; tests about the unconnected state pass
-// llmAccount: false.
+// llmAccount: false. Their address is <username>@example.org, confirmed,
+// unless a test says otherwise.
 export async function createUser(
   db,
-  { username, password = 'password123', isAdmin = false, llmAccount = true }
+  {
+    username,
+    password = 'password123',
+    isAdmin = false,
+    llmAccount = true,
+    email = `${username}@example.org`,
+    emailVerified = true,
+  }
 ) {
   const user = await db.models.User.create({
     username,
+    email,
+    email_verified_at: emailVerified ? new Date() : null,
     password_hash: hashPassword(password),
     is_admin: isAdmin,
   });
@@ -183,11 +194,38 @@ export async function login(app, username, password = 'password123') {
   return res.headers['set-cookie'][0].split(';')[0];
 }
 
+// A mail server that works and remembers: every message the app sends lands
+// in the array, and nothing leaves the process.
+export function createMailRecorder() {
+  const sent = [];
+  const mailImpl = async (message) => {
+    sent.push(message);
+  };
+  return { sent, mailImpl };
+}
+
+export const TEST_MAIL_CONFIG = {
+  mail_host: 'smtp.example.org',
+  mail_from: 'rack@example.org',
+  public_url: 'https://rack.example.org',
+};
+
 // Standard fixture: app + admin ('admin') + regular user ('alice').
 // A device hub is always attached so the oscilloscope routes are exercisable;
-// with no device registered it simply reports nothing connected.
-export async function createTestApp({ hub = createDeviceHub(), bus = null, fetchImpl, runImpl } = {}) {
+// with no device registered it simply reports nothing connected. The mail
+// server is set up and recorded (`sentMail`) unless `mail: false`.
+export async function createTestApp({
+  hub = createDeviceHub(),
+  bus = null,
+  fetchImpl,
+  runImpl,
+  mail = true,
+  mailImpl: mailOverride,
+} = {}) {
   const db = await createTestDb();
+  const recorder = createMailRecorder();
+  const mailImpl = mailOverride || recorder.mailImpl;
+  if (mail) await setMailConfig(db, TEST_MAIL_CONFIG);
   const manualsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-manuals-'));
   const exportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-exports-'));
   const capturesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-captures-'));
@@ -203,6 +241,7 @@ export async function createTestApp({ hub = createDeviceHub(), bus = null, fetch
     bus,
     fetchImpl,
     runImpl,
+    mailImpl,
     rateLimit: false,
   });
   await createUser(db, { username: 'admin', isAdmin: true });
@@ -213,6 +252,7 @@ export async function createTestApp({ hub = createDeviceHub(), bus = null, fetch
     db,
     app,
     hub,
+    sentMail: recorder.sent,
     manualsDir,
     exportsDir,
     capturesDir,

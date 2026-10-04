@@ -420,17 +420,30 @@ The app is then at <http://localhost:8080>.
 Pass your domain to the setup script to serve TLS on port 443:
 
 ```sh
-sudo certbot certonly --standalone -d rack.example.com   # if you don't have certs yet
 ./setup.sh rack.example.com
 ```
 
-When certs exist in `/etc/letsencrypt/live/<fqdn>/`, nginx serves
-<https://fqdn/> on port 443 with port 80 redirecting to it (the FQDN is
-remembered in `.env`, so later plain `./setup.sh` runs keep TLS). Certs are
-mounted read-only from the host; after a `certbot renew`, reload nginx with
-`docker compose exec nginx nginx -s reload` (a good certbot deploy hook).
-With rootless Docker, setup grants `rootlesskit` the `cap_net_bind_service`
-capability so it can bind ports 80/443.
+When no certs exist in `/etc/letsencrypt/live/<fqdn>/` yet, setup requests
+them from Let's Encrypt with `certbot certonly --standalone` (installing
+certbot on Ubuntu if it is missing). That needs the domain's DNS pointing at
+the host and port 80 reachable from the internet, and it agrees to the
+Let's Encrypt subscriber agreement for you; set `CERTBOT_EMAIL=you@example.com`
+to register the account with an address. If the request fails, setup says why
+and stays on plain HTTP — fix the DNS or the port and re-run.
+
+With certs in place, nginx serves <https://fqdn/> on port 443 with port 80
+redirecting to it (the FQDN is remembered in `.env`, so later plain
+`./setup.sh` runs keep TLS). Certs are mounted read-only from the host and
+renewed by certbot's own timer; setup installs renewal hooks under
+`/etc/letsencrypt/renewal-hooks/` (`deploy/certbot-renewal-hook.sh`) that
+stop nginx for the renewal, since the standalone challenge needs port 80, and
+start it again with the new cert. Certs obtained some other way (a DNS
+challenge, say) still need a reload after renewal:
+`docker compose exec nginx nginx -s reload` as a certbot deploy hook. With
+rootless Docker, setup grants `rootlesskit` the `cap_net_bind_service`
+capability so it can bind ports 80/443, and skips the renewal hooks (root's
+certbot cannot reach your daemon) — stop and start nginx around renewals
+yourself.
 
 LLM credentials are per user, connected in the web UI (Account → LLM
 provider) — the server no longer mounts or uses a login from the host. Each
@@ -447,6 +460,8 @@ docker compose logs -f server   # watch the job worker
 ./reset-admin-password.sh       # new random admin password (printed once; forces a change at next login)
 ./backup-db.sh [--files]        # dump the database to /tmp on the host (or pass a path)
 ./restore-db.sh [--files <zip>] <dump-file>   # replace the database with a dump (stops the app during the restore)
+./install-backup.sh <s3-bucket> # a full backup to S3 every day, keeping the newest 10 (see below)
+./backup-to-s3.sh               # one full backup to S3 right now
 docker compose down             # stop (data persists in volumes)
 sudo systemctl status eurorack-assistant   # the boot unit (start/stop/restart drive compose)
 ```
@@ -460,6 +475,61 @@ to `restore-db.sh --files` puts the files back after the database restore;
 files in the archive overwrite files on disk, extra files on disk are left
 alone (the stores are content-addressed, so an extra file is unreferenced,
 never wrong).
+
+### Daily backups to S3
+
+```sh
+./install-backup.sh my-backups --now      # bucket name; --now also makes the first backup
+```
+
+`install-backup.sh` records the bucket in `.env` and installs a systemd timer
+(`eurorack-assistant-backup.timer`, rendered from `deploy/`) that runs
+`backup-to-s3.sh` once a day — at 03:17 host time by default, `--at HH:MM`
+for another — and keeps the newest 10 backups in the bucket, deleting older
+ones after each upload (`--keep N` for another count; `0` keeps everything).
+Re-running `./setup.sh` keeps the timer current once a bucket is configured.
+`--prefix <folder>` picks the folder in the bucket (default
+`eurorack-assistant`); `--region` records `AWS_REGION`.
+
+Each backup is **one object**, `eurorack-backup-<UTC stamp>.tar`, holding
+everything a restore needs: `db.dump` (the database), `files.zip` (manuals,
+panels, captures and recordings), `llm-token.key` (the key that decrypts the
+stored LLM credentials — without it every restored user re-authorizes) and a
+`MANIFEST` with the sha256 of each. The `llm` volume is not in it: the server
+rebuilds those per-user CLI homes from the database and the key. The dump and
+the zip are staged under `/var/tmp` (`BACKUP_TMP` in `.env` for somewhere
+with more room) and the tar is streamed straight into the upload, so the host
+never holds a second copy. A backup holds the key and every credential the
+database stores, so the bucket must be private. To restore from one:
+
+```sh
+aws s3 cp s3://my-backups/eurorack-assistant/eurorack-backup-20260101-031700Z.tar .
+tar -xf eurorack-backup-20260101-031700Z.tar
+./restore-db.sh --files files.zip db.dump
+docker compose cp llm-token.key server:/data/keys/llm-token.key && docker compose restart server
+```
+
+**Credentials.** The job runs as root through systemd and uses the AWS CLI
+when one is on `PATH`, else the `amazon/aws-cli` container image (so a host
+with docker needs nothing installed). Give it access any one of these ways:
+an instance role on the host, `sudo aws configure` (root's `~/.aws`), or
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` lines in `.env` (which the
+installer makes `0600`). The identity needs `s3:PutObject`,
+`s3:AbortMultipartUpload`, `s3:ListBucket` and `s3:DeleteObject` on the
+bucket. `BACKUP_S3_ENDPOINT_URL` in `.env` points the job at an
+S3-compatible store that is not AWS; `BACKUP_S3_STORAGE_CLASS` picks a
+cheaper class. On a bucket with versioning on, a deleted backup is only a
+delete marker — add a lifecycle rule expiring noncurrent versions, or the
+old ones never free their space.
+
+Pruning deletes only objects named like the job's own uploads under its
+prefix, and only once the listing shows the backup just made; a listing that
+cannot be read deletes nothing. Watch it with
+`journalctl -u eurorack-assistant-backup.service` and
+`systemctl list-timers eurorack-assistant-backup.timer`. Hosts without
+systemd get the equivalent cron line printed instead; under rootless Docker
+the installer prints the user-timer steps, as `setup.sh` does for the boot
+unit.
 
 ## Architecture
 
@@ -497,7 +567,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 
 | table | purpose |
 | --- | --- |
-| `users` | accounts; `is_admin` flag, and `token_budget` — this user's own token allowance per window (NULL takes the configured default, 0 lifts the ceiling for them) |
+| `users` | accounts; `is_admin` flag, `email` (required, one per account, with `email_verified_at` once the mailed link is followed), the lock (`failed_logins`, `locked_at`, `locked_reason`), `last_login_at` (the last successful password login), and `token_budget` — this user's own token allowance per window (NULL takes the configured default, 0 lifts the ceiling for them). `email_verifications` holds the hashed token of the outstanding confirmation. See `docs/accounts.md` |
 | `modules` | **shared** module records with `manual_status` / `analysis_status` / `panel_status` — the manual is found, analyzed and drawn once, for everyone |
 | `racks` | a user's named racks (unique name per user, `main rack` by default); strictly private to their owner |
 | `rack_modules` | maps racks to the modules in them (per-rack quantity); "deleting" a module only unlinks it, and the same module can sit in many racks |
@@ -535,7 +605,7 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
 | `question_patches` | the patches a question is about — the patch rides along as a document of its cables, settings, normalled connections and signal flow, and the modules it uses go into scope |
 | `jobs` | the async queue (`import`, `find_manual`, `analyze_manual`, `reanalyze_components`, `panel_image`, `extract_manual`, `scope_question`, `answer_question`) with attempts + errors |
 | `llm_usage` | one row per CLI invocation: the tokens it spent (fresh input, cached input, cache writes, output), the model that spent them, and the job and user it is billed to. `cost_usd` is filled in where the provider reports one (claude does, codex does not) |
-| `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`), job worker count (`import_workers`, default 4), the per-user token budget and its window (`token_budget_default`, `token_budget_period`), and the queue pause the worker sets when the provider runs out of tokens (`queue_paused_until`, `queue_paused_reason`) |
+| `app_config` | admin-set LLM provider/model (globally and per job type via `llm_model_<job_type>`), job worker count (`import_workers`, default 4), the per-user token budget and its window (`token_budget_default`, `token_budget_period`), and the queue pause the worker sets when the provider runs out of tokens (`queue_paused_until`, `queue_paused_reason`); also the mail server settings (`mail_*`, `public_url`, the password encrypted), served only through `/api/config/mail` |
 
 ## Development
 
@@ -577,6 +647,13 @@ free for public repositories) to turn that on.
   endpoint except the change-password form until they set their own password.
 - Users change their own password (current password required) via the username
   link in the nav; admins can reset any other user's password without it.
+- Every account has an email address, confirmed by following a mailed link;
+  users change their own (current password required) under the Email link in
+  the nav, admins change anyone's from the Users page, and either change has to
+  be confirmed again. Mail goes out through the SMTP account set on the admin's
+  Mail server page (`/admin/mail`).
+- Five wrong passwords in a row lock an account; admins lock and unlock
+  accounts from the Users page, and only an admin unlocks one.
 - Only admins can create users (always non-admin) and change the LLM config.
 - Each user sees only their own module mappings, questions, notes, uploaded
   documents, captures, and jobs (admins see all jobs), plus whatever another

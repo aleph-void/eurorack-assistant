@@ -11,7 +11,7 @@ const reset = process.argv.includes('--reset');
 const db = createDatabase();
 try {
   await migrate(db);
-  const result = await ensureAdmin(db, { reset });
+  const result = await ensureAdmin(db, { reset, email: process.env.ADMIN_EMAIL });
   if (result.password) {
     console.log('');
     console.log('==============================================');

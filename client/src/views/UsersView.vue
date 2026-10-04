@@ -7,6 +7,7 @@ import { useAuthStore } from '../stores/auth.js';
 const auth = useAuthStore();
 const users = ref([]);
 const username = ref('');
+const email = ref('');
 const password = ref('');
 const error = ref('');
 const created = ref(null);
@@ -58,10 +59,11 @@ async function createUser() {
   created.value = null;
   busy.value = true;
   try {
-    const body = { username: username.value };
+    const body = { username: username.value, email: email.value.trim() };
     if (password.value) body.password = password.value;
     created.value = await api.post('/api/users', body);
     username.value = '';
+    email.value = '';
     password.value = '';
     await load();
   } catch (e) {
@@ -70,6 +72,55 @@ async function createUser() {
     busy.value = false;
   }
 }
+
+// A user's address, put right by the admin: the row's own small form, one
+// open at a time. Whatever was confirmed was the old address, so the server
+// starts the confirmation over and says whether the mail went.
+const editingEmail = ref(null);
+const emailDraft = ref('');
+const emailResult = ref(null);
+
+function editEmail(user) {
+  editingEmail.value = user.id;
+  emailDraft.value = user.email;
+  emailResult.value = null;
+}
+
+async function saveEmail(user) {
+  error.value = '';
+  try {
+    const updated = await api.put(`/api/users/${user.id}/email`, { email: emailDraft.value.trim() });
+    emailResult.value = { username: updated.username, email: updated.email, ...updated.verification };
+    editingEmail.value = null;
+    await load();
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
+// Shutting an account logs it out everywhere; opening one also forgets the
+// failed logins that may have shut it.
+async function setLocked(user, locked) {
+  if (locked) {
+    const ok = await dialog.confirm({
+      title: 'Lock account',
+      message: `Lock ${user.username}'s account? They are logged out everywhere and cannot log in until it is unlocked.`,
+      confirmLabel: 'Lock account',
+      danger: true,
+    });
+    if (!ok) return;
+  }
+  error.value = '';
+  try {
+    await api.put(`/api/users/${user.id}/lock`, { locked });
+    await load();
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+
+const lockLabel = (user) =>
+  user.locked_reason === 'failed_logins' ? 'locked after failed logins' : 'locked by admin';
 
 async function resetPassword(user) {
   const ok = await dialog.confirm({
@@ -207,6 +258,18 @@ onMounted(load);
           <input id="new-username" v-model="username" data-test="username" required />
         </div>
         <div>
+          <label for="new-email">Email</label>
+          <input
+            id="new-email"
+            v-model="email"
+            data-test="email"
+            type="email"
+            autocomplete="off"
+            placeholder="name@example.com"
+            required
+          />
+        </div>
+        <div>
           <label for="new-password">Password (min 8 chars, blank to generate)</label>
           <!-- minlength only applies when a value is present, so leaving the
                field blank still generates a password. -->
@@ -232,6 +295,14 @@ onMounted(load);
         Generated password: <strong data-test="generated-password">{{ created.generated_password }}</strong
         ><br />
         <span class="muted">Share it now — it is not stored in cleartext and cannot be shown again.</span>
+      </p>
+      <p v-if="created.verification" class="muted" style="margin: 0.4rem 0 0" data-test="created-verification">
+        <template v-if="created.verification.sent">
+          A confirmation link was mailed to {{ created.email }}.
+        </template>
+        <template v-else>
+          The confirmation mail did not go: {{ created.verification.problem }}
+        </template>
       </p>
     </div>
   </div>
@@ -329,6 +400,12 @@ onMounted(load);
   </div>
 
   <div class="panel">
+    <p v-if="emailResult" class="muted" data-test="email-result">
+      Address for <strong>{{ emailResult.username }}</strong> changed to
+      <strong>{{ emailResult.email }}</strong>.
+      <template v-if="emailResult.sent">A confirmation link was mailed to it.</template>
+      <template v-else>The confirmation mail did not go: {{ emailResult.problem }}</template>
+    </p>
     <div v-if="resetResult" class="password-reveal" data-test="reset-result">
       <p style="margin: 0">
         Password for <strong>{{ resetResult.username }}</strong> reset. New password:
@@ -356,8 +433,10 @@ onMounted(load);
         <thead>
           <tr>
             <th>Username</th>
+            <th>Email</th>
             <th>Role</th>
             <th>Created</th>
+            <th>Last login</th>
             <th>Spent</th>
             <th>Budget</th>
             <th></th>
@@ -366,12 +445,50 @@ onMounted(load);
         <tbody>
           <tr v-for="user in users" :key="user.id">
             <td data-label="Username">{{ user.username }}</td>
+            <td data-label="Email" :data-test="`email-${user.id}`">
+              <div v-if="editingEmail === user.id" class="actions nowrap">
+                <input
+                  v-model="emailDraft"
+                  type="email"
+                  :data-test="`email-input-${user.id}`"
+                  style="width: 14rem"
+                  @keyup.enter="saveEmail(user)"
+                  @keyup.esc="editingEmail = null"
+                />
+                <button :data-test="`save-email-${user.id}`" @click="saveEmail(user)">Save</button>
+                <button @click="editingEmail = null">Cancel</button>
+              </div>
+              <template v-else>
+                {{ user.email }}
+                <span
+                  class="badge"
+                  :class="user.email_verified_at ? 'found' : 'pending'"
+                  :data-test="`email-state-${user.id}`"
+                >
+                  {{ user.email_verified_at ? 'confirmed' : 'unconfirmed' }}
+                </span>
+                <button
+                  v-if="user.id !== auth.user?.id"
+                  class="small"
+                  :data-test="`edit-email-${user.id}`"
+                  @click="editEmail(user)"
+                >
+                  Change
+                </button>
+              </template>
+            </td>
             <td data-label="Role">
               <span class="badge" :class="user.is_admin ? 'found' : ''">
                 {{ user.is_admin ? 'admin' : 'user' }}
               </span>
+              <span v-if="user.locked_at" class="badge failed" :data-test="`locked-${user.id}`">
+                {{ lockLabel(user) }}
+              </span>
             </td>
             <td data-label="Created" class="muted">{{ new Date(user.created_at).toLocaleDateString() }}</td>
+            <td data-label="Last login" class="muted" :data-test="`last-login-${user.id}`">
+              {{ user.last_login_at ? new Date(user.last_login_at).toLocaleString() : 'never' }}
+            </td>
             <td data-label="Spent" :data-test="`spent-${user.id}`">
               {{ tokens(spending.get(user.id)?.used ?? 0) }}
               <span
@@ -406,6 +523,16 @@ onMounted(load);
               <div v-if="user.id !== auth.user?.id" class="actions nowrap">
                 <button :data-test="`reset-${user.id}`" @click="resetPassword(user)">
                   Reset password
+                </button>
+                <button
+                  v-if="user.locked_at"
+                  :data-test="`unlock-${user.id}`"
+                  @click="setLocked(user, false)"
+                >
+                  Unlock
+                </button>
+                <button v-else :data-test="`lock-${user.id}`" @click="setLocked(user, true)">
+                  Lock
                 </button>
                 <button
                   class="danger"
