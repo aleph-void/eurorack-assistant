@@ -36,7 +36,26 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   the design.
 - `routes/systems.js` — systems: collections of racks patched together as
   one instrument. A rack joins/leaves via `PUT /api/racks/:id/system`; the
-  system's own routes arrange the racks on a floor plan.
+  system's own routes arrange the racks on a floor plan. AN ADMIN HANDS A
+  SYSTEM TO ANOTHER USER WHOLE: `POST /api/systems/:id/transfer` (admin only,
+  any owner's system, body `{ user_id }`) → `services/systemTransfer.js`,
+  which moves the rows rather than copying them — the system, its racks (and
+  by FK their modules, rows and exits), every patch of the owner's made from
+  the system or one of its racks, and the owner's PRIVATE rows about any of
+  that: notes, questions (follow-ups with their root), bench captures and
+  clips, recordings, uploaded documents, videos, links, shares, the jobs of
+  moved questions and the model's live work on moved patches. A module is a
+  shared record, so what is transferred about one is those private rows,
+  and they go when the module stands in the system and in NO rack the old
+  owner keeps (it is out of their sight the moment the racks change hands).
+  A note or question goes when EVERYTHING it is about goes, except that one
+  asked OF the system or of one of its racks goes on that alone; one that
+  straddles the line stays whole, and a moved question's attachment links to
+  records that stayed are cut (the answer pipeline reads attachments by id,
+  no owner check). Names are per account, so a mover that collides takes
+  `<name> 2` (`freeName`), and a patch's snapshotted `system_name` /
+  `rack_name` follow. The Users admin page drives it (`GET
+  /api/users/:id/systems` lists what an owner has to hand over).
 - `server/src/services/` — domain logic, one concern per file. Serializer
   shapes for module hardware facts live in `services/moduleJson.js`; patch
   ones in `services/patchDetail.js`; rack ones in `services/rackJson.js`;
