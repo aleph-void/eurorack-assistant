@@ -411,7 +411,12 @@ installation; on other distros install Docker yourself first):
    leaves them down across every later boot, and the unit is what makes it
    unconditional. Run `SKIP_BOOT_SERVICE=1 ./setup.sh` to leave the host's
    boot alone; under rootless Docker setup skips it and prints the user-unit
-   equivalent instead, since a system unit would drive the wrong daemon.
+   equivalent instead, since a system unit would drive the wrong daemon, and
+6. installs the daily backup to S3 (see [Daily backups to
+   S3](#daily-backups-to-s3)): the bucket is `BACKUP_S3_BUCKET` in the
+   environment (`BACKUP_S3_BUCKET=my-backups ./setup.sh`), else the one an
+   earlier run remembered in `.env`, else asked for at the prompt — blank
+   skips, as does a non-interactive run with no bucket anywhere.
 
 The app is then at <http://localhost:8080>.
 
@@ -469,7 +474,9 @@ never wrong).
 ./install-backup.sh my-backups --now      # bucket name; --now also makes the first backup
 ```
 
-`install-backup.sh` records the bucket in `.env` and installs a systemd timer
+`setup.sh` runs this for you — it takes the bucket from `BACKUP_S3_BUCKET`
+in the environment, from an earlier run's `.env`, or asks — and the script is
+also there to run by hand. `install-backup.sh` records the bucket in `.env` and installs a systemd timer
 (`eurorack-assistant-backup.timer`, rendered from `deploy/`) that runs
 `backup-to-s3.sh` once a day — at 03:17 host time by default, `--at HH:MM`
 for another — and keeps the newest 10 backups in the bucket, deleting older

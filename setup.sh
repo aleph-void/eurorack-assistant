@@ -14,6 +14,14 @@
 #      and stored nowhere else in cleartext.
 #   6. Installs the systemd unit that starts the stack at boot
 #      (SKIP_BOOT_SERVICE=1 to leave the host's boot alone).
+#   7. Installs the daily backup to S3 (./backup-to-s3.sh on a systemd
+#      timer): the bucket is BACKUP_S3_BUCKET in the environment, else one
+#      remembered in .env from an earlier run, else asked for at the prompt
+#      (blank skips). BACKUP_S3_PREFIX, BACKUP_KEEP and BACKUP_TIME in the
+#      environment set the folder, how many to keep and the hour; see
+#      ./install-backup.sh for the rest.
+#
+#   e.g.  BACKUP_S3_BUCKET=my-backups ./setup.sh rack.example.com
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -253,20 +261,45 @@ ensure_boot_service() {
 }
 
 # --------------------------------------------------------------- backup ----
-# The daily S3 backup is opted into with ./install-backup.sh <bucket>, which
-# records the bucket in .env. Once it is there, every later setup run
-# re-renders the timer from the current templates (a changed path, a changed
-# unit) the same way the boot unit is kept current.
+# The daily S3 backup (./backup-to-s3.sh on a systemd timer) is installed by
+# ./install-backup.sh, which records its settings in .env. The bucket comes
+# from the environment, else from an earlier run's .env, else — when a
+# person is at the keyboard — from a question; a non-interactive run with no
+# bucket anywhere leaves backups off and says how to turn them on. Every
+# later setup run re-renders the timer from the current templates (a changed
+# path, a changed unit), the same way the boot unit is kept current.
 ensure_backup_timer() {
-  if [ -z "$(get_env BACKUP_S3_BUCKET)" ]; then
-    info "no BACKUP_S3_BUCKET in .env — daily S3 backups are off (./install-backup.sh <bucket> turns them on)"
+  local bucket="${BACKUP_S3_BUCKET:-}"
+  if [ -z "$bucket" ]; then
+    bucket=$(get_env BACKUP_S3_BUCKET)
+  fi
+  if [ -z "$bucket" ] && [ "$INTERACTIVE" = "1" ]; then
+    echo ""
+    info "A full backup (database, files, credential key) can be made to S3 once a day."
+    read -r -p "[setup] S3 bucket for daily backups (blank to skip): " bucket
+  fi
+  if [ -z "$bucket" ]; then
+    info "no S3 bucket given — daily backups are off (BACKUP_S3_BUCKET=<bucket> ./setup.sh, or ./install-backup.sh <bucket>, turns them on)"
     return
   fi
   if [ "${SKIP_BOOT_SERVICE:-0}" = "1" ]; then
-    info "SKIP_BOOT_SERVICE=1 — not touching the backup timer"
+    info "SKIP_BOOT_SERVICE=1 — recording the bucket but not touching the backup timer"
+    set_env BACKUP_S3_BUCKET "$bucket"
     return
   fi
-  ./install-backup.sh || warn "could not install the backup timer; re-run ./install-backup.sh with sudo available."
+  # The other settings travel the same way the bucket does, so a scripted
+  # install can set everything in one line.
+  local args=()
+  [ -n "${BACKUP_S3_PREFIX:-}" ] && args+=(--prefix "$BACKUP_S3_PREFIX")
+  [ -n "${BACKUP_KEEP:-}" ] && args+=(--keep "$BACKUP_KEEP")
+  [ -n "${BACKUP_TIME:-}" ] && args+=(--at "$BACKUP_TIME")
+  [ -n "${AWS_REGION:-}" ] && args+=(--region "$AWS_REGION")
+  if ./install-backup.sh "${args[@]}" "$bucket"; then
+    info "daily backups go to s3://${bucket}; credentials: an instance role, root's ~/.aws, or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY in .env"
+    info "set the alert email under Admin -> Application Config -> Alerts to be told when one fails"
+  else
+    warn "could not install the backup timer; re-run ./install-backup.sh ${bucket} with sudo available."
+  fi
 }
 
 # ------------------------------------------------------------------- app ----
