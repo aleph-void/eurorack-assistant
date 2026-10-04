@@ -9,22 +9,34 @@
 # archive overwrite files on disk; extra files already on disk are left alone
 # (the stores are content-addressed, so they are unreferenced, not wrong).
 #
-# Usage: ./restore-db.sh [--files <zip-file>] <dump-file>
+# --llm <tar-file> additionally restores the token encryption key
+# (/data/keys) and the per-user CLI homes (/data/llm) from the llm.tar of a
+# ./backup-s3.sh run. Without it a restored database's LLM tokens, encrypted
+# with the key the dump was taken under, cannot be read, and every user
+# connects their provider again.
+#
+# Usage: ./restore-db.sh [--files <zip-file>] [--llm <tar-file>] <dump-file>
 set -euo pipefail
 cd "$(dirname "$0")"
 
 usage() {
-  echo "usage: $0 [--files <zip-file>] <dump-file>" >&2
+  echo "usage: $0 [--files <zip-file>] [--llm <tar-file>] <dump-file>" >&2
   exit 1
 }
 
 FILES_ZIP=""
+LLM_TAR=""
 DUMP=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --files)
       [ $# -ge 2 ] || usage
       FILES_ZIP="$2"
+      shift
+      ;;
+    --llm)
+      [ $# -ge 2 ] || usage
+      LLM_TAR="$2"
       shift
       ;;
     -*) usage ;;
@@ -44,6 +56,10 @@ if [ -n "$FILES_ZIP" ] && [ ! -f "$FILES_ZIP" ]; then
   echo "error: no such file: ${FILES_ZIP}" >&2
   exit 1
 fi
+if [ -n "$LLM_TAR" ] && [ ! -f "$LLM_TAR" ]; then
+  echo "error: no such file: ${LLM_TAR}" >&2
+  exit 1
+fi
 
 DOCKER="docker"
 if ! docker info >/dev/null 2>&1; then
@@ -58,7 +74,7 @@ fi
 # This throws the current database away. Ask first when a human is present;
 # a non-interactive caller (cron, a runbook) has already decided.
 if [ -t 0 ]; then
-  read -r -p "Replace the current database with ${DUMP}${FILES_ZIP:+ (and restore files from ${FILES_ZIP})}? [y/N] " answer
+  read -r -p "Replace the current database with ${DUMP}${FILES_ZIP:+ (and restore files from ${FILES_ZIP})}${LLM_TAR:+ (and the LLM key and credentials from ${LLM_TAR})}? [y/N] " answer
   case "$answer" in
     y | Y | yes | YES) ;;
     *)
@@ -85,6 +101,15 @@ echo "database restored from ${DUMP}"
 if [ -n "$FILES_ZIP" ]; then
   $DOCKER compose run --rm --no-deps -T server node scripts/load-data.js < "$FILES_ZIP"
   echo "file volumes restored from ${FILES_ZIP}"
+fi
+
+# The key and the credential homes, also while the app is stopped: the server
+# reads the key once at start, and a key swapped under a running one would
+# leave it decrypting with the old. -p keeps the modes the server set (the
+# key is 0600, the per-user dirs are group-shared with the agent sandbox).
+if [ -n "$LLM_TAR" ]; then
+  $DOCKER compose run --rm --no-deps -T server tar -C /data -xpf - < "$LLM_TAR"
+  echo "LLM key and credentials restored from ${LLM_TAR}"
 fi
 
 $DOCKER compose up -d nginx server

@@ -411,7 +411,10 @@ installation; on other distros install Docker yourself first):
    leaves them down across every later boot, and the unit is what makes it
    unconditional. Run `SKIP_BOOT_SERVICE=1 ./setup.sh` to leave the host's
    boot alone; under rootless Docker setup skips it and prints the user-unit
-   equivalent instead, since a system unit would drive the wrong daemon.
+   equivalent instead, since a system unit would drive the wrong daemon, and
+6. when `.env` names a `BACKUP_S3_BUCKET`, installs `eurorack-backup.timer`,
+   which takes a full backup to that bucket once a day ([Backups to
+   S3](#backups-to-s3)).
 
 The app is then at <http://localhost:8080>.
 
@@ -446,9 +449,11 @@ Useful afterwards:
 docker compose logs -f server   # watch the job worker
 ./reset-admin-password.sh       # new random admin password (printed once; forces a change at next login)
 ./backup-db.sh [--files]        # dump the database to /tmp on the host (or pass a path)
-./restore-db.sh [--files <zip>] <dump-file>   # replace the database with a dump (stops the app during the restore)
+./backup-s3.sh [--dry-run]      # a full backup to S3 now (what the daily timer runs)
+./restore-db.sh [--files <zip>] [--llm <tar>] <dump-file>   # replace the database with a dump (stops the app during the restore)
 docker compose down             # stop (data persists in volumes)
 sudo systemctl status eurorack-assistant   # the boot unit (start/stop/restart drive compose)
+sudo systemctl list-timers eurorack-backup.timer   # when the next backup runs, and when the last one did
 ```
 
 `backup-db.sh` runs `pg_dump` inside the db container and streams the dump to
@@ -460,6 +465,66 @@ to `restore-db.sh --files` puts the files back after the database restore;
 files in the archive overwrite files on disk, extra files on disk are left
 alone (the stores are content-addressed, so an extra file is unreferenced,
 never wrong).
+
+### Backups to S3
+
+`backup-s3.sh` takes a FULL backup — the database dump, the file-volume zip,
+and the LLM token encryption key with the per-user CLI credential homes
+(`llm.tar`, the `llmkeys` and `llm` volumes) — and streams each piece straight
+from the containers into one timestamped folder of a bucket, so a backup needs
+no free disk on the host however large the manuals and panels have grown:
+
+```
+s3://<bucket>/<prefix>/<YYYYmmdd-HHMMSS>/db.dump  files.zip  llm.tar  manifest.txt
+```
+
+`manifest.txt` is written last, so a folder without one is a run that did not
+finish (a failed run removes what it uploaded; one the host lost power under
+is swept up by the next). After uploading, the script keeps the newest ten
+finished runs and deletes the rest — counted in runs rather than days, so a
+week of failed nights still leaves ten good backups rather than three.
+
+Set it up in `.env` and re-run `./setup.sh`, which installs
+`eurorack-backup.timer` (rendered from `deploy/eurorack-backup.service` +
+`.timer`, the service file says how to do it by hand) to run the script at
+03:15 host time every day, catching up a night the host slept through:
+
+```sh
+BACKUP_S3_BUCKET=my-backups            # the bucket name alone, no s3://
+BACKUP_S3_PREFIX=eurorack-assistant    # optional: the folder inside it (this is the default)
+BACKUP_KEEP=10                         # optional: finished runs to keep (this is the default)
+AWS_ACCESS_KEY_ID=...                  # optional: a key with s3:ListBucket on the bucket and
+AWS_SECRET_ACCESS_KEY=...              #   s3:PutObject/GetObject/DeleteObject under the prefix
+AWS_DEFAULT_REGION=eu-west-1           # optional
+AWS_ENDPOINT_URL=https://...           # optional: an S3-compatible store (MinIO, R2, B2)
+```
+
+The AWS variables are passed to the AWS CLI when set and left to its own
+chain when not — a host with an instance role on it needs none of them. The
+upload uses the host's `aws` CLI when there is one and the `amazon/aws-cli`
+docker image otherwise, so nothing has to be installed. `./backup-s3.sh
+--dry-run` shows what a run would upload and prune without touching the
+bucket; `sudo systemctl start eurorack-backup.service` takes one now, and
+`journalctl -u eurorack-backup` is where a night's output went. Taking the
+bucket out of `.env` and re-running `./setup.sh` switches the timer off; a
+host without systemd (or with rootless Docker, where a system unit would drive
+the wrong daemon) runs the script from cron instead.
+
+**The bucket must be private**: a run is everything needed to stand the
+instance up again, every user's provider credentials included. Objects are
+uploaded with server-side encryption asked for explicitly (SSE-S3); a bucket
+policy denying public access and a customer-managed KMS key are the usual
+additions.
+
+Restoring a run is downloading its folder and handing the pieces to
+`restore-db.sh` — `--llm` puts the key back beside the database whose tokens
+were encrypted with it, so restored accounts keep working without
+re-authorizing:
+
+```sh
+aws s3 cp --recursive s3://my-backups/eurorack-assistant/20261004-031500/ ./restore/
+./restore-db.sh --files restore/files.zip --llm restore/llm.tar restore/db.dump
+```
 
 ## Architecture
 

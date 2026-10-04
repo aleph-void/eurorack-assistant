@@ -252,6 +252,78 @@ ensure_boot_service() {
     warn "could not start $UNIT_NAME; check: systemctl status $UNIT_NAME"
 }
 
+# -------------------------------------------------------------- backups ----
+# A daily full backup to S3 (./backup-s3.sh), as a systemd timer, installed
+# whenever .env names a bucket. Set BACKUP_S3_BUCKET (and the AWS credentials
+# or an instance role — see the script's header) in .env and re-run
+# ./setup.sh; take the bucket out again and the timer is switched off.
+BACKUP_SERVICE="eurorack-backup.service"
+BACKUP_TIMER="eurorack-backup.timer"
+
+ensure_backup_timer() {
+  if [ "${SKIP_BOOT_SERVICE:-0}" = "1" ]; then
+    info "SKIP_BOOT_SERVICE=1 — not installing the $BACKUP_TIMER backup timer"
+    return
+  fi
+  if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+    info "no systemd on this host; skipping the backup timer (run ./backup-s3.sh from cron instead)"
+    return
+  fi
+  local bucket
+  bucket=$(get_env BACKUP_S3_BUCKET)
+  if [ -z "$bucket" ]; then
+    if [ -f "/etc/systemd/system/$BACKUP_TIMER" ]; then
+      info "BACKUP_S3_BUCKET is no longer set in .env; switching the $BACKUP_TIMER off"
+      sudo systemctl disable --now "$BACKUP_TIMER" >/dev/null 2>&1 || true
+    else
+      info "no BACKUP_S3_BUCKET in .env — daily S3 backups are off (see README: Backups to S3)"
+    fi
+    return
+  fi
+  if [ ! -f "deploy/$BACKUP_SERVICE" ] || [ ! -f "deploy/$BACKUP_TIMER" ]; then
+    warn "deploy/$BACKUP_SERVICE or deploy/$BACKUP_TIMER missing; skipping the backup timer"
+    return
+  fi
+  if $DOCKER info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+    warn "rootless docker: a system-wide backup timer would drive the wrong daemon."
+    warn "Run the backup from your own crontab instead, e.g.:"
+    warn "  15 3 * * * $PWD/backup-s3.sh >> $HOME/eurorack-backup.log 2>&1"
+    return
+  fi
+
+  local rendered changed=0
+  rendered=$(mktemp)
+  sed -e "s|@APP_DIR@|$PWD|g" "deploy/$BACKUP_SERVICE" > "$rendered"
+  if ! { [ -r "/etc/systemd/system/$BACKUP_SERVICE" ] && cmp -s "$rendered" "/etc/systemd/system/$BACKUP_SERVICE"; }; then
+    info "installing $BACKUP_SERVICE (requires sudo)..."
+    if ! sudo install -m 644 "$rendered" "/etc/systemd/system/$BACKUP_SERVICE"; then
+      rm -f "$rendered"
+      warn "could not write /etc/systemd/system/$BACKUP_SERVICE; daily backups are NOT scheduled."
+      return
+    fi
+    changed=1
+  fi
+  rm -f "$rendered"
+  if ! { [ -r "/etc/systemd/system/$BACKUP_TIMER" ] && cmp -s "deploy/$BACKUP_TIMER" "/etc/systemd/system/$BACKUP_TIMER"; }; then
+    info "installing $BACKUP_TIMER (requires sudo)..."
+    if ! sudo install -m 644 "deploy/$BACKUP_TIMER" "/etc/systemd/system/$BACKUP_TIMER"; then
+      warn "could not write /etc/systemd/system/$BACKUP_TIMER; daily backups are NOT scheduled."
+      return
+    fi
+    changed=1
+  fi
+  if [ "$changed" = "1" ]; then
+    sudo systemctl daemon-reload || true
+  else
+    info "$BACKUP_TIMER already installed and current"
+  fi
+  if sudo systemctl enable --now "$BACKUP_TIMER" >/dev/null 2>&1; then
+    info "daily backups to s3://$bucket are scheduled ($BACKUP_TIMER); try one now with: sudo systemctl start $BACKUP_SERVICE"
+  else
+    warn "could not enable $BACKUP_TIMER; check: systemctl status $BACKUP_TIMER"
+  fi
+}
+
 # ------------------------------------------------------------------- app ----
 random_hex() {
   if command -v openssl >/dev/null 2>&1; then
@@ -337,6 +409,7 @@ info "starting all services..."
 $DOCKER compose up -d
 
 ensure_boot_service
+ensure_backup_timer
 
 echo ""
 if [ "$TLS_ENABLED" = "1" ]; then

@@ -1,0 +1,18 @@
+# eurorack-backup.timer — fires eurorack-backup.service once a day.
+# Installed beside the service by ./setup.sh when BACKUP_S3_BUCKET is set in
+# .env (the service file says how to do it by hand). `systemctl list-timers
+# eurorack-backup.timer` shows the next and the last run.
+
+[Unit]
+Description=Eurorack Assistant daily backup to S3
+
+[Timer]
+# 03:15 host time, plus up to 15 minutes so a fleet does not all hit S3 on
+# the same second. Persistent makes a night the host slept through run as
+# soon as it is back up, instead of being skipped.
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
