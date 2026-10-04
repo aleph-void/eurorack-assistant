@@ -6,9 +6,15 @@
 #
 #   1. Installs Docker (docker.io + docker-compose-v2) on Ubuntu if missing.
 #   2. Installs the LLM provider CLIs (claude, codex) if missing.
-#   3. When an FQDN is given (or remembered in .env) and Let's Encrypt certs
-#      exist in /etc/letsencrypt/live/<fqdn>/, serves HTTPS on port 443 (with
-#      port 80 redirecting) instead of plain HTTP on port 8080.
+#   3. When an FQDN is given (or remembered in .env), serves HTTPS on port 443
+#      (with port 80 redirecting) instead of plain HTTP on port 8080, using the
+#      Let's Encrypt certs in /etc/letsencrypt/live/<fqdn>/ — and when there
+#      are none yet, requests them with certbot first (installing certbot if
+#      missing). That needs the FQDN's DNS pointing at this host and port 80
+#      reachable from the internet, and agrees to the Let's Encrypt subscriber
+#      agreement on your behalf; CERTBOT_EMAIL=you@example.com registers the
+#      account with an address. Renewals are left to certbot's own timer, with
+#      hooks installed that stop nginx around a renewal so port 80 is free.
 #   4. Generates secrets, builds containers, migrates the database.
 #   5. Creates the admin account — its random password is printed ONCE below
 #      and stored nowhere else in cleartext.
@@ -161,6 +167,86 @@ ensure_port_bind_cap() {
     warn "could not restart rootless docker; restart it manually: systemctl --user restart docker"
 }
 
+ensure_certbot() {
+  if command -v certbot >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! is_ubuntu; then
+    warn "certbot is not installed; install it: https://certbot.eff.org/instructions"
+    return 1
+  fi
+  info "installing certbot (requires sudo)..."
+  sudo apt-get install -y certbot || {
+    sudo apt-get update && sudo apt-get install -y certbot
+  } || {
+    warn "could not install certbot"
+    return 1
+  }
+}
+
+# Ask Let's Encrypt for the FQDN's certificate. certbot's standalone responder
+# answers the HTTP-01 challenge on port 80 itself, so the port has to be free:
+# a container of an earlier run may be holding it (a TLS run whose certs have
+# since gone), and is stopped for the duration — the whole stack is brought up
+# again below either way. Passing an FQDN to this script is taken as agreeing
+# to the subscriber agreement; CERTBOT_EMAIL registers the account with an
+# address (Let's Encrypt no longer sends expiry mail, so none is required).
+request_certs() {
+  ensure_certbot || return 1
+  if [ -n "$($DOCKER compose ps -q nginx 2>/dev/null)" ]; then
+    info "stopping nginx so certbot can answer on port 80..."
+    $DOCKER compose stop nginx || true
+  fi
+  local -a account_args
+  if [ -n "${CERTBOT_EMAIL:-}" ]; then
+    account_args=(--email "$CERTBOT_EMAIL")
+  else
+    account_args=(--register-unsafely-without-email)
+  fi
+  info "requesting a Let's Encrypt certificate for $FQDN (requires sudo)..."
+  sudo certbot certonly --standalone --non-interactive --agree-tos \
+    --cert-name "$FQDN" -d "$FQDN" "${account_args[@]}"
+}
+
+# certbot's timer renews a standalone cert the same way it was issued: on
+# port 80, which nginx holds once TLS is on. The hooks stop nginx for the
+# renewal and start it again after, which also puts the new cert in service
+# (no reload needed). They go in certbot's hook directories, rendered from the
+# template like the boot unit, so a cert obtained by hand is covered too.
+CERTBOT_HOOK_TEMPLATE="deploy/certbot-renewal-hook.sh"
+CERTBOT_HOOKS_DIR="/etc/letsencrypt/renewal-hooks"
+
+ensure_certbot_hooks() {
+  if [ ! -f "$CERTBOT_HOOK_TEMPLATE" ]; then
+    warn "$CERTBOT_HOOK_TEMPLATE missing; skipping the certbot renewal hooks"
+    return
+  fi
+  # Hooks run as root under certbot's timer, and root's docker is not the
+  # user's rootless daemon — the same reason the boot unit is skipped there.
+  if $DOCKER info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+    warn "rootless docker: certbot's root-run renewal hooks cannot reach your daemon."
+    warn "Free port 80 around renewals yourself (docker compose stop/start nginx)."
+    return
+  fi
+  local docker_bin hook rendered target
+  docker_bin=$(command -v docker)
+  for hook in pre post; do
+    target="$CERTBOT_HOOKS_DIR/$hook/eurorack-assistant"
+    rendered=$(mktemp)
+    sed -e "s|@APP_DIR@|$PWD|g" -e "s|@DOCKER_BIN@|$docker_bin|g" \
+      -e "s|@HOOK@|$hook|g" "$CERTBOT_HOOK_TEMPLATE" > "$rendered"
+    # /etc/letsencrypt is root-only, so even the comparison needs sudo.
+    if sudo test -r "$target" 2>/dev/null && sudo cmp -s "$rendered" "$target"; then
+      rm -f "$rendered"
+      continue
+    fi
+    info "installing certbot $hook-renewal hook $target (requires sudo)..."
+    sudo install -D -m 755 "$rendered" "$target" || \
+      warn "could not write $target; stop nginx by hand around cert renewals."
+    rm -f "$rendered"
+  done
+}
+
 setup_tls() {
   # Falling back to plain HTTP must also drop Secure from the session cookie —
   # a leftover SECURE_COOKIES=1 from an earlier TLS run would make every login
@@ -173,6 +259,16 @@ setup_tls() {
   if [ -z "$FQDN" ]; then
     return
   fi
+  if ! certs_exist; then
+    info "no TLS certs in /etc/letsencrypt/live/$FQDN yet"
+    if ! request_certs || ! certs_exist; then
+      warn "could not get a certificate for $FQDN; staying on plain HTTP."
+      warn "Check that $FQDN resolves to this host, that port 80 is reachable from"
+      warn "the internet and nothing else on this machine is listening on it, then"
+      warn "re-run: ./setup.sh $FQDN  (or get certs yourself with"
+      warn "  sudo certbot certonly --standalone -d $FQDN  and re-run)."
+    fi
+  fi
   if certs_exist; then
     info "TLS certs found in /etc/letsencrypt/live/$FQDN — enabling HTTPS on port 443"
     TLS_ENABLED=1
@@ -181,11 +277,8 @@ setup_tls() {
     set_env COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
     set_env SECURE_COOKIES 1
     ensure_port_bind_cap
+    ensure_certbot_hooks
   else
-    warn "no TLS certs in /etc/letsencrypt/live/$FQDN (need fullchain.pem + privkey.pem);"
-    warn "staying on plain HTTP. Get certs with:"
-    warn "  sudo certbot certonly --standalone -d $FQDN"
-    warn "then re-run: ./setup.sh $FQDN"
     sed -i '/^COMPOSE_FILE=/d' .env
   fi
 }
@@ -359,8 +452,8 @@ ensure_backup_timer
 echo ""
 if [ "$TLS_ENABLED" = "1" ]; then
   info "done — the app is at https://$FQDN/"
-  info "after cert renewals, reload nginx: $DOCKER compose exec nginx nginx -s reload"
-  info "(e.g. as a certbot deploy hook)"
+  info "certbot's timer renews the certificate; the hooks in $CERTBOT_HOOKS_DIR"
+  info "restart nginx around a renewal, which puts the new cert in service."
 else
   APP_PORT=$(get_env APP_PORT)
   info "done — the app is at http://localhost:${APP_PORT:-8080}"
