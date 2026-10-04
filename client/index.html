@@ -9,6 +9,17 @@
     <link rel="apple-touch-icon" href="/logo.png" />
     <meta name="theme-color" content="#0a0a0f" />
     <title>Eurorack Assistant</title>
+    <!-- The body face, asked for up front. Declared only in the stylesheet it
+         is discovered a round trip later, once that has arrived and been
+         parsed, and font-display: swap then repaints every line on the page
+         when it lands. Vite rewrites the href to the hashed asset. -->
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      crossorigin
+      href="/src/assets/fonts/inter-latin.woff2"
+    />
   </head>
   <body>
     <div id="app"></div>

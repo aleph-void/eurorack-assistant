@@ -192,23 +192,123 @@ const {
     relatedIds.add(e.expander_module_id);
   }
 
-  const components =
+  const load = async (model, extra = {}) =>
     relatedIds.size === 0
       ? []
-      : await ModuleComponent.findAll({
+      : model.findAll({ where: { module_id: [...relatedIds] }, order: [['id', 'ASC']], ...extra });
+
+  // Everything the patch is made of is read at once: the patch's own rows,
+  // the hardware facts of the modules in it, the panels and the layout. Each
+  // depends on nothing but the patch and the module ids above, and on a
+  // whole-studio patch the fifteen of them in a row were fifteen round
+  // trips before a single cable was traced.
+  const [
+    components,
+    portRows,
+    cables,
+    settings,
+    groups,
+    outputRows,
+    linkRows,
+    normalizationRows,
+    routeRows,
+    pairRows,
+    multGroupRows,
+    switchRows,
+    panels,
+    parametersByModule,
+    layout,
+  ] = await Promise.all([
+    relatedIds.size === 0
+      ? []
+      : ModuleComponent.findAll({
           where: { module_id: [...relatedIds] },
+          // The prose is dropped by componentJson when `describe` is off, so
+          // it is not read either — on a whole-studio patch it is the
+          // biggest column of the biggest table the payload touches.
+          ...(describe ? {} : { attributes: { exclude: ['description'] } }),
           order: [
             ['type', 'ASC'],
             ['id', 'ASC'],
           ],
-        });
-  const valueRows =
+        }),
+    PatchModulePort.findAll({
+      where: { patch_module_id: patchModules.map((pm) => pm.id) },
+      order: [
+        ['position', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    }),
+    PatchCable.findAll({
+      where: { patch_id: patch.id },
+      order: [['id', 'ASC']],
+    }),
+    PatchSetting.findAll({
+      where: { patch_id: patch.id },
+      order: [['id', 'ASC']],
+    }),
+    PatchGroup.findAll({
+      where: { patch_id: patch.id },
+      order: [
+        ['position', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    }),
+    PatchOutput.findAll({
+      where: { patch_id: patch.id },
+      order: [
+        ['position', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    }),
+    PatchModuleLink.findAll({
+      where: { patch_id: patch.id },
+      order: [['id', 'ASC']],
+    }),
+    load(ComponentNormalization),
+    load(ComponentRoute),
+    load(ComponentPair),
+    // A switched multiple's per-jack bus toggles: which section each jack
+    // joins in each position of its control. Resolved against the patch's
+    // recorded settings in buildPatchTopology.
+    load(ComponentMultGroup),
+    load(ComponentSwitch),
+    loadPanels(db, [...liveIds], { describe }),
+    // The menu parameters of every module still in the rack, so the patch
+    // pages can offer them to dial in. Prose travels with `describe`,
+    // exactly as a component's description does: a studio's worth of option
+    // descriptions is a megabyte none of the patch pages shows.
+    loadParametersByModule(db, [...liveIds], { describe }),
+    // The physical arrangement is the patch's OWN copy of the racks it was
+    // built from (services/patchLayout.js), not the racks as they stand
+    // today — reorganising a case does not rearrange the patches already
+    // made from it. A patch catches up only when its owner asks it to.
+    includeRackLayout ? loadPatchRackLayout(db, patch.id) : { rows: [], placements: [] },
+  ]);
+  // The second wave: the rows the first one's answers point at.
+  const [valueRows, linkJackRows, switchStepRows] = await Promise.all([
     components.length === 0
       ? []
-      : await ComponentValue.findAll({
+      : ComponentValue.findAll({
           where: { component_id: components.map((c) => c.id) },
           order: [['id', 'ASC']],
-        });
+        }),
+    linkRows.length === 0
+      ? []
+      : PatchModuleLinkJack.findAll({
+          where: { link_id: linkRows.map((l) => l.id) },
+          order: [['id', 'ASC']],
+        }),
+    switchRows.length === 0
+      ? []
+      : ComponentSwitchStep.findAll({
+          where: { switch_id: switchRows.map((s) => s.id) },
+          order: [
+            ['position', 'ASC'],
+            ['component_id', 'ASC'],
+          ],
+        }),
+  ]);
   const valuesByComponent = new Map();
   for (const v of valueRows) {
     if (!valuesByComponent.has(v.component_id)) valuesByComponent.set(v.component_id, []);
@@ -228,53 +328,12 @@ const {
     });
   }
 
-  const portRows = await PatchModulePort.findAll({
-    where: { patch_module_id: patchModules.map((pm) => pm.id) },
-    order: [
-      ['position', 'ASC'],
-      ['id', 'ASC'],
-    ],
-  });
   const portsByPatchModule = new Map();
   for (const p of portRows) {
     if (!portsByPatchModule.has(p.patch_module_id)) portsByPatchModule.set(p.patch_module_id, []);
     portsByPatchModule.get(p.patch_module_id).push({ ...portJson(p, { describe }), values: [] });
   }
 
-  const cables = await PatchCable.findAll({
-    where: { patch_id: patch.id },
-    order: [['id', 'ASC']],
-  });
-  const settings = await PatchSetting.findAll({
-    where: { patch_id: patch.id },
-    order: [['id', 'ASC']],
-  });
-  const groups = await PatchGroup.findAll({
-    where: { patch_id: patch.id },
-    order: [
-      ['position', 'ASC'],
-      ['id', 'ASC'],
-    ],
-  });
-  const outputRows = await PatchOutput.findAll({
-    where: { patch_id: patch.id },
-    order: [
-      ['position', 'ASC'],
-      ['id', 'ASC'],
-    ],
-  });
-
-  const linkRows = await PatchModuleLink.findAll({
-    where: { patch_id: patch.id },
-    order: [['id', 'ASC']],
-  });
-  const linkJackRows =
-    linkRows.length === 0
-      ? []
-      : await PatchModuleLinkJack.findAll({
-          where: { link_id: linkRows.map((l) => l.id) },
-          order: [['id', 'ASC']],
-        });
   const links = linkRows.map((l) => ({
     id: l.id,
     kind: l.kind,
@@ -292,10 +351,6 @@ const {
       })),
   }));
 
-  const load = async (model, extra = {}) =>
-    relatedIds.size === 0
-      ? []
-      : model.findAll({ where: { module_id: [...relatedIds] }, order: [['id', 'ASC']], ...extra });
   const groupByModule = (rows) => {
     const map = new Map();
     for (const r of rows) {
@@ -304,26 +359,10 @@ const {
     }
     return map;
   };
-  const normalizationsByModule = groupByModule(await load(ComponentNormalization));
-  const routesByModule = groupByModule(await load(ComponentRoute));
-  const pairsByModule = groupByModule(await load(ComponentPair));
-
-  // A switched multiple's per-jack bus toggles: which section each jack joins
-  // in each position of its control. Resolved against the patch's recorded
-  // settings in buildPatchTopology.
-  const multGroupsByModule = groupByModule(await load(ComponentMultGroup));
-
-  const switchRows = await load(ComponentSwitch);
-  const switchStepRows =
-    switchRows.length === 0
-      ? []
-      : await ComponentSwitchStep.findAll({
-          where: { switch_id: switchRows.map((s) => s.id) },
-          order: [
-            ['position', 'ASC'],
-            ['component_id', 'ASC'],
-          ],
-        });
+  const normalizationsByModule = groupByModule(normalizationRows);
+  const routesByModule = groupByModule(routeRows);
+  const pairsByModule = groupByModule(pairRows);
+  const multGroupsByModule = groupByModule(multGroupRows);
   const switchesByModule = new Map();
   for (const s of switchRows) {
     if (!switchesByModule.has(s.module_id)) switchesByModule.set(s.module_id, []);
@@ -372,19 +411,7 @@ const {
     const key = whole ? `${o.patch_module_id}:*` : `${o.patch_module_id}:${o.component_id}`;
     return outputJson(o, { live, reached: arrived.has(key) });
   });
-  const panels = await loadPanels(db, [...liveIds], { describe });
-  // The menu parameters of every module still in the rack, so the patch pages
-  // can offer them to dial in. Prose travels with `describe`, exactly as a
-  // component's description does: a studio's worth of option descriptions is
-  // a megabyte none of the patch pages shows.
-  const parametersByModule = await loadParametersByModule(db, [...liveIds], { describe });
-  // The physical arrangement is the patch's OWN copy of the racks it was
-  // built from (services/patchLayout.js), not the racks as they stand today
-  // — reorganising a case does not rearrange the patches already made from
-  // it. A patch catches up only when its owner asks it to.
-  const { rows: layoutRows, placements: rowPlacements } = includeRackLayout
-    ? await loadPatchRackLayout(db, patch.id)
-    : { rows: [], placements: [] };
+  const { rows: layoutRows, placements: rowPlacements } = layout;
   // A placement names a module model, while a patch snapshots physical
   // instances. Assign each placed copy to the next matching snapshot instance
   // OF THE SAME RACK, so the two Mathses of a two-rack system do not swap

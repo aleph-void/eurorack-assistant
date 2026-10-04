@@ -281,7 +281,7 @@ onMounted(async () => {
         </button>
       </div>
       <div ref="feed" class="feed" data-test="feed">
-        <div v-for="(line, i) in jobs.feed" :key="i" class="feed-line">
+        <div v-for="line in jobs.feed" :key="line.id" class="feed-line">
           <span class="muted">[job {{ line.jobId }} · {{ line.type }}]</span> {{ line.message }}
         </div>
         <div v-if="jobs.feed.length === 0" class="muted">

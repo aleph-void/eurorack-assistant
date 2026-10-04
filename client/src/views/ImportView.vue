@@ -134,7 +134,7 @@ async function submit() {
   <div v-if="queuedJobId" class="panel">
     <h2>Live progress</h2>
     <div class="feed" data-test="feed">
-      <div v-for="(line, i) in jobFeed" :key="i">
+      <div v-for="line in jobFeed" :key="line.id">
         <span class="muted">[job {{ line.jobId }} · {{ line.type }}]</span> {{ line.message }}
       </div>
       <div v-if="jobFeed.length === 0" class="muted">Waiting for the worker…</div>

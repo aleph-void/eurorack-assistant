@@ -1,15 +1,17 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { api } from '../api.js';
 import { dialog } from '../dialog.js';
+import { useJobsStore } from '../stores/jobs.js';
 import ShareButton from '../components/ShareButton.vue';
 import QuestionThread from '../components/QuestionThread.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
+const jobs = useJobsStore();
 
 const question = ref(null);
 const options = ref(null);
@@ -27,6 +29,10 @@ const moduleFilter = ref('');
 const followUp = ref('');
 const askingFollowUp = ref(false);
 let pollTimer = null;
+// The answer lands as a job ending on the socket (`jobs.finished`), which is
+// what re-reads the page; the poll is only the fallback for a socket that
+// died, so it can afford to be slow.
+const POLL_MS = 15000;
 
 const answerHtml = computed(() => {
   if (!question.value?.answer) return '';
@@ -48,21 +54,23 @@ const threadWorking = computed(() =>
 const canFollowUp = computed(() => question.value?.status === 'answered');
 
 // Attachment choices narrow to whatever modules (and components) are
-// currently selected.
+// currently selected. A whole rack is ticked at once, and every row below
+// asks whether its module is among them, so the ticks are a Set.
+const selectedModuleIds = computed(() => new Set(selectedModules.value));
 const visibleComponents = computed(
-  () => options.value?.components.filter((c) => selectedModules.value.includes(c.module_id)) ?? []
+  () => options.value?.components.filter((c) => selectedModuleIds.value.has(c.module_id)) ?? []
 );
 const chosenComponentIds = computed(() =>
   visibleComponents.value.filter((c) => selectedComponents.value.includes(c.id)).map((c) => c.id)
 );
 const visibleManuals = computed(
-  () => options.value?.manuals.filter((m) => selectedModules.value.includes(m.module_id)) ?? []
+  () => options.value?.manuals.filter((m) => selectedModuleIds.value.has(m.module_id)) ?? []
 );
 const visibleAnswers = computed(
   () =>
     options.value?.answers.filter(
       (a) =>
-        a.module_ids.some((id) => selectedModules.value.includes(id)) ||
+        a.module_ids.some((id) => selectedModuleIds.value.has(id)) ||
         a.component_ids.some((id) => chosenComponentIds.value.includes(id))
     ) ?? []
 );
@@ -70,7 +78,7 @@ const visibleNotes = computed(
   () =>
     options.value?.notes.filter(
       (n) =>
-        n.module_ids.some((id) => selectedModules.value.includes(id)) ||
+        n.module_ids.some((id) => selectedModuleIds.value.has(id)) ||
         n.component_ids.some((id) => chosenComponentIds.value.includes(id))
     ) ?? []
 );
@@ -89,7 +97,7 @@ const visibleCaptures = computed(
   () =>
     options.value?.captures?.filter(
       (c) =>
-        c.module_ids.some((id) => selectedModules.value.includes(id)) ||
+        c.module_ids.some((id) => selectedModuleIds.value.has(id)) ||
         c.component_ids.some((id) => chosenComponentIds.value.includes(id))
     ) ?? []
 );
@@ -102,7 +110,7 @@ const chosenCaptureIds = computed(() =>
 const visibleAudio = computed(
   () =>
     options.value?.audio?.filter((a) =>
-      a.module_ids.some((id) => selectedModules.value.includes(id))
+      a.module_ids.some((id) => selectedModuleIds.value.has(id))
     ) ?? []
 );
 const chosenAudioIds = computed(() =>
@@ -152,12 +160,12 @@ function moduleMatchesFilter(m) {
 }
 const scopedModules = computed(() =>
   (options.value?.modules ?? []).filter(
-    (m) => selectedModules.value.includes(m.id) && moduleMatchesFilter(m)
+    (m) => selectedModuleIds.value.has(m.id) && moduleMatchesFilter(m)
   )
 );
 const otherModules = computed(() =>
   (options.value?.modules ?? []).filter(
-    (m) => !selectedModules.value.includes(m.id) && moduleMatchesFilter(m)
+    (m) => !selectedModuleIds.value.has(m.id) && moduleMatchesFilter(m)
   )
 );
 const hiddenScopedCount = computed(() => selectedModules.value.length - scopedModules.value.length);
@@ -188,8 +196,11 @@ function selectNoManuals() {
   selectedManuals.value = selectedManuals.value.filter((id) => !shown.has(id));
 }
 
+// Looked up once per row of components and manuals, so the modules are a map
+// rather than a list walked from the top for each.
+const modulesById = computed(() => new Map((options.value?.modules ?? []).map((m) => [m.id, m])));
 function moduleLabel(moduleId) {
-  const m = options.value?.modules.find((mod) => mod.id === moduleId);
+  const m = modulesById.value.get(moduleId);
   return m ? `${m.manufacturer} ${m.name}`.trim() : `module ${moduleId}`;
 }
 
@@ -234,8 +245,11 @@ async function load() {
     }
     question.value = loaded;
     if (isReview.value && !options.value) await loadOptions();
+    // One poll in the air at a time: a read the socket asked for would
+    // otherwise start a second chain beside the one already waiting.
+    clearTimeout(pollTimer);
     if (isWorking.value || threadWorking.value) {
-      pollTimer = setTimeout(load, 3000);
+      pollTimer = setTimeout(load, POLL_MS);
     }
   } catch (e) {
     error.value = e.message;
@@ -257,7 +271,8 @@ async function requestAnswer() {
       patch_ids: chosenPatchIds.value,
     });
     options.value = null;
-    pollTimer = setTimeout(load, 3000);
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(load, POLL_MS);
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -279,7 +294,7 @@ async function askFollowUp() {
     question.value = { ...question.value, thread: [...thread.value, { answer: null, ...turn }] };
     followUp.value = '';
     clearTimeout(pollTimer);
-    pollTimer = setTimeout(load, 3000);
+    pollTimer = setTimeout(load, POLL_MS);
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -328,6 +343,15 @@ async function removeQuestion() {
     error.value = e.message;
   }
 }
+
+// A job ending is the answer landing, nine times out of ten: read the page
+// back the moment the socket says so, rather than up to a poll later.
+watch(
+  () => jobs.finished,
+  () => {
+    if (isWorking.value || threadWorking.value) load();
+  }
+);
 
 onMounted(load);
 onUnmounted(() => clearTimeout(pollTimer));

@@ -15,6 +15,24 @@ services:
       - shared_preload_libraries=pg_stat_statements
       - -c
       - pg_stat_statements.track=top
+      # The image's defaults are sized for a machine from twenty years ago
+      # (128 MB of shared buffers, 4 MB per sort) and tell the planner that
+      # a random read costs four sequential ones, which is true of a
+      # spinning disk and not of anything this runs on. These are modest
+      # for a host with a few gigabytes; raise them with the host.
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - random_page_cost=1.1
+    # Docker's default /dev/shm is 64 MB, which Postgres's parallel workers
+    # share; sized with the buffers above.
+    shm_size: 256m
     environment:
       POSTGRES_USER: eurorack
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?missing POSTGRES_PASSWORD - run ./setup.sh first}
@@ -31,6 +49,11 @@ services:
 
   server:
     build: ./server
+    # node is PID 1 in this container and spawns chromium, ffmpeg, yt-dlp
+    # and the LLM CLIs; a grandchild orphaned by a killed chromium reparents
+    # to it, and node does not reap, so without an init the zombies pile up
+    # over weeks of uptime.
+    init: true
     environment:
       DATABASE_URL: postgres://eurorack:${POSTGRES_PASSWORD}@db:5432/eurorack
       MANUALS_DIR: /data/manuals

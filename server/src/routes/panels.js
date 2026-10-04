@@ -13,19 +13,43 @@ import { asyncHandler } from './asyncHandler.js';
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
+// How many verified names are remembered (below). A studio is a few hundred
+// panels; this is more than any one process will be asked for and still a
+// few hundred kilobytes if it ever fills.
+const VERIFIED_LIMIT = 4096;
+
 export function panelRoutes(db, { panelsDir = process.env.PANELS_DIR || '/data/panels' } = {}) {
   const { ModulePanel } = db.models;
   const router = Router();
   router.use(requireAuth(db));
+
+  // The names some module's panel has been found to reference. A patch page
+  // asks for forty of these at once and a zoom asks for them all again, and
+  // the answer never changes: a name is a content hash, so a panel row that
+  // names it today names the same bytes forever, and a row deleted takes
+  // its orphaned bytes with it (services/panelStore.js) — which the stat
+  // below still catches. Only a yes is remembered; a no is one query.
+  const verified = new Set();
+  async function referenced(hash, ext) {
+    const name = `${hash}.${ext}`;
+    if (verified.has(name)) return true;
+    const panel = await ModulePanel.findOne({
+      where: { image_hash: hash, image_ext: ext },
+      attributes: ['id'],
+    });
+    if (!panel) return false;
+    if (verified.size >= VERIFIED_LIMIT) verified.clear();
+    verified.add(name);
+    return true;
+  }
 
   router.get('/:file', asyncHandler(async (req, res) => {
     const [hash, ext] = String(req.params.file).toLowerCase().split('.');
     if (!SHA256_RE.test(hash || '') || !IMAGE_TYPES[ext]) {
       return res.status(404).json({ error: 'Panel image not found' });
     }
-    const panel = await ModulePanel.findOne({ where: { image_hash: hash, image_ext: ext } });
     const file = panelPath(panelsDir, hash, ext);
-    if (!panel || !fs.existsSync(file)) {
+    if (!(await referenced(hash, ext)) || !fs.existsSync(file)) {
       return res.status(404).json({ error: 'Panel image not found' });
     }
     // ?w=<pixels> asks for the picture at the size it is about to be drawn
@@ -43,7 +67,11 @@ export function panelRoutes(db, { panelsDir = process.env.PANELS_DIR || '/data/p
     res.set('X-Content-Type-Options', 'nosniff');
     // The bytes are addressed by their own hash, so they can never change.
     res.set('Cache-Control', 'private, max-age=31536000, immutable');
-    fs.createReadStream(variant ?? file).pipe(res);
+    // Sized, so the browser can lay the picture's download out and nginx
+    // need not chunk it.
+    const served = variant ?? file;
+    res.set('Content-Length', String((await fs.promises.stat(served)).size));
+    fs.createReadStream(served).pipe(res);
   }));
 
   return router;

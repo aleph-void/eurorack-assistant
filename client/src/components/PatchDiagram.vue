@@ -303,21 +303,6 @@ const directed = (a) => {
     color: component ? componentColor(type) : MARKER_NEUTRAL,
   };
 };
-// The markers built into the picture: the ones of a type the key has on, on
-// a panel that is on screen. Everything else about a marker — the legend
-// below, what a cable may be dragged to — is a fact about the whole diagram
-// and keeps counting them all, so scrolling never changes what the picture
-// SAYS, only what it draws. A marker is matched on what it is IN THIS PATCH,
-// the same reading the key is listed from, so a mult the patch has pointed
-// one way follows the entry it is now drawn under.
-const visibleAnchors = computed(() => {
-  if (!showMarkers.value) return [];
-  const shown = new Set(shownTypes.value);
-  return anchorBase.value
-    .filter((a) => visibleModuleIds.value.has(a.patchModuleId) && shown.has(directedType(a)))
-    .map(directed);
-});
-
 // The key under the picture: what is actually on this diagram, not the whole
 // catalogue of types — and a mult the patch has pointed one way counts as
 // what it is now, so the key never names a colour the picture is not using.
@@ -517,6 +502,44 @@ const isMoveTarget = (a) =>
   a.key !== movingFixed.value.key &&
   (moving.value.end === 'to' ? CABLE_IN : CABLE_OUT).includes(a.type);
 
+// The markers built into the picture: the ones of a type the key has on, on
+// a panel that is on screen. Everything else about a marker — the legend
+// below, what a cable may be dragged to — is a fact about the whole diagram
+// and keeps counting them all, so scrolling never changes what the picture
+// SAYS, only what it draws. A marker is matched on what it is IN THIS PATCH,
+// the same reading the key is listed from, so a mult the patch has pointed
+// one way follows the entry it is now drawn under.
+//
+// Whether a marker is picked out, and whether it is dimmed while a cable is
+// armed or a plug is in hand, are worked out HERE rather than in the
+// template: a marker is then a fact of this computed alone, and the circle
+// drawn from it is memoized on the object (`v-memo`), so a drag — which
+// redraws the picture on every frame for the draft cable — leaves six
+// thousand circles untouched.
+const anchorSelected = (a) =>
+  (selected.value?.patchModuleId === a.patchModuleId &&
+    selected.value?.componentId === a.componentId) ||
+  patchFrom.value?.key === a.key ||
+  movingHeld.value?.key === a.key;
+const anchorDimmed = (a) =>
+  (Boolean(patchFrom.value) && patchFrom.value.key !== a.key && !isPatchTarget(a)) ||
+  (Boolean(moving.value) &&
+    movingHeld.value.key !== a.key &&
+    movingFixed.value.key !== a.key &&
+    !isMoveTarget(a));
+const visibleAnchors = computed(() => {
+  if (!showMarkers.value) return [];
+  const shown = new Set(shownTypes.value);
+  return anchorBase.value
+    .filter((a) => visibleModuleIds.value.has(a.patchModuleId) && shown.has(directedType(a)))
+    .map((base) => {
+      const a = directed(base);
+      a.selected = anchorSelected(a);
+      a.dimmed = anchorDimmed(a);
+      return a;
+    });
+});
+
 function startMove(cable, end) {
   moving.value = { cable, end };
   selected.value = null;
@@ -618,6 +641,18 @@ const selectedCableId = ref(null);
 // entered rather than following it: following would be work once an event
 // where the rule here is work once a frame, and the words do not change.
 const hoveredCableId = ref(null);
+// What the picture draws a cable differently for, named once so the class
+// bindings and the memo keys below cannot disagree. A cable's curve is
+// memoized on these and the cable itself (`v-memo`), for the same reason a
+// marker is: a drag redraws the picture every frame, and the cables already
+// plugged have not moved.
+const cableDimmed = (c) =>
+  props.interactive &&
+  (Boolean(patchFrom.value) || Boolean(moving.value)) &&
+  c.cable.id !== moving.value?.cable.id;
+const cablePicked = (c) =>
+  c.cable.id === selectedCableId.value || c.cable.id === moving.value?.cable.id;
+const cableHovered = (c) => c.cable.id === hoveredCableId.value;
 const cableTip = ref(null);
 function hoverCable(entry, event) {
   hoveredCableId.value = entry.cable.id;
@@ -986,6 +1021,7 @@ function setMenuValue(value) {
               <path
                 v-for="h in cableHits"
                 :key="`hit-${h.entry.cable.id}`"
+                v-memo="[h, Boolean(patchFrom) || Boolean(moving)]"
                 :d="h.d"
                 class="cable-hit"
                 :class="{ dimmed: Boolean(patchFrom) || Boolean(moving) }"
@@ -1003,17 +1039,15 @@ function setMenuValue(value) {
             <path
               v-for="c in visibleCables"
               :key="c.cable.id"
+              v-memo="[c, interactive, cableDimmed(c), cablePicked(c), cableHovered(c)]"
               :d="c.d"
               class="cable"
               :class="{
                 optional: c.cable.optional,
                 unpluggable: interactive,
-                dimmed:
-                  interactive &&
-                  (Boolean(patchFrom) || Boolean(moving)) &&
-                  c.cable.id !== moving?.cable.id,
-                picked: c.cable.id === selectedCableId || c.cable.id === moving?.cable.id,
-                hovered: c.cable.id === hoveredCableId,
+                dimmed: cableDimmed(c),
+                picked: cablePicked(c),
+                hovered: cableHovered(c),
               }"
               :stroke="c.color"
               :data-test="`diagram-cable-${c.cable.id}`"
@@ -1048,34 +1082,19 @@ function setMenuValue(value) {
             <circle
               v-for="a in visibleAnchors"
               :key="a.key"
+              v-memo="[a, markerRadius, markerStroke]"
               :cx="a.x"
               :cy="a.y"
               :r="markerRadius"
               class="jack-marker"
               :fill="a.color"
-              :stroke="
-                (selected?.patchModuleId === a.patchModuleId &&
-                  selected?.componentId === a.componentId) ||
-                patchFrom?.key === a.key ||
-                movingHeld?.key === a.key
-                  ? MARKER_SELECTED
-                  : MARKER_HALO
-              "
+              :stroke="a.selected ? MARKER_SELECTED : MARKER_HALO"
               :stroke-width="markerStroke"
               :class="{
                 patchable: CABLE_OUT.includes(a.type),
                 jack: Boolean(a.type?.endsWith('_jack')),
-                selected:
-                  (selected?.patchModuleId === a.patchModuleId &&
-                    selected?.componentId === a.componentId) ||
-                  patchFrom?.key === a.key ||
-                  movingHeld?.key === a.key,
-                dimmed:
-                  (Boolean(patchFrom) && patchFrom.key !== a.key && !isPatchTarget(a)) ||
-                  (Boolean(moving) &&
-                    movingHeld.key !== a.key &&
-                    movingFixed.key !== a.key &&
-                    !isMoveTarget(a)),
+                selected: a.selected,
+                dimmed: a.dimmed,
               }"
               :data-test="`diagram-jack-${a.patchModuleId}-${a.componentId}`"
               @pointerdown="

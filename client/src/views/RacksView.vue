@@ -245,6 +245,33 @@ const placedComponents = computed(() =>
 const DEFAULT_ROW_HP = 104;
 const rowUsed = (row) => (row.modules || []).reduce((sum, module) => sum + (Number(module.hp) || 0), 0);
 
+// Everything a row is drawn from, for the memo on it (`v-memo` on
+// `.rack-row`). A drag writes `dragPoint` on every frame, and that is read
+// by the ghost alone — but it is read in this view's render, so every row of
+// the rack re-rendered its every module and marker at pointer speed for a
+// picture that had not changed. With the row memoized, a frame of a drag
+// redraws the row the pointer is over and the row the module came from, and
+// leaves the rest. The list has to name EVERY reactive value the row's node
+// reads, or a row is drawn stale: the row object (a save replaces them), its
+// unit and HP (edited in place), which modules stand in it in what order (a
+// drop or a nudge splices the list; a module's own facts never change under
+// the organizer, so its id stands for it), the whole-page flags, this row's
+// collapsed and opened state, and the drop hint and the held module when
+// they are this row's — as the index, so a hint moving along the row is a
+// change and one moving along another row is not.
+const rowMemo = (row, rowIndex) => [
+  row,
+  row.unit,
+  row.hp,
+  (row.modules || []).map((module) => module.module_id).join(','),
+  layoutBusy.value,
+  showMarkers.value,
+  rowCollapsed(rowIndex),
+  rowOpened(rowIndex),
+  dropHint.value?.rowIndex === rowIndex ? dropHint.value.index : null,
+  dragged.value?.rowIndex === rowIndex ? dragged.value.index : null,
+];
+
 // A save REPLACES the rack's rows — the server deletes them and writes the
 // ones it was sent — so two saves in flight at once are a race the rack loses:
 // each one deletes the rows it can see and then inserts its own, and the rack
@@ -643,7 +670,13 @@ async function nudge(rowIndex, index, delta) {
       <!-- Keyed by position, not by row id: a save replaces the rows, so
            keying by id would tear down and rebuild every row (and reload its
            panel pictures) after every drop. -->
-      <div v-for="(row, rowIndex) in organizer.rows" :key="rowIndex" class="rack-row" :data-test="`rack-row-${rowIndex}`">
+      <div
+        v-for="(row, rowIndex) in organizer.rows"
+        :key="rowIndex"
+        v-memo="rowMemo(row, rowIndex)"
+        class="rack-row"
+        :data-test="`rack-row-${rowIndex}`"
+      >
         <div class="rack-row-meta">
           <button
             type="button"

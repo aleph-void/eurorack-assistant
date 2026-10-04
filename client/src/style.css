@@ -173,9 +173,17 @@ pre {
   gap: 0.85rem;
   height: var(--topbar-height);
   padding: 0 1rem;
-  background: rgba(10, 10, 15, 0.85);
-  backdrop-filter: blur(12px);
+  /* Opaque on a phone: blurring whatever scrolls under the bar is a full
+     repaint of it on every frame of a scroll, and a phone has neither the
+     GPU for it nor the screen to show the page through a bar. */
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
+}
+@media (min-width: 768px) {
+  .topbar {
+    background: rgba(10, 10, 15, 0.85);
+    backdrop-filter: blur(12px);
+  }
 }
 
 .topbar .brand {
