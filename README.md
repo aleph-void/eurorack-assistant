@@ -397,14 +397,21 @@ The setup script does everything (Ubuntu is the supported target for automatic
 installation; on other distros install Docker yourself first):
 
 1. installs `docker.io` + `docker-compose-v2` via apt if missing,
-2. installs the `claude` and `codex` CLIs if missing (each user connects
-   their own Claude or Codex account in the web UI afterwards),
-3. generates `.env` (random database password), builds the images, migrates
+2. installs Node.js 26 from [NodeSource](https://github.com/nodesource/distributions)'s
+   apt repository when the host's `node` is missing or older (Ubuntu's own
+   `nodejs` package is too old for the CLIs), then the `claude` and `codex`
+   CLIs if missing (each user connects their own Claude or Codex account in
+   the web UI afterwards),
+3. installs the [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+   from AWS's installer if missing, for the daily S3 backup below (not fatal
+   when it cannot: the backup job falls back to the `amazon/aws-cli`
+   container),
+4. generates `.env` (random database password), builds the images, migrates
    the database, and
-4. creates the `admin` account — **its random password is printed once during
+5. creates the `admin` account — **its random password is printed once during
    setup and stored only as a bcrypt hash**. The admin must set their own
    password at the first login, and
-5. installs `/etc/systemd/system/eurorack-assistant.service` (rendered from
+6. installs `/etc/systemd/system/eurorack-assistant.service` (rendered from
    `deploy/eurorack-assistant.service`) and enables it, so the stack comes up at
    boot. The containers' own `restart: unless-stopped` covers crashes and
    reboots only until someone runs `docker compose stop` — after that Docker
@@ -510,8 +517,9 @@ docker compose cp llm-token.key server:/data/keys/llm-token.key && docker compos
 ```
 
 **Credentials.** The job runs as root through systemd and uses the AWS CLI
-when one is on `PATH`, else the `amazon/aws-cli` container image (so a host
-with docker needs nothing installed). Give it access any one of these ways:
+when one is on `PATH` (`setup.sh` installs v2), else the `amazon/aws-cli`
+container image (so a host with docker still works without it). Give it
+access any one of these ways:
 an instance role on the host, `sudo aws configure` (root's `~/.aws`), or
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` lines in `.env` (which the
 installer makes `0600`). The identity needs `s3:PutObject`,
