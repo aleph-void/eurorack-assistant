@@ -39,6 +39,9 @@ export function createApp(
     exportsDir,
     capturesDir,
     panelsDir,
+    // The nginx-internal prefix panel files are served under, when nginx
+    // sends them itself (routes/panels.js); null streams them from here.
+    panelsAccelPrefix = null,
     videosDir,
     rateLimit,
     hub,
@@ -114,7 +117,7 @@ export function createApp(
   app.use('/api/systems', systemRoutes(db));
   app.use('/api/racks', rackRoutes(db, { fetchImpl, runImpl }));
   app.use('/api/manuals', manualRoutes(db, { manualsDir }));
-  app.use('/api/panels', panelRoutes(db, { panelsDir }));
+  app.use('/api/panels', panelRoutes(db, { panelsDir, accelPrefix: panelsAccelPrefix }));
   app.use('/api/imports', importRoutes(db));
   app.use('/api/questions', questionRoutes(db));
   app.use('/api/config', configRoutes(db, { mailImpl }));

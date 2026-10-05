@@ -101,7 +101,11 @@ export function moduleManualRoutes(db, { manualsDir }) {
     // than part of this request: it shells out to pdftotext, which a browser
     // upload should not have to wait on. A re-upload of a document that has
     // already been extracted needs nothing done again.
-    const hasText = await ManualDocument.findOne({ where: { manual_id: manual.id } });
+    const hasText = await ManualDocument.findOne({
+      where: { manual_id: manual.id },
+      // Only whether a row exists; the row carries the whole extracted text.
+      attributes: ['id'],
+    });
     const queued = hasText
       ? null
       : await enqueueExtractManual(db, manual.get({ plain: true }), req.user.id);

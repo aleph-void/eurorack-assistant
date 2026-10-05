@@ -8,6 +8,48 @@
 //
 // Split out of jobs/worker.js, which is the queue engine itself.
 
+// The job types whose payload names what the job is about — export_rack its
+// rack and, once complete, the download link; trim_panels the system it
+// sweeps; generate_patch and patch_turn the patch they are wiring up. Every
+// other type's payload is read by its handler alone, and an import's is the
+// whole pasted file.
+const LABELLED_JOB_TYPES = new Set(['export_rack', 'trim_panels', 'generate_patch', 'patch_turn']);
+
+const NO_LABELS = Object.freeze({
+  rack_name: null,
+  system_name: null,
+  patch_id: null,
+  patch_name: null,
+  download: null,
+});
+
+// What a job's payload says about its target, in the shape the jobs API and
+// the job events both carry. An import emits hundreds of progress lines and
+// every one of them used to parse the whole payload again, so the last
+// payload parsed is remembered: the same string answers the same way.
+let lastPayload = null;
+let lastLabels = NO_LABELS;
+export function payloadLabels(job) {
+  if (!job.payload || !LABELLED_JOB_TYPES.has(job.type)) return NO_LABELS;
+  if (job.payload === lastPayload) return lastLabels;
+  let labels = NO_LABELS;
+  try {
+    const payload = JSON.parse(job.payload);
+    labels = {
+      rack_name: payload.rack_name ?? null,
+      system_name: payload.system_name ?? null,
+      patch_id: payload.patch_id ?? null,
+      patch_name: payload.patch_name ?? null,
+      download: payload.download ?? null,
+    };
+  } catch {
+    // payload is not JSON (never the case for export, trim or patch jobs)
+  }
+  lastPayload = job.payload;
+  lastLabels = labels;
+  return labels;
+}
+
 export function createJobEvents(db, { bus = null, log = () => {} } = {}) {
   // The user a job belongs to. Every job is stamped with the user who caused
   // it at enqueue time; job status and progress events are visible to that
@@ -53,26 +95,7 @@ export function createJobEvents(db, { bus = null, log = () => {} } = {}) {
       module_name = null,
       question_prompt = null,
     } = job;
-    // export_rack jobs carry their target rack and, once complete, the
-    // download link in the payload; trim_panels carries the system it sweeps;
-    // generate_patch carries the patch it is wiring up.
-    let rack_name = null;
-    let system_name = null;
-    let patch_id = null;
-    let patch_name = null;
-    let download = null;
-    if (job.payload) {
-      try {
-        const payload = JSON.parse(job.payload);
-        rack_name = payload.rack_name ?? null;
-        system_name = payload.system_name ?? null;
-        patch_id = payload.patch_id ?? null;
-        patch_name = payload.patch_name ?? null;
-        download = payload.download ?? null;
-      } catch {
-        // payload is not JSON (never the case for export, trim or patch jobs)
-      }
-    }
+    const { rack_name, system_name, patch_id, patch_name, download } = payloadLabels(job);
     return {
       id,
       type,

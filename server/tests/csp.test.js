@@ -185,6 +185,21 @@ describe('the client shell policy', () => {
     expect(policy).not.toMatch(/connect-src[^;"]*\bwss?:(?!\/\/)/);
   });
 
+  // nginx sends panel pictures itself on the API's X-Accel-Redirect, and a
+  // redirect drops the API's CSP on the floor: the internal location has to
+  // say the stored-file policy again, word for word, in both vhosts.
+  it('gives the panel files nginx sends the stored-file policy', () => {
+    for (const file of ['nginx.conf', 'tls.conf.template']) {
+      const vhost = readNginx(file);
+      const location = vhost.slice(vhost.indexOf('location /_panels/'));
+      const block = location.slice(0, location.indexOf('}'));
+      expect(block).toContain('internal;');
+      expect(block).toContain('alias /data/panels/;');
+      expect(block).toContain(`add_header Content-Security-Policy "${STORED_FILE_POLICY}";`);
+      expect(block).toContain('add_header X-Content-Type-Options nosniff;');
+    }
+  });
+
   it('is carried by every location that serves the client, in both vhosts', () => {
     const headers = readNginx('csp-headers.conf');
     expect(headers).toContain('add_header Content-Security-Policy $csp_enforced');

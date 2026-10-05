@@ -87,43 +87,65 @@ export function noteRoutes(db) {
   // never shareable in their own right), so they must not ride out on a note
   // share — only the note's text and the global hardware facts it references
   // (modules, components) do.
-  async function noteWithAttachments(note, { includePrivate = true } = {}) {
-    const moduleLinks = await NoteModule.findAll({
-      where: { note_id: note.id },
-      include: Module,
-      order: [
-        [Module, 'manufacturer', 'ASC'],
-        [Module, 'name', 'ASC'],
-      ],
-    });
-    const componentLinks = await NoteComponent.findAll({
-      where: { note_id: note.id },
-      include: [{ model: ModuleComponent, include: [Module] }],
-      order: [[ModuleComponent, 'id', 'ASC']],
-    });
-    const patchLinks = includePrivate
-      ? await NotePatch.findAll({
-          where: { note_id: note.id },
-          include: Patch,
-          order: [[Patch, 'id', 'ASC']],
-        })
-      : [];
-    // Waveform captures filed under this note travel with it — but only for
-    // the owner; a share recipient never sees them.
-    const captures = includePrivate
-      ? await Capture.findAll({
-          where: { note_id: note.id },
-          order: [['id', 'ASC']],
-        })
-      : [];
-    return {
+  //
+  // The list is served whole, so the four link tables are read once for all
+  // of its notes and dealt out in JS — four queries per note was eight
+  // hundred fired at once for a notebook of two hundred.
+  async function notesWithAttachments(notes, { includePrivate = true } = {}) {
+    if (notes.length === 0) return [];
+    const ids = notes.map((note) => note.id);
+    const [moduleLinks, componentLinks, patchLinks, captures] = await Promise.all([
+      NoteModule.findAll({
+        where: { note_id: ids },
+        include: Module,
+        order: [
+          [Module, 'manufacturer', 'ASC'],
+          [Module, 'name', 'ASC'],
+        ],
+      }),
+      NoteComponent.findAll({
+        where: { note_id: ids },
+        include: [{ model: ModuleComponent, include: [Module] }],
+        order: [[ModuleComponent, 'id', 'ASC']],
+      }),
+      includePrivate
+        ? NotePatch.findAll({
+            where: { note_id: ids },
+            include: Patch,
+            order: [[Patch, 'id', 'ASC']],
+          })
+        : [],
+      // Waveform captures filed under a note travel with it — but only for
+      // the owner; a share recipient never sees them.
+      includePrivate
+        ? Capture.findAll({
+            where: { note_id: ids },
+            order: [['id', 'ASC']],
+          })
+        : [],
+    ]);
+    // Dealt out per note in the order the query sorted them, which a filter
+    // keeps.
+    const byNote = (rows) => {
+      const map = new Map();
+      for (const row of rows) {
+        if (!map.has(row.note_id)) map.set(row.note_id, []);
+        map.get(row.note_id).push(row);
+      }
+      return (noteId) => map.get(noteId) ?? [];
+    };
+    const modulesOf = byNote(moduleLinks);
+    const componentsOf = byNote(componentLinks);
+    const patchesOf = byNote(patchLinks);
+    const capturesOf = byNote(captures);
+    return notes.map((note) => ({
       ...(typeof note.get === 'function' ? note.get({ plain: true }) : note),
-      modules: moduleLinks.map(({ Module: m }) => ({
+      modules: modulesOf(note.id).map(({ Module: m }) => ({
         id: m.id,
         manufacturer: m.manufacturer,
         name: m.name,
       })),
-      components: componentLinks.map(({ ModuleComponent: mc }) => ({
+      components: componentsOf(note.id).map(({ ModuleComponent: mc }) => ({
         id: mc.id,
         name: mc.name,
         type: mc.type,
@@ -131,12 +153,12 @@ export function noteRoutes(db) {
         module_manufacturer: mc.Module.manufacturer,
         module_name: mc.Module.name,
       })),
-      patches: patchLinks.map(({ Patch: p }) => ({
+      patches: patchesOf(note.id).map(({ Patch: p }) => ({
         id: p.id,
         name: p.name,
         rack_name: p.rack_name,
       })),
-      captures: captures.map((c) => ({
+      captures: capturesOf(note.id).map((c) => ({
         id: c.id,
         title: c.title,
         caption: c.caption,
@@ -146,7 +168,11 @@ export function noteRoutes(db) {
         image_height: c.image_height,
         captured_at: c.captured_at,
       })),
-    };
+    }));
+  }
+
+  async function noteWithAttachments(note, options) {
+    return (await notesWithAttachments([note], options))[0];
   }
 
   async function ownNote(userId, id) {
@@ -170,7 +196,7 @@ export function noteRoutes(db) {
         ['id', 'DESC'],
       ],
     });
-    res.json(await Promise.all(notes.map((n) => noteWithAttachments(n))));
+    res.json(await notesWithAttachments(notes));
   }));
 
   // Body: { body, title?, module_ids?, component_ids?, patch_ids? }

@@ -348,8 +348,26 @@ export function patchCoreRoutes(db) {
     const otherIds = others.map((p) => p.id);
     if (otherIds.length === 0 || mine.length === 0) return res.json({ suggestions: [] });
 
-    const otherModules = await PatchModule.findAll({ where: { patch_id: otherIds } });
-    const otherCables = await PatchCable.findAll({ where: { patch_id: otherIds } });
+    // A habit is only worth suggesting between modules THIS patch holds, so
+    // the other patches' instances are read for those modules alone — a
+    // library of whole-studio patches is tens of thousands of instances,
+    // and the few columns a habit is made of are all that is read of them.
+    const myModuleIds = [...new Set(mine.map((pm) => pm.module_id))];
+    const otherModules = await PatchModule.findAll({
+      where: { patch_id: otherIds, module_id: myModuleIds },
+      attributes: ['id', 'module_id'],
+    });
+    if (otherModules.length === 0) return res.json({ suggestions: [] });
+    const otherCables = await PatchCable.findAll({
+      where: { from_patch_module_id: otherModules.map((pm) => pm.id) },
+      attributes: [
+        'patch_id',
+        'from_patch_module_id',
+        'from_component_id',
+        'to_patch_module_id',
+        'to_component_id',
+      ],
+    });
     const moduleOfInstance = new Map(otherModules.map((pm) => [pm.id, pm.module_id]));
 
     // One entry per (module, jack) → (module, jack) pair, counting the
@@ -379,7 +397,10 @@ export function patchCoreRoutes(db) {
     const componentIds = [
       ...new Set([...habits.values()].flatMap((h) => [h.from_component_id, h.to_component_id])),
     ];
-    const components = await ModuleComponent.findAll({ where: { id: componentIds } });
+    const components = await ModuleComponent.findAll({
+      where: { id: componentIds },
+      attributes: ['id', 'module_id', 'name'],
+    });
     const componentById = new Map(components.map((c) => [c.id, c]));
 
     const instancesOf = (moduleId) => mine.filter((pm) => pm.module_id === moduleId);

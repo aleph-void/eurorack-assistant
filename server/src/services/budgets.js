@@ -61,11 +61,16 @@ export function limitFor(user, settings) {
 //
 // Summed in JS rather than with GROUP BY: the rows are small, the window is
 // bounded, and the test database (pg-mem) is happier with a plain select than
-// with an aggregate it has to reimplement.
-export async function usageByUser(db, since) {
+// with an aggregate it has to reimplement. `userIds` narrows the read to the
+// users the caller is about to look up: a month of every account's runs is
+// read on every request that starts a job, and the guard wants one of them.
+export async function usageByUser(db, since, { userIds = null } = {}) {
   const rows = await db.models.LlmUsage.findAll({
     attributes: ['user_id', 'total_tokens', 'cost_usd'],
-    where: { created_at: { [Op.gte]: since } },
+    where: {
+      created_at: { [Op.gte]: since },
+      ...(userIds ? { user_id: userIds } : {}),
+    },
   });
   const totals = new Map();
   for (const row of rows) {
@@ -85,7 +90,11 @@ export async function budgetStatus(db, user, now = Date.now()) {
   const settings = await getBudgetSettings(db);
   const limit = limitFor(user, settings);
   const since = new Date(now - settings.windowMs);
-  const spent = (await usageByUser(db, since)).get(user.id) ?? { tokens: 0, cost: 0, runs: 0 };
+  const spent = (await usageByUser(db, since, { userIds: [user.id] })).get(user.id) ?? {
+    tokens: 0,
+    cost: 0,
+    runs: 0,
+  };
   return {
     period: settings.period,
     window_ms: settings.windowMs,
@@ -115,7 +124,9 @@ export async function exhaustedUserIds(db, now = Date.now()) {
   }
   if (limits.size === 0) return new Set();
 
-  const totals = await usageByUser(db, new Date(now - settings.windowMs));
+  const totals = await usageByUser(db, new Date(now - settings.windowMs), {
+    userIds: [...limits.keys()],
+  });
   const exhausted = new Set();
   for (const [userId, limit] of limits) {
     if ((totals.get(userId)?.tokens ?? 0) >= limit) exhausted.add(userId);
@@ -153,6 +164,10 @@ export async function recordUsage(db, usage, { userId = null, jobId = null, jobT
 export function requireBudget(db) {
   return async (req, res, next) => {
     try {
+      // A user with no ceiling has nothing to measure against, so their
+      // usage is not read at all — which is every user on an install that
+      // never set a budget, on every request that starts a job.
+      if (limitFor(req.user, await getBudgetSettings(db)) === 0) return next();
       const status = await budgetStatus(db, req.user);
       if (!status.exhausted) {
         req.budget = status;

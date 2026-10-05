@@ -512,6 +512,11 @@ export function createWorker(db, options = {}) {
       // tokens). The pause clears itself here once its time has passed, so
       // the next wake-up drains the queue that has been piling up.
       if (await queuePaused()) return;
+      // An idle queue is the usual case, and it is asked about once rather
+      // than by every runner in turn: a runner's claim is three reads
+      // (budgets, account pauses, the page) and a quiet server was making
+      // them `import_workers` times every tick.
+      if ((await db.models.Job.count({ where: { status: 'pending' } })) === 0) return;
       // The worker count is admin-configurable (app_config.import_workers)
       // and re-read on every wake-up, so changes apply without a restart.
       let workers = DEFAULT_IMPORT_WORKERS;

@@ -108,6 +108,8 @@ onMounted(load);
               :src="`/api/captures/${capture.id}/image`"
               :alt="capture.title || `Capture ${capture.id}`"
               style="max-width: 100%; height: auto"
+              loading="lazy"
+              decoding="async"
               :data-test="`patch-note-capture-${capture.id}`"
             />
           </div>

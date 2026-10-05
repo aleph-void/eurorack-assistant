@@ -1,6 +1,7 @@
 import { Op } from 'sequelize';
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
+import { payloadLabels } from '../jobs/jobEvents.js';
 import { isStalled, resetJobTarget } from '../jobs/worker.js';
 import { getQueuePause, resumeQueue } from '../services/config.js';
 import { asyncHandler } from './asyncHandler.js';
@@ -91,24 +92,8 @@ export function jobRoutes(db, { bus = null } = {}) {
         // export_rack jobs carry their target rack and, while the zip is
         // still on disk, the download link in the payload; trim_panels
         // carries the system whose panels it sweeps; generate_patch the
-        // patch it wires up.
-        let rack_name = null;
-        let system_name = null;
-        let patch_id = null;
-        let patch_name = null;
-        let download = null;
-        if (job.payload) {
-          try {
-            const payload = JSON.parse(job.payload);
-            rack_name = payload.rack_name ?? null;
-            system_name = payload.system_name ?? null;
-            patch_id = payload.patch_id ?? null;
-            patch_name = payload.patch_name ?? null;
-            download = payload.download ?? null;
-          } catch {
-            // payload is not JSON
-          }
-        }
+        // patch it wires up (jobs/jobEvents.js).
+        const { rack_name, system_name, patch_id, patch_name, download } = payloadLabels(job);
         return {
           id,
           type,

@@ -19,6 +19,10 @@ const asLlmPause = (event) => ({
   reason: event?.reason || '',
 });
 
+// Every feed line gets the next of these. One counter for the module, so the
+// lines are told apart across a clear and across the stores of several tests.
+let nextFeedId = 1;
+
 // Job list + live progress feed. WebSocket events land here via applyEvent().
 export const useJobsStore = defineStore('jobs', {
   state: () => ({
@@ -237,6 +241,10 @@ export const useJobsStore = defineStore('jobs', {
         this.triggerDownload(event.job.download);
       }
       this.feed.unshift({
+        // The one thing a line is keyed on in a list that grows at the TOP:
+        // keyed by position, every line below a new one was a different
+        // line, and the whole feed re-rendered for each.
+        id: nextFeedId++,
         at: event.at,
         jobId: event.job.id,
         type: event.job.type,

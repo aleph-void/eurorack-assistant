@@ -134,8 +134,11 @@ export function createManualsHandlers(db, {
       order: [['id', 'ASC']],
     });
     for (const document of saved) {
+      // Only whether a row exists: the row itself carries the whole
+      // extracted text.
       const extracted = await db.models.ManualDocument.findOne({
         where: { manual_id: document.id },
+        attributes: ['id'],
       });
       if (!extracted && (await enqueueExtractManual(db, document, job.user_id))) {
         progress(`queued text extraction: ${document.original_name || `${document.hash}.pdf`}`);

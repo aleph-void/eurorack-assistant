@@ -67,9 +67,13 @@ async function load() {
   // import. Reloading here is the moment to let theirs go.
   refreshRackModules();
   try {
-    racks.value = await api.get('/api/racks');
+    // Neither read needs the other, so they go out together rather than one
+    // round trip after the other.
     const query = selectedRack.value ? `?rack_id=${selectedRack.value}` : '';
-    modules.value = await api.get(`/api/modules${query}`);
+    [racks.value, modules.value] = await Promise.all([
+      api.get('/api/racks'),
+      api.get(`/api/modules${query}`),
+    ]);
   } catch (e) {
     error.value = e.message;
   } finally {

@@ -53,8 +53,17 @@ async function removeVideo(video) {
   }
 }
 
-// The analysis summary is model-written markdown; render it like an answer.
-const summaryHtml = (video) => DOMPurify.sanitize(marked.parse(video.summary || ''));
+// The analysis summary is model-written markdown; render it like an answer —
+// once per video when the list changes, not from the template on every
+// render, since parsing and sanitizing a page of markdown is not free.
+const summaryHtml = computed(
+  () =>
+    new Map(
+      (props.module.videos ?? [])
+        .filter((video) => video.summary)
+        .map((video) => [video.id, DOMPurify.sanitize(marked.parse(video.summary))])
+    )
+);
 
 const length = (video) =>
   video.duration_seconds ? `${Math.round(video.duration_seconds / 60)} min` : '';
@@ -129,7 +138,7 @@ const working = (status) => ['pending', 'downloading', 'downloaded', 'analyzing'
                   <details v-if="video.summary" :data-test="`video-summary-${video.id}`">
                     <summary>Techniques</summary>
                     <!-- eslint-disable-next-line vue/no-v-html -- sanitized with DOMPurify -->
-                    <div class="answer" v-html="summaryHtml(video)"></div>
+                    <div class="answer" v-html="summaryHtml.get(video.id)"></div>
                   </details>
                   <p
                     v-else-if="video.error"

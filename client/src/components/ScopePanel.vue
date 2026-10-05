@@ -686,6 +686,8 @@ watch(canOverlay, (can) => {
             :src="`/api/captures/${row.id}/image`"
             :alt="row.title || `Capture ${row.id}`"
             style="max-width: 100%; height: auto"
+            loading="lazy"
+            decoding="async"
             :data-test="`capture-image-${row.id}`"
           />
           <div v-if="row.channels?.length" class="table-wrap">
