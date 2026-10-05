@@ -254,58 +254,56 @@ onMounted(load);
 
   <div class="panel">
     <h2>Create user</h2>
-    <p class="muted">New accounts are regular (non-admin) users.</p>
-    <p
-      v-if="registration?.limit > 0"
-      :class="registrationClosed ? 'error' : 'muted'"
-      data-test="registration"
-    >
-      <template v-if="registrationClosed">
-        Registration is closed: {{ registration.active }} of {{ registration.limit }} active users
-        (anyone who logged in within the last {{ registration.window_days }} days). Raise the
-        maximum on the Configuration page to add more.
-      </template>
-      <template v-else>
+    <!-- At the ceiling there is nothing to fill in: the form goes, and the
+         message stands where it was. -->
+    <p v-if="registrationClosed" class="error" data-test="registration-closed">
+      Registration is closed: {{ registration.active }} of {{ registration.limit }} active users
+      (anyone who logged in within the last {{ registration.window_days }} days). Raise the
+      maximum on the Configuration page to add more.
+    </p>
+    <template v-else>
+      <p class="muted">New accounts are regular (non-admin) users.</p>
+      <p v-if="registration?.limit > 0" class="muted" data-test="registration">
         {{ registration.active }} of {{ registration.limit }} active users (anyone who logged in
         within the last {{ registration.window_days }} days); registration closes at the maximum,
         set on the Configuration page.
-      </template>
-    </p>
-    <form @submit.prevent="createUser">
-      <div class="row">
-        <div>
-          <label for="new-username">Username</label>
-          <input id="new-username" v-model="username" data-test="username" required />
+      </p>
+      <form @submit.prevent="createUser">
+        <div class="row">
+          <div>
+            <label for="new-username">Username</label>
+            <input id="new-username" v-model="username" data-test="username" required />
+          </div>
+          <div>
+            <label for="new-email">Email</label>
+            <input
+              id="new-email"
+              v-model="email"
+              data-test="email"
+              type="email"
+              autocomplete="off"
+              placeholder="name@example.com"
+              required
+            />
+          </div>
+          <div>
+            <label for="new-password">Password (min 8 chars, blank to generate)</label>
+            <!-- minlength only applies when a value is present, so leaving the
+                 field blank still generates a password. -->
+            <input
+              id="new-password"
+              v-model="password"
+              data-test="password"
+              type="text"
+              minlength="8"
+            />
+          </div>
+          <div class="shrink">
+            <button type="submit" :disabled="busy" data-test="create">Create</button>
+          </div>
         </div>
-        <div>
-          <label for="new-email">Email</label>
-          <input
-            id="new-email"
-            v-model="email"
-            data-test="email"
-            type="email"
-            autocomplete="off"
-            placeholder="name@example.com"
-            required
-          />
-        </div>
-        <div>
-          <label for="new-password">Password (min 8 chars, blank to generate)</label>
-          <!-- minlength only applies when a value is present, so leaving the
-               field blank still generates a password. -->
-          <input
-            id="new-password"
-            v-model="password"
-            data-test="password"
-            type="text"
-            minlength="8"
-          />
-        </div>
-        <div class="shrink">
-          <button type="submit" :disabled="busy || registrationClosed" data-test="create">Create</button>
-        </div>
-      </div>
-    </form>
+      </form>
+    </template>
     <p v-if="error" class="error" data-test="error">{{ error }}</p>
     <div v-if="created" class="password-reveal" data-test="created">
       <p style="margin: 0 0 0.4rem">

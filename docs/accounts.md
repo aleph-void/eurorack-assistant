@@ -69,7 +69,7 @@ page) closes registration once the active count has reached it. The only
 way an account is registered is the admin's Create user form, so that is
 what is refused: `POST /api/users` answers 409 with `code:
 'registration_closed'` and the numbers in the message, and the Users page
-says the same above the form, which it disables.
+takes the form away and says the same in its place.
 `GET /api/users/registration` is the state the page reads (`{ limit,
 active, window_days, open }`), and each user in the list carries `active`,
 so the ones who do not count are marked.

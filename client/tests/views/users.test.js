@@ -232,7 +232,8 @@ describe('UsersView registration', () => {
     const wrapper = mount(UsersView, { global: testGlobal() });
     await flushPromises();
     expect(wrapper.find('[data-test="registration"]').exists()).toBe(false);
-    expect(wrapper.find('[data-test="create"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('[data-test="registration-closed"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="create"]').exists()).toBe(true);
   });
 
   it('counts the active users against the ceiling while there is room', async () => {
@@ -242,18 +243,21 @@ describe('UsersView registration', () => {
     const line = wrapper.find('[data-test="registration"]');
     expect(line.text()).toContain('7 of 10 active users');
     expect(line.classes()).not.toContain('error');
-    expect(wrapper.find('[data-test="create"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('[data-test="create"]').exists()).toBe(true);
   });
 
-  it('closes the form at the ceiling and marks the users who do not count', async () => {
+  it('replaces the form with a closed notice at the ceiling and marks the users who do not count', async () => {
     const bob = { id: 2, username: 'bob', is_admin: false, email: 'b@example.com', created_at: '2026-01-01T00:00:00Z', last_login_at: '2026-02-01T00:00:00Z', active: false };
     api.get.mockImplementation(byPath([admin, bob], { limit: 10, active: 10, window_days: 14, open: false }));
     const wrapper = mount(UsersView, { global: testGlobal() });
     await flushPromises();
-    const line = wrapper.find('[data-test="registration"]');
-    expect(line.text()).toContain('Registration is closed: 10 of 10 active users');
-    expect(line.classes()).toContain('error');
-    expect(wrapper.find('[data-test="create"]').attributes('disabled')).toBeDefined();
+    const notice = wrapper.find('[data-test="registration-closed"]');
+    expect(notice.text()).toContain('Registration is closed: 10 of 10 active users');
+    expect(notice.classes()).toContain('error');
+    // No form at all: nothing to type into while nobody can be made.
+    expect(wrapper.find('[data-test="create"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="username"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="registration"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="inactive-1"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="inactive-2"]').text()).toBe('inactive');
   });
