@@ -27,6 +27,7 @@ vi.mock('vue-router', async (importOriginal) => {
 import { api } from '../src/api.js';
 import { createProgressSocket } from '../src/progressSocket.js';
 import App from '../src/App.vue';
+import RecordNavigation from '../src/components/RecordNavigation.vue';
 import { useAuthStore } from '../src/stores/auth.js';
 import { useJobsStore } from '../src/stores/jobs.js';
 import { useDevicesStore } from '../src/stores/devices.js';
@@ -55,7 +56,51 @@ function mountApp(user = { id: 1, username: 'nick', is_admin: false }) {
   };
 }
 
+function mountRecordNavigation() {
+  const global = testGlobal();
+  const wrapper = mount(RecordNavigation, { global });
+  return { wrapper, detail: useDetailStore() };
+}
+
 describe('App', () => {
+  it('keeps the app menu stable and record sections inside the page', async () => {
+    const { wrapper, detail } = mountApp();
+    await flushPromises();
+    const menu = wrapper.find('#main-nav');
+    const destinations = menu.findAll('a').map((link) => link.attributes('to'));
+    detail.set('patch', '4', 'Krell');
+    route.path = '/patches/4/notes';
+    await nextTick();
+    expect(menu.findAll('a').map((link) => link.attributes('to'))).toEqual(destinations);
+    expect(menu.find('[data-test="nav-detail-heading"]').exists()).toBe(false);
+    expect(wrapper.find('main [data-test="nav-detail-heading"]').exists()).toBe(true);
+    expect(menu.find('[data-test="nav-patches"]').attributes('aria-current')).toBe('location');
+    expect(wrapper.find('[data-test="nav-detail-notes"]').attributes('aria-current')).toBe('page');
+    expect(wrapper.find('[data-test="nav-detail-index"]').classes()).not.toContain('current');
+    expect(menu.find('[data-test="nav-section-account"] [data-test="nav-llm"]').exists()).toBe(true);
+    route.path = undefined;
+    wrapper.unmount();
+  });
+
+  it('moves focus into the menu, traps Tab, and restores focus on Escape', async () => {
+    const global = testGlobal();
+    useAuthStore().user = { id: 1, username: 'nick' };
+    const wrapper = mount(App, { global, attachTo: document.body });
+    await flushPromises();
+    const toggle = wrapper.find('[data-test="nav-toggle"]');
+    await toggle.trigger('click');
+    const close = wrapper.find('[aria-label="Close menu"]');
+    expect(document.activeElement).toBe(close.element);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true }));
+    expect(document.activeElement).toBe(wrapper.find('[data-test="logout"]').element);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }));
+    expect(document.activeElement).toBe(close.element);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await nextTick();
+    expect(document.activeElement).toBe(toggle.element);
+    wrapper.unmount();
+  });
+
   it('opens one progress socket for a logged-in user and closes it on logout', async () => {
     const { wrapper, auth } = mountApp();
     await flushPromises();
@@ -202,14 +247,14 @@ describe('App', () => {
 
   // A module and a patch are each a dozen routes over one record, so the
   // drawer answers with that record's own pages while one of them is open.
-  it('offers the open module’s pages at the top of the drawer', async () => {
-    const { wrapper, detail } = mountApp();
+  it('offers the module’s grouped sections within the page', async () => {
+    const { wrapper, detail } = mountRecordNavigation();
     await flushPromises();
     expect(wrapper.find('[data-test="nav-detail-heading"]').exists()).toBe(false);
 
     const claim = detail.set('module', '4', 'Make Noise Maths');
     await nextTick();
-    expect(wrapper.find('[data-test="nav-detail-heading"]').text()).toBe('Make Noise Maths');
+    expect(wrapper.find('[data-test="nav-detail-heading"]').text()).toBe('Explore this module');
     expect(wrapper.find('[data-test="nav-detail-index"]').attributes('to')).toBe('/modules/4');
     expect(wrapper.find('[data-test="nav-detail-components"]').attributes('to')).toBe(
       '/modules/4/components'
@@ -242,7 +287,7 @@ describe('App', () => {
     detail.set('module', '5', 'Mutable Rings');
     detail.clear(claim);
     await nextTick();
-    expect(wrapper.find('[data-test="nav-detail-heading"]').text()).toBe('Mutable Rings');
+    expect(wrapper.find('[data-test="nav-detail-heading"]').text()).toBe('Explore this module');
 
     detail.clear(detail.claim);
     await nextTick();
@@ -252,7 +297,7 @@ describe('App', () => {
   });
 
   it('offers the open patch’s pages instead, when a patch is what is open', async () => {
-    const { wrapper, detail } = mountApp();
+    const { wrapper, detail } = mountRecordNavigation();
     await flushPromises();
 
     detail.set('patch', '7', 'Krell');
@@ -279,7 +324,7 @@ describe('App', () => {
   // line per group — a module is twenty-seven pages and for most modules
   // half of them are blank.
   it('badges the full pages and folds the empty ones away', async () => {
-    const { wrapper, detail } = mountApp();
+    const { wrapper, detail } = mountRecordNavigation();
     await flushPromises();
 
     detail.set('module', '4', 'Make Noise Maths', {
@@ -334,7 +379,7 @@ describe('App', () => {
   // The record's name is also the fold for its whole block of pages, so the
   // rest of the app is one tap away instead of a scroll past thirty links.
   it('folds the whole record block behind its heading, and opens it for the next record', async () => {
-    const { wrapper, detail } = mountApp();
+    const { wrapper, detail } = mountRecordNavigation();
     await flushPromises();
 
     detail.set('module', '4', 'Make Noise Maths');
@@ -344,8 +389,8 @@ describe('App', () => {
     await wrapper.find('[data-test="nav-detail-heading"]').trigger('click');
     expect(wrapper.find('[data-test="nav-detail-index"]').exists()).toBe(false);
     // The heading itself, and the rest of the app, stay where they were.
-    expect(wrapper.find('[data-test="nav-detail-heading"]').text()).toBe('Make Noise Maths');
-    expect(wrapper.text()).toContain('Your system');
+    expect(wrapper.find('[data-test="nav-detail-heading"]').text()).toBe('Explore this module');
+    expect(wrapper.find('[data-test="nav-detail-heading"]').exists()).toBe(true);
 
     await wrapper.find('[data-test="nav-detail-heading"]').trigger('click');
     expect(wrapper.find('[data-test="nav-detail-index"]').exists()).toBe(true);
