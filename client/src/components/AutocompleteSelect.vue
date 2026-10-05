@@ -33,7 +33,8 @@ const listEl = ref(null);
 
 // Stable per instance: the ids that tie the input to its list for assistive
 // technology (aria-controls / aria-activedescendant).
-const listId = `ac-${(uid += 1)}`;
+uid += 1;
+const listId = `ac-${uid}`;
 
 const same = (a, b) => String(a) === String(b);
 const selectedOption = computed(
