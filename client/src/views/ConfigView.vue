@@ -12,6 +12,7 @@ const budgetDefault = ref(0);
 const budgetPeriod = ref('month');
 const youtubeApiKey = ref('');
 const discordInviteUrl = ref('');
+const maxActiveUsers = ref(0);
 const error = ref('');
 const saved = ref(false);
 const busy = ref(false);
@@ -28,6 +29,7 @@ onMounted(async () => {
     budgetPeriod.value = config.value.token_budget_period || 'month';
     youtubeApiKey.value = config.value.youtube_api_key || '';
     discordInviteUrl.value = config.value.discord_invite_url || '';
+    maxActiveUsers.value = Number(config.value.max_active_users) || 0;
   } catch (e) {
     error.value = e.message;
   }
@@ -46,6 +48,7 @@ async function save() {
       token_budget_period: budgetPeriod.value,
       youtube_api_key: youtubeApiKey.value,
       discord_invite_url: discordInviteUrl.value,
+      max_active_users: maxActiveUsers.value,
     })) };
     // The server normalizes the address (a bare host becomes https); show
     // what it kept, and put it in this page's own footer at once.
@@ -151,6 +154,27 @@ async function save() {
           data-test="discord-invite-url"
           autocomplete="off"
           placeholder="https://discord.gg/…"
+        />
+      </fieldset>
+
+      <fieldset>
+        <legend>Registration</legend>
+        <p class="muted" style="margin-top: 0">
+          The most active users the app will register. An active user is anyone who logged in
+          within the last two weeks (a new account counts for its first two weeks). At the
+          maximum, the Users page stops creating accounts. Nobody is shut out: a user who comes
+          back after a quiet spell logs in as always, and the maximum is raised to fit them.
+          0 is no maximum.
+        </p>
+        <label for="max-active-users">Maximum active users (0 = no limit)</label>
+        <input
+          id="max-active-users"
+          v-model.number="maxActiveUsers"
+          data-test="max-active-users"
+          type="number"
+          min="0"
+          step="1"
+          required
         />
       </fieldset>
 

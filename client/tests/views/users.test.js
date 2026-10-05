@@ -219,6 +219,46 @@ describe('UsersView', () => {
 });
 
 
+describe('UsersView registration', () => {
+  const admin = { id: 1, username: 'admin', is_admin: true, email: 'a@example.com', created_at: new Date().toISOString(), active: true };
+  const byPath = (users, registration) => (path) => {
+    if (path === '/api/users') return Promise.resolve(users);
+    if (path === '/api/users/registration') return Promise.resolve(registration);
+    return Promise.resolve(null);
+  };
+
+  it('says nothing about a ceiling that is not set', async () => {
+    api.get.mockImplementation(byPath([admin], { limit: 0, active: 1, window_days: 14, open: true }));
+    const wrapper = mount(UsersView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="registration"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="create"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('counts the active users against the ceiling while there is room', async () => {
+    api.get.mockImplementation(byPath([admin], { limit: 10, active: 7, window_days: 14, open: true }));
+    const wrapper = mount(UsersView, { global: testGlobal() });
+    await flushPromises();
+    const line = wrapper.find('[data-test="registration"]');
+    expect(line.text()).toContain('7 of 10 active users');
+    expect(line.classes()).not.toContain('error');
+    expect(wrapper.find('[data-test="create"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('closes the form at the ceiling and marks the users who do not count', async () => {
+    const bob = { id: 2, username: 'bob', is_admin: false, email: 'b@example.com', created_at: '2026-01-01T00:00:00Z', last_login_at: '2026-02-01T00:00:00Z', active: false };
+    api.get.mockImplementation(byPath([admin, bob], { limit: 10, active: 10, window_days: 14, open: false }));
+    const wrapper = mount(UsersView, { global: testGlobal() });
+    await flushPromises();
+    const line = wrapper.find('[data-test="registration"]');
+    expect(line.text()).toContain('Registration is closed: 10 of 10 active users');
+    expect(line.classes()).toContain('error');
+    expect(wrapper.find('[data-test="create"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('[data-test="inactive-1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="inactive-2"]').text()).toBe('inactive');
+  });
+});
+
 describe('UsersView budgets', () => {
   const usersResponse = [
     { id: 1, username: 'admin', is_admin: true, created_at: new Date().toISOString(), token_budget: null },

@@ -14,6 +14,9 @@ const created = ref(null);
 const resetResult = ref(null);
 const busy = ref(false);
 const usage = ref(null);
+// The active-user ceiling and the count against it (GET /api/users/registration).
+const registration = ref(null);
+const registrationClosed = computed(() => registration.value?.limit > 0 && !registration.value.open);
 
 const periodLabels = { day: 'last 24 hours', week: 'last 7 days', month: 'last 30 days' };
 
@@ -26,6 +29,7 @@ async function load() {
   try {
     users.value = await api.get('/api/users');
     usage.value = await api.get('/api/usage');
+    registration.value = await api.get('/api/users/registration');
   } catch (e) {
     error.value = e.message;
   }
@@ -251,6 +255,22 @@ onMounted(load);
   <div class="panel">
     <h2>Create user</h2>
     <p class="muted">New accounts are regular (non-admin) users.</p>
+    <p
+      v-if="registration?.limit > 0"
+      :class="registrationClosed ? 'error' : 'muted'"
+      data-test="registration"
+    >
+      <template v-if="registrationClosed">
+        Registration is closed: {{ registration.active }} of {{ registration.limit }} active users
+        (anyone who logged in within the last {{ registration.window_days }} days). Raise the
+        maximum on the Configuration page to add more.
+      </template>
+      <template v-else>
+        {{ registration.active }} of {{ registration.limit }} active users (anyone who logged in
+        within the last {{ registration.window_days }} days); registration closes at the maximum,
+        set on the Configuration page.
+      </template>
+    </p>
     <form @submit.prevent="createUser">
       <div class="row">
         <div>
@@ -282,7 +302,7 @@ onMounted(load);
           />
         </div>
         <div class="shrink">
-          <button type="submit" :disabled="busy" data-test="create">Create</button>
+          <button type="submit" :disabled="busy || registrationClosed" data-test="create">Create</button>
         </div>
       </div>
     </form>
@@ -483,6 +503,9 @@ onMounted(load);
               </span>
               <span v-if="user.locked_at" class="badge failed" :data-test="`locked-${user.id}`">
                 {{ lockLabel(user) }}
+              </span>
+              <span v-if="user.active === false" class="badge" :data-test="`inactive-${user.id}`">
+                inactive
               </span>
             </td>
             <td data-label="Created" class="muted">{{ new Date(user.created_at).toLocaleDateString() }}</td>

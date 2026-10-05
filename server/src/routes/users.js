@@ -15,6 +15,7 @@ import { revokeUserDeviceTokens } from '../services/deviceAuth.js';
 import { userSystemsSummary } from '../services/systemTransfer.js';
 import { lockUser, unlockUser } from '../services/accountLock.js';
 import { startEmailVerification } from '../services/emailVerification.js';
+import { isActiveUser, registrationStatus, REGISTRATION_CLOSED } from '../services/activeUsers.js';
 import { sendMail } from '../services/mailer.js';
 import { asyncHandler } from './asyncHandler.js';
 
@@ -45,6 +46,8 @@ function publicUser(user) {
     locked_reason: locked_reason ?? null,
     failed_logins: Number(failed_logins || 0),
     last_login_at: iso(last_login_at),
+    // Whether they count against max_active_users (services/activeUsers.js).
+    active: isActiveUser(user),
     // BIGINT arrives from postgres as a string; the API says numbers.
     token_budget: token_budget === null || token_budget === undefined ? null : Number(token_budget),
   };
@@ -76,11 +79,22 @@ export function userRoutes(db, { mailImpl } = {}) {
     res.json(users.map(publicUser));
   }));
 
+  // Whether another account may be made: the active-user ceiling, the
+  // count against it, and the verdict (services/activeUsers.js).
+  router.get('/registration', asyncHandler(async (req, res) => {
+    res.json(await registrationStatus(db));
+  }));
+
   // Admins create non-admin users only. If no password is given, one is
   // generated and returned once in the response (stored only as a hash).
   // The address is required and starts unconfirmed: the confirmation mail
-  // goes out as the account is made.
+  // goes out as the account is made. Refused while the active-user ceiling
+  // is reached — this form is the app's whole registration.
   router.post('/', asyncHandler(async (req, res) => {
+    const registration = await registrationStatus(db);
+    if (!registration.open) {
+      return res.status(409).json({ error: REGISTRATION_CLOSED(registration), code: 'registration_closed' });
+    }
     const { username } = req.body || {};
     let { password } = req.body || {};
     if (!username || !/^[a-zA-Z0-9._-]{2,64}$/.test(username)) {

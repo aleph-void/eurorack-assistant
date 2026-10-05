@@ -25,6 +25,12 @@ export const CONFIG_DEFAULTS = {
   // is a link in the footer every signed-in user sees (GET /api/site), so it
   // is held to the same http(s)-only rule as a resource link.
   discord_invite_url: '',
+  // The most ACTIVE users the app will register (services/activeUsers.js):
+  // 0 is no ceiling. An active user is one who logged in within the last
+  // two weeks; at the ceiling the admin's Create user form is refused, and
+  // a user coming back from a quiet spell raises it rather than being
+  // shut out.
+  max_active_users: '0',
 };
 
 // The keys every signed-in user may read, as opposed to the admin's page.
@@ -84,6 +90,13 @@ export async function setConfig(db, updates) {
         if (normalized.error) throw new Error(`Invalid discord_invite_url: ${normalized.error}`);
         value = normalized.url;
       }
+    }
+    if (key === 'max_active_users') {
+      const n = Number(value);
+      if (typeof value === 'boolean' || String(value).trim() === '' || !Number.isInteger(n) || n < 0) {
+        throw new Error('Invalid max_active_users: must be a whole number of users (0 = no limit)');
+      }
+      value = n;
     }
     if (key === 'import_workers') {
       const n = Number(value);
