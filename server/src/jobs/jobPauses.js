@@ -29,8 +29,11 @@ export function createJobPauses(
     quotaPauseMs,
     // How long the set of out-of-tokens users is reused for (see
     // heldForBudget). Tests that change a budget and expect the very next
-    // claim to see it set this to 0.
-    budgetCacheMs = 2000,
+    // claim to see it set this to 0. Ten seconds: the window it measures is
+    // a day at the shortest, and a pool of runners draining a long import
+    // would otherwise re-read every budgeted user's month of runs a few
+    // times a minute for hours.
+    budgetCacheMs = 10000,
   }
 ) {
   // Set while this process knows the queue is paused, so the runners mid-drain

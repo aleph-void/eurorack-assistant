@@ -282,7 +282,14 @@ const rackStyle = (rack) => {
   };
 };
 const rowStyle = (row) => ({ height: `${(Number(row.unit) || 3) * uPx.value}px` });
-const moduleStyle = (module) => ({ width: `${(Number(module.hp) || 4) * hpPx.value}px` });
+const moduleWidth = (module) => (Number(module.hp) || 4) * hpPx.value;
+const moduleStyle = (module) => ({ width: `${moduleWidth(module)}px` });
+// Each panel is asked for at the width the plan draws it, on a screen of this
+// density: at four pixels an HP a module is a few dozen pixels across, and a
+// flat 256 fetched every one of a studio's panels at that whatever it was
+// drawn at.
+const density = () => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
+const modulePanelUrl = (module) => panelThumbUrl(module.panel, moduleWidth(module), density());
 
 // How much floor there is to arrange on. Saved on the system, because a
 // studio's shape is a property of the studio and not of this browser.
@@ -731,9 +738,11 @@ async function assign(rackId, systemId) {
               >
                 <img
                   v-if="module.panel"
-                  :src="panelThumbUrl(module.panel, 256)"
+                  :src="modulePanelUrl(module)"
                   :style="panelCropStyle(module.panel)"
                   :alt="`${module.manufacturer} ${module.name}`"
+                  loading="lazy"
+                  decoding="async"
                 />
               </div>
             </div>

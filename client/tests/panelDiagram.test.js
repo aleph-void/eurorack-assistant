@@ -264,9 +264,10 @@ describe('panel layout geometry', () => {
     expect(panelImageUrl({ ...panel, url: '/api/panels/abc.png' }, 512)).toBe(
       '/api/panels/abc.png?w=512'
     );
-    // Wanted bigger than any variant: the file itself.
+    // Wanted bigger than any variant: the biggest variant, never the file —
+    // the original is megabytes, and nothing draws a panel wider than this.
     expect(panelImageUrl({ ...panel, url: '/api/panels/abc.png' }, 3000)).toBe(
-      '/api/panels/abc.png'
+      '/api/panels/abc.png?w=1024'
     );
     // A drawn panel is a vector; it scales on its own.
     expect(panelImageUrl(panel, 300)).toBe('/api/panels/abc.svg');

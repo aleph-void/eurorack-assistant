@@ -126,11 +126,17 @@ export function systemRoutes(db) {
     const mappings = allRackIds.length
       ? await RackModule.findAll({ where: { rack_id: allRackIds }, attributes: ['module_id'] })
       : [];
-    const panels = await loadPanels(db, [...new Set(mappings.map((m) => m.module_id))]);
-    const detailed = [];
-    for (const rack of racks) detailed.push(await rackDetailJson(db, rack, { panels }));
-    const freeJson = [];
-    for (const rack of free) freeJson.push(await rackDetailJson(db, rack, { panels }));
+    const panels = await loadPanels(db, [...new Set(mappings.map((m) => m.module_id))], {
+      describe: false,
+    });
+    // Every rack is read at once: each is a handful of queries, and a studio
+    // of a dozen cases read one after the other is four dozen round trips
+    // in a row for a page that wants all of them anyway.
+    const [detailed, freeJson, outputs] = await Promise.all([
+      Promise.all(racks.map((rack) => rackDetailJson(db, rack, { panels }))),
+      Promise.all(free.map((rack) => rackDetailJson(db, rack, { panels }))),
+      systemOutputsJson(db, system.id),
+    ]);
     res.json({
       ...systemJson(system, {
         rack_count: detailed.length,
@@ -139,7 +145,7 @@ export function systemRoutes(db) {
       racks: detailed,
       unassigned_racks: freeJson,
       // Where sound leaves the system (migration 048).
-      outputs: await systemOutputsJson(db, system.id),
+      outputs,
     });
   }));
 

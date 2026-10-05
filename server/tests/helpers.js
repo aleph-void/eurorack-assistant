@@ -221,6 +221,7 @@ export async function createTestApp({
   runImpl,
   mail = true,
   mailImpl: mailOverride,
+  panelsAccelPrefix = null,
 } = {}) {
   const db = await createTestDb();
   const recorder = createMailRecorder();
@@ -236,6 +237,7 @@ export async function createTestApp({
     exportsDir,
     capturesDir,
     panelsDir,
+    panelsAccelPrefix,
     videosDir,
     hub,
     bus,

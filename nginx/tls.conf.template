@@ -16,15 +16,24 @@ server {
 
     ssl_certificate     /etc/letsencrypt/live/${FQDN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${FQDN}/privkey.pem;
+    # Resume sessions rather than handshake afresh on every connection: TLS
+    # 1.3 tickets do this on their own, a TLS 1.2 client needs the cache.
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets on;
 
     root /usr/share/nginx/html;
     index index.html;
 
-    client_max_body_size 10m;
+    # The server takes 40 MB of JSON (server/src/app.js), which is what a
+    # 25 MB manual comes to as base64 (routes/modules/manuals.js); a smaller
+    # ceiling here answered 413 before the server ever saw the upload.
+    client_max_body_size 40m;
 
     # WebSocket endpoint for live job progress.
     location /api/ws {
-        proxy_pass http://server:3000;
+        proxy_pass http://api;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -39,7 +48,7 @@ server {
     # separate from /api/ws because its frames carry captured images, and a
     # scope stays connected for as long as it is on the bench.
     location /api/devices/ws {
-        proxy_pass http://server:3000;
+        proxy_pass http://api;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -51,12 +60,37 @@ server {
     }
 
     location /api/ {
-        proxy_pass http://server:3000;
+        proxy_pass http://api;
         proxy_http_version 1.1;
+        # An empty Connection header is what lets nginx reuse a connection
+        # from the upstream's keepalive pool (upstream.conf).
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 120s;
+        # A whole-studio patch is two megabytes of JSON. The default buffers
+        # hold sixty-four kilobytes, and what does not fit is written to a
+        # temp file on disk and read back before it is compressed.
+        proxy_buffers 64 32k;
+        proxy_busy_buffers_size 256k;
+    }
+
+    # Panel pictures. The API decides whether a picture may be served and
+    # which file that is, then answers with X-Accel-Redirect naming it under
+    # this prefix (server/src/routes/panels.js), and nginx sends the bytes
+    # from the shared panels volume with sendfile rather than node streaming
+    # a multi-megabyte original a chunk at a time. `internal`: a browser
+    # asking for /_panels/ directly gets a 404 — only a redirect from the
+    # API lands here. Content-Type and Cache-Control come across from the
+    # API's answer; the two headers nginx drops on a redirect are set here,
+    # to the same stored-file policy server/src/csp.js gives streamed bytes
+    # (tests/csp.test.js reads this file and checks).
+    location /_panels/ {
+        internal;
+        alias /data/panels/;
+        add_header Content-Security-Policy "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; style-src 'unsafe-inline'";
+        add_header X-Content-Type-Options nosniff;
     }
 
     include /etc/nginx/snippets/cache.conf;

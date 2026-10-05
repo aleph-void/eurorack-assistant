@@ -94,6 +94,12 @@ const width = computed(() => {
   return Number.isFinite(ratio) && ratio > 0 ? Math.round(props.height * ratio) : 200;
 });
 
+// The picture is asked for at the width the figure draws it — `width` is its
+// ceiling — on a screen of this density; 1024 flat overshot the biggest
+// variant on a cropped photograph and fetched the original.
+const density = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
+const imageHref = computed(() => panelThumbUrl(props.panel, width.value, density));
+
 const viewBox = computed(() => {
   const c = crop.value;
   const p = props.panel;
@@ -245,7 +251,7 @@ function endDrag() {
           y="0"
           :width="panel.width"
           :height="panel.height"
-          :href="panelThumbUrl(panel, 1024)"
+          :href="imageHref"
           preserveAspectRatio="none"
         />
       </svg>

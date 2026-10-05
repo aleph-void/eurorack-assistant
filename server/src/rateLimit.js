@@ -29,11 +29,12 @@ export const CREDENTIALS_LIMIT = { windowMs: 15 * 60 * 1000, limit: 10 };
 export const API_LIMIT = { windowMs: 60 * 1000, limit: 300 };
 export const REPORTS_LIMIT = { windowMs: 60 * 1000, limit: 60 };
 
-function build({ windowMs, limit, message, skipSuccessfulRequests = false }) {
+function build({ windowMs, limit, message, skipSuccessfulRequests = false, skip = undefined }) {
   return rateLimit({
     windowMs,
     limit,
     skipSuccessfulRequests,
+    skip,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     // The API answers JSON everywhere else; a bare text body here would break
@@ -63,6 +64,13 @@ export function createLimiters(options = {}) {
     api: build({
       ...API_LIMIT,
       message: 'Too many requests. Slow down and try again shortly.',
+      // A panel picture is one request per panel on screen, again at a new
+      // size every time the picture is zoomed, and every device behind one
+      // NAT shares the bucket: a studio scrolled for a minute would reach
+      // the ceiling and the panels would stop loading. They are read-only
+      // bytes addressed by their own hash, so they cost no LLM and no
+      // database write — nothing the ceiling is there to protect.
+      skip: (req) => req.method === 'GET' && req.path.startsWith('/panels/'),
       ...api,
     }),
     reports: build({

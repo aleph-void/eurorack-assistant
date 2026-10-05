@@ -75,7 +75,14 @@ export async function loadPanels(db, moduleIds, { describe = true } = {}) {
   const componentIds = [...new Set(placements.map((p) => p.component_id).filter((id) => id != null))];
   const facts = new Map();
   if (componentIds.length > 0) {
-    for (const c of await ModuleComponent.findAll({ where: { id: componentIds } })) {
+    // Only the columns the picture needs: a description is a sentence per
+    // marker, and a studio's worth of them is read off the disk for nothing
+    // when the caller is not going to say it.
+    const rows = await ModuleComponent.findAll({
+      where: { id: componentIds },
+      attributes: describe ? ['id', 'type', 'description'] : ['id', 'type'],
+    });
+    for (const c of rows) {
       facts.set(c.id, { type: c.type ?? null, description: c.description ?? null });
     }
   }

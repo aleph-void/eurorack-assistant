@@ -132,7 +132,11 @@ export async function rackDetailJson(db, rack, { panels = null } = {}) {
       [Module, 'name', 'ASC'],
     ],
   });
-  const loaded = panels ?? (await loadPanels(db, mappings.map((mapping) => mapping.module_id)));
+  // The organizer and the floor plan draw a panel's markers and never say
+  // what a marker does, so the prose stays in the database.
+  const loaded =
+    panels ??
+    (await loadPanels(db, mappings.map((mapping) => mapping.module_id), { describe: false }));
   const rows = await layoutJson(db, rack, mappings, loaded);
   return {
     ...rackJson(rack, mappings.length),

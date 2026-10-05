@@ -95,10 +95,15 @@ export const PANEL_WIDTHS = [128, 256, 512, 1024];
 export function panelImageUrl(panel, drawnWidth) {
   const url = panel?.url ?? null;
   // A drawn panel is an SVG: it is already a few kilobytes and scales on its
-  // own. So is a width bigger than anything on offer — that wants the file.
+  // own.
   if (!url || url.endsWith('.svg')) return url;
-  const bucket = PANEL_WIDTHS.find((width) => width >= drawnWidth);
-  return bucket ? `${url}?w=${bucket}` : url;
+  // A width bigger than anything on offer takes the biggest there is, never
+  // the file: a crop or a retina screen overshooting the last bucket by a few
+  // pixels was fetching the manufacturer's multi-megabyte original, and the
+  // widest variant is already more than any page here draws.
+  const bucket =
+    PANEL_WIDTHS.find((width) => width >= drawnWidth) ?? PANEL_WIDTHS[PANEL_WIDTHS.length - 1];
+  return `${url}?w=${bucket}`;
 }
 
 // The same, for a panel drawn as a plain <img> in a box `cssWidth` wide: the
