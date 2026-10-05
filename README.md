@@ -562,9 +562,21 @@ browser ── nginx (:8080) ──┬── static Vue 3 client (built at image
   httpOnly cookies backed by a `sessions` table; passwords are bcrypt hashes.
 - `client/` — Vue 3 + Pinia + Vue Router (Vite). Live job progress arrives over
   the WebSocket and feeds the Jobs page, the Import page, and the badge on the
-  menu button. Navigation lives in a hamburger drawer, styling follows the
-  Aleph Void palette in `src/style.css`, and the long detail pages (module,
-  patch, question) keep each section behind a click-to-open expander.
+  menu button. Navigation uses a stable menu grouped into System (systems, racks, modules,
+  import), Music (patches, compositions, performances), Knowledge (manual
+  search, notes, questions, sharing), Tools (devices, jobs), Account, and
+  Administration (admins only). Desktop section shortcuts sit in the top bar;
+  the full menu is available at every screen size. Module and patch sections
+  live in a separate, collapsible navigation panel within the page. On every
+  module page, the title and rack context come first, followed by grouped
+  sections for panel controls, signal behavior, reference, notes and questions,
+  and measurement. Questions have one entry in that navigation. Module edits
+  and rack membership sit in a labeled disclosure; overview analysis tools and
+  panel image tools are grouped with the content they maintain. Active
+  destinations stay highlighted on detail routes, and module links preserve
+  the current rack. Global destinations are defined in `src/navigation.js`;
+  record sections are in `src/components/RecordNavigation.vue`. Styling follows
+  the Aleph Void palette in `src/style.css`.
 - Database schema is created by the migrations in `server/migrations/`, applied
   automatically at server start (tracked in `schema_migrations`). Each is a
   module with `up`/`down` hooks run by `server/src/db/migrate.js`; see

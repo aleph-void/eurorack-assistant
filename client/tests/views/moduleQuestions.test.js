@@ -46,6 +46,10 @@ describe('ModuleQuestionsView', () => {
     const wrapper = mount(ModuleQuestionsView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
 
+    expect(wrapper.findAll('[aria-label="Record sections"]')).toHaveLength(1);
+    expect(wrapper.find('[data-test="nav-detail-questions"]').attributes('aria-current')).toBe('page');
+    expect(wrapper.find('[data-test="ask-about-module"]').exists()).toBe(false);
+
     // The list is the module's own questions, not every question asked.
     expect(api.get).toHaveBeenCalledWith('/api/questions?module_id=1');
     expect(wrapper.find('[data-test="record-question-table"]').text()).toContain(

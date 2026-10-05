@@ -2,7 +2,7 @@
 // The module itself: the picture of the front plate and what the manual says
 // the module is. Everything else about it — the components, the signal paths
 // inside it, the documents, the videos, the notes — is a page of its own,
-// reached from the nav drawer, so this page stays the one that is looked at
+// reached from the module navigation, so this page stays the one that is looked at
 // rather than worked in.
 import { computed, ref, toRef, watch } from 'vue';
 import { api } from '../api.js';
@@ -228,59 +228,6 @@ watch(id, () => {
     @reload="load"
   />
   <template v-if="module">
-    <div class="row reanalyze-row">
-      <button
-        style="margin: 0; white-space: nowrap"
-        :disabled="reanalyzing || retailerPagesExist"
-        :title="reanalyzeTitle"
-        data-test="reanalyze-components"
-        @click="reanalyzeComponents"
-      >
-        {{ reanalyzing ? 'Queuing…' : 'Re-analyze components' }}
-      </button>
-      <button
-        style="margin: 0; white-space: nowrap"
-        :disabled="rebuilding"
-        :title="rebuildTitle"
-        data-test="rebuild-analysis"
-        @click="rebuildAnalysis"
-      >
-        {{ rebuilding ? 'Queuing…' : 'Rebuild analysis' }}
-      </button>
-      <button
-        v-if="module.panel && ['upload', 'image'].includes(module.panel.source)"
-        type="button"
-        class="secondary"
-        style="margin: 0; white-space: nowrap"
-        data-test="panel-trim"
-        :disabled="trimmingPanel || module.panel.trimmed"
-        :title="
-          module.panel.trimmed
-            ? 'This picture has already been cut down to the front plate'
-            : 'Cut the picture down to the front plate — the markers stay on the hardware they point at'
-        "
-        @click="trimPanel"
-      >
-        {{ trimmingPanel ? 'Trimming…' : module.panel.trimmed ? 'Panel trimmed' : 'Trim panel' }}
-      </button>
-      <button
-        v-if="orphanMarkers > 0"
-        type="button"
-        class="secondary"
-        style="margin: 0; white-space: nowrap"
-        data-test="panel-relink"
-        :disabled="relinking"
-        title="Match the markers that name no component back to the components they name"
-        @click="relinkMarkers"
-      >
-        {{ relinking ? 'Tidying…' : `Tidy ${orphanMarkers} stray marker(s)` }}
-      </button>
-    </div>
-    <p v-if="reanalyzeNotice" class="muted" data-test="reanalyze-notice">{{ reanalyzeNotice }}</p>
-    <p v-if="reanalyzeError" class="error" data-test="reanalyze-error">{{ reanalyzeError }}</p>
-    <p v-if="rebuildNotice" class="muted" data-test="rebuild-notice">{{ rebuildNotice }}</p>
-    <p v-if="rebuildError" class="error" data-test="rebuild-error">{{ rebuildError }}</p>
-
     <details open class="panel" data-test="panel">
       <summary>
         <h2>Front panel</h2>
@@ -296,60 +243,93 @@ watch(id, () => {
           supply your own below.
         </p>
 
-        <label for="panel-upload">
-          Supply your own panel picture (PNG, JPEG, GIF or WebP, up to 12MB)
-        </label>
-        <p class="muted" style="margin-top: 0">
-          Upload a file or enter a direct image URL. A straight-on shot of the front plate works
-          best. Leave the width blank and it is measured off the picture — a shot that takes in an
-          expander sets the module's width to what it actually shows, so the rack is not drawn
-          stretched. The components are located on it in the background, so the markers appear once
-          that job finishes. Everyone with this module in a rack sees the picture you supply.
-        </p>
-        <div class="row">
-          <input
-            id="panel-hp"
-            v-model="panelHp"
-            style="max-width: 10rem"
-            placeholder="Width in HP (optional)"
-            data-test="panel-hp"
-            @input="panelHpDirty = true"
-          />
-          <input
-            id="panel-upload"
-            type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp"
-            data-test="panel-upload"
-            :disabled="panelUploading"
-            @change="onPanelChosen"
-          />
-          <input
-            v-model="panelUrl"
-            type="url"
-            style="min-width: min(28rem, 100%)"
-            placeholder="https://example.com/panel.png"
-            aria-label="Panel image URL"
-            data-test="panel-url"
-            :disabled="panelUploading"
-            @keyup.enter="downloadPanel"
-          />
-          <button
-            type="button"
-            data-test="panel-url-submit"
-            :disabled="panelUploading || !panelUrl.trim()"
-            @click="downloadPanel"
-          >
-            Download from URL
-          </button>
-          <button
-            v-if="module.panel?.source === 'upload'"
-            class="danger"
-            data-test="remove-panel"
-            @click="removePanel"
-          >
-            Remove supplied picture
-          </button>
-        </div>
+        <details class="module-image-tools" data-test="panel-image-tools">
+          <summary>Panel image tools</summary>
+          <div class="actions">
+            <button
+              v-if="module.panel && ['upload', 'image'].includes(module.panel.source)"
+              type="button"
+              class="secondary"
+              style="margin: 0; white-space: nowrap"
+              data-test="panel-trim"
+              :disabled="trimmingPanel || module.panel.trimmed"
+              :title="
+                module.panel.trimmed
+                  ? 'This picture has already been cut down to the front plate'
+                  : 'Cut the picture down to the front plate — the markers stay on the hardware they point at'
+              "
+              @click="trimPanel"
+            >
+              {{ trimmingPanel ? 'Trimming…' : module.panel.trimmed ? 'Panel trimmed' : 'Trim panel' }}
+            </button>
+            <button
+              v-if="orphanMarkers > 0"
+              type="button"
+              class="secondary"
+              style="margin: 0; white-space: nowrap"
+              data-test="panel-relink"
+              :disabled="relinking"
+              title="Match the markers that name no component back to the components they name"
+              @click="relinkMarkers"
+            >
+              {{ relinking ? 'Tidying…' : `Tidy ${orphanMarkers} stray marker(s)` }}
+            </button>
+          </div>
+          <label for="panel-upload">
+            Supply your own panel picture (PNG, JPEG, GIF or WebP, up to 12MB)
+          </label>
+          <p class="muted" style="margin-top: 0">
+            Upload a file or enter a direct image URL. A straight-on shot of the front plate works
+            best. Leave the width blank and it is measured off the picture — a shot that takes in an
+            expander sets the module's width to what it actually shows, so the rack is not drawn
+            stretched. The components are located on it in the background, so the markers appear once
+            that job finishes. Everyone with this module in a rack sees the picture you supply.
+          </p>
+          <div class="row">
+            <input
+              id="panel-hp"
+              v-model="panelHp"
+              style="max-width: 10rem"
+              placeholder="Width in HP (optional)"
+              data-test="panel-hp"
+              @input="panelHpDirty = true"
+            />
+            <input
+              id="panel-upload"
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              data-test="panel-upload"
+              :disabled="panelUploading"
+              @change="onPanelChosen"
+            />
+            <input
+              v-model="panelUrl"
+              type="url"
+              style="min-width: min(28rem, 100%)"
+              placeholder="https://example.com/panel.png"
+              aria-label="Panel image URL"
+              data-test="panel-url"
+              :disabled="panelUploading"
+              @keyup.enter="downloadPanel"
+            />
+            <button
+              type="button"
+              data-test="panel-url-submit"
+              :disabled="panelUploading || !panelUrl.trim()"
+              @click="downloadPanel"
+            >
+              Download from URL
+            </button>
+            <button
+              v-if="module.panel?.source === 'upload'"
+              class="danger"
+              data-test="remove-panel"
+              @click="removePanel"
+            >
+              Remove supplied picture
+            </button>
+          </div>
+        </details>
         <p v-if="panelError" class="error" data-test="panel-error">{{ panelError }}</p>
       </div>
     </details>
@@ -360,6 +340,35 @@ watch(id, () => {
       </summary>
       <div class="panel-body">
         <p style="white-space: pre-wrap">{{ module.summary }}</p>
+      </div>
+    </details>
+    <details class="panel" data-test="module-analysis-tools">
+      <summary><h2>Analysis tools</h2></summary>
+      <div class="panel-body">
+        <div class="row reanalyze-row">
+          <button
+            style="margin: 0; white-space: nowrap"
+            :disabled="reanalyzing || retailerPagesExist"
+            :title="reanalyzeTitle"
+            data-test="reanalyze-components"
+            @click="reanalyzeComponents"
+          >
+            {{ reanalyzing ? 'Queuing…' : 'Re-analyze components' }}
+          </button>
+          <button
+            style="margin: 0; white-space: nowrap"
+            :disabled="rebuilding"
+            :title="rebuildTitle"
+            data-test="rebuild-analysis"
+            @click="rebuildAnalysis"
+          >
+            {{ rebuilding ? 'Queuing…' : 'Rebuild analysis' }}
+          </button>
+        </div>
+        <p v-if="reanalyzeNotice" class="muted" data-test="reanalyze-notice">{{ reanalyzeNotice }}</p>
+        <p v-if="reanalyzeError" class="error" data-test="reanalyze-error">{{ reanalyzeError }}</p>
+        <p v-if="rebuildNotice" class="muted" data-test="rebuild-notice">{{ rebuildNotice }}</p>
+        <p v-if="rebuildError" class="error" data-test="rebuild-error">{{ rebuildError }}</p>
       </div>
     </details>
   </template>

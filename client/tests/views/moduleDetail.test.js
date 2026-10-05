@@ -34,6 +34,30 @@ beforeEach(() => {
 describe('ModuleDetailView', () => {
   const moduleResponse = mathsModule;
 
+  it('places questions in module navigation and groups editing and maintenance tools', async () => {
+    currentRouteQuery = { rack: '2' };
+    api.get.mockResolvedValue(structuredClone(moduleResponse));
+    const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
+    await flushPromises();
+
+    expect(wrapper.find('h1').text()).toBe('Make Noise Maths');
+    expect(wrapper.find('h1 a').exists()).toBe(false);
+    expect(wrapper.find('h1 button').exists()).toBe(false);
+    expect(wrapper.find('[data-test="ask-about-module"]').exists()).toBe(false);
+    const navigation = wrapper.find('[aria-label="Record sections"]');
+    const questions = navigation.find('[data-test="nav-detail-questions"]');
+    expect(questions.attributes('to')).toBe('/modules/1/questions?rack=2');
+    expect(questions.text()).toBe('Questions & answers');
+    expect(questions.element.parentElement.textContent).toContain('Notes & questions');
+    expect(wrapper.find('h1').element.compareDocumentPosition(navigation.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(wrapper.find('[data-test="module-details"] [data-test="edit-naming-button"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="module-details"]').element.open).toBe(false);
+    expect(wrapper.find('[data-test="module-analysis-tools"] [data-test="rebuild-analysis"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="module-analysis-tools"]').element.open).toBe(false);
+    expect(wrapper.find('[data-test="panel-image-tools"] [data-test="panel-upload"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it('edits the naming and HP inline', async () => {
     api.get.mockResolvedValue({ ...structuredClone(moduleResponse), hp: 20 });
     api.patch.mockResolvedValue({});
@@ -433,7 +457,7 @@ describe('ModuleDetailView', () => {
     expect(wrapper.find('.marker').attributes('cy')).toBe(String(0.4 * 560));
   });
 
-  it('keeps Trim panel beside the re-analyze buttons', async () => {
+  it('keeps image tools with the front panel and analysis tools separate', async () => {
     const panel = {
       source: 'image',
       url: '/api/panels/abc.png',
@@ -446,12 +470,13 @@ describe('ModuleDetailView', () => {
     const wrapper = mount(ModuleDetailView, { props: { id: '1' }, global: testGlobal() });
     await flushPromises();
 
-    // Every module-wide action is in one row at the top of the page — not
-    // buried inside the Front panel section.
-    const row = wrapper.find('[data-test="rebuild-analysis"]').element.parentElement;
+    // Image maintenance belongs beside the image; analysis has its own area.
+    const imageTools = wrapper.find('[data-test="panel-image-tools"]');
     const button = wrapper.find('[data-test="panel-trim"]');
     expect(button.exists()).toBe(true);
-    expect(button.element.parentElement).toBe(row);
+    expect(imageTools.element.contains(button.element)).toBe(true);
+    expect(imageTools.find('[data-test="rebuild-analysis"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="module-analysis-tools"] [data-test="rebuild-analysis"]').exists()).toBe(true);
     // Arranging IS done here: the plate is on this page, and the jacks are
     // listed beside it so a marker can be put right where it is drawn.
     expect(wrapper.find('[data-test="arrange-component-1"]').exists()).toBe(true);

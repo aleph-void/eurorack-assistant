@@ -2,11 +2,12 @@
 // The top of every module page: which module this is, how far its research
 // got, and the corrections that are about the module itself rather than any
 // one section. It is drawn by all twelve module routes, so it is also what
-// tells the nav drawer which module's sub-pages to offer.
+// provides the module's grouped section navigation.
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { api } from '../../api.js';
 import { useDetailStore } from '../../stores/detail.js';
+import RecordNavigation from '../RecordNavigation.vue';
 
 const props = defineProps({
   module: { type: Object, default: null },
@@ -20,7 +21,7 @@ const route = useRoute();
 const detail = useDetailStore();
 
 // How many rows each of the module's pages has, keyed by the page keys the
-// nav drawer uses, so it can badge the full pages and fold the empty ones
+// section navigation uses, so it can badge the full pages and fold the empty ones
 // away. Pages whose rows are not in this payload (recordings, links,
 // questions) are left out: absent means unknown, not empty. The scope page
 // is left out on purpose — it is a bench to take captures at, not a list.
@@ -29,7 +30,7 @@ function moduleCounts(m) {
   const components = m.components || [];
   const ofType = (type) => components.filter((c) => c.type === type).length;
   const counts = { components: components.length };
-  // Of the ten component types, only the three kinds of jack are drawer
+  // Of the ten component types, only the three kinds of jack are section
   // entries; the rest are reached through the chip row on the component
   // pages, which counts them off the payload itself.
   counts.input_jack = ofType('input_jack');
@@ -51,7 +52,7 @@ function moduleCounts(m) {
   return counts;
 }
 
-// The drawer says the module by name while any of its pages is open. The
+// Section navigation follows the module while any of its pages is open. The
 // payload rides in the watch because a reload replaces it wholesale, and the
 // counts have to follow the row that was just added or removed.
 let claim = 0;
@@ -202,61 +203,7 @@ const nextModuleHref = computed(() =>
   </nav>
   <p v-if="error" class="error">{{ error }}</p>
   <template v-if="module">
-    <div v-if="editingNaming" class="row reanalyze-row" data-test="edit-naming">
-      <input
-        v-model="editManufacturer"
-        aria-label="Manufacturer"
-        placeholder="Manufacturer"
-        style="flex: 0 0 auto; width: 13rem"
-        data-test="edit-manufacturer"
-      />
-      <input
-        v-model="editModuleName"
-        aria-label="Module name"
-        placeholder="Module name"
-        style="flex: 0 0 auto; width: 13rem"
-        data-test="edit-module-name"
-      />
-      <input
-        v-model="editHp"
-        aria-label="Width in HP"
-        placeholder="HP"
-        style="flex: 0 0 auto; width: 4.5rem"
-        title="Width in HP — leave empty if unknown"
-        data-test="edit-hp"
-      />
-      <button style="margin: 0" :disabled="savingNaming" data-test="save-naming" @click="saveNaming">
-        {{ savingNaming ? 'Saving…' : 'Save' }}
-      </button>
-      <button
-        style="margin: 0"
-        class="secondary"
-        data-test="cancel-naming"
-        @click="editingNaming = false"
-      >
-        Cancel
-      </button>
-    </div>
-    <h1 v-else>
-      {{ module.manufacturer }} {{ module.name }}
-      <button
-        class="linklike"
-        style="font-size: 1rem; vertical-align: middle"
-        title="Correct the manufacturer, module name or HP without re-analysis (the fix shows for every user of this module)"
-        data-test="edit-naming-button"
-        @click="startEditNaming"
-      >
-        Edit
-      </button>
-      <RouterLink
-        :to="`/modules/${moduleId}/questions`"
-        style="font-size: 0.8rem"
-        data-test="ask-about-module"
-      >
-        Ask about this module
-      </RouterLink>
-    </h1>
-    <p v-if="namingError" class="error" data-test="naming-error">{{ namingError }}</p>
+    <h1>{{ module.manufacturer }} {{ module.name }}</h1>
     <p>
       <span class="badge" :class="module.manual_status">manual: {{ module.manual_status }}</span>
       &nbsp;
@@ -270,46 +217,101 @@ const nextModuleHref = computed(() =>
         <span class="badge" data-test="module-hp">{{ module.hp }}HP</span>
       </template>
     </p>
-    <div v-if="editingQuantities" class="row reanalyze-row" data-test="edit-quantities">
-      <label v-for="r in module.racks" :key="r.id" style="flex: 0 0 auto">
-        {{ r.name }} ×
-        <input
-          v-model="editQuantities[r.id]"
-          :aria-label="`Quantity in ${r.name}`"
-          style="width: 4rem"
-          :data-test="`edit-quantity-${r.id}`"
-        />
-      </label>
-      <button
-        style="margin: 0"
-        :disabled="savingQuantities"
-        data-test="save-quantities"
-        @click="saveQuantities"
-      >
-        {{ savingQuantities ? 'Saving…' : 'Save' }}
-      </button>
-      <button
-        style="margin: 0"
-        class="secondary"
-        data-test="cancel-quantities"
-        @click="editingQuantities = false"
-      >
-        Cancel
-      </button>
-    </div>
-    <p v-else-if="module.racks?.length" data-test="racks">
+    <p v-if="module.racks?.length" class="muted" data-test="racks">
       In {{ module.racks.length === 1 ? 'rack' : 'racks' }}:
       {{ module.racks.map((r) => `${r.name} (×${r.quantity})`).join(', ') }}
-      <button
-        class="linklike"
-        title="Change how many copies of this module each rack contains"
-        data-test="edit-quantities-button"
-        @click="startEditQuantities"
-      >
-        Edit
-      </button>
-      — <RouterLink to="/racks">manage racks</RouterLink>
     </p>
-    <p v-if="quantityError" class="error" data-test="quantity-error">{{ quantityError }}</p>
+    <RecordNavigation />
+    <details class="panel module-management" data-test="module-details">
+      <summary><h2>Module details & rack membership</h2></summary>
+      <div class="panel-body">
+        <div class="actions" aria-label="Edit module">
+          <button
+            class="linklike"
+            style="font-size: 1rem; vertical-align: middle"
+            title="Correct the manufacturer, module name or HP without re-analysis (the fix shows for every user of this module)"
+            data-test="edit-naming-button"
+            @click="startEditNaming"
+          >
+            Edit module details
+          </button>
+          <template v-if="module.racks?.length">
+            <button
+              class="linklike"
+              title="Change how many copies of this module each rack contains"
+              data-test="edit-quantities-button"
+              @click="startEditQuantities"
+            >
+              Edit rack quantities
+            </button>
+          </template>
+          <RouterLink to="/racks" data-test="manage-module-racks">Manage racks</RouterLink>
+        </div>
+        <div v-if="editingNaming" class="row reanalyze-row" data-test="edit-naming">
+          <input
+            v-model="editManufacturer"
+            aria-label="Manufacturer"
+            placeholder="Manufacturer"
+            style="flex: 0 0 auto; width: 13rem"
+            data-test="edit-manufacturer"
+          />
+          <input
+            v-model="editModuleName"
+            aria-label="Module name"
+            placeholder="Module name"
+            style="flex: 0 0 auto; width: 13rem"
+            data-test="edit-module-name"
+          />
+          <input
+            v-model="editHp"
+            aria-label="Width in HP"
+            placeholder="HP"
+            style="flex: 0 0 auto; width: 4.5rem"
+            title="Width in HP — leave empty if unknown"
+            data-test="edit-hp"
+          />
+          <button style="margin: 0" :disabled="savingNaming" data-test="save-naming" @click="saveNaming">
+            {{ savingNaming ? 'Saving…' : 'Save' }}
+          </button>
+          <button
+            style="margin: 0"
+            class="secondary"
+            data-test="cancel-naming"
+            @click="editingNaming = false"
+          >
+            Cancel
+          </button>
+        </div>
+        <p v-if="namingError" class="error" data-test="naming-error">{{ namingError }}</p>
+        <div v-if="editingQuantities" class="row reanalyze-row" data-test="edit-quantities">
+          <label v-for="r in module.racks" :key="r.id" style="flex: 0 0 auto">
+            {{ r.name }} ×
+            <input
+              v-model="editQuantities[r.id]"
+              :aria-label="`Quantity in ${r.name}`"
+              style="width: 4rem"
+              :data-test="`edit-quantity-${r.id}`"
+            />
+          </label>
+          <button
+            style="margin: 0"
+            :disabled="savingQuantities"
+            data-test="save-quantities"
+            @click="saveQuantities"
+          >
+            {{ savingQuantities ? 'Saving…' : 'Save' }}
+          </button>
+          <button
+            style="margin: 0"
+            class="secondary"
+            data-test="cancel-quantities"
+            @click="editingQuantities = false"
+          >
+            Cancel
+          </button>
+        </div>
+        <p v-if="quantityError" class="error" data-test="quantity-error">{{ quantityError }}</p>
+      </div>
+    </details>
   </template>
 </template>

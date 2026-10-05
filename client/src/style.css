@@ -331,16 +331,52 @@ pre {
   border-left-color: var(--accent);
   color: var(--text);
 }
-/* The pages of the one record the reader is inside, listed above the app's
-   own sections: indented under their heading so the drawer reads as "this
-   module, then everything else" rather than as one long list. */
-.nav-drawer a.nav-sub {
+/* Record sections stay in the page; the app menu has a stable hierarchy. */
+.record-nav {
+  padding: 0.75rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+}
+.record-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.5rem 1rem;
+}
+.record-sections > a {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+.record-nav a {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 5px;
+  color: var(--muted);
+}
+.record-nav a:hover, .record-nav a.current {
+  background: var(--accent-glow);
+  color: var(--text);
+  text-decoration: none;
+}
+.record-nav a.current {
+  box-shadow: inset 2px 0 var(--accent);
+}
+.record-nav .nav-heading {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0.35rem 0.6rem;
+}
+.record-nav a.nav-sub {
   padding-left: 1.35rem;
   font-size: 0.9rem;
 }
 /* The record's name is also the fold for its whole block of pages, so the
    rest of the app is one tap away instead of a scroll past thirty links. */
-.nav-drawer button.nav-record-toggle {
+.record-nav button.nav-record-toggle {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -352,17 +388,17 @@ pre {
   cursor: pointer;
   text-align: left;
 }
-.nav-drawer button.nav-record-toggle::after {
+.record-nav button.nav-record-toggle::after {
   content: '▾';
   color: var(--muted);
 }
-.nav-drawer button.nav-record-toggle[aria-expanded='false']::after {
+.record-nav button.nav-record-toggle[aria-expanded='false']::after {
   content: '▸';
 }
 /* The record's pages come grouped: a lighter heading per group, the count of
    rows beside every page that has any, and the empty pages folded behind one
    line so a module that is mostly blank reads as the pages that aren't. */
-.nav-drawer .nav-subheading {
+.record-nav .nav-subheading {
   font-family: var(--font-mono);
   font-size: 0.62rem;
   text-transform: uppercase;
@@ -370,16 +406,16 @@ pre {
   color: var(--muted);
   padding: 0.6rem 0.6rem 0.2rem 1.35rem;
 }
-.nav-drawer .nav-count {
+.record-nav .nav-count {
   margin-left: auto;
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--muted);
 }
-.nav-drawer a.router-link-active .nav-count {
+.record-nav a.current .nav-count {
   color: var(--text);
 }
-.nav-drawer button.nav-empty-toggle {
+.record-nav button.nav-empty-toggle {
   display: block;
   width: 100%;
   margin: 0;
@@ -391,11 +427,47 @@ pre {
   font-size: 0.78rem;
   color: var(--muted);
 }
-.nav-drawer button.nav-empty-toggle:hover {
+.record-nav button.nav-empty-toggle:hover {
   color: var(--text);
 }
-.nav-drawer a.nav-empty {
+.record-nav a.nav-empty {
   opacity: 0.7;
+}
+
+.nav-drawer-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.6rem;
+}
+.nav-drawer-title button {
+  margin: 0;
+  font-size: 1.3rem;
+}
+.nav-user {
+  display: block;
+  padding: 0.6rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.topbar-sections {
+  display: flex;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+.topbar-sections a {
+  padding: 0.4rem 0.7rem;
+  color: var(--muted);
+  border-radius: 6px;
+}
+.topbar-sections a.current {
+  color: var(--text);
+  background: var(--accent-glow);
+}
+@media (max-width: 760px) {
+  .topbar-sections {
+    display: none;
+  }
 }
 
 .nav-drawer .nav-foot {
@@ -1255,6 +1327,19 @@ button.linklike:hover {
 }
 .module-detail-navigation > :last-child {
   text-align: right;
+}
+.module-image-tools {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+.module-image-tools > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 600;
+}
+.module-image-tools[open] > summary {
+  margin-bottom: 1rem;
 }
 
 /* Bulk move: the count, the target rack and the button on one line above the
