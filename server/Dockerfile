@@ -1,3 +1,34 @@
+# TARGETARCH is a BuildKit builtin naming the platform being built for —
+# amd64, arm64 or arm (armv7) — filled in by docker build (since 23), docker
+# compose v2 and docker/build-push-action. Declared up here, outside every
+# stage, so a FROM below can select a stage by it.
+ARG TARGETARCH
+
+# yt-dlp downloads attached YouTube videos (jobs download_video). The
+# standalone release binary rather than Debian's package: yt-dlp has to move
+# as fast as YouTube changes, and a year-old copy simply stops downloading.
+#
+# The binary is native code, so there is one per instruction set and the
+# image has to take the one that matches the machine it will run on (an
+# x86-64 build host, an ARM VPS). BuildKit fills in TARGETARCH with the
+# platform being built for and picks which of these fetch-only stages the
+# final image copies from. Everything else in the image (the node base, deno,
+# chromium, the pure-python bgutil plugin) is already published for every one
+# of those.
+FROM scratch AS yt-dlp-amd64
+ADD https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux /yt-dlp
+
+FROM scratch AS yt-dlp-arm64
+ADD https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64 /yt-dlp
+
+FROM scratch AS yt-dlp-arm
+ADD https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_armv7l /yt-dlp
+
+# The legacy (pre-BuildKit) builder leaves TARGETARCH empty and this FROM
+# fails to resolve, which is the right outcome: it would otherwise bake the
+# wrong binary in silently.
+FROM yt-dlp-${TARGETARCH} AS yt-dlp
+
 FROM node:26-bookworm-slim
 
 # poppler-utils gives the LLM CLIs a way to read the manual PDFs
@@ -11,11 +42,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends poppler-utils ca-certificates chromium ffmpeg sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# yt-dlp downloads attached YouTube videos (jobs download_video). The
-# standalone release binary rather than Debian's package: yt-dlp has to move
-# as fast as YouTube changes, and a year-old copy simply stops downloading.
-ADD https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux /usr/local/bin/yt-dlp
-RUN chmod 0755 /usr/local/bin/yt-dlp
+# The yt-dlp binary for this image's architecture (the stages at the top).
+COPY --from=yt-dlp --chmod=0755 /yt-dlp /usr/local/bin/yt-dlp
 
 # What it takes to keep YouTube serving that yt-dlp from a datacenter IP
 # (services/videos.js chooses the player clients to match):
