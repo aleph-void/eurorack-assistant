@@ -51,8 +51,9 @@ describe('config service', () => {
     const budgetDefaults = { token_budget_default: '0', token_budget_period: 'month' };
     // The channel scan is off until an admin pastes a YouTube API key.
     const youtubeDefaults = { youtube_api_key: '' };
-    // No community link until an admin pastes one.
-    const siteDefaults = { discord_invite_url: '' };
+    // No community link until an admin pastes one, and no ceiling on active
+    // users until an admin sets one (services/activeUsers.js).
+    const siteDefaults = { discord_invite_url: '', max_active_users: '0' };
     expect(await getConfig(db)).toEqual({
       llm_provider: 'claude',
       llm_model: '',

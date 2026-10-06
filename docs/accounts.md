@@ -55,6 +55,32 @@ continuing, and a device token refreshing itself is a machine. It is served
 to the user on `/api/auth/me` and to the admin in the user list, where the
 Users page shows it (or "never").
 
+## How many users
+
+An ACTIVE user is one who logged in within the last two weeks
+(`services/activeUsers.js`, read off `last_login_at`). An account that has
+never logged in counts for the two weeks after it was made — it was
+registered to be used, and the admin who just created it should see it
+against the limit at once — and after that it is as inactive as one that
+went quiet.
+
+`max_active_users` (`app_config`, 0 = no ceiling, set on the Configuration
+page) closes registration once the active count has reached it. The only
+way an account is registered is the admin's Create user form, so that is
+what is refused: `POST /api/users` answers 409 with `code:
+'registration_closed'` and the numbers in the message, and the Users page
+takes the form away and says the same in its place.
+`GET /api/users/registration` is the state the page reads (`{ limit,
+active, window_days, open }`), and each user in the list carries `active`,
+so the ones who do not count are marked.
+
+The ceiling never shuts anybody out. A user who comes back after a quiet
+spell logs in as always, and if that makes more active users than the
+ceiling allows, the ceiling is raised to the new count
+(`admitReturningUser`, called from the login route with the user as they
+were before the login was recorded). A login by a user who was active
+already moves nothing.
+
 ## Locking
 
 Five wrong passwords in a row lock the account they were tried against

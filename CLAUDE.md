@@ -619,6 +619,16 @@ API, PostgreSQL, dockerized (compose: db / server / nginx).
   `getSessionUser()` refuses a locked user besides. `users.last_login_at`
   (migration 054) is set by the same `recordLogin()` a right password calls,
   and by nothing else: a session presented is the same login continuing.
+  HOW MANY USERS THE APP HAS IS THE ADMIN'S TO CAP (`services/activeUsers.js`):
+  an ACTIVE user logged in within the last two weeks (a never-logged-in
+  account counts for its first two weeks), `max_active_users` (`app_config`,
+  0 = no ceiling) closes registration at that count — the admin's Create
+  user form is the app's whole registration, so `POST /api/users` is what
+  answers 409 `registration_closed`, and `GET /api/users/registration` is
+  what the Users page reads — and NOBODY IS SHUT OUT: a user back from a
+  quiet spell logs in as always and, if that is one active user too many,
+  the login route raises the ceiling to the new count
+  (`admitReturningUser`).
 - A TABLE ROW IS A CARD ON A PHONE. A table is columns beside each other and
   a phone has room for about two of them, so under 768px every `.table-wrap`
   table stops being columns: each row becomes a small bordered block, one line

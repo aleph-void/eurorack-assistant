@@ -38,6 +38,7 @@ describe('ConfigView', () => {
     token_budget_period: 'month',
     youtube_api_key: '',
     discord_invite_url: '',
+    max_active_users: '0',
   };
 
   it('loads current config and saves changes', async () => {
@@ -59,6 +60,9 @@ describe('ConfigView', () => {
     await wrapper.find('[data-test="token-budget-period"]').setValue('week');
     await wrapper.find('[data-test="youtube-api-key"]').setValue('AIzaTestKey123');
     await wrapper.find('[data-test="discord-invite-url"]').setValue('discord.gg/abc123');
+    // Registration is open to any number until an admin sets a ceiling here.
+    expect(wrapper.find('[data-test="max-active-users"]').element.value).toBe('0');
+    await wrapper.find('[data-test="max-active-users"]').setValue('25');
     await wrapper.find('form').trigger('submit');
     await flushPromises();
     expect(api.put).toHaveBeenCalledWith('/api/config', {
@@ -69,6 +73,7 @@ describe('ConfigView', () => {
       token_budget_period: 'week',
       youtube_api_key: 'AIzaTestKey123',
       discord_invite_url: 'discord.gg/abc123',
+      max_active_users: 25,
     });
     expect(wrapper.find('[data-test="saved"]').exists()).toBe(true);
   });
@@ -93,6 +98,13 @@ describe('ConfigView', () => {
       'https://discord.gg/new'
     );
     expect(site.discordInviteUrl).toBe('https://discord.gg/new');
+  });
+
+  it('shows the active-user ceiling as stored', async () => {
+    api.get.mockResolvedValue({ ...configResponse, max_active_users: '12' });
+    const wrapper = mount(ConfigView, { global: testGlobal() });
+    await flushPromises();
+    expect(wrapper.find('[data-test="max-active-users"]').element.value).toBe('12');
   });
 
   it('shows save errors', async () => {

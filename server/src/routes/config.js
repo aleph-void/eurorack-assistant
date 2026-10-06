@@ -66,6 +66,7 @@ export function configRoutes(db, { mailImpl } = {}) {
         'token_budget_period',
         'youtube_api_key',
         'discord_invite_url',
+        'max_active_users',
       ];
       for (const key of allowed) {
         if (req.body?.[key] !== undefined) updates[key] = req.body[key];

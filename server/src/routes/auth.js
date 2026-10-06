@@ -20,6 +20,7 @@ import {
   recordFailedLogin,
   recordLogin,
 } from '../services/accountLock.js';
+import { admitReturningUser } from '../services/activeUsers.js';
 import {
   confirmEmailVerification,
   resendEmailVerification,
@@ -47,7 +48,11 @@ export function authRoutes(db, { mailImpl } = {}) {
       if (user && (await recordFailedLogin(db, user)).locked) return locked(res);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
+    // Read before the login is recorded: whether they were active until now
+    // is what decides if the active-user ceiling has to move for them.
+    const before = { last_login_at: user.last_login_at, created_at: user.created_at };
     await recordLogin(db, user);
+    await admitReturningUser(db, before);
     const { token, expiresAt } = await createSession(db, user.id);
     res.cookie(SESSION_COOKIE, token, { ...sessionCookieOptions(), expires: expiresAt });
     res.json(sessionUserJson(user));
