@@ -39,7 +39,7 @@
     "pg-mem": "^3.0.14",
     "supertest": "^7.3.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.3"
   },
   "overrides": {
     "uuid": "^11.1.1"
