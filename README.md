@@ -1,5 +1,7 @@
 # Eurorack Assistant
 
+[![Sponsor Aleph Void](https://img.shields.io/badge/Sponsor-Aleph%20Void-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/aleph-void)
+
 [![CI](https://github.com/aleph-void/eurorack-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/aleph-void/eurorack-assistant/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/aleph-void/eurorack-assistant/actions/workflows/codeql.yml/badge.svg)](https://github.com/aleph-void/eurorack-assistant/actions/workflows/codeql.yml)
 [![codecov](https://codecov.io/gh/aleph-void/eurorack-assistant/branch/main/graph/badge.svg)](https://codecov.io/gh/aleph-void/eurorack-assistant)
