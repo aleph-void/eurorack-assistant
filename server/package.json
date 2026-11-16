@@ -20,26 +20,26 @@
   },
   "dependencies": {
     "cookie-parser": "^1.4.6",
-    "express": "^5.2.1",
-    "express-rate-limit": "^8.7.0",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.4",
     "ipaddr.js": "^2.5.0",
-    "nodemailer": "^10.0.14",
+    "nodemailer": "^10.6.0",
     "pg": "^8.23.1",
     "sequelize": "^6.37.8",
     "sharp": "^0.35.5",
-    "ws": "^8.22.0"
+    "ws": "^8.23.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^26.6.4",
-    "@vitest/coverage-v8": "^4.1.10",
-    "eslint": "^10.11.0",
-    "globals": "^17.13.0",
+    "@types/node": "^26.6.6",
+    "@vitest/coverage-v8": "^5.1.0",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0",
     "moment": "^2.31.0",
     "pg-mem": "^3.0.14",
-    "supertest": "^7.3.0",
+    "supertest": "^7.3.2",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.1.0"
   },
   "overrides": {
     "uuid": "^11.1.1"
